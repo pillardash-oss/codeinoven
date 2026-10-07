@@ -48,9 +48,7 @@ export function normalizeBundleDefinitions(input: unknown): UtilityDefinitionInp
   }
   return entries.map((rawEntry, index) => {
     if (!isRecord(rawEntry)) {
-      throw new TypeError(
-        `Utility bundle entry ${index} must be an object shaped ${BUNDLE_SHAPE}`
-      )
+      throw new TypeError(`Utility bundle entry ${index} must be an object shaped ${BUNDLE_SHAPE}`)
     }
     const entry = rawEntry
     if (entry['credentials'] !== undefined) {
@@ -82,4 +80,15 @@ export function normalizeBundleDefinitions(input: unknown): UtilityDefinitionInp
     const { id: _ignoredId, ...fields } = definition
     return { ...fields, credentials: [] } as unknown as UtilityDefinitionInput
   })
+}
+
+/**
+ * The validated bundle name, for a surface that shows the proposal to a human.
+ * Kept beside the parser so the name rule and the shape rule cannot drift.
+ */
+export function normalizeBundleName(input: unknown): string {
+  if (!isRecord(input)) {
+    throw new TypeError(`Utility bundle must be an object shaped ${BUNDLE_SHAPE}`)
+  }
+  return requiredString(input['name'], 'Utility bundle name', 120)
 }

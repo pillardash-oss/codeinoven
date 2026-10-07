@@ -43,6 +43,7 @@ import {
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_SUGGEST_TOOL_NAME,
   type GatewayToolDefinition
 } from '../../lib/gateway-tools'
 
@@ -54,7 +55,8 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_DOCS_TOOL_NAME,
   ASK_SECRET_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  UTILITY_SUGGEST_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -70,6 +72,7 @@ const docsTool = gatewayTool(UTILITY_DOCS_TOOL_NAME)
 const askSecretTool = gatewayTool(ASK_SECRET_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
+const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -419,6 +422,44 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         HUMAN_PACED_TIMEOUT_MS
       )
       return textResult(applySecretEnvironment(result))
+    }
+  })
+
+  // A capability the agent found but the user does not have: the app owns the
+  // decision card and the install, so the tool only proposes a secret-free
+  // bundle and reports what the user chose. Announced on every turn, because a
+  // task can need a connection at any point and the alternative is the agent
+  // telling the user something is connected when nothing was surfaced.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(suggestTool.name)},
+    label: 'Propose a capability for the user to install',
+    description: ${JSON.stringify(suggestTool.description)},
+    promptSnippet: 'Propose a capability you found for the user to install, with their explicit acceptance',
+    promptGuidelines: [
+      'When a search finds a capability the task needs but the user does not have, offer it with ${JSON.stringify(suggestTool.name)} instead of telling the user it is connected: the app surfaces an actionable card and installs it through Utilities only if they accept.',
+      'Never say a capability is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free; collect a credential afterwards with ${JSON.stringify(askSecretTool.name)}.'
+    ],
+    parameters: Type.Object({
+      reason: Type.String({
+        description:
+          'One or two plain sentences telling the user why this capability is needed and what it enables.'
+      }),
+      bundle: Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            '{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}. Credentials are forbidden; contact the app via the tool result, never the bundle.'
+        }
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(suggestTool.route)},
+        { reason: params.reason, bundle: params.bundle },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
     }
   })
 

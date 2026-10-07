@@ -216,6 +216,7 @@ import type {
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
+  UtilitySuggestionContext,
   UtilityResultAttribution,
   UtilityTurnBudgetContext,
   UtilityTurnGateway
@@ -227,6 +228,12 @@ import {
   secretRequestQuestions,
   type AgentSecretPlanEntry
 } from '../../lib/secret-request'
+import {
+  isUtilitySuggestionAccepted,
+  isUtilitySuggestionQuestion,
+  utilitySuggestionQuestion,
+  type UtilitySuggestionDecision
+} from '../../lib/utility-suggestion'
 import {
   imageDescriptorInactivityTimeoutMs,
   resolveVisionAttachment
@@ -313,6 +320,7 @@ import type {
   ProviderCatalog,
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
+  AgentUtilitySuggestionEntry,
   SessionAgentEvent,
   SpecGenerationRequest,
   SpecActionIntent,
@@ -1619,6 +1627,12 @@ export class ChatEngine {
     this.utilityOrchestration.setSecretRequestExecutor((input, context) =>
       this.requestUtilitySecrets(input, context)
     )
+    // A proposed capability is an app-owned gateway tool too, so the call has to
+    // be able to wait for the user: the engine surfaces the card and settles a
+    // promise with the decision, and only the gateway installs on acceptance.
+    this.utilityOrchestration.setUtilitySuggestionExecutor((entry, context) =>
+      this.requestUtilitySuggestion(entry, context)
+    )
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -2628,6 +2642,18 @@ export class ChatEngine {
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const safeAnswers = validateQuestionAnswers(answers, pending.request.questions)
+    // An agent-proposed capability is an app-owned request with no harness behind
+    // it: the user's choice settles the waiting gateway call here, and only the
+    // gateway installs, and only on acceptance.
+    if (pending.settleUtilitySuggestion) {
+      pending.resumeUtilitySuggestionAfterSettlement = true
+      await this.persistQuestionAnswer(pending, safeAnswers)
+      const accepted = isUtilitySuggestionAccepted(safeAnswers[0] ?? [])
+      await this.resolvePendingQuestion(pending, 'answered', safeAnswers, async () => {
+        pending.settleUtilitySuggestion?.(accepted ? 'accepted' : 'declined')
+      })
+      return
+    }
     const driver = this.driverForRuntime(
       pending.driverId,
       this.sessionRegistry.get(pending.request.sessionId)?.accountId
@@ -2854,6 +2880,98 @@ export class ChatEngine {
         secrets: secretReferences,
         ...(resolution.unresolved ? { unresolvedEnvironmentVariables: resolution.unresolved } : {})
       })
+    ].join('\n\n')
+    await this.sendPrompt(
+      pending.request.projectId,
+      pending.request.threadId,
+      thread.settings,
+      prompt,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
+  }
+
+  /**
+   * Surface one `cio_util_suggest` card and wait for the user.
+   *
+   * The request is app-owned, so nothing is sent to a harness: this registers
+   * the pending question, broadcasts it, and settles a promise with the user's
+   * decision. Installing is deliberately left to the gateway handler, which owns
+   * the registry, so a card that is dismissed or expires can never install.
+   */
+  private async requestUtilitySuggestion(
+    entry: AgentUtilitySuggestionEntry,
+    context: UtilitySuggestionContext
+  ): Promise<UtilitySuggestionDecision> {
+    const requestId = `cio-suggest-${randomUUID()}`
+    const pending = this.registerPendingQuestion(
+      context.harnessId,
+      context.projectId,
+      context.threadId,
+      context.projectPath,
+      {
+        requestId,
+        sessionId: context.sessionId,
+        questions: [utilitySuggestionQuestion(entry)]
+      },
+      await this.pendingQuestionTimeoutMs()
+    )
+    const settled = new Promise<UtilitySuggestionDecision>((resolve) => {
+      pending.settleUtilitySuggestion = resolve
+    })
+    await this.threadManager.setStatus(context.projectId, context.threadId, 'awaiting_approval', {
+      read: false
+    })
+    this.broadcast({
+      type: 'question.asked',
+      sessionId: context.sessionId,
+      requestId,
+      questions: pending.request.questions
+    })
+    const decision = await settled
+    const driver = this.driverForRuntime(
+      context.harnessId,
+      this.sessionRegistry.get(context.sessionId)?.accountId
+    )
+    if (
+      pending.resumeUtilitySuggestionAfterSettlement &&
+      driver &&
+      !this.questionAnswerCanReachLiveTurn(pending, driver)
+    ) {
+      await this.resumeAfterInactiveUtilitySuggestion(pending, entry, decision)
+    }
+    return decision
+  }
+
+  /** Resume the thread when a suggestion card settles after its turn ended. */
+  private async resumeAfterInactiveUtilitySuggestion(
+    pending: PendingQuestionInfo,
+    entry: AgentUtilitySuggestionEntry,
+    decision: UtilitySuggestionDecision
+  ): Promise<void> {
+    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
+      Logger.error('Utility suggestion turn settlement failed:', error)
+    )
+
+    const thread = await this.threadManager.getThread(
+      pending.request.projectId,
+      pending.request.threadId
+    )
+    if (!thread?.settings) {
+      throw new Error(`Thread settings are unavailable: ${pending.request.threadId}`)
+    }
+
+    const prompt = [
+      'Your previous turn ended while waiting for the user to resolve a capability suggestion.',
+      decision === 'accepted'
+        ? `The user accepted "${entry.name}". The app is installing it now; search for it before relying on it, then continue the original request.`
+        : `The user declined "${entry.name}". Do not install it and do not claim it is available. Continue without it, or say plainly what is missing.`
     ].join('\n\n')
     await this.sendPrompt(
       pending.request.projectId,
@@ -21861,6 +21979,19 @@ export class ChatEngine {
     this.finalizePendingQuestion(pending.request.requestId, 'dismissed')
   }
 
+  /**
+   * Close an abandoned capability-suggestion card and settle the gateway call
+   * waiting on it as a decline. Nothing installs without the user, so an expired
+   * card is a "no" the agent can react to, never a silent install.
+   */
+  private expireUtilitySuggestionQuestion(pending: PendingQuestionInfo): void {
+    if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
+    pending.timer = undefined
+    pending.resumeUtilitySuggestionAfterSettlement = true
+    pending.settleUtilitySuggestion?.('declined')
+    this.finalizePendingQuestion(pending.request.requestId, 'timed_out')
+  }
+
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
     // Creating a Brainstorm version is a human decision with no safe default at
@@ -21902,6 +22033,28 @@ export class ChatEngine {
       pending.timer = setTimeout(
         () => this.expireSecretQuestion(pending),
         Math.max(0, secretExpiresAt - Date.now())
+      )
+      return
+    }
+
+    // A capability suggestion runs the same absolute countdown, but an expired
+    // card settles as a decline: installing software is never automatic.
+    if (pending.request.questions.some(isUtilitySuggestionQuestion)) {
+      if (pending.request.interactedQuestionIndexes.length > 0) {
+        pending.request.expiresAt = undefined
+        if (this.isUserActive()) {
+          pending.timer = setTimeout(
+            () => this.schedulePendingQuestion(pending),
+            ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          )
+          return
+        }
+      }
+      const suggestionExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
+      pending.request.expiresAt = suggestionExpiresAt
+      pending.timer = setTimeout(
+        () => this.expireUtilitySuggestionQuestion(pending),
+        Math.max(0, suggestionExpiresAt - Date.now())
       )
       return
     }
@@ -22075,6 +22228,10 @@ export class ChatEngine {
     // can answer it once the request is gone, so settle it as dismissed and let
     // the harness turn continue instead of hanging on an unreachable question.
     pending.settleSecret?.({ status: 'dismissed', secrets: [] })
+    // A gateway `cio_util_suggest` call is waiting on this card too. An accepted
+    // decision already settled it; anything else (dismissal, teardown) is a
+    // decline, so a capability is never installed by a card that went away.
+    pending.settleUtilitySuggestion?.('declined')
   }
 
   private clearPendingQuestionsForSession(sessionId: string): void {

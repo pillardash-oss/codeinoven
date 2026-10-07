@@ -121,7 +121,12 @@ function inlineChipHtml(reference: PromptProjectReference): string {
     reference.kind === 'directory'
       ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
       : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  const kind = reference.kind === 'directory' ? 'folder' : 'file'
+  const safeLabel = escapeHtmlForChip(`Reveal this ${kind} in the file tree: ${reference.path}`)
+  // A real control, not decoration: the chip names a file the reader can jump
+  // to. It carries the same `data-file-chip` path across the message render,
+  // and MarkdownView + the citation context menu pick it up by delegation.
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
 }
 
 function inlineTagChipHtml(tag: ComposerBuiltInTag): string {

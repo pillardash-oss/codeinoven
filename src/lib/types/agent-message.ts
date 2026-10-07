@@ -31,6 +31,22 @@ export interface AgentQuestionOption {
   recommended?: boolean
 }
 
+/**
+ * A capability an agent proposed for the user to install, carried on the
+ * question that renders as the suggestion card. The app installs the proposed
+ * bundle through Utilities only when the user accepts.
+ */
+export interface AgentUtilitySuggestionEntry {
+  /** Stable id the settlement is correlated against. */
+  id: string
+  /** Bundle/display name shown as the card title. */
+  name: string
+  /** Utility kinds the proposal installs, for the one-line summary. */
+  kinds: string[]
+  /** Plain-language reason from the agent, shown as the card body. */
+  reason: string
+}
+
 /** A structured question the agent is asking the user. */
 export interface AgentQuestion {
   /** OpenCode question request id (used to submit the answer via the question API). */
@@ -59,6 +75,12 @@ export interface AgentQuestion {
   secretEnvironmentVariable?: string
   /** Utility this secret is bound to as a credential, when the agent named one. */
   secretUtilityId?: string
+  /**
+   * The question proposes installing a discovered capability. It renders as the
+   * suggestion card and is answered by the canonical question submission; the
+   * app installs the proposal only when the user picks the install option.
+   */
+  utilitySuggestion?: AgentUtilitySuggestionEntry
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */

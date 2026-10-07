@@ -5,6 +5,7 @@ import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/drive
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
+import type { UtilitySuggestionDecision } from '../../../lib/utility-suggestion'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -342,6 +343,15 @@ export interface PendingQuestionInfo {
   settleSecret?: (resolution: AgentSecretResolution) => void
   /** The secret card was explicitly answered, dismissed, or timed out. */
   resumeSecretAfterSettlement?: boolean
+  /**
+   * Set for an app-owned `cio_util_suggest` request. The gateway tool call that
+   * proposed the capability is still open, so the user's decision settles here
+   * instead of being answered through a harness: only the gateway installs, and
+   * only after this reports "accepted".
+   */
+  settleUtilitySuggestion?: (decision: UtilitySuggestionDecision) => void
+  /** The suggestion card was answered, dismissed, or timed out. */
+  resumeUtilitySuggestionAfterSettlement?: boolean
 }
 
 /**

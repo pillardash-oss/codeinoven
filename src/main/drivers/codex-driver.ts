@@ -19,7 +19,11 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
-import { ASK_SECRET_TOOL_NAME, GATEWAY_TOOLS } from '../../lib/gateway-tools'
+import {
+  ASK_SECRET_TOOL_NAME,
+  GATEWAY_TOOLS,
+  UTILITY_SUGGEST_TOOL_NAME
+} from '../../lib/gateway-tools'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -1412,7 +1416,8 @@ export class CodexDriver extends PersistentCliDriver {
       }
       void this.callUtilityTool(active, params).then((result) => {
         if (
-          params['tool'] === ASK_SECRET_TOOL_NAME &&
+          (params['tool'] === ASK_SECRET_TOOL_NAME ||
+            params['tool'] === UTILITY_SUGGEST_TOOL_NAME) &&
           (active.finished || active.completionReceived)
         ) {
           return
@@ -1495,11 +1500,13 @@ export class CodexDriver extends PersistentCliDriver {
           'content-type': 'application/json'
         },
         body: JSON.stringify(recordValue(params['arguments']) ?? {}),
-        // The secret card is human-paced, so that one call waits as long as the
-        // app's own deadline   the endpoint carries it   while every other tool
-        // stays bounded by the short gateway timeout.
+        // The secret and suggestion cards are human-paced, so those calls wait as
+        // long as the app's own deadline   the endpoint carries it   while every
+        // other tool stays bounded by the short gateway timeout.
         signal: AbortSignal.timeout(
-          tool.name === ASK_SECRET_TOOL_NAME ? endpoint.timeoutMs : 120_000
+          tool.name === ASK_SECRET_TOOL_NAME || tool.name === UTILITY_SUGGEST_TOOL_NAME
+            ? endpoint.timeoutMs
+            : 120_000
         )
       })
       const result: unknown = await response.json()

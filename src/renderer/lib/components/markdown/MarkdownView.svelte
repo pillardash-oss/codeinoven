@@ -263,6 +263,18 @@
     return link instanceof HTMLAnchorElement ? link : null
   }
 
+  /** The inline `@path` file chip under the event, if any. Chips are injected
+   *  as trusted HTML rather than anchors, so they are matched by their data
+   *  attribute and revealed through the same citation path as a link. */
+  function chipFromEvent(event: Event): HTMLElement | null {
+    const chip = (event.target as Element | null)?.closest('[data-file-chip]')
+    return chip instanceof HTMLElement ? chip : null
+  }
+
+  function chipPath(chip: HTMLElement): string | null {
+    return chip.dataset.fileChip ?? null
+  }
+
   function citationFromLink(link: HTMLAnchorElement): { path: string; line?: number } | null {
     const path = link.dataset.citationPath
     const line = link.dataset.citationLine
@@ -339,6 +351,16 @@
   }
 
   function handleClick(event: MouseEvent): void {
+    const chip = chipFromEvent(event)
+    if (chip) {
+      const path = chipPath(chip)
+      if (path) {
+        event.preventDefault()
+        clearTooltip()
+        openCitation(path)
+        return
+      }
+    }
     const link = linkFromEvent(event)
     if (!link) return
     const citation = citationFromLink(link)
@@ -366,6 +388,17 @@
       clearTooltip()
       void openInBrowser(href)
     }
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    const chip = chipFromEvent(event)
+    if (!chip) return
+    const path = chipPath(chip)
+    if (!path) return
+    event.preventDefault()
+    clearTooltip()
+    openCitation(path)
   }
 
   /** Mirror of the citation click path   used by the file context menu's
@@ -440,6 +473,7 @@
     class={['markdown-body min-w-0 max-w-full', className]}
     role="presentation"
     onclick={handleClick}
+    onkeydown={handleKeydown}
     onpointerover={handlePointerOver}
     onpointerout={handlePointerOut}
     onfocusin={handleFocusIn}
