@@ -272,7 +272,7 @@
         onclick={beginNaming}
       >
         <Plus size={11} class="shrink-0" />
-        <span>Save</span>
+        <span>Save current profile</span>
       </button>
     {/if}
   </div>
@@ -373,5 +373,24 @@
         </li>
       {/each}
     </ul>
+  {:else if !editor}
+    <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center">
+      <p class="text-[0.6875rem] font-medium text-foreground">No profiles yet</p>
+      <p class="text-[0.625rem] leading-relaxed text-muted">
+        Save the current harness, model, thinking level, speed, and permissions as a reusable
+        profile.
+      </p>
+      <button
+        type="button"
+        class="mt-1 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+        title="Save the current harness, model, thinking level, speed, and permissions as a profile"
+        aria-label="Save the current model setup as a profile"
+        disabled={atCapacity}
+        onclick={beginNaming}
+      >
+        <Plus size={12} />
+        Add profile
+      </button>
+    </div>
   {/if}
 </div>
