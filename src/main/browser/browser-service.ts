@@ -171,6 +171,7 @@ import {
   removeBrowserProfiles
 } from './browser-service/browser-profile-store'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
+import { installBrowserHistorySwipe } from './browser-service/browser-history-swipe'
 import {
   AGENT_REVEAL_GRACE_MS,
   DEFAULT_PARKED_VIEWPORT,
@@ -2941,6 +2942,7 @@ export class BrowserService {
     // the capture observer can be installed before the page's own scripts ask
     // for the microphone.
     view.webContents.on('dom-ready', () => {
+      installBrowserHistorySwipe(view.webContents)
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
