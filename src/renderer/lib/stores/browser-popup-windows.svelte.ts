@@ -194,17 +194,9 @@ class BrowserPopupWindowsState {
     })
   }
 
-  /** Hide an extension popup; close a page-created popup window. */
-  dismissOrClose(popupId: string): void {
-    const popup = this.find(popupId)
-    if (!popup) return
-    if (popup.extensionId !== null) this.dismiss(popupId)
-    else this.close(popupId)
-  }
-
-  /** Dismiss visible popups without destroying extension action pages. */
-  dismissAll(): void {
-    for (const popup of this.all()) this.dismissOrClose(popup.id)
+  /** Close every visible popup, including extension action pages. */
+  closeAll(): void {
+    for (const popup of this.all()) this.close(popup.id)
   }
 
   /** Close a popup and destroy its page. */

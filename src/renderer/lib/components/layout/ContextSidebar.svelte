@@ -94,8 +94,8 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
-    /** Dismiss extension action popups and close page-created popup windows. */
-    onDismissPopups?: () => void
+    /** Close all visible popup windows, including extension action pages. */
+    onClosePopups?: () => void
     /**
      * Resolve a tab's own presentation, for a tool that names itself from state
      * the shell does not hold (the Oven panel wears the Oven's mark and name).
@@ -122,7 +122,7 @@
     onTerminalDockToggle,
     onNewTerminal,
     onNewBrowser,
-    onDismissPopups,
+    onClosePopups,
     tabMenu,
     tabPresentation
   }: Props = $props()
@@ -741,9 +741,9 @@
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={popupMode ? 'Dismiss popups' : `Close ${activeTab.title}`}
-              title={popupMode ? 'Hide extension popups and close page popups' : 'Close panel'}
-              onclick={() => (popupMode ? onDismissPopups?.() : onClose(activeTab.id))}
+              aria-label={popupMode ? 'Close all popups' : `Close ${activeTab.title}`}
+              title={popupMode ? 'Close all popup windows' : 'Close panel'}
+              onclick={() => (popupMode ? onClosePopups?.() : onClose(activeTab.id))}
             >
               <X size={13} />
             </button>
