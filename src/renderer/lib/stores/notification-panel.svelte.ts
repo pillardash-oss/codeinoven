@@ -10,6 +10,7 @@ import type {
 import {
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
+  isAssistantSetupThread,
   isOrchestrationChildThread,
   type Project,
   type Thread
@@ -442,6 +443,24 @@ class NotificationPanelState {
     this.subFilter = sub
   }
 
+  /**
+   * The name an assistant failure or parked card reports when its live payload
+   * never arrived: the task it ran, else its routine, else its own non-authoring
+   * title. A routine's fixed "Getting started" title is an authoring host, not a
+   * job, so it is never returned as a name.
+   */
+  private assistantThreadSubject(thread: Thread, threads: readonly Thread[]): string {
+    const routineName = thread.routineId
+      ? assistantRoutines.routines.find((routine) => routine.id === thread.routineId)?.name.trim()
+      : ''
+    const task = thread.assistantTaskId
+      ? threads.find((candidate) => candidate.id === thread.assistantTaskId)
+      : undefined
+    if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
+    if (routineName) return routineName
+    return isAssistantSetupThread(thread) ? '' : thread.title.trim()
+  }
+
   /** Populate attention notifications from persisted threads on startup. */
   hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
     const projectById = new Map(projects.map((project) => [project.id, project]))
@@ -465,7 +484,7 @@ class NotificationPanelState {
         const sourceName = isChat
           ? 'Chat'
           : isAssistant
-            ? 'Assistant'
+            ? this.assistantThreadSubject(thread, threads) || 'Assistant'
             : (project?.name ?? thread.title)
         const errorDetail = thread.lastError?.trim() || undefined
         const errorHeadline = errorDetail?.split('\n', 1)[0]?.trim() || undefined

@@ -61,6 +61,12 @@
     nextRunAt: number | null
     /** Human-readable schedule label (schedule override or owning routine). */
     scheduleLabel?: string | null
+    /**
+     * The task a hoisted run belongs to, shown on the run's line. A run lifted to
+     * its routine's own level has no parent row above it, so without this its
+     * line would name only a time and no run would be tellable from another.
+     */
+    contextLabel?: string | null
     onSelect: (task: Thread) => void
     /** The full thread action set, so a task behaves exactly like a thread row. */
     onRename: (task: Thread, newName: string) => Promise<void>
@@ -91,6 +97,7 @@
     missed,
     nextRunAt,
     scheduleLabel = null,
+    contextLabel = null,
     onSelect,
     onRename,
     onTogglePin,
@@ -122,15 +129,19 @@
   const iconKey = $derived(taskRowIconKey(task))
   const howToThread = $derived(isAssistantSetupThread(task))
 
-  /** Line 2: task schedule/activity, run activity, or the setup thread's role. */
+  /** Line 2: task schedule/activity, run activity, or the setup thread's role.
+   *  A row whose thread is actually producing work says so instead of reporting
+   *  a stale schedule time, and a hoisted run names the task it belongs to. */
   const runLine = $derived.by(() => {
+    const working = runWorking || isThreadLiveWorking(task)
     if (isRun) {
       subscribeMinute()
-      return runRowLine(task, Date.now())
+      const line = working ? 'Running now' : runRowLine(task, Date.now())
+      return contextLabel ? `${contextLabel} · ${line}` : line
     }
     if (howToThread) return 'How-to conversation'
     subscribeMinute()
-    return taskRunLine(task, nextRunAt, Date.now())
+    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now())
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)

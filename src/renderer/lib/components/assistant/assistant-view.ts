@@ -194,6 +194,24 @@ export function runRowLine(run: Pick<Thread, 'lastActivity'>, now: number): stri
   return `Ran ${describeRelativeTime(run.lastActivity, now)}`
 }
 
+/**
+ * The name a run or a card reports for: the task it ran, else its routine, else a
+ * neutral fallback. A routine's fixed "Getting started" title is its authoring
+ * host, not a job, so a run of it (or a missed/unattended run of it) is named for
+ * the routine instead   naming it "Getting started" made a saved routine's runs
+ * read as setup work on every notification and sidebar surface.
+ */
+export function assistantSubjectName(
+  task: Pick<Thread, 'title' | 'assistantGettingStarted'> | null | undefined,
+  routineName: string | null | undefined,
+  fallback: string
+): string {
+  const routine = routineName?.trim()
+  if (!task) return routine || fallback
+  if (isAssistantSetupThread(task)) return routine || fallback
+  return task.title.trim() || routine || fallback
+}
+
 /** How many runs a routine row states exactly before it collapses to a chip. */
 export const ROUTINE_RUN_COUNT_CAP = 10
 

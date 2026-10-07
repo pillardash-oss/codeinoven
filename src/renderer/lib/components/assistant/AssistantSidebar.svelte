@@ -21,6 +21,7 @@
   import {
     TASK_RUN_PREVIEW,
     assistantForeignThread,
+    assistantSubjectName,
     previewRuns,
     routineSiblingRuns
   } from './assistant-view'
@@ -242,6 +243,26 @@
    *  even when that parent renders outside the routine's own list. */
   const tasksById = $derived(new Map(tasks.map((task) => [task.id, task])))
 
+  /**
+   * The task name a hoisted run row reports. A run lifted to its routine's own
+   * level has no parent row above it to say which task it ran, so without this
+   * every hoisted run read as a bare time. A run nested under its task already
+   * sits below that task's name, so it needs nothing. The name resolves through
+   * `assistantSubjectName`, so a routine's Getting started host keeps naming the
+   * routine instead of leaking "Getting started" onto its own runs.
+   */
+  function runContextLabel(
+    run: Thread,
+    nested: boolean,
+    routineName: string | null
+  ): string | null {
+    if (nested) return null
+    if (!run.assistantTaskId) return null
+    const parent = tasksById.get(run.assistantTaskId)
+    if (!parent) return null
+    return assistantSubjectName(parent, routineName, '') || null
+  }
+
   /** The runs a routine shows at its own level, beside its task rows (see
    *  `routineSiblingRuns`). */
   function siblingRuns(routine: Routine): readonly Thread[] {
@@ -356,7 +377,8 @@
   color: string | undefined,
   key: string,
   ariaLabel: string,
-  nested: boolean
+  nested: boolean,
+  routineName: string | null = null
 )}
   {#if runs.length > 0}
     <div
@@ -374,6 +396,7 @@
           active={run.id === selectedThreadId}
           missed={false}
           nextRunAt={null}
+          contextLabel={runContextLabel(run, nested, routineName)}
           onSelect={onOpenTask}
           onRename={onRenameTask}
           onTogglePin={onTogglePinTask}
@@ -523,7 +546,8 @@
               routine.color,
               `routine:${routine.id}`,
               `Runs of ${routine.name}`,
-              false
+              false,
+              routine.name
             )}
           </div>
         {/if}
