@@ -108,7 +108,11 @@ export class UpdaterService {
   private explicitCheckInFlight = false
   /** True while a check initiated by this service is still resolving. */
   private checkInFlight = false
-  private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
+  private changelogCache: {
+    changelog: UpdaterChangelog | null
+    fetchedAt: number
+    nightlyChannel: boolean
+  } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
   /** Channel the last check resolved, so the seed picks the matching mirror directory. */
@@ -495,17 +499,24 @@ export class UpdaterService {
    * the feed cannot be resolved   the renderer shows a quiet fallback.
    */
   async fetchChangelog(): Promise<UpdaterChangelog | null> {
-    if (this.changelogCache && Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS) {
-      return this.changelogCache.changelog
-    }
     let nightlyChannel = false
     try {
       nightlyChannel = (await this.storage.getConfig()).updateChannel === 'nightly'
     } catch (error: unknown) {
       Logger.error('Updater: failed to read update channel for changelog', error)
     }
+    if (
+      this.changelogCache?.nightlyChannel === nightlyChannel &&
+      Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS
+    ) {
+      return this.changelogCache.changelog
+    }
     try {
-      const response = await fetch(GITHUB_RELEASES_URL, {
+      // The latest stable endpoint cannot be crowded out by frequent nightlies.
+      const releaseUrl = nightlyChannel
+        ? GITHUB_RELEASES_URL
+        : 'https://api.github.com/repos/pillardash-oss/codeinoven/releases/latest'
+      const response = await fetch(releaseUrl, {
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(10_000)
       })
@@ -516,7 +527,8 @@ export class UpdaterService {
         prerelease?: unknown
         body?: unknown
       }
-      const releases = (await response.json()) as GhRelease[]
+      const payload = (await response.json()) as GhRelease | GhRelease[]
+      const releases = Array.isArray(payload) ? payload : [payload]
       const nightlyPattern = /^v\d+\.\d+\.\d+-nightly[.-]\d+$/
       const entry = releases.find((release) =>
         nightlyChannel
@@ -533,7 +545,7 @@ export class UpdaterService {
               notes: entry.body.slice(0, CHANGELOG_MAX_NOTES_CHARS)
             }
           : null
-      this.changelogCache = { changelog, fetchedAt: Date.now() }
+      this.changelogCache = { changelog, fetchedAt: Date.now(), nightlyChannel }
       return changelog
     } catch (error: unknown) {
       Logger.error('Updater: changelog fetch failed', error)

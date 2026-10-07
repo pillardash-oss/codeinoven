@@ -1463,7 +1463,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
               data-external-url={WEBSITE_URL}
-              onclick={() => void openInBrowser(WEBSITE_URL)}
+              onclick={() => void openInBrowser(WEBSITE_URL, 'global')}
             >
               <VendorIcon name="CodeInOven" size={15} />
               Website
@@ -1473,7 +1473,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
               data-external-url={GITHUB_URL}
-              onclick={() => void openInBrowser(GITHUB_URL)}
+              onclick={() => void openInBrowser(GITHUB_URL, 'global')}
             >
               <VendorIcon name="GitHub" size={15} />
               GitHub
@@ -1483,7 +1483,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
               data-external-url={X_URL}
-              onclick={() => void openInBrowser(X_URL)}
+              onclick={() => void openInBrowser(X_URL, 'global')}
             >
               <svg
                 viewBox="0 0 24 24"

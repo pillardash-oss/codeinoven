@@ -135,8 +135,16 @@ export function prefersCioBrowser(url: string): boolean {
  * the page stays in the workspace; otherwise the operating system browser is the
  * fallback rather than a silent no-op.
  */
-export async function openInBrowser(url: string): Promise<void> {
+export async function openInBrowser(
+  url: string,
+  destination: 'context' | 'global' = 'context'
+): Promise<void> {
   if (prefersCioBrowser(url)) {
+    if (destination === 'global') {
+      if (await openInGlobalCioBrowserWhenReady(url)) return
+      await invoke('shell:openExternal', url)
+      return
+    }
     // A link opened while the app-wide browser is the view on screen belongs to
     // that browser: the thread browser would put the page in a project thread's
     // tab behind a workspace the reader is not looking at, so it takes a tab

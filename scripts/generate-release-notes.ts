@@ -124,7 +124,10 @@ export function parseSubject(subject: string): ParsedSubject {
 
 /** Map a raw commit type to its heading; unknown types fall back to "Other". */
 function headingForType(rawType: string, title: string): string {
-  if (rawType === 'chore' && /^bump\b.*\b(?:v?\d+\.\d+\.\d+|package\.json|dependencies)/i.test(title)) {
+  if (
+    rawType === 'chore' &&
+    /^bump\b.*\b(?:v?\d+\.\d+\.\d+|package\.json|dependencies)/i.test(title)
+  ) {
     return 'Dependencies'
   }
   return TYPE_HEADINGS[rawType.toLowerCase()] ?? 'Other'
@@ -199,7 +202,11 @@ export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: strin
   const releases = ghReleaseTags()
   const tags = releases ?? { prerelease: [], stable: [] }
   const stableTags = tags.stable
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .filter(
+      (t) =>
+        /^v\d+\.\d+\.\d+$/.test(t) &&
+        (channel === 'nightly' || compareVersions(t.slice(1), baseVersion) < 0)
+    )
     .sort((a, b) => compareVersions(b.slice(1), a.slice(1)))
 
   if (channel === 'nightly') {
@@ -218,9 +225,10 @@ export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: strin
 
   // gh unavailable or no releases: fall back to local tags so a local run and
   // a CI run without gh still produce correct notes.
-  const localNightly = channel === 'nightly'
-    ? git('tag', '--list', `v${baseVersion}-nightly*`).split('\n').filter(Boolean)
-    : []
+  const localNightly =
+    channel === 'nightly'
+      ? git('tag', '--list', `v${baseVersion}-nightly*`).split('\n').filter(Boolean)
+      : []
   if (localNightly.length > 0) {
     return localNightly.sort((a, b) => {
       const na = Number(/\d+$/.exec(a)?.[0] ?? 0)
@@ -230,7 +238,11 @@ export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: strin
   }
   const localStable = git('tag', '--list', 'v*.*.*')
     .split('\n')
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .filter(
+      (t) =>
+        /^v\d+\.\d+\.\d+$/.test(t) &&
+        (channel === 'nightly' || compareVersions(t.slice(1), baseVersion) < 0)
+    )
     .sort((a, b) => compareVersions(b.slice(1), a.slice(1)))
   if (localStable.length > 0) return localStable[0]
 
@@ -339,10 +351,13 @@ async function main(): Promise<number> {
   if (!from) {
     let baseVersion: string
     try {
-      const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      const pkg = JSON.parse(
+        await readFile(new URL('../package.json', import.meta.url), 'utf8')
+      ) as {
         version?: unknown
       }
-      if (typeof pkg.version !== 'string') throw new TypeError('package.json version is not a string')
+      if (typeof pkg.version !== 'string')
+        throw new TypeError('package.json version is not a string')
       baseVersion = pkg.version
     } catch (error: unknown) {
       // eslint-disable-next-line no-console
@@ -371,7 +386,13 @@ async function main(): Promise<number> {
     }
   }
 
-  const subjects = git('log', '--no-merges', '--encoding=UTF-8', '--pretty=%s', `${from}..${flags.to}`)
+  const subjects = git(
+    'log',
+    '--no-merges',
+    '--encoding=UTF-8',
+    '--pretty=%s',
+    `${from}..${flags.to}`
+  )
     .split('\n')
     .filter(Boolean)
 
@@ -381,9 +402,10 @@ async function main(): Promise<number> {
     from,
     to: flags.to,
     subjects,
-    baseVersion: git('show', `${flags.to}:package.json`)
-      .toString()
-      .match(/"version"\s*:\s*"([^"]+)"/)?.[1] ?? 'unversioned'
+    baseVersion:
+      git('show', `${flags.to}:package.json`)
+        .toString()
+        .match(/"version"\s*:\s*"([^"]+)"/)?.[1] ?? 'unversioned'
   })
 
   if (flags.out) {
