@@ -278,7 +278,10 @@ export class GeneratedArtifactService {
       ...message,
       parts: [...message.parts]
     }))
-    const assistantMessages = messages.filter((message) => message.role === 'assistant')
+    // Explicit app-published artifacts already have validated presentation paths.
+    const assistantMessages = messages.filter(
+      (message) => message.role === 'assistant' && !message.inlineArtifact
+    )
     if (assistantMessages.length === 0) return { messages: inputMessages, changed: false }
 
     const knownIdentities = new Set<string>()

@@ -422,6 +422,7 @@ import { deriveTitleFromText } from './title-generator'
 import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
+import { inlineArtifactMessage } from './inline-artifact-service'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
 import { writeAssistantReport } from './assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../lib/assistant-reports'
@@ -1606,6 +1607,20 @@ export class ChatEngine {
       }
     )
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
+    this.utilityOrchestration.setArtifactExecutor(async (_operation, input, context) => {
+      const thread = await this.threadManager.getThread(context.projectId, context.threadId)
+      if (!thread) throw new Error('Artifact thread no longer exists')
+      const root = await this.resolveThreadPath(context.projectId, context.threadId)
+      const message = await inlineArtifactMessage(input, { ...context, root })
+      await this.threadManager.upsertMessages(context.projectId, context.threadId, [message])
+      this.broadcast({
+        type: 'artifact.rendered',
+        sessionId: thread.sessionId ?? `${context.projectId}:${context.threadId}`,
+        ...context,
+        message
+      })
+      return { rendered: true, messageId: message.id }
+    })
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>

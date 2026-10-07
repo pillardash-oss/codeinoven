@@ -37,6 +37,7 @@ const PREVIEW_TYPES: Record<string, PreviewType> = {
   '.jpeg': previewType('.jpeg', 'image/jpeg', IMAGE_MAX_BYTES),
   '.gif': previewType('.gif', 'image/gif', IMAGE_MAX_BYTES),
   '.webp': previewType('.webp', 'image/webp', IMAGE_MAX_BYTES),
+  '.avif': previewType('.avif', 'image/avif', IMAGE_MAX_BYTES),
   // SVG is intentionally excluded: project-controlled active XML must not run
   // in a privileged custom-scheme document. It remains available as text.
   '.ico': previewType('.ico', 'image/x-icon', IMAGE_MAX_BYTES),

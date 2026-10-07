@@ -280,6 +280,10 @@ export class ThreadMessagesEvents {
   }
 
   handle(event: AgentEvent): void {
+    if (event.type === 'artifact.rendered') {
+      this.cache.mergePage(event.projectId, event.threadId, [event.message])
+      return
+    }
     if (event.type === 'brainstorm.trace') {
       this.#applyBrainstormTrace(event.projectId, event.threadId, event.update)
       return

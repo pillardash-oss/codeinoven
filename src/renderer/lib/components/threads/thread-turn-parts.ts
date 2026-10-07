@@ -179,11 +179,13 @@ export function buildTranscriptIndex(
  */
 export function turnSpanEndIndex(messages: readonly AgentMessage[], startMsgIndex: number): number {
   let endIndex = startMsgIndex
-  while (endIndex + 1 < messages.length) {
-    const next = messages[endIndex + 1]
+  let cursor = startMsgIndex
+  while (cursor + 1 < messages.length) {
+    const next = messages[++cursor]
+    if (next?.inlineArtifact) continue
     if (!next) break
     if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-      endIndex += 1
+      endIndex = cursor
       continue
     }
     break
@@ -233,8 +235,10 @@ export function turnStartPromptsBefore(
 }
 
 export function isTurnStartIndex(messages: readonly AgentMessage[], index: number): boolean {
+  if (messages[index]?.inlineArtifact) return false
   for (let i = index - 1; i >= 0; i--) {
     const message = messages[i]
+    if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'assistant') return false
     if (!isActivityOnlyUserMessage(message)) return true
@@ -243,8 +247,10 @@ export function isTurnStartIndex(messages: readonly AgentMessage[], index: numbe
 }
 
 export function isTurnEndIndex(messages: readonly AgentMessage[], index: number): boolean {
+  if (messages[index]?.inlineArtifact) return false
   for (let i = index + 1; i < messages.length; i++) {
     const message = messages[i]
+    if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'assistant') return false
     if (!isActivityOnlyUserMessage(message)) return true
@@ -261,21 +267,28 @@ export function isTurnEndIndex(messages: readonly AgentMessage[], index: number)
  */
 export function lastTurnStartIndex(messages: readonly AgentMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role !== 'assistant') continue
+    if (messages[i]?.inlineArtifact || messages[i]?.role !== 'assistant') continue
     let j = i
+    let start = i
     while (j > 0) {
       const previous = messages[j - 1]
+      if (previous?.inlineArtifact) {
+        j--
+        continue
+      }
       if (previous?.role === 'assistant') {
         j--
+        start = j
         continue
       }
       if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
         j--
+        start = j
         continue
       }
       break
     }
-    return j
+    return start
   }
   return -1
 }
@@ -299,7 +312,7 @@ export function pendingTurnAnchorIndex(messages: readonly AgentMessage[]): numbe
     if (!message || message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
     const assistantMirrored = messages
       .slice(index + 1)
-      .some((candidate) => candidate.role === 'assistant')
+      .some((candidate) => candidate.role === 'assistant' && !candidate.inlineArtifact)
     return assistantMirrored ? -1 : index
   }
   return -1
@@ -318,6 +331,7 @@ export function getTurnFinalText(
   for (let i = turnStart; i <= endMsgIndex; i++) {
     if (i >= messages.length) break
     const message = messages[i]
+    if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'user') {
       if (isActivityOnlyUserMessage(message)) continue
@@ -359,6 +373,7 @@ export function getTurnWorkingParts(
   const finalText = getTurnFinalText(messages, turnEndIndex)
   for (let i = startMsgIndex; i <= turnEndIndex; i++) {
     const message = messages[i]
+    if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'user') {
       if (!isActivityOnlyUserMessage(message)) break

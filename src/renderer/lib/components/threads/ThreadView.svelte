@@ -82,6 +82,7 @@
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
+  import InlineMediaFigure from './InlineMediaFigure.svelte'
   import InlineImageFigure from './InlineImageFigure.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
@@ -11764,7 +11765,30 @@
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
-            {#if msg.role === 'user'}
+            {#if msg.inlineArtifact}
+              <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
+                {#each msg.parts as part (part.id)}
+                  {#if part.type === 'text'}
+                    <MarkdownView text={part.text} />
+                  {:else if part.type === 'file' && isImageMime(part.mime)}
+                    <InlineImageFigure
+                      url={part.url}
+                      mime={part.mime}
+                      filename={part.filename ?? 'Image'}
+                      {imageUrls}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
+                    <InlineMediaFigure
+                      src={part.url}
+                      kind={isVideoMime(part.mime) ? 'video' : 'audio'}
+                      filename={part.filename ?? 'Media'}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {/if}
+                {/each}
+              </div>
+            {:else if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
                 <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
@@ -11889,18 +11913,18 @@
                       {#if msg.parts.some((p) => p.type === 'file')}
                         {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
                         {@const imageParts = fileParts.filter(
-                          (p): p is Extract<AgentPart, { type: 'file' }> =>
-                            isImageMime(p.mime)
+                          (p): p is Extract<AgentPart, { type: 'file' }> => isImageMime(p.mime)
                         )}
                         {@const otherParts = fileParts.filter(
-                          (p): p is Extract<AgentPart, { type: 'file' }> =>
-                            !isImageMime(p.mime)
+                          (p): p is Extract<AgentPart, { type: 'file' }> => !isImageMime(p.mime)
                         )}
-                        <!-- Model-generated images render large and inline (two-up
+                        <!-- Attached images render large and inline (two-up
                              on wide transcripts), each expanding into the
                              fullscreen viewer with sibling navigation. -->
                         {#if imageParts.length > 0}
-                          <div class="mt-2 grid grid-cols-1 gap-2 border-t border-border pt-2 xl:grid-cols-2">
+                          <div
+                            class="mt-2 grid grid-cols-1 gap-2 border-t border-border pt-2 xl:grid-cols-2"
+                          >
                             {#each imageParts as part (part.id)}
                               <FileCitationContextMenu
                                 projectId={thread.projectId}
@@ -11909,9 +11933,7 @@
                                 <InlineImageFigure
                                   url={part.url}
                                   mime={part.mime}
-                                  filename={part.filename ??
-                                    part.url.split('/').pop() ??
-                                    'image'}
+                                  filename={part.filename ?? part.url.split('/').pop() ?? 'image'}
                                   {imageUrls}
                                   onExpand={() => openMessageViewer(msg, part)}
                                 />
@@ -11920,8 +11942,8 @@
                           </div>
                         {/if}
                         {#if otherParts.length > 0}
-                        <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
-                          {#each otherParts as part (part.id)}
+                          <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
+                            {#each otherParts as part (part.id)}
                               {@const mediaKind = isVideoMime(part.mime)
                                 ? 'video'
                                 : isAudioMime(part.mime)
@@ -11972,7 +11994,7 @@
                                 </FileCitationContextMenu>
                               {/if}
                             {/each}
-                        </div>
+                          </div>
                         {/if}
                       {/if}
                     </div>

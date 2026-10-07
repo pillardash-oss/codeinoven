@@ -94,6 +94,13 @@ export type SpecGenerationTraceUpdate =
 export type AssignmentGenerationTraceUpdate = SpecGenerationTraceUpdate
 
 export type AgentEvent =
+  | {
+      type: 'artifact.rendered'
+      sessionId: string
+      projectId: string
+      threadId: string
+      message: AgentMessage
+    }
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
   | {
       type: 'checkpoint.updated'

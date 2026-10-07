@@ -234,6 +234,8 @@ export interface AgentArtifact {
 
 /** A message in the agent conversation. */
 export interface AgentMessage {
+  /** App-published artifact row independent of the assistant turn trace. */
+  inlineArtifact?: boolean
   id: string
   role: 'user' | 'assistant'
   /** Who produced the display-facing record. */

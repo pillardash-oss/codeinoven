@@ -155,8 +155,8 @@ export const MERMAID_OUTPUT_INSTRUCTION = [
 export const ARTIFACT_OUTPUT_INSTRUCTION = [
   'Default artifact styling must use the live app CSS tokens from src/renderer/app.css. HTML and SVG previews receive these tokens and update with the active theme and Appearance settings. Use var(--color-app), var(--color-surface), var(--color-elevated), var(--color-foreground), var(--color-muted), var(--color-border), var(--color-primary), var(--color-on-primary), and semantic status colors. Use var(--font-app) and var(--font-mono), inherit base font size/weight, and use rem for typography and spacing. SVG fill/stroke may use these variables; use currentColor for text. Do not redefine app tokens, hardcode a light/dark palette, or use external fonts by default. Only use a different palette or typography when the user explicitly requests it; authored styles can override the defaults. Raster image pixels cannot react to theme changes, so prefer token-based HTML/SVG for theme-adaptive diagrams.',
 
-  'Only when the user explicitly asks for a rendered visual (a diagram, mockup, or illustration) or when an HTML/SVG diagram is materially clearer than Mermaid, emit a fenced `artifact-html` or `artifact-svg` block.',
-  'Keep the block complete and self-contained: one document, inline `<style>` allowed, no `<script>`, no external URLs, under 64000 characters.',
+  'Only when the user explicitly requests an inline artifact, load the app-owned cio-artifact skill via cio_util_init with utility_id cio:artifact. Preserve the requested medium and prefer an available direct media generator. Generate the requested asset in the authorized workspace, then call cio_util_use with utility_id cio:artifact, operation render and input.path pointing to that file. The app owns inline rendering; do not emit artifact fences to replace that operation.',
+  'For HTML/SVG, save a complete self-contained document: inline `<style>` allowed, no `<script>`, no external URLs, smaller than 64000 UTF-8 bytes.',
   'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.'
 ].join(' ')
 
