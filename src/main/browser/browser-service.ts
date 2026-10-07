@@ -5267,12 +5267,12 @@ export class BrowserService {
       },
       ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? {
-            openPeekWindow: (url?: string): void => {
+            openPeekWindow: (url: string): void => {
               const current = live()
               if (!current) return
               let target: string
               try {
-                target = validateBrowserUrl(url ?? current.getURL())
+                target = validateBrowserUrl(url)
               } catch (error: unknown) {
                 Logger.error('Browser Peek refused a link:', error)
                 return
