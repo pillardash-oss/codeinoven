@@ -1,7 +1,9 @@
 <script lang="ts">
   import { MessagesCircle } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import { copyText } from '$lib/copy-text'
   import { invoke } from '$lib/ipc.svelte'
   import {
     contextSidebarState,
@@ -354,7 +356,8 @@
         return
       case 'copyThreadId':
         try {
-          await invoke('clipboard:writeText', current.threadId)
+          await copyText(current.threadId)
+          toast.success('Thread ID copied')
         } catch (error) {
           reportError(error, 'The thread ID could not be copied.')
         }
