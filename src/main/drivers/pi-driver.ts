@@ -2133,7 +2133,8 @@ export class PiDriver extends PersistentCliDriver {
           // any other turn, and never finalize here   the compaction's own
           // `agent_settled` finalizes the whole turn.
           if (this.turnStates.get(session.id)?.compacting) return
-          if (this.beginSilentContinue(session)) return
+          if (record['aborted'] === true) this.silentContinues.delete(session.id)
+          else if (this.beginSilentContinue(session)) return
           this.activeTurns.delete(session.id)
           void this.refreshSessionUsage(session).finally(() => {
             void this.finishTurn(session)

@@ -339,6 +339,9 @@ describe('PiDriver', () => {
     expect(issue && issue.state === 'error' ? issue.issue?.message : undefined).toBe(
       'rate limit exceeded'
     )
+    expect(mapPiRecord({ type: 'agent_settled', aborted: true }, context, state)?.events).toEqual(
+      []
+    )
   })
 
   it('stays silent on oversized agent_settled errors while recovery claims them', async () => {
