@@ -876,8 +876,7 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-90 flex w-72 max-h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
-        style="height: var(--bits-popover-content-available-height)"
+        class="z-90 flex w-72 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           void pickerList?.focusPickerEntries()

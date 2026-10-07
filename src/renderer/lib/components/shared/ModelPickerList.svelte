@@ -572,7 +572,7 @@
       if (pickerRoot === node) pickerRoot = undefined
     }
   }}
-  class="flex min-h-0 flex-1 items-stretch"
+  class="flex min-h-0 items-stretch"
 >
   <ModelPickerRail
     view={effectiveView}
@@ -586,7 +586,7 @@
   <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
     {#if isProfilesView}
       {#if profiles}
-        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div class="flex max-h-60 min-h-52 flex-col overflow-hidden">
           <ModelPickerProfiles {...profiles} />
         </div>
       {/if}
@@ -677,7 +677,7 @@
             if (modelList === node) modelList = undefined
           }
         }}
-        class="min-h-0 flex-1 overflow-y-auto p-1"
+        class="max-h-60 overflow-y-auto p-1"
         role="group"
         aria-label="Model entries"
       >
@@ -813,7 +813,7 @@
       {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
     </p>
   {:else if item.kind === 'unavailable-model'}
-    <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+    <div class="flex h-full items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs">{item.favorite.modelId}</span>
         {#if item.favorite.providerId}
@@ -841,7 +841,7 @@
     {#if item.favoriteKey !== undefined}
       {@const key = item.favoriteKey}
       <div
-        class="relative"
+        class="relative h-full"
         role="listitem"
         class:opacity-50={draggingFavoriteKey === key}
         draggable={item.draggable}
@@ -884,7 +884,7 @@
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
   {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   <button
-    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={unavailable
       ? unavailableHarnessTitle(entry.provider.harnessId)
       : `Use ${entry.model.name}`}
