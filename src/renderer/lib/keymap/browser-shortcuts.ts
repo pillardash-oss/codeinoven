@@ -46,7 +46,18 @@ const ACTION_ENTRIES: ReadonlyArray<readonly [BrowserShortcutAction, string]> = 
   // The notes rail is this view's right sidebar, so it answers the same
   // user-visible binding every other view's right sidebar answers, and a user
   // rebind moves both at once.
-  ['toggleNotes', 'nav-toggle-right-sidebar']
+  ['toggleNotes', 'nav-toggle-right-sidebar'],
+  ...(
+    [
+      'nav-projects',
+      'nav-threads',
+      'nav-projects-with-scope',
+      'nav-scope',
+      'nav-chats',
+      'nav-browser',
+      'nav-assistant'
+    ] as const
+  ).map((id): readonly [BrowserShortcutAction, string] => [id, id])
 ]
 
 /** Only the effective key tokens per id are needed, which is what the keymap
@@ -127,6 +138,19 @@ let publishingInstalled = false
 export function installBrowserShortcutPublishing(source: BrowserShortcutKeySource): void {
   if (publishingInstalled) return
   publishingInstalled = true
+  subscribe('browser:navigationKey', (chord) => {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: chord.key,
+        metaKey: chord.meta,
+        ctrlKey: chord.control,
+        shiftKey: chord.shift,
+        altKey: chord.alt,
+        bubbles: true,
+        cancelable: true
+      })
+    )
+  })
   publishBrowserShortcutBindings(source)
   subscribe('app:featuresReady', () => publishBrowserShortcutBindings(source))
 }

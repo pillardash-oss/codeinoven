@@ -2590,6 +2590,17 @@ export class BrowserService {
     this.publishState(tabId)
   }
 
+  /** Deliver view navigation to the existing shell handlers, with renderer focus. */
+  private forwardNavigationShortcut(action: BrowserShortcutAction): boolean {
+    if (!action.startsWith('nav-')) return false
+    const chord = this.shortcutBindings[action]?.[0]
+    if (chord && !this.window.webContents.isDestroyed()) {
+      this.window.webContents.focus()
+      sendToRenderer(this.window.webContents, 'browser:navigationKey', chord)
+    }
+    return true
+  }
+
   /**
    * Run one claimed browser action on a tab.
    *
@@ -2600,6 +2611,7 @@ export class BrowserService {
    * it must never block the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
+    if (this.forwardNavigationShortcut(action)) return
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
     const contents = tab.view.webContents
@@ -3867,6 +3879,7 @@ export class BrowserService {
     record: BrowserPopupWindowRecord,
     action: BrowserShortcutAction
   ): void {
+    if (this.forwardNavigationShortcut(action)) return
     const contents = record.view.webContents
     if (contents.isDestroyed()) return
     switch (action) {

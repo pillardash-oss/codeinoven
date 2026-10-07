@@ -384,7 +384,14 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'toggleNotes',
   'find',
   'findNext',
-  'findPrevious'
+  'findPrevious',
+  'nav-projects',
+  'nav-threads',
+  'nav-projects-with-scope',
+  'nav-scope',
+  'nav-chats',
+  'nav-browser',
+  'nav-assistant'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
