@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Check, Code2, Copy, Expand, Eye } from '@lucide/svelte'
+  import { Check, Code2, Copy, Expand, Eye, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
+  import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import Modal from '../ui/Modal.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { buildArtifactSrcdoc, type ArtifactKind } from './artifact'
@@ -19,6 +20,7 @@
 
   const label = $derived(kind === 'html' ? 'HTML artifact' : 'SVG artifact')
   const srcdoc = $derived(buildArtifactSrcdoc(kind, code))
+  const wrapped = $derived(wrapTextState.wrapped)
 
   $effect(() => () => clearTimeout(copyResetTimer))
 
@@ -37,7 +39,7 @@
 {#snippet artifactBody(fullscreen = false)}
   {#if showSource && !fullscreen}
     <div class="[&>div]:rounded-none [&>div]:border-0 [&>div]:border-t">
-      <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} />
+      <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
   {:else}
     <iframe
@@ -83,6 +85,15 @@
           <span class="flex items-center gap-1"><Code2 size={12} />Code</span>
         </button>
       </div>
+      <button
+        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        aria-label={wrapToggleLabel(wrapped)}
+        title={wrapToggleLabel(wrapped)}
+        aria-pressed={wrapped}
+        onclick={() => wrapTextState.toggle()}
+      >
+        <WrapText size={13} class={wrapped ? 'text-primary' : ''} />
+      </button>
       <button
         class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Copy {label} source"

@@ -8,9 +8,14 @@
     code: string
     /** Fence language tag, e.g. `ts`   plain text when omitted or unknown. */
     lang?: string
+    /**
+     * Hide the header toolbar (language label, wrap, copy). Used when the
+     * caller already owns those controls, e.g. the artifact card header.
+     */
+    hideHeader?: boolean
   }
 
-  let { code, lang }: Props = $props()
+  let { code, lang, hideHeader = false }: Props = $props()
 
   let copied = $state(false)
   let highlightCode = $state<((source: string, language?: string) => string) | null>(null)
@@ -49,34 +54,36 @@
 </script>
 
 <div class="overflow-hidden rounded-lg border bg-elevated">
-  <div class="flex h-7 items-center justify-between border-b px-3">
-    <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed"
-      >{lang || 'text'}</span
-    >
-    <div class="flex items-center gap-1">
-      <button
-        class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label={wrapToggleLabel(wrapped)}
-        title={wrapToggleLabel(wrapped)}
-        aria-pressed={wrapped}
-        onclick={() => wrapTextState.toggle()}
+  {#if !hideHeader}
+    <div class="flex h-7 items-center justify-between border-b px-3">
+      <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed"
+        >{lang || 'text'}</span
       >
-        <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
-      </button>
-      <button
-        class="flex items-center gap-1 rounded p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label="Copy code"
-        title="Copy code"
-        onclick={() => void copy()}
-      >
-        {#if copied}
-          <Check size={12} class="text-success" />
-        {:else}
-          <Copy size={12} />
-        {/if}
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          aria-label={wrapToggleLabel(wrapped)}
+          title={wrapToggleLabel(wrapped)}
+          aria-pressed={wrapped}
+          onclick={() => wrapTextState.toggle()}
+        >
+          <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
+        </button>
+        <button
+          class="flex items-center gap-1 rounded p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          aria-label="Copy code"
+          title="Copy code"
+          onclick={() => void copy()}
+        >
+          {#if copied}
+            <Check size={12} class="text-success" />
+          {:else}
+            <Copy size={12} />
+          {/if}
+        </button>
+      </div>
     </div>
-  </div>
+  {/if}
   <!-- eslint-disable svelte/no-at-html-tags -- hljs output is escaped text + spans -->
   <pre
     class="p-3 font-mono text-xs leading-relaxed text-foreground"

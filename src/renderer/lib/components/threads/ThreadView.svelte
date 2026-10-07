@@ -82,6 +82,7 @@
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
+  import InlineImageFigure from './InlineImageFigure.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -11886,10 +11887,41 @@
                         />
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
+                        {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
+                        {@const imageParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> =>
+                            isImageMime(p.mime)
+                        )}
+                        {@const otherParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> =>
+                            !isImageMime(p.mime)
+                        )}
+                        <!-- Model-generated images render large and inline (two-up
+                             on wide transcripts), each expanding into the
+                             fullscreen viewer with sibling navigation. -->
+                        {#if imageParts.length > 0}
+                          <div class="mt-2 grid grid-cols-1 gap-2 border-t border-border pt-2 xl:grid-cols-2">
+                            {#each imageParts as part (part.id)}
+                              <FileCitationContextMenu
+                                projectId={thread.projectId}
+                                citation={citationForFilePart(part)}
+                              >
+                                <InlineImageFigure
+                                  url={part.url}
+                                  mime={part.mime}
+                                  filename={part.filename ??
+                                    part.url.split('/').pop() ??
+                                    'image'}
+                                  {imageUrls}
+                                  onExpand={() => openMessageViewer(msg, part)}
+                                />
+                              </FileCitationContextMenu>
+                            {/each}
+                          </div>
+                        {/if}
+                        {#if otherParts.length > 0}
                         <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
-                          {#each msg.parts as part (part.id)}
-                            {#if part.type === 'file'}
-                              {@const imageFile = isImageMime(part.mime)}
+                          {#each otherParts as part (part.id)}
                               {@const mediaKind = isVideoMime(part.mime)
                                 ? 'video'
                                 : isAudioMime(part.mime)
@@ -11902,41 +11934,7 @@
                                 Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
                               {@const partName =
                                 part.filename ?? part.url.split('/').pop() ?? 'file'}
-                              {#if imageFile}
-                                <FileCitationContextMenu
-                                  projectId={thread.projectId}
-                                  citation={citationForFilePart(part)}
-                                >
-                                  <button
-                                    type="button"
-                                    class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
-                                    title="Preview {part.filename ?? 'image'}"
-                                    aria-label="Preview {part.filename ?? 'image'}"
-                                    onclick={() => openMessageViewer(msg, part)}
-                                  >
-                                    <img
-                                      src={imageUrls.getUrl(part.url)}
-                                      alt={part.filename ?? 'image'}
-                                      class="h-16 w-24 object-cover"
-                                      onerror={(e: Event) =>
-                                        void imageUrls.bindImage(
-                                          part.url,
-                                          part.mime,
-                                          e.currentTarget as HTMLImageElement
-                                        )}
-                                    />
-                                    <div
-                                      class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
-                                    >
-                                      <span
-                                        class="text-[0.625rem] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
-                                      >
-                                        Preview
-                                      </span>
-                                    </div>
-                                  </button>
-                                </FileCitationContextMenu>
-                              {:else if mediaKind}
+                              {#if mediaKind}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
@@ -11973,9 +11971,9 @@
                                   )}
                                 </FileCitationContextMenu>
                               {/if}
-                            {/if}
-                          {/each}
+                            {/each}
                         </div>
+                        {/if}
                       {/if}
                     </div>
                     <div
