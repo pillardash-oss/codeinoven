@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Globe, Loader2, Mic, Moon, Pin, Volume2, VolumeX, X } from '@lucide/svelte'
+  import { Eye, Globe, Loader2, Mic, Moon, Pin, Volume2, VolumeX, X } from '@lucide/svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -409,6 +409,14 @@
       >
         <TabNoteIcon size={12} />
       </span>
+    {/if}
+    {#if globalBrowser.hasPeek(tab.id)}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center text-accent"
+        title="Peek open on this tab"
+        aria-label="Peek open on this tab"><Eye size={12} /></span
+      >
     {/if}
     {#if runtime.capturing}
       <span

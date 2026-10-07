@@ -6,7 +6,6 @@
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { threadBrowserTabs } from '$lib/stores/thread-browser-tabs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { subscribe } from '$lib/ipc.svelte'
@@ -193,17 +192,11 @@
    */
   onMount(() =>
     subscribe('browser:switcherKey', ({ backward }) => {
-      // The full screen thread browser owns the gesture while it is up: there,
-      // Ctrl+Tab steps through its own tabs rather than opening this switcher.
-      if (threadBrowserTabs.fullscreenActive) return
       cycle(backward ? -1 : 1)
     })
   )
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    // The full screen thread browser owns Ctrl+Tab while it is up (see the
-    // subscription above); everywhere else the switcher keeps the gesture.
-    if (threadBrowserTabs.fullscreenActive) return
     if (keymapState.matches('thread-switcher', event)) {
       // No "nothing to show" guard before the cycle: an empty list is exactly the
       // state the cycle's own stored-list read is there to fill, so returning

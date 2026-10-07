@@ -43,6 +43,7 @@ import {
 import { browserExtensionSidePanels } from './browser-extension-side-panels.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
+import { browserVisibility } from './browser-visibility.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
@@ -108,45 +109,73 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
-  peekTab: GlobalBrowserTab | null = $state(null)
-  /**
-   * How far the current Peek Window has got, or null when there is none.
-   *
-   * The peek is the one browser surface that animates, so its life is a state
-   * machine rather than a mount: the surface draws the phase it is given and tells
-   * the store when the flight lands (`peekFlightLanded`), which is what keeps the
-   * tab alive long enough to be seen leaving.
-   */
-  peekPhase: BrowserPeekPhase | null = $state(null)
-  /**
-   * The rectangle on screen the current peek's opening flight starts from.
-   *
-   * Main works it out, because the click that opens a peek lands in a native page
-   * and never reaches the renderer: it is the link the user pressed, or a box
-   * around the click when the page named no link. Null when nothing named one, and
-   * the surface falls back to a box of its own.
-   */
-  peekOrigin: BrowserViewBounds | null = $state(null)
-  /**
-   * Whether the current peek's page has reported a document at all.
-   *
-   * Main starts the load before the surface exists, so the first state a peek
-   * reads can already be "not loading". A gate that only read that would uncover
-   * an empty native view on the first frame, which is exactly the flash the
-   * loading state is there to prevent. A page that answers from cache reports only
-   * its commit, so a committed address counts as a document too.
-   */
-  private peekDocumentSeen = $state(false)
-  /**
-   * Whether the current peek has finished its opening flight.
-   *
-   * This is what says its page may be uncovered, and it is not the same question as
-   * the phase: a close or an expansion the user asks for while the peek is still
-   * growing has to be able to leave, and it leaves with a page that was never on
-   * screen at all. Only a landing turns this on, so a flight that never got there
-   * cannot picture or uncover a page that never arrived.
-   */
-  private peekLanded = $state(false)
+  private peeks = new SvelteMap<
+    string,
+    {
+      tab: GlobalBrowserTab
+      projectId: string
+      threadId: string
+      ownerThreadId: string
+      phase: BrowserPeekPhase
+      origin: BrowserViewBounds | null
+      documentSeen: boolean
+      landed: boolean
+    }
+  >()
+
+  private get currentPeek() {
+    const sourceId = browserVisibility.sourceTabId
+    const peek = sourceId ? this.peeks.get(sourceId) : undefined
+    if (!peek) return undefined
+    if (
+      peek.projectId !== GLOBAL_BROWSER_PROJECT_ID &&
+      contextSidebarState.threadIdForProject(peek.projectId) !== peek.ownerThreadId
+    )
+      return undefined
+    return peek
+  }
+
+  get peekTab(): GlobalBrowserTab | null {
+    return this.currentPeek?.tab ?? null
+  }
+  get peekPhase(): BrowserPeekPhase | null {
+    return this.currentPeek?.phase ?? null
+  }
+  set peekPhase(phase: BrowserPeekPhase | null) {
+    const peek = this.currentPeek
+    if (peek && phase) peek.phase = phase
+  }
+  get peekOrigin(): BrowserViewBounds | null {
+    return this.currentPeek?.origin ?? null
+  }
+  private get peekDocumentSeen(): boolean {
+    return this.currentPeek?.documentSeen ?? false
+  }
+  private get peekLanded(): boolean {
+    return this.currentPeek?.landed ?? false
+  }
+  private set peekLanded(value: boolean) {
+    const peek = this.currentPeek
+    if (peek) peek.landed = value
+  }
+
+  hasPeek(sourceTabId: string): boolean {
+    return this.peeks.has(sourceTabId)
+  }
+
+  hasThreadPeek(projectId: string, threadId: string): boolean {
+    for (const peek of this.peeks.values()) {
+      if (peek.projectId === projectId && peek.ownerThreadId === threadId) return true
+    }
+    return false
+  }
+
+  peekContext(tabId: string): { projectId: string; threadId: string } | null {
+    for (const peek of this.peeks.values()) {
+      if (peek.tab.id === tabId) return { projectId: peek.projectId, threadId: peek.threadId }
+    }
+    return null
+  }
 
   /**
    * Whether the peek's page is on screen, or would be if nothing was holding it.
@@ -212,7 +241,17 @@ export class GlobalBrowserState {
     // about the tab. Activation waits for the landing: until then the strip is
     // behind the surface, drawing a row nobody can see.
     this.enforceTabCap()
-    this.tabs = [...this.tabs, tab]
+    const context = this.peekContext(tab.id)
+    if (context && context.projectId !== GLOBAL_BROWSER_PROJECT_ID) {
+      contextSidebarState.openBrowserForContext(
+        tab.url,
+        context.projectId,
+        context.threadId,
+        tab.id,
+        false,
+        tab.boxId
+      )
+    } else this.tabs = [...this.tabs, tab]
     this.peekPhase = 'expanding'
   }
 
@@ -240,9 +279,14 @@ export class GlobalBrowserState {
       return
     }
     if (landing !== 'expand') return
+    const context = this.peekContext(tab.id)
     this.forgetPeek()
-    this.activate(tab.id)
-    this.persist()
+    if (context && context.projectId !== GLOBAL_BROWSER_PROJECT_ID)
+      contextSidebarState.focus(tab.id)
+    else {
+      this.activate(tab.id)
+      this.persist()
+    }
   }
 
   /** Drop a peek's tab for good: it is over, and its runtime describes a page
@@ -255,20 +299,20 @@ export class GlobalBrowserState {
     )
   }
 
-  /** Give up a peek with no flight and no IPC: main has already taken its tab
-   *  away (a new peek is replacing it), so only the renderer's side is left. */
-  private discardPeek(): void {
-    if (!this.peekTab) return
-    this.runtime.delete(this.peekTab.id)
-    this.forgetPeek()
+  private forgetPeek(): void {
+    const tab = this.peekTab
+    if (!tab) return
+    for (const [sourceId, peek] of this.peeks) {
+      if (peek.tab.id === tab.id) this.peeks.delete(sourceId)
+    }
   }
 
-  private forgetPeek(): void {
-    this.peekTab = null
-    this.peekPhase = null
-    this.peekOrigin = null
-    this.peekDocumentSeen = false
-    this.peekLanded = false
+  closeSourcePeek(sourceId: string): void {
+    const peek = this.peeks.get(sourceId)
+    if (!peek) return
+    this.peeks.delete(sourceId)
+    this.runtime.delete(peek.tab.id)
+    void invoke('browser:destroy', peek.tab.id, 'closed').catch(() => {})
   }
   /**
    * Tabs closed this session, most recently closed last.
@@ -811,7 +855,8 @@ export class GlobalBrowserState {
   tabById(tabId: string): GlobalBrowserTab | null {
     return (
       this.tabs.find((tab) => tab.id === tabId) ??
-      (this.peekTab?.id === tabId ? this.peekTab : null)
+      [...this.peeks.values()].find((peek) => peek.tab.id === tabId)?.tab ??
+      null
     )
   }
 
@@ -1291,11 +1336,15 @@ export class GlobalBrowserState {
    * Adopt a tab the main process created on a page's behalf.
    *
    * Main parks and loads the popup before this arrives, so the renderer only has
-   * to give it a row. A request outside the global context belongs to a project
-   * browser and is left alone.
+   * to give it a row. Ordinary project tabs belong to the sidebar; ephemeral
+   * peeks from both browser surfaces share this lifecycle.
    */
-  adoptOpenRequest(url: string, context?: BrowserOpenRequestContext): void {
-    if (!context || context.projectId !== GLOBAL_BROWSER_PROJECT_ID) return
+  adoptOpenRequest(
+    url: string,
+    context?: BrowserOpenRequestContext,
+    peekOwnerThreadId?: string
+  ): void {
+    if (!context || (!context.peek && context.projectId !== GLOBAL_BROWSER_PROJECT_ID)) return
     const tabId = context.requestedTabId
     if (!tabId) return
     const existing = this.tabs.find((tab) => tab.id === tabId)
@@ -1332,12 +1381,33 @@ export class GlobalBrowserState {
       imagePath: null
     }
     if (context.peek) {
-      this.discardPeek()
-      this.peekTab = newTab
-      this.peekOrigin = context.origin ?? null
-      this.peekDocumentSeen = false
-      this.peekLanded = false
-      this.peekPhase = 'opening'
+      const sourceTabId = context.sourceTabId ?? browserVisibility.sourceTabId
+      if (!sourceTabId) return
+      const previous = this.peeks.get(sourceTabId)
+      if (previous?.tab.id === tabId) return
+      if (previous) this.runtime.delete(previous.tab.id)
+      const peek = $state({
+        tab: newTab,
+        projectId: context.projectId,
+        threadId: context.threadId,
+        ownerThreadId:
+          peekOwnerThreadId ??
+          (context.projectId === GLOBAL_BROWSER_PROJECT_ID
+            ? context.threadId
+            : (contextSidebarState.threadIdForProject(context.projectId) ?? context.threadId)),
+        phase: 'opening' as BrowserPeekPhase,
+        origin: context.origin ?? null,
+        documentSeen: false,
+        landed: false
+      })
+      this.peeks.set(sourceTabId, peek)
+      // Native loading begins before a lazy renderer can subscribe. Read once
+      // so a page that already loaded cannot remain behind the loading gate.
+      void invoke('browser:pageState', tabId)
+        .then((state) => {
+          if (state && !this.runtime.has(tabId) && this.tabById(tabId)) this.applyPageState(state)
+        })
+        .catch(() => {})
       return
     }
     this.tabs = [...this.tabs, newTab]
@@ -1491,6 +1561,7 @@ export class GlobalBrowserState {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
     const closing = this.tabs[index]
+    this.closeSourcePeek(tabId)
     if (options.recordForReopen !== false) this.rememberClosedTab(closing, index)
     // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
     // instead of holding a slot in the recency list.
@@ -1999,10 +2070,9 @@ export class GlobalBrowserState {
     if (state.loading) tab.lastUsedAt = Date.now()
     // A peek's gate reads the document, not just the load flag: see
     // `peekDocumentSeen` for why one is not enough without the other.
-    if (state.tabId === this.peekTab?.id && (state.loading || state.url !== '')) {
-      this.peekDocumentSeen = true
-    }
-    if (changed && tab !== this.peekTab) this.persist()
+    const peek = [...this.peeks.values()].find((entry) => entry.tab.id === state.tabId)
+    if (peek && (state.loading || state.url !== '')) peek.documentSeen = true
+    if (changed && !peek) this.persist()
     const current = this.runtime.get(state.tabId)
     if (
       current &&

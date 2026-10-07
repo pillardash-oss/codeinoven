@@ -17,6 +17,7 @@
 </script>
 
 <script lang="ts">
+  import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -83,6 +84,7 @@
     onFullscreenTab?: (id: string) => void
     /** Callback for drag-to-reorder; position is relative to the target tab.
      *  Only tabbed kinds render a strip, so this only reorders those. */
+    onTabContextMenu?: (id: string, event: MouseEvent) => void
     onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     onWidthChange: (width: number) => void
     onHeightChange: (height: number) => void
@@ -116,6 +118,7 @@
     onClose,
     onFullscreenTab,
     onMoveTab,
+    onTabContextMenu,
     onWidthChange,
     onHeightChange,
     onTerminalPlacementChange,
@@ -486,7 +489,7 @@
 
   {#snippet stripRowBody(tab: ContextSidebarTab)}
     {@const runtime = contextSidebarState.browserRuntime(tab.id)}
-    {@const indicators = browserTabIndicators(runtime)}
+    {@const indicators = browserTabIndicators(runtime, browserStore()?.hasPeek(tab.id))}
     {@const conversation = badgeConversation(tab)}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
@@ -497,6 +500,7 @@
         : ''}"
       draggable={onMoveTab ? 'true' : 'false'}
       role="listitem"
+      oncontextmenu={(event) => onTabContextMenu?.(tab.id, event)}
       ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
       ondragend={handleDragEnd}
       ondragover={(e: DragEvent) => handleDragOver(e, tab)}
@@ -674,7 +678,7 @@
                 class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another browser tab"
                 title="New browser tab"
-                onclick={onNewBrowser}
+                onclick={() => onNewBrowser?.()}
               >
                 <Plus size={13} />
               </button>

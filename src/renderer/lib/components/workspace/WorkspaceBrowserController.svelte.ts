@@ -1,3 +1,6 @@
+import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { loadBrowser } from '$lib/stores/browser-access.svelte'
+import { browserAddressFocus } from '$lib/stores/browser-address-focus'
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -44,6 +47,75 @@ export class WorkspaceBrowserController {
     const projectId = this.getSelectedProjectId()
     return projectId ? browserDownloads.unfinishedCount(projectId) : 0
   })
+
+  /** Both strips use the same native tab menu, above the native page. */
+  async openTabMenu(tabId: string, event: MouseEvent, close: (id: string) => void): Promise<void> {
+    event.preventDefault()
+    const x = event.clientX
+    const y = event.clientY
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+    if (tab?.kind !== 'browser') return
+    try {
+      const store = await loadBrowser()
+      const { browserBookmarks } = await import('$lib/stores/browser-bookmarks.svelte')
+      const choice = await invoke(
+        'browser:tabContextMenu',
+        {
+          threadScoped: true,
+          tabId,
+          title: tab.title,
+          url: tab.url,
+          bookmarkAvailable: Boolean(tab.url),
+          bookmarked: browserBookmarks.isBookmarked(tab.url, tab.boxId),
+          pinned: false,
+          groupId: null,
+          boxId: tab.boxId,
+          canReopenClosedTab: true,
+          groups: [],
+          boxes: store.boxes.map(({ id, name }) => ({ id, name }))
+        },
+        x,
+        y
+      )
+      if (!choice || !contextSidebarState.tabs.some((candidate) => candidate.id === tabId)) return
+      if (choice.action === 'close') {
+        close(tabId)
+        return
+      }
+      if (choice.action === 'toggleBookmark') {
+        browserBookmarks.toggle(tab.url, tab.title, tab.favicon, tab.boxId)
+        return
+      }
+      if (choice.action === 'reopenClosed') {
+        const id = contextSidebarState.reopenClosedBrowserTab()
+        if (id) browserAddressFocus.request(id)
+        return
+      }
+      if (choice.action === 'reopenInBox') {
+        store.closeSourcePeek(tabId)
+        contextSidebarState.setBrowserTabBox(tabId, choice.boxId)
+        return
+      }
+      if (!['duplicate', 'newBefore', 'newTab', 'newPlaced'].includes(choice.action)) return
+      const boxId = choice.action === 'newPlaced' ? choice.boxId : tab.boxId
+      const finalId = contextSidebarState.openBrowserForContext(
+        choice.action === 'duplicate' ? tab.url : '',
+        tab.projectId,
+        tab.threadId,
+        undefined,
+        true,
+        boxId
+      )
+      contextSidebarState.reorder(
+        finalId,
+        tabId,
+        choice.action === 'newBefore' ? 'before' : 'after'
+      )
+      if (choice.action !== 'duplicate') browserAddressFocus.request(finalId)
+    } catch (error: unknown) {
+      reportError(error, 'Browser tab menu could not be opened.')
+    }
+  }
 
   openContextMenu(event: MouseEvent): void {
     event.preventDefault()

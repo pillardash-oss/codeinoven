@@ -459,7 +459,7 @@ export interface BrowserFindRequest {
   text: string
   /** The direction the session moves in. */
   forward: boolean
-  /** Continue the existing session instead of starting a new one. */
+  /** Start a new Chromium find session; false steps within the current one. */
   findNext: boolean
   /** Match the text case-sensitively. */
   matchCase: boolean
@@ -494,6 +494,8 @@ export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activa
 export interface BrowserOpenRequestContext {
   /** Ephemeral native page, adopted into the saved tab list only on expansion. */
   peek?: boolean
+  /** Browser tab whose page opened this peek or sibling. */
+  sourceTabId?: string
   projectId: string
   threadId: string
   requestedTabId?: string

@@ -632,7 +632,7 @@ export class BrowserService {
   private readonly tabHistory = new BrowserTabHistoryStore()
   /** Stacks of tabs closed this session, held only until the tab is reopened. */
   private readonly closedTabHistory = new BrowserClosedTabHistory()
-  private peekTabId: string | null = null
+  private peekTabs = new Map<string, string>()
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -824,7 +824,7 @@ export class BrowserService {
    * to be restored twice.
    */
   private captureTabHistory(tabId: string, tab: BrowserTab): void {
-    if (tabId === this.peekTabId) return
+    if (this.peekTabs.has(tabId)) return
     const record = this.readTabHistory(tabId, tab)
     if (!record) return
     this.closedTabHistory.forget(tabId)
@@ -1028,7 +1028,7 @@ export class BrowserService {
       // because a native view is painted over the DOM that flight happens in. The
       // grace period below would leave the page sitting over that flight for its
       // length.
-      if (tabId === this.peekTabId) this.parkTab(tabId)
+      if (this.peekTabs.has(tabId)) this.parkTab(tabId)
       // Deferred by one tick, so a panel that unmounts because the same tab is
       // moving to another surface (the sidebar handing the tab to the full screen
       // browser) does not park a view that is about to be shown again.
@@ -1184,6 +1184,11 @@ export class BrowserService {
         throw new TypeError('Browser mouse history direction must be back or forward')
       }
       return this.navigateFocusedHistory(rawDirection)
+    })
+    replaceHandler('browser:pageState', (_event, rawTabId) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.liveTab(tabId)
+      return tab ? this.stateFor(tabId, tab) : null
     })
     replaceHandler('browser:reload', (_event, rawTabId) => {
       this.liveTab(validateTabId(rawTabId))?.view.webContents.reload()
@@ -1406,9 +1411,9 @@ export class BrowserService {
     })
     replaceHandler('browser:expandPeek', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
-      if (tabId !== this.peekTabId || !this.tabs.has(tabId))
+      if (!this.peekTabs.has(tabId) || !this.tabs.has(tabId))
         throw new Error('Peek Window is no longer available')
-      this.peekTabId = null
+      this.peekTabs.delete(tabId)
     })
     replaceHandler('browser:peekSnapshot', async (_event, rawTabId) => {
       // Taken while the peek is still on screen, because the surface animates the
@@ -2925,7 +2930,7 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
-      if (this.peekTabId === tabId && input.type === 'keyDown' && input.key === 'Escape') {
+      if (this.peekTabs.has(tabId) && input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault()
         this.requestPanelShortcut(tabId, 'close-tab')
         return
@@ -5308,9 +5313,14 @@ export class BrowserService {
     peek = false,
     origin: BrowserViewBounds | null = null
   ): void {
-    if (peek && this.peekTabId) this.destroy(this.peekTabId, 'closed')
+    const sourceTabId = this.peekTabs.get(owner.tabId) ?? owner.tabId
+    if (peek) {
+      for (const [peekId, sourceId] of this.peekTabs) {
+        if (sourceId === sourceTabId) this.destroy(peekId, 'closed')
+      }
+    }
     const tabId = `browser:${crypto.randomUUID()}`
-    if (peek) this.peekTabId = tabId
+    if (peek) this.peekTabs.set(tabId, sourceTabId)
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
     const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
@@ -5321,6 +5331,7 @@ export class BrowserService {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,
+      sourceTabId,
       peek,
       reveal: true,
       boxId: owner.boxId,
@@ -6027,6 +6038,11 @@ export class BrowserService {
     // about to be gone: the view would be handed to the stage window only to be
     // destroyed.
     this.dropPendingPark(tabId)
+    if (reason === 'closed') {
+      for (const [peekId, sourceId] of this.peekTabs) {
+        if (sourceId === tabId) this.destroy(peekId, 'closed')
+      }
+    }
     const tab = this.tabs.get(tabId)
     // The stack dies with the view, so a tab that is only being hibernated hands
     // its stack over before it goes. A tab that is being closed hands it to the
@@ -6037,8 +6053,8 @@ export class BrowserService {
     if (reason === 'hibernated') {
       if (tab) this.captureTabHistory(tabId, tab)
     } else {
-      if (tabId !== this.peekTabId) this.stashClosedTabHistory(tabId, tab)
-      else this.peekTabId = null
+      if (!this.peekTabs.has(tabId)) this.stashClosedTabHistory(tabId, tab)
+      else this.peekTabs.delete(tabId)
       this.tabHistory.forget(tabId)
     }
     if (!tab) return

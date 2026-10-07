@@ -626,9 +626,10 @@ class ContextSidebarState {
     projectId: string,
     threadId: string,
     requestedTabId?: string,
-    reveal = false
+    reveal = false,
+    boxId?: string | null
   ): string {
-    return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal)
+    return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal, boxId)
   }
 
   /** The label of a conversation scope's own box, for the thread browser's box

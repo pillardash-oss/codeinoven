@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import { Eye, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import {
     BROWSER_TAB_CAPTURE_LABEL,
@@ -15,7 +16,7 @@
   let { tabId }: Props = $props()
 
   const runtime = $derived(contextSidebarState.browserRuntime(tabId))
-  const indicators = $derived(browserTabIndicators(runtime))
+  const indicators = $derived(browserTabIndicators(runtime, browserStore()?.hasPeek(tabId)))
   const muteLabel = $derived(browserTabMuteLabel(runtime.muted))
 </script>
 
@@ -27,7 +28,14 @@
   to the tab.
 -->
 {#each indicators as indicator (indicator)}
-  {#if indicator === 'capture'}
+  {#if indicator === 'peek'}
+    <span
+      role="img"
+      class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center text-accent"
+      title="Peek open on this tab"
+      aria-label="Peek open on this tab"><Eye size={12} /></span
+    >
+  {:else if indicator === 'capture'}
     <span
       role="img"
       class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center text-accent"

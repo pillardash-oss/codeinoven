@@ -44,7 +44,12 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { isBrowserLoaded, loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
+  import {
+    browserStore,
+    isBrowserLoaded,
+    loadBrowser,
+    withBrowser
+  } from '$lib/stores/browser-access.svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
@@ -1716,6 +1721,13 @@
       {/if}
       {#if activeView === 'scope' || isSettingsView(activeView)}
         <GlobalContextSidebar />
+      {/if}
+      {#if browserStore()?.peekTab}
+        {#key browserStore()?.peekTab?.id}
+          {#await import('$lib/components/browser/BrowserPeekWindow.svelte') then { default: BrowserPeekWindow }}
+            <BrowserPeekWindow />
+          {/await}
+        {/key}
       {/if}
     </main>
   </div>

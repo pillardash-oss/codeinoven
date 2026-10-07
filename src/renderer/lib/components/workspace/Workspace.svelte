@@ -1348,6 +1348,7 @@
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
+  let browserFullscreenThreadId = $state<string | null>(null)
 
   /** The terminal tab actually shown fullscreen, or null when the recorded id no
    *  longer names an open terminal.
@@ -1398,9 +1399,13 @@
    */
   $effect(() => {
     if (!browserFullscreenTabId) return
-    const active = contextSidebarState.activeBrowserTabId
-    if (active === browserFullscreenTabId) return
-    browserFullscreenTabId = active
+    if (!active || selectedThread?.id !== browserFullscreenThreadId) {
+      browserFullscreenTabId = null
+      return
+    }
+    const activeBrowserTabId = contextSidebarState.activeBrowserTabId
+    if (activeBrowserTabId === browserFullscreenTabId) return
+    browserFullscreenTabId = activeBrowserTabId
   })
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
@@ -1600,6 +1605,7 @@
   function openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'browser') {
+      browserFullscreenThreadId = selectedThread?.id ?? null
       browserFullscreenTabId = tabId
       terminalFullscreenTabId = null
     }
@@ -1658,12 +1664,12 @@
     // brings it back from the rail, otherwise it would reappear immediately.
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     if (tab.kind === 'browser') {
-      if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
       // A thread browser tab that is closed takes its Back/Forward stack out of
       // the strip with it, but main keeps it in the session's reopen set so
       // Cmd/Ctrl+Shift+T can bring the tab back on the page it was left on.
       // Quitting the app clears that set. There is no hibernation on this surface,
       // so a destroy here is otherwise the tab really going away.
+      browserStore()?.closeSourcePeek(tab.id)
       void invoke('browser:destroy', tab.id, 'closed')
     }
     // Symmetric with the browser: closing the terminal that is showing fullscreen
@@ -1672,6 +1678,9 @@
       terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
+    if (tab.kind === 'browser' && browserFullscreenTabId === tab.id) {
+      browserFullscreenTabId = contextSidebarState.activeBrowserTabId
+    }
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
     }
@@ -2275,13 +2284,20 @@
       // A tab opened by the global browser belongs to the global strip, which
       // adopts it in its own store; the workspace sidebar must not mirror it.
       if (context?.projectId === GLOBAL_BROWSER_PROJECT_ID) return
+      if (context?.peek) {
+        const ownerThreadId =
+          contextSidebarState.threadIdForProject(context.projectId) ?? context.threadId
+        void loadBrowser().then((browser) => browser.adoptOpenRequest(url, context, ownerThreadId))
+        return
+      }
       if (context) {
         contextSidebarState.openBrowserForContext(
           url,
           context.projectId,
           context.threadId,
           context.requestedTabId,
-          context.reveal
+          context.reveal,
+          context.boxId
         )
         return
       }
@@ -4829,7 +4845,8 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onNewTerminal={openNewTerminal}
-            onNewBrowser={openNewBrowserTab}
+            onNewBrowser={() => openNewBrowserTab()}
+            onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
           />
         </div>
       {/if}
@@ -4926,7 +4943,8 @@
     <WorkspaceFullscreenBrowser
       tabId={browserFullscreenTabId}
       onTabIdChange={(id) => (browserFullscreenTabId = id)}
-      onNewBrowser={openNewBrowserTab}
+      onNewBrowser={() => openNewBrowserTab()}
+      onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
       onCloseTab={(id) => closeFullscreenTab('browser', id)}
     />
   {/await}

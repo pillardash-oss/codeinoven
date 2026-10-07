@@ -34,7 +34,6 @@
   import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
   import BrowserContextSidebar from './BrowserContextSidebar.svelte'
   import BrowserNewTabButton from './BrowserNewTabButton.svelte'
-  import BrowserPeekWindow from './BrowserPeekWindow.svelte'
   import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
@@ -434,8 +433,6 @@
     onClose={() => globalBrowser.closeAddressSpotlight()}
   />
 {/if}
-
-<BrowserPeekWindow />
 
 <style>
   .context-rail {
