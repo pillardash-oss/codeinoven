@@ -411,7 +411,10 @@ export class CodexDriver extends PersistentCliDriver {
       const restoredHistory = (): string => {
         const currentMessageId = options.userMessageId ?? session.messages.at(-1)?.id
         return formatHistoryRecap(
-          session.messages.filter((message) => message.id !== currentMessageId)
+          session.messages.filter((message) => message.id !== currentMessageId),
+          // Apply the transport cap below, keeping the recent end of history.
+          // The formatter's default budget retains the oldest prefix instead.
+          { maxInputTokens: Number.MAX_SAFE_INTEGER }
         )
       }
       let historyRecap = options.historyRecap
@@ -461,11 +464,7 @@ export class CodexDriver extends PersistentCliDriver {
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
-        input: await this.codexInput(
-          prependHistoryRecap(options.text, historyRecap),
-          options.attachments,
-          session.id
-        ),
+        input: await this.codexInput(options.text, options.attachments, session.id, historyRecap),
         cwd: projectPath,
         approvalPolicy: codexApprovalPolicy(
           options.readOnly === true,
@@ -1876,7 +1875,8 @@ export class CodexDriver extends PersistentCliDriver {
   private async codexInput(
     text: string,
     attachments: PromptAttachment[],
-    sessionId: string
+    sessionId: string,
+    historyRecap?: string
   ): Promise<Array<Record<string, unknown>>> {
     const input: Array<Record<string, unknown>> = [{ type: 'text', text, text_elements: [] }]
     const references: string[] = []
@@ -1894,6 +1894,35 @@ export class CodexDriver extends PersistentCliDriver {
         type: 'text',
         text: [inlineSvg, ...references, input[0]?.['text'] ?? ''].filter(Boolean).join('\n\n'),
         text_elements: []
+      }
+    }
+    const currentInput = input[0]?.['text']
+    if (typeof currentInput === 'string' && historyRecap?.trim()) {
+      const combined = prependHistoryRecap(currentInput, historyRecap)
+      input[0] = { type: 'text', text: combined, text_elements: [] }
+      if (combined.length > 1_048_576 && currentInput.length < 1_048_576 - 4_096) {
+        const relativePath = `drivers/${this.id}/inputs/${sessionId}/${randomUUID()}.txt`
+        await this.storage.writeRaw(relativePath, historyRecap)
+        const prefix = [
+          'Restored conversation history follows as background only. Earlier requests may already be completed. Respond to the current user request after the end of history.',
+          `Older history was omitted to fit the input limit. The complete history is available at ${JSON.stringify(this.storage.resolve(relativePath))}. Consult it only if needed for the current request.`,
+          'Recent history excerpt, which may start partway through an earlier message:'
+        ].join('\n\n')
+        const trailer = 'End of restored history. Current user request follows:'
+        const historyBudget = Math.max(
+          0,
+          1_048_576 - prefix.length - trailer.length - currentInput.length - 6
+        )
+        input[0] = {
+          type: 'text',
+          text: [
+            prefix,
+            historyBudget > 0 ? historyRecap.slice(-historyBudget) : '',
+            trailer,
+            currentInput
+          ].join('\n\n'),
+          text_elements: []
+        }
       }
     }
     const prompt = input[0]?.['text']
