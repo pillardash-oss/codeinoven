@@ -36,7 +36,8 @@ class BrowserKeyboardFocus {
   private readonly claims: Record<BrowserSurface, string | null> = {
     sidebar: null,
     fullscreen: null,
-    workspace: null
+    workspace: null,
+    peek: null
   }
   /** The tab main was last told about, so a repeated claim is not re-sent. */
   private published: string | null = null
@@ -53,8 +54,15 @@ class BrowserKeyboardFocus {
     this.publish()
   }
 
+  /** The browser tab whose chrome currently owns renderer keyboard shortcuts. */
+  get tabId(): string | null {
+    return (
+      this.claims.peek ?? this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
+    )
+  }
+
   private publish(): void {
-    const effective = this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
+    const effective = this.tabId
     if (this.published === effective) return
     this.published = effective
     // A failure is silent: the feature handlers are not registered until after

@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { tick } from 'svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     calculateThreadHoverPopoverPosition,
     resolveThreadHoverPopoverSize,
@@ -14,7 +16,11 @@
   import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
+  import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { type Thread, type ThreadSearchResult } from '$shared/types'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { GitBranch } from '@lucide/svelte'
 
   interface Props {
     result: ThreadSearchResult
@@ -25,6 +31,19 @@
   let { result, selected = false, onOpen }: Props = $props()
 
   let thread = $derived(result.thread)
+  /** Oven the thread runs on, or null when it runs on this computer. */
+  let oven = $derived(
+    thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID
+      ? ovens.identity(thread.settings.ovenId)
+      : null
+  )
+
+  /** Git branch the thread's checkout is on, when main resolved one. */
+  let branch = $derived(thread.branch?.trim() || null)
+
+  $effect(() => {
+    if (thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID) void ovens.ensure()
+  })
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
 
@@ -33,7 +52,13 @@
   let isWorking = $derived(isThreadLiveWorking(thread))
   let isRetryPaused = $derived(thread.status === 'working-paused')
 
+  let hasQueuedMessage = $derived(
+    rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+  )
+  let queuedBadge = $derived(statusBadgeForThread(thread, isWorking, hasQueuedMessage))
+
   let badgeProps = $derived.by(() => {
+    if (queuedBadge.variant === 'icon') return queuedBadge
     if (isRetryPaused) {
       return { tone: 'working-paused' as const, variant: 'spinner' as const }
     }
@@ -88,20 +113,6 @@
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
-
-  function relativeTime(ts: number): string {
-    const diff = Date.now() - ts
-    const minutes = Math.floor(diff / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    return `${Math.floor(days / 30)}mo`
-  }
 
   // ─── Hover popover (parity with ThreadRow) ────────────────────────────────
 
@@ -181,9 +192,10 @@
           tone={badgeProps.tone}
           kind={badgeProps.kind}
           variant={badgeProps.variant ?? 'dot'}
+          icon={queuedBadge.icon}
           animated={badgeProps.animated}
           size="sm"
-          title={statusBadgeForThread(thread, isWorking)?.label}
+          title={queuedBadge.label}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
@@ -196,10 +208,28 @@
       <SpeakingIndicator label="Playing audio" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed">
-        {relativeTime(thread.lastActivity)}
+        {formatCompactAge(thread.lastActivity)}
       </span>
     {/if}
   </span>
+  {#if oven || branch}
+    <span class="flex min-w-0 items-center gap-2 pl-[22px] text-[0.625rem] text-dimmed">
+      {#if oven}
+        <span class="flex min-w-0 items-center gap-1" title={`Oven: ${oven.name}`}>
+          {#if oven.iconUrl}
+            <img src={oven.iconUrl} alt="" class="h-2.5 w-2.5 shrink-0 object-contain" />
+          {/if}
+          <span class="max-w-[9rem] truncate">{oven.name}</span>
+        </span>
+      {/if}
+      {#if branch}
+        <span class="flex min-w-0 items-center gap-1" title={`Branch: ${branch}`}>
+          <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+          <span class="font-mono">{threadBranchRowLabel(branch)}</span>
+        </span>
+      {/if}
+    </span>
+  {/if}
   {#if result.kind === 'message' && result.snippet}
     <span class="line-clamp-2 pl-[22px] text-[0.6875rem] leading-snug text-dimmed">
       <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">

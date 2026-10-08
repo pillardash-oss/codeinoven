@@ -18,6 +18,12 @@
       "$shared/*": ["./src/lib/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "electron.vite.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "tests/**/*.ts",
+    "packages/cio-oven/src/**/*.ts",
+    "electron.vite.config.ts"
+  ],
   "exclude": ["node_modules", "out"]
 }

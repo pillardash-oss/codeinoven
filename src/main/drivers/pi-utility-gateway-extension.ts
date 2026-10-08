@@ -43,6 +43,7 @@ import {
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_SUGGEST_TOOL_NAME,
   type GatewayToolDefinition
 } from '../../lib/gateway-tools'
 
@@ -54,7 +55,8 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_DOCS_TOOL_NAME,
   ASK_SECRET_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  UTILITY_SUGGEST_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -70,6 +72,7 @@ const docsTool = gatewayTool(UTILITY_DOCS_TOOL_NAME)
 const askSecretTool = gatewayTool(ASK_SECRET_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
+const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -232,13 +235,49 @@ function isGatewayContent(value) {
   )
 }
 
+/**
+ * The tool result a gateway response becomes.
+ *
+ * A gateway operation that declares an output schema answers with its payload
+ * both ways: content parts for the model, and \`structuredContent\` for a
+ * script. The structured payload is forwarded exactly as it arrived, because a
+ * codemode script resolves this call to that value   which is how a script reads
+ * a snapshot's element tokens or a search's candidates as fields instead of
+ * parsing text. The content parts stay what a model reads, and a route without a
+ * structured payload keeps the shape it has always had.
+ */
 function textResult(value) {
-  if (value && typeof value === 'object' && isGatewayContent(value.content)) {
-    return { content: value.content }
-  }
-  return {
-    content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
-  }
+  const structured =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? value.structuredContent
+      : undefined
+  const content =
+    value && typeof value === 'object' && isGatewayContent(value.content)
+      ? value.content
+      : [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
+  return structured === undefined ? { content } : { content, structuredContent: structured }
+}
+
+/**
+ * Output schemas by gateway tool name.
+ *
+ * Interpolated from the same catalog that defines the tools, so the schema a
+ * script sees in a declaration cannot drift from the schema the gateway answers
+ * with. A tool without one is registered exactly as before.
+ */
+const CIO_GATEWAY_OUTPUT_SCHEMAS = ${JSON.stringify(
+    Object.fromEntries(
+      GATEWAY_TOOLS.filter((tool) => tool.outputSchema !== undefined).map((tool) => [
+        tool.name,
+        tool.outputSchema
+      ])
+    )
+  )}
+
+/** Register one gateway tool, with its output schema when the catalog declares one. */
+function registerCioGatewayTool(pi, definition) {
+  const outputSchema = CIO_GATEWAY_OUTPUT_SCHEMAS[definition.name]
+  pi.registerTool(outputSchema === undefined ? definition : { ...definition, outputSchema })
 }
 
 /**
@@ -260,7 +299,7 @@ function applySecretEnvironment(result) {
 }
 
 export default function codeInOvenUtilityGatewayExtension(pi) {
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(searchTool.name)},
     label: 'Search CodeInOven utilities',
     description: ${JSON.stringify(searchTool.description)},
@@ -286,7 +325,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(activateTool.name)},
     label: 'Activate CodeInOven utility',
     description: ${JSON.stringify(activateTool.description)},
@@ -300,7 +339,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(invokeTool.name)},
     label: 'Invoke CodeInOven utility operation',
     description: ${JSON.stringify(invokeTool.description)},
@@ -323,7 +362,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
   // Post-compaction docs re-dump: registered without a promptSnippet so it
   // stays out of the always-on system prompt, but always callable when the
   // turn instructions mention the thread utilities bank.
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(docsTool.name)},
     label: 'Re-list CodeInOven utility docs',
     description: ${JSON.stringify(docsTool.description)},
@@ -340,7 +379,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
   // credential, so the tool result carries only the names the model
   // interpolates. It is announced on every turn because a task can need a
   // credential at any point, not only during setup.
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(askSecretTool.name)},
     label: 'Collect a secret from the user',
     description: ${JSON.stringify(askSecretTool.description)},
@@ -386,11 +425,49 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
+  // A capability the agent found but the user does not have: the app owns the
+  // decision card and the install, so the tool only proposes a secret-free
+  // bundle and reports what the user chose. Announced on every turn, because a
+  // task can need a connection at any point and the alternative is the agent
+  // telling the user something is connected when nothing was surfaced.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(suggestTool.name)},
+    label: 'Propose a capability for the user to install',
+    description: ${JSON.stringify(suggestTool.description)},
+    promptSnippet: 'Propose a capability you found for the user to install, with their explicit acceptance',
+    promptGuidelines: [
+      'When a search finds a capability the task needs but the user does not have, offer it with ${JSON.stringify(suggestTool.name)} instead of telling the user it is connected: the app surfaces an actionable card and installs it through Utilities only if they accept.',
+      'Never say a capability is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free; collect a credential afterwards with ${JSON.stringify(askSecretTool.name)}.'
+    ],
+    parameters: Type.Object({
+      reason: Type.String({
+        description:
+          'One or two plain sentences telling the user why this capability is needed and what it enables.'
+      }),
+      bundle: Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            '{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}. Credentials are forbidden; contact the app via the tool result, never the bundle.'
+        }
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(suggestTool.route)},
+        { reason: params.reason, bundle: params.bundle },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
   // Setup/diagnostics tools: registered without a promptSnippet so they stay
   // out of the always-on system prompt, but remain callable whenever an
   // explicit @cio-utility turn names them in prose. The gateway server still
   // enforces allowManagement, so ordinary turns cannot misuse them.
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(manageTool.name)},
     label: 'Install a CodeInOven utility bundle',
     description: ${JSON.stringify(manageTool.description)},
@@ -460,7 +537,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
-  pi.registerTool({
+  registerCioGatewayTool(pi, {
     name: ${JSON.stringify(diagnosticsTool.name)},
     label: 'Run CodeInOven app diagnostics',
     description: ${JSON.stringify(diagnosticsTool.description)},

@@ -12,12 +12,14 @@
  *      cross-session extension, so each box that enables one gets its own copy with
  *      its own storage. That is the point of containing an extension: two boxes can
  *      run different extensions, or the same one with separate state.
- *   3. **The jars are the global browser's.** Only that context's jars are
- *      reconciled: the panel that installs an extension, the boxes it can be placed
- *      in and the pins in the header all belong to that browser. A project's browser,
- *      which is the light one a conversation opens beside itself with no boxes and
- *      no extension chrome, never loads one, so no third-party code or extension
- *      renderer sits behind a thread browser.
+ *   3. **The extensions follow the jar, and only the global browser's jars carry
+ *      them.** The panel that installs an extension, the boxes it can be placed in
+ *      and the pins in the header all belong to that browser. A box is one identity
+ *      of the profile, so its extension set is the box's and it stays loaded while
+ *      any context is using that box. A project's own jar, the light browser a
+ *      conversation opens beside itself, never loads one, so no extension renderer
+ *      runs behind a thread browser that is not already using one of the user's
+ *      boxes.
  *   4. **It costs a renderer per jar it lives in, so it is unloaded the moment its
  *      jar has no live page.** An extension left loaded for a box the user closed
  *      is a renderer held for nothing.
@@ -30,7 +32,7 @@
 /// <reference types="vite/client" />
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve, sep } from 'node:path'
 import { dialog, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
@@ -47,11 +49,13 @@ import type {
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import { getNotificationService } from '../../notifications/notification-service'
-import { browserPartitionFor } from '../browser-service/browser-validation'
+import { browserJarFor, browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import {
   BrowserExtensionBridge,
+  type BrowserExtensionActionPopupRequest,
+  type BrowserExtensionInstalledDetails,
   type BrowserExtensionMailbox,
   type BrowserExtensionNotificationRecord,
   type BrowserExtensionSidePanelMailbox,
@@ -59,30 +63,49 @@ import {
   type BrowserExtensionSidePanelRequest
 } from './browser-extension-bridge'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
-import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
+import { compareBrowserExtensionVersions } from './browser-extension-version'
+import {
+  downloadWebStoreRelease,
+  resolveWebStoreRelease,
+  resolveWebStoreUpdate,
+  type WebStoreRelease
+} from './browser-extension-webstore'
 import {
   EXTENSION_MANIFEST_NAME,
+  extensionPageFileExists,
+  extensionPageUrl,
   extensionPopupUrl,
   readActionIconDataUrl,
-  readManifestObject
+  readManifestObject,
+  readManifestRecord
 } from './browser-extension-source'
 import { stripInstalledManifestPermissions } from './browser-extension-manifest'
 import {
   BROWSER_EXTENSION_SOURCE_DIR,
-  BROWSER_EXTENSION_STORE_DIR,
   BrowserExtensionRegistry,
   extensionRunsInJar,
+  extensionRunsOnHost,
   extensionSourceDirectory,
+  resolveBrowserExtensionStoreDir,
   toExtensionView,
   type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
 } from './browser-extension-registry'
+import { filterManifestForSiteRules } from '../../../lib/browser/browser-extension-site-rules'
+import {
+  DARK_READER_EXTENSION_ID,
+  type DarkReaderTabAction,
+  type DarkReaderTabState
+} from '../../../lib/browser/browser-darkreader-control'
 import { materializeUserScriptFiles } from './browser-extension-user-scripts'
 
 /** How often progress reaches the renderer. A download reports per chunk and the
  *  install worker per phase, so without a gate a large package would send hundreds
  *  of events that all say the same thing. */
 const PROGRESS_INTERVAL_MS = 200
+
+/** Give Electron time to finish initializing extension browser state after load. */
+const EXTENSION_READY_TIMEOUT_MS = 5_000
 
 /** How many installs run at once, and therefore how many downloads.
  *
@@ -91,6 +114,12 @@ const PROGRESS_INTERVAL_MS = 200
  * second is even accepted, while a third download would only split the same
  * connection and disk between them. Everything else waits its turn. */
 const MAX_CONCURRENT_INSTALLS = 2
+
+/** The browser checks for newer store versions on startup and every six hours. */
+const EXTENSION_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/** Keep store checks small so many installed extensions do not flood the network. */
+const MAX_CONCURRENT_UPDATE_CHECKS = 2
 
 /** Directories inside the store root that are not extensions. */
 const STAGING_DIR = '.staging'
@@ -141,6 +170,8 @@ interface LoadedJar {
    *  extension, so the poll never raises the same request twice. Dropped when
    *  that extension's worker restarts, whose own sequence starts over. */
   sidePanelSeq: Map<string, number>
+  /** Highest `action.openPopup()` request handled, per extension. */
+  actionPopupSeq: Map<string, number>
   /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
    *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
   published: Map<string, string>
@@ -162,6 +193,8 @@ export interface BrowserExtensionHost {
   sessionFor(projectId: string, boxId: string | null): Session
   /** Every jar that currently has a live page. */
   liveJars(): { projectId: string; boxId: string | null }[]
+  /** Drop documents before Chromium invalidates their extension contexts. */
+  releaseViews(extensionId: string, projectId: string, boxId: string | null): void
   /** The app tab a browser page belongs to, for action state an extension scoped
    *  to the tab ids the runtime gave it. */
   resolveTabId(projectId: string, contentsId: number): string | null
@@ -189,6 +222,18 @@ export interface BrowserExtensionHost {
   /** Close one extension's side panel. `extensionTabId` names the tab the
    *  request was for; null closes it whatever tab it belongs to. */
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
+  /** Apply a popup surface request for the tab named by the extension runtime. */
+  openPopup(request: BrowserExtensionActionPopupOpenRequest): void
+}
+
+/** One extension popup request carried from the worker to the browser host. */
+export interface BrowserExtensionActionPopupOpenRequest {
+  projectId: string
+  boxId: string | null
+  extensionId: string
+  extensionTabId: number
+  kind: BrowserExtensionActionPopupRequest['kind']
+  url?: string
 }
 
 /** One side panel a worker asked the app to raise. The extension service
@@ -270,6 +315,19 @@ export class BrowserExtensionService {
   /** Every install that is queued or running, so a caller cannot name one that is
    *  already in flight and have its progress attributed to it. */
   private readonly installIds = new Set<string>()
+  /** Store ids accepted by an install, so an update cannot replace the same files. */
+  private readonly installingWebStoreIds = new Set<string>()
+  /** Store versions found by the most recent successful check, held for the panel. */
+  private readonly availableUpdateVersions = new Map<string, string>()
+  /** Updates in progress, keyed by extension id. */
+  private readonly updatingIds = new Set<string>()
+  /** Install/update events awaiting delivery into live extension workers. */
+  private readonly pendingInstalledEvents = new Map<string, BrowserExtensionInstalledDetails>()
+  /** One recovery pass per extension if a process stopped during a directory swap. */
+  private readonly recoveringSources = new Map<string, Promise<void>>()
+  /** One scheduled check at a time, even when startup and the app updater overlap. */
+  private updateCheck: Promise<void> | null = null
+  private updateCheckTimer: ReturnType<typeof setInterval> | null = null
   /** Per-install progress gating, keyed by install id: two installs reporting at
    *  the same moment must not suppress each other's lines the way one shared
    *  clock would. */
@@ -296,6 +354,14 @@ export class BrowserExtensionService {
     this.ready = this.registry.load().catch((error: unknown) => {
       Logger.error('Browser extension registry could not be read:', error)
     })
+    void this.ready.then(() => {
+      if (this.disposed) return
+      void this.checkForUpdates()
+      this.updateCheckTimer = setInterval(
+        () => void this.checkForUpdates(),
+        EXTENSION_UPDATE_CHECK_INTERVAL_MS
+      )
+    })
   }
 
   /** Wait for the registry to have been read. */
@@ -305,7 +371,12 @@ export class BrowserExtensionService {
 
   /** The installed extensions, as the renderer draws them. */
   list(): BrowserExtension[] {
-    return this.registry.list().map((record) => toExtensionView(record, []))
+    return this.registry.list().map((record) => this.toView(record))
+  }
+
+  /** Include the latest store version found by the background check. */
+  private toView(record: BrowserExtensionRecord): BrowserExtension {
+    return toExtensionView(record, [], this.availableUpdateVersions.get(record.id) ?? null)
   }
 
   /**
@@ -316,11 +387,44 @@ export class BrowserExtensionService {
    * host one: an extension the jar does not run is not loaded there, so its own
    * page would have no extension behind it.
    */
-  popupUrlFor(extensionId: string, boxId: string | null): string | null {
+  popupUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
     const record = this.registry.get(extensionId)
     if (!record || !record.enabled) return null
-    if (!extensionRunsInJar(record, boxId)) return null
+    // The jar, not the choice: a context in the profile's default box is in the
+    // global browser's own jar, which is the set a popup can be hosted from.
+    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
     return extensionPopupUrl(record.id, record.popupPath)
+  }
+
+  /**
+   * The options document one installed extension declares, as an address, when
+   * it is enabled and runs in the jar asked for. Null when it declares none or
+   * the jar does not run it.
+   */
+  optionsUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
+    const record = this.registry.get(extensionId)
+    if (!record || !record.enabled) return null
+    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
+    return extensionPageUrl(record.id, record.optionsPath)
+  }
+
+  /**
+   * Whether a `chrome-extension://` address names a file of an enabled
+   * extension that runs in the jar asked for. Any path inside that extension is
+   * allowed, because setup flows span more than the single options file: the
+   * options page links to its own setup pages.
+   */
+  isExtensionPageAllowed(rawUrl: string, projectId: string, boxId: string | null): boolean {
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return false
+    }
+    if (parsed.protocol !== 'chrome-extension:' || !isExtensionId(parsed.host)) return false
+    const record = this.registry.get(parsed.host)
+    if (!record || !record.enabled) return false
+    return extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)
   }
 
   /**
@@ -337,6 +441,13 @@ export class BrowserExtensionService {
     if (this.installIds.has(input.installId)) {
       throw new Error('That install is already running')
     }
+    const webstoreId = input.source === 'webstore' ? extensionIdFromInput(input.value) : null
+    if (
+      webstoreId &&
+      (this.installingWebStoreIds.has(webstoreId) || this.updatingIds.has(webstoreId))
+    ) {
+      throw new Error('That extension is already being installed or updated')
+    }
     const context: InstallContext = {
       installId: input.installId,
       label: input.value.trim() || 'extension',
@@ -345,6 +456,7 @@ export class BrowserExtensionService {
       webstoreId: input.source === 'webstore' ? extensionIdFromInput(input.value) : null
     }
     this.installIds.add(context.installId)
+    if (context.webstoreId) this.installingWebStoreIds.add(context.webstoreId)
     return new Promise<BrowserExtension>((resolve, reject) => {
       this.installQueue.push({ input, context, resolve, reject })
       // Reported before anything starts, so a queued install shows up in the panel
@@ -380,6 +492,7 @@ export class BrowserExtensionService {
     } finally {
       this.runningInstalls -= 1
       this.installIds.delete(job.context.installId)
+      if (job.context.webstoreId) this.installingWebStoreIds.delete(job.context.webstoreId)
       this.installProgress.delete(job.context.installId)
       this.startQueuedInstalls()
     }
@@ -388,6 +501,9 @@ export class BrowserExtensionService {
   /** Uninstall an extension: stop it everywhere, then delete its files. */
   async uninstall(extensionId: string): Promise<void> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    if (this.updatingIds.has(extensionId) || this.installingWebStoreIds.has(extensionId)) {
+      throw new Error('That extension is being installed or updated')
+    }
     const record = this.registry.get(extensionId)
     if (!record) return
     await this.unloadEverywhere(extensionId)
@@ -396,6 +512,7 @@ export class BrowserExtensionService {
     // came from and be drawn for whatever is installed under the same id next.
     this.actionIcons.clear()
     await this.registry.remove(extensionId)
+    this.availableUpdateVersions.delete(extensionId)
     this.host.publish()
   }
 
@@ -408,9 +525,16 @@ export class BrowserExtensionService {
    * that declares a popup, since opening that popup is the only thing a pin does. */
   async update(
     extensionId: string,
-    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
+    patch: {
+      enabled?: boolean
+      boxes?: string[]
+      pinned?: boolean
+      blockedHosts?: string[]
+      allowedHosts?: string[]
+    }
   ): Promise<BrowserExtension> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    if (this.updatingIds.has(extensionId)) throw new Error('That extension is being updated')
     const current = this.registry.get(extensionId)
     if (!current) throw new Error('That extension is not installed')
     if (patch.pinned === true) {
@@ -424,11 +548,107 @@ export class BrowserExtensionService {
         throw new Error(`Only ${MAX_PINNED_EXTENSIONS} extensions can be pinned at once`)
       }
     }
+    const refreshDarkReader =
+      extensionId === DARK_READER_EXTENSION_ID &&
+      (patch.enabled !== undefined ||
+        patch.blockedHosts !== undefined ||
+        patch.allowedHosts !== undefined ||
+        patch.boxes !== undefined)
+    if (refreshDarkReader) {
+      for (const state of this.loaded.values()) {
+        const bridge = state.bridges.get(extensionId)
+        if (bridge) await bridge.request({ kind: 'dark-reader-power', enabled: false })
+      }
+    }
     const record = await this.registry.patch(extensionId, patch)
     if (!record) throw new Error('That extension is not installed')
+    if (patch.blockedHosts !== undefined || patch.allowedHosts !== undefined) {
+      await this.unloadEverywhere(extensionId)
+    }
     await this.reconcileLiveJars()
+    if (refreshDarkReader && record.enabled) {
+      for (const state of this.loaded.values()) {
+        const bridge = state.bridges.get(extensionId)
+        if (bridge) await bridge.request({ kind: 'dark-reader-power', enabled: true })
+      }
+    }
     this.host.publish()
-    return toExtensionView(record, [])
+    return this.toView(record)
+  }
+
+  /** Reorder the installed extensions and publish their new order to renderers. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    await this.ready
+    await this.registry.reorder(orderedIds)
+    this.host.publish()
+  }
+
+  /** Find newer Web Store releases without downloading or replacing anything. */
+  checkForUpdates(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.updateCheck) return this.updateCheck
+    const pass = this.runUpdateCheck()
+      .catch((error: unknown) => {
+        Logger.dev('Browser extension update checks could not finish:', error)
+      })
+      .finally(() => {
+        if (this.updateCheck === pass) this.updateCheck = null
+      })
+    this.updateCheck = pass
+    return pass
+  }
+
+  /** Download and install the newest Web Store release after the user asks. */
+  async updateFromWebStore(extensionId: string, repair = false): Promise<BrowserExtension> {
+    if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    await this.ready
+    const original = this.registry.get(extensionId)
+    if (!original || original.source !== 'webstore' || !original.webstoreId) {
+      throw new Error('Only extensions installed from the Web Store can be updated here')
+    }
+    if (this.updatingIds.has(extensionId) || this.installingWebStoreIds.has(extensionId)) {
+      throw new Error('That extension is already being installed or updated')
+    }
+
+    this.updatingIds.add(extensionId)
+    let replaced = false
+    try {
+      const release = repair
+        ? await resolveWebStoreRelease(original.webstoreId)
+        : await resolveWebStoreUpdate(original.webstoreId, original.version)
+      const versionOrder = release
+        ? compareBrowserExtensionVersions(original.version, release.version)
+        : null
+      if (!release || (!repair && versionOrder !== -1)) {
+        this.availableUpdateVersions.delete(extensionId)
+        this.host.publish()
+        return this.toView(original)
+      }
+
+      const updated = await this.installWebStoreUpdate(original, release)
+      replaced = true
+      this.availableUpdateVersions.delete(extensionId)
+      this.host.publish()
+      return this.toView(updated)
+    } finally {
+      this.updatingIds.delete(extensionId)
+      if (!this.disposed) {
+        await this.reconcileLiveJars().catch((error: unknown) => {
+          Logger.error('Browser extensions could not be reloaded after an update:', error)
+        })
+        if (
+          replaced &&
+          extensionId === DARK_READER_EXTENSION_ID &&
+          this.registry.get(extensionId)?.enabled
+        ) {
+          for (const state of this.loaded.values()) {
+            const bridge = state.bridges.get(extensionId)
+            if (bridge) await bridge.request({ kind: 'dark-reader-power', enabled: true })
+          }
+        }
+      }
+      this.pendingInstalledEvents.delete(extensionId)
+    }
   }
 
   /** Ask the user for an unpacked extension folder. */
@@ -454,10 +674,14 @@ export class BrowserExtensionService {
   async ensureJarLoaded(projectId: string, boxId: string | null): Promise<void> {
     if (this.disposed) return
     await this.ready
-    const partition = browserPartitionFor(projectId, boxId)
+    // Loaded as the jar it is, not as the context that reached for it: the
+    // profile's default box is the global browser's own jar, and this pair is what
+    // the loaded state remembers.
+    const jar = browserJarFor(projectId, boxId)
+    const partition = browserPartitionFor(jar.projectId, jar.boxId)
     const inFlight = this.loading.get(partition)
     if (inFlight) return inFlight
-    const task = this.reconcileJar(projectId, boxId, partition).catch((error: unknown) => {
+    const task = this.reconcileJar(jar.projectId, jar.boxId, partition).catch((error: unknown) => {
       Logger.error('Browser extensions could not be reconciled for a jar:', error)
     })
     this.loading.set(partition, task)
@@ -474,18 +698,25 @@ export class BrowserExtensionService {
    * This is the memory half of containment: a box the user closed keeps its
    * cookies on disk, but it does not keep a renderer per extension loaded into it.
    */
-  async onJarEmptied(projectId: string, boxId: string | null): Promise<void> {
+  async onJarEmptied(projectId: string, boxId: string | null, force = false): Promise<void> {
     if (this.disposed) return
     const partition = browserPartitionFor(projectId, boxId)
     // A load already in flight would otherwise finish after this and leave the jar
     // loaded with nothing to show for it.
     const inFlight = this.loading.get(partition)
     if (inFlight) await inFlight.catch(() => undefined)
+    if (
+      !force &&
+      this.host
+        .liveJars()
+        .some((jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition)
+    )
+      return
     const state = this.loaded.get(partition)
     if (!state) return
     for (const id of [...state.ids]) {
       this.stopBridge(state, id)
-      this.removeFromSession(state.session, id)
+      this.removeFromSession(state, id)
     }
     this.loaded.delete(partition)
   }
@@ -496,7 +727,7 @@ export class BrowserExtensionService {
    */
   async forgetBox(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
-    await this.onJarEmptied(projectId, boxId)
+    await this.onJarEmptied(projectId, boxId, true)
     this.loaded.delete(partition)
     if (await this.registry.forgetBox(boxId)) this.host.publish()
   }
@@ -504,16 +735,21 @@ export class BrowserExtensionService {
    *  is going away. */
   async dispose(): Promise<void> {
     this.disposed = true
+    if (this.updateCheckTimer) {
+      clearInterval(this.updateCheckTimer)
+      this.updateCheckTimer = null
+    }
     // An install still waiting for a slot will never get one once the window is
     // going away, so its caller is answered instead of left pending forever.
     for (const job of this.installQueue.splice(0)) {
       this.installIds.delete(job.context.installId)
+      if (job.context.webstoreId) this.installingWebStoreIds.delete(job.context.webstoreId)
       job.reject(new Error('The browser closed before the install started'))
     }
     for (const [partition, state] of [...this.loaded]) {
       for (const id of [...state.ids]) {
         this.stopBridge(state, id)
-        this.removeFromSession(state.session, id)
+        this.removeFromSession(state, id)
       }
       this.loaded.delete(partition)
     }
@@ -583,6 +819,7 @@ export class BrowserExtensionService {
         throw new Error('The extension did not produce a usable identity')
       }
       const id = result.id
+      const previousRecord = this.registry.get(id)
       this.report(context, { phase: 'registering', detail: 'Installing' })
 
       // Move the prepared tree to its final home. A rename, not a copy: it is the
@@ -598,6 +835,9 @@ export class BrowserExtensionService {
       const warnings: string[] = []
       if (result.skippedLinks > 0) {
         warnings.push(`${result.skippedLinks} symbolic links in the folder were skipped`)
+      }
+      if (result.popupMissing) {
+        warnings.push('Its popup page is missing from the package, so it has no popup to open.')
       }
       if (result.manifestVersion === 2) {
         warnings.push(
@@ -619,6 +859,9 @@ export class BrowserExtensionService {
         source: input.source,
         webstoreId,
         popupPath: result.popupPath,
+        optionsPath: result.optionsPath,
+        blockedHosts: [],
+        allowedHosts: [],
         pinned: false,
         iconDataUrl: result.iconDataUrl,
         declaredPermissions: result.declaredPermissions,
@@ -635,13 +878,189 @@ export class BrowserExtensionService {
         installedAt: Date.now()
       }
       await this.registry.upsert(record)
+      this.pendingInstalledEvents.set(
+        id,
+        previousRecord
+          ? { reason: 'update', previousVersion: previousRecord.version }
+          : { reason: 'install' }
+      )
+      this.availableUpdateVersions.delete(id)
       this.report(context, { phase: 'done', detail: `Installed ${result.name}` })
-      await this.reconcileLiveJars()
+      try {
+        await this.reconcileLiveJars()
+      } finally {
+        this.pendingInstalledEvents.delete(id)
+      }
       this.host.publish()
-      return toExtensionView(record, [])
+      return this.toView(record)
     } finally {
       await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
       if (crxPath) await rm(crxPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  private async runUpdateCheck(): Promise<void> {
+    await this.ready
+    if (this.disposed) return
+    let changed = false
+    const candidates = this.registry.list().filter((record) => record.source === 'webstore')
+
+    for (let offset = 0; offset < candidates.length; offset += MAX_CONCURRENT_UPDATE_CHECKS) {
+      if (this.disposed) return
+      const batch = candidates.slice(offset, offset + MAX_CONCURRENT_UPDATE_CHECKS)
+      await Promise.all(
+        batch.map(async (record) => {
+          if (!record.webstoreId || this.updatingIds.has(record.id)) return
+          if (this.installingWebStoreIds.has(record.webstoreId)) return
+          try {
+            const release = await resolveWebStoreUpdate(record.webstoreId, record.version)
+            const current = this.registry.get(record.id)
+            if (
+              !current ||
+              current.version !== record.version ||
+              this.updatingIds.has(record.id) ||
+              this.disposed
+            ) {
+              return
+            }
+            const previousVersion = this.availableUpdateVersions.get(record.id) ?? null
+            const nextVersion =
+              release && compareBrowserExtensionVersions(current.version, release.version) === -1
+                ? release.version
+                : null
+            if (previousVersion === nextVersion) return
+            if (nextVersion) this.availableUpdateVersions.set(record.id, nextVersion)
+            else this.availableUpdateVersions.delete(record.id)
+            changed = true
+          } catch (error: unknown) {
+            Logger.dev('Browser extension update check failed:', {
+              extensionId: record.id,
+              error
+            })
+          }
+        })
+      )
+    }
+
+    if (changed && !this.disposed) this.host.publish()
+  }
+
+  private async installWebStoreUpdate(
+    original: BrowserExtensionRecord,
+    release: WebStoreRelease
+  ): Promise<BrowserExtensionRecord> {
+    const stagingRoot = join(this.storeRoot(), STAGING_DIR, randomUUID())
+    const stagingSource = join(stagingRoot, BROWSER_EXTENSION_SOURCE_DIR)
+    const backupSource = join(
+      this.extensionDirectory(original.id),
+      `${BROWSER_EXTENSION_SOURCE_DIR}.previous`
+    )
+    const extensionSource = extensionSourceDirectory(this.configRoot, original.id)
+    const crxPath = join(this.downloadRoot(), `${original.id}-${randomUUID()}.crx`)
+    let previousMoved = false
+    let replacementMoved = false
+    let recordCommitted = false
+
+    try {
+      await this.restoreInterruptedSource(original.id)
+      await mkdir(this.downloadRoot(), { recursive: true })
+      await downloadWebStoreRelease(release, crxPath, () => undefined)
+      const result = await prepareExtensionSource(
+        {
+          destinationDir: stagingSource,
+          crxPath,
+          folderPath: null,
+          expectedId: original.webstoreId,
+          preamble: preambleSource
+        },
+        () => undefined
+      )
+      if (result.id !== original.id || result.version !== release.version) {
+        throw new Error('The downloaded package did not match the Web Store update')
+      }
+
+      const current = this.registry.get(original.id)
+      if (!current || current.version !== original.version) {
+        throw new Error('The installed extension changed before its update could be applied')
+      }
+
+      // Let any extension load already in progress finish. New loads skip this id
+      // until the replacement has been registered, so no worker sees half a tree.
+      await Promise.all([...this.loading.values()].map((task) => task.catch(() => undefined)))
+      if (original.id === DARK_READER_EXTENSION_ID) {
+        for (const state of this.loaded.values()) {
+          const bridge = state.bridges.get(original.id)
+          if (bridge) await bridge.request({ kind: 'dark-reader-power', enabled: false })
+        }
+      }
+      await this.unloadEverywhere(original.id)
+
+      const warnings: string[] = []
+      if (result.popupMissing) {
+        warnings.push('Its popup page is missing from the package, so it has no popup to open.')
+      }
+      if (result.manifestVersion === 2) {
+        warnings.push(
+          'This is a Manifest V2 extension. The runtime warns that support for it is deprecated.'
+        )
+      }
+      const declaredEnabled = result.ruleResources.filter((resource) => resource.enabled)
+      if (declaredEnabled.length > 0 && result.injected === 'none') {
+        warnings.push(
+          `It ships ${declaredEnabled.length} filter rulesets enabled by default, and this runtime ignores that flag.`
+        )
+      }
+
+      await rename(extensionSource, backupSource)
+      previousMoved = true
+      await rename(stagingSource, extensionSource)
+      replacementMoved = true
+
+      const updated: BrowserExtensionRecord = {
+        ...current,
+        name: result.name,
+        version: result.version,
+        description: result.description,
+        popupPath: result.popupPath,
+        optionsPath: result.optionsPath,
+        pinned: current.pinned && result.popupPath !== null,
+        iconDataUrl: result.iconDataUrl,
+        declaredPermissions: result.declaredPermissions,
+        ruleResources: result.ruleResources,
+        manifestVersion: result.manifestVersion,
+        missingCapabilities: [...missingExtensionCapabilities(result.declaredPermissions)],
+        warnings,
+        injected: result.injected,
+        sourceHash: result.sourceHash
+      }
+      await this.registry.upsert(updated)
+      this.pendingInstalledEvents.set(original.id, {
+        reason: 'update',
+        previousVersion: original.version
+      })
+      recordCommitted = true
+      this.actionIcons.clear()
+      await rm(backupSource, { recursive: true, force: true }).catch(() => undefined)
+      return updated
+    } catch (error: unknown) {
+      if (previousMoved && !recordCommitted) {
+        try {
+          if (replacementMoved) {
+            await rm(extensionSource, { recursive: true, force: true })
+          }
+          await this.restoreInterruptedSource(original.id)
+          await this.registry.upsert(original)
+        } catch (rollbackError: unknown) {
+          Logger.error('Browser extension update could not restore its previous files:', {
+            extensionId: original.id,
+            rollbackError
+          })
+        }
+      }
+      throw error
+    } finally {
+      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
+      await rm(crxPath, { force: true }).catch(() => undefined)
     }
   }
 
@@ -677,25 +1096,97 @@ export class BrowserExtensionService {
     }
   }
 
+  private readonly darkReaderPolicies = new Map<
+    string,
+    { onlyTabId: number | null; disabledTabIds: number[] }
+  >()
+
+  darkReaderTabState(projectId: string, boxId: string | null, tabId: number): DarkReaderTabState {
+    const policy = this.darkReaderPolicies.get(browserPartitionFor(projectId, boxId))
+    const record = this.registry.get(DARK_READER_EXTENSION_ID)
+    return {
+      supported: Boolean(record),
+      enabled:
+        Boolean(record?.enabled) &&
+        (!policy ||
+          ((policy.onlyTabId === null || policy.onlyTabId === tabId) &&
+            !policy.disabledTabIds.includes(tabId))),
+      scoped: policy !== undefined
+    }
+  }
+
+  async setDarkReaderTabScope(
+    projectId: string,
+    boxId: string | null,
+    tabId: number,
+    action: DarkReaderTabAction
+  ): Promise<DarkReaderTabState> {
+    const record = this.registry.get(DARK_READER_EXTENSION_ID)
+    if (!record || !extensionRunsInJar(record, boxId)) {
+      throw new Error('Dark Reader is not installed in this box')
+    }
+    const partition = browserPartitionFor(projectId, boxId)
+    const previous = this.darkReaderPolicies.get(partition) ?? {
+      onlyTabId: null,
+      disabledTabIds: []
+    }
+    const policy = {
+      onlyTabId: action === 'only-tab' ? tabId : previous.onlyTabId,
+      disabledTabIds: previous.disabledTabIds.filter((id) => id !== tabId)
+    }
+    if (action === 'only-tab') policy.disabledTabIds = []
+    if (!record.enabled && action === 'enable-tab') policy.onlyTabId = tabId
+    if (action === 'disable-tab') policy.disabledTabIds.push(tabId)
+    if (action === 'enable-tab' && policy.onlyTabId !== null) policy.onlyTabId = tabId
+    if (action === 'reset-tabs') this.darkReaderPolicies.delete(partition)
+    else this.darkReaderPolicies.set(partition, policy)
+    if (!record.enabled) {
+      if (action === 'disable-tab' || action === 'reset-tabs')
+        return this.darkReaderTabState(projectId, boxId, tabId)
+      await this.update(record.id, { enabled: true })
+    }
+    await this.ensureJarLoaded(projectId, boxId)
+    const bridge = this.loaded.get(partition)?.bridges.get(record.id)
+    if (!bridge) throw new Error('Dark Reader background is unavailable')
+    await bridge.push({
+      kind: 'dark-reader-tab-policy',
+      ...(action === 'reset-tabs' ? { onlyTabId: null, disabledTabIds: [] } : policy),
+      enable: action === 'only-tab' || action === 'enable-tab',
+      refresh: action === 'reset-tabs'
+    })
+    return this.darkReaderTabState(projectId, boxId, tabId)
+  }
+
   /**
    * The extensions one jar should be running, given what is installed.
    *
-   * Only the global browser's context has jars that extensions may live in. An
-   * extension is third-party code that browser runs, and the panel that installs it,
-   * the boxes it can be placed in and the pins in the header are all that browser's,
-   * so a project's browser (the light one a conversation opens beside itself, with
-   * no boxes and no extension chrome) must never load one.
+   * The global browser's own jar and the profile's boxes are the jars an extension
+   * may live in. A box's set is the box's, not the caller's: a box is one identity
+   * of the profile, so the extensions the user placed in it are loaded while any
+   * context uses that box. That is also what keeps a shared jar intact: answering
+   * "nothing" for a project's boxed tab would unload the extensions the personal
+   * browser is running in the very same session.
    *
-   * The empty jar id is what makes this a rule rather than a filter: it names "the
+   * A project's own jar loads none. An extension is third-party code that browser
+   * runs, and the panel that installs it, the boxes it can be placed in and the pins
+   * in the header are all the global browser's, so the light browser a conversation
+   * opens beside itself stays free of them.
+   *
+   * The empty jar id is what makes that a rule rather than a filter: it names "the
    * context's own jar", which read without the context matches every project's jar
    * too, so a record placed in "No box" would otherwise put an extension renderer,
    * its service worker and its load warnings behind every thread browser.
    */
   private desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
-    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    // Answered about the jar rather than about the choice, for the same reason the
+    // partitions agree: a context in the profile's default box is browsing the
+    // global browser's own jar, and answering "a project's own jar" for it would
+    // unload the set that jar is running.
+    const jar = browserJarFor(projectId, boxId)
+    if (jar.boxId === null && jar.projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
     return this.registry
       .list()
-      .filter((record) => record.enabled && extensionRunsInJar(record, boxId))
+      .filter((record) => record.enabled && extensionRunsInJar(record, jar.boxId))
   }
 
   private async reconcileJar(
@@ -707,7 +1198,9 @@ export class BrowserExtensionService {
     const desiredIds = new Set(desired.map((record) => record.id))
     const current = this.loaded.get(partition)?.ids ?? new Set<string>()
     const toUnload = [...current].filter((id) => !desiredIds.has(id))
-    const toLoad = desired.filter((record) => !current.has(record.id))
+    const toLoad = desired.filter(
+      (record) => !current.has(record.id) && !this.updatingIds.has(record.id)
+    )
     if (toUnload.length === 0 && toLoad.length === 0) return
 
     // Only now is a session asked for, which is what creates its profile directory.
@@ -716,7 +1209,7 @@ export class BrowserExtensionService {
     const state = this.loadedFor(partition, session, projectId, boxId)
     for (const id of toUnload) {
       this.stopBridge(state, id)
-      this.removeFromSession(session, id)
+      this.removeFromSession(state, id)
     }
     for (const id of toUnload) state.ids.delete(id)
     if (toLoad.length === 0) return
@@ -734,10 +1227,14 @@ export class BrowserExtensionService {
   ): Promise<boolean> {
     const directory = extensionSourceDirectory(this.configRoot, record.id)
     try {
+      await this.restoreInterruptedSource(record.id)
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
+      await this.refreshOptionsPath(directory, record)
+      await this.refreshPopupAvailability(directory, record)
+      await this.applySiteRulesToManifest(directory, record)
       await this.makeManifestLoadable(directory)
-      await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
+      await this.loadExtensionWhenReady(state.session, directory, record.injected !== 'none')
       state.ids.add(record.id)
       this.startBridge(state, record)
       // A successful load answers any earlier failure, so the row stops claiming
@@ -748,6 +1245,96 @@ export class BrowserExtensionService {
       const warning = `It could not be loaded (${reason})`
       Logger.error(`Browser extension ${record.id} could not be loaded:`, error)
       return this.registry.setLoadWarning(record.id, warning)
+    }
+  }
+
+  /** Restore the old source if a process stopped halfway through an update swap. */
+  private async restoreInterruptedSource(extensionId: string): Promise<void> {
+    const existing = this.recoveringSources.get(extensionId)
+    if (existing) return existing
+
+    const source = extensionSourceDirectory(this.configRoot, extensionId)
+    const backup = join(
+      this.extensionDirectory(extensionId),
+      `${BROWSER_EXTENSION_SOURCE_DIR}.previous`
+    )
+    const recovery = (async () => {
+      const [sourceExists, backupExists] = await Promise.all([
+        stat(source).then(
+          () => true,
+          () => false
+        ),
+        stat(backup).then(
+          () => true,
+          () => false
+        )
+      ])
+      if (!backupExists) return
+      if (!sourceExists) {
+        await rename(backup, source)
+        Logger.dev('Recovered a browser extension interrupted during update:', { extensionId })
+      } else {
+        await rm(backup, { recursive: true, force: true })
+      }
+    })()
+    this.recoveringSources.set(extensionId, recovery)
+    try {
+      await recovery
+    } finally {
+      this.recoveringSources.delete(extensionId)
+    }
+  }
+
+  /**
+   * Load the extension, then wait until Electron has initialized the browser
+   * state needed to start its background. The load promise only reports that the
+   * extension was loaded; starting its bridge or navigating a page in between
+   * that promise and `extension-ready` can race content-script registration.
+   */
+  private async loadExtensionWhenReady(
+    session: Session,
+    directory: string,
+    waitForReady: boolean
+  ): Promise<void> {
+    const extensions = session.extensions
+    if (!waitForReady) {
+      await extensions.loadExtension(directory, { allowFileAccess: false })
+      return
+    }
+
+    const readyExtensionIds = new Set<string>()
+    let loadedExtensionId: string | null = null
+    let resolveReady: (() => void) | null = null
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve
+    })
+    const onReady = (_event: Electron.Event, extension: Electron.Extension): void => {
+      readyExtensionIds.add(extension.id)
+      if (loadedExtensionId === extension.id) resolveReady?.()
+    }
+
+    extensions.on('extension-ready', onReady)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const extension = await extensions.loadExtension(directory, { allowFileAccess: false })
+      loadedExtensionId = extension.id
+      if (readyExtensionIds.has(extension.id)) return
+
+      const becameReady = await Promise.race([
+        ready.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), EXTENSION_READY_TIMEOUT_MS)
+        })
+      ])
+      if (!becameReady) {
+        Logger.dev('Browser extension did not report readiness before its startup deadline:', {
+          extensionId: extension.id,
+          timeoutMs: EXTENSION_READY_TIMEOUT_MS
+        })
+      }
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+      extensions.off('extension-ready', onReady)
     }
   }
 
@@ -811,6 +1398,153 @@ export class BrowserExtensionService {
   }
 
   /**
+   * Fill in the options page for an extension installed before it was tracked.
+   * Reads the installed manifest once and patches the record when it names an
+   * options document the record does not have yet.
+   */
+  private async refreshOptionsPath(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    if (record.optionsPath) return
+    try {
+      const manifest = await readManifestRecord(directory)
+      if (!manifest.optionsPath) return
+      const patched = await this.registry.patch(record.id, {
+        optionsPath: manifest.optionsPath
+      })
+      if (patched) {
+        record.optionsPath = patched.optionsPath
+        this.host.publish()
+      }
+    } catch (error) {
+      Logger.dev('Browser extension options path could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Whether an extension runs on one host. Blocked wins. Extension pages have
+   * no host and always run, so setup flows never lock themselves out.
+   */
+  isExtensionEnabledOnHost(extensionId: string, host: string | null): boolean {
+    const record = this.registry.get(extensionId)
+    if (!record || !record.enabled) return false
+    return extensionRunsOnHost(record, host)
+  }
+
+  /**
+   * Apply per-site rules to an installed copy before Chromium loads it.
+   *
+   * Reads from a preserved original manifest so unblocking restores the exact
+   * bytes the extension shipped. Blocked hosts are appended to each content
+   * script's `exclude_matches`. A non-empty allowlist intersects each content
+   * script's `matches` with the allowed hosts. Host permissions keep `<all_urls>`
+   * because that grant has no exclude mechanism; content scripts carry the block.
+   */
+  private async applySiteRulesToManifest(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    const manifestPath = join(directory, EXTENSION_MANIFEST_NAME)
+    const originalPath = join(directory, 'cio-original-manifest.json')
+    try {
+      const hasRules = record.blockedHosts.length > 0 || record.allowedHosts.length > 0
+      if (!hasRules) {
+        if (!existsSync(originalPath)) return
+        const original = await readFile(originalPath, 'utf8')
+        const current = await readFile(manifestPath, 'utf8').catch(() => null)
+        if (current !== null && current !== original) {
+          await writeFile(manifestPath, original)
+        }
+        return
+      }
+      if (!existsSync(originalPath)) {
+        const current = await readFile(manifestPath, 'utf8')
+        await writeFile(originalPath, current)
+      }
+      const originalText = await readFile(originalPath, 'utf8')
+      const original = JSON.parse(originalText) as Record<string, unknown>
+      const filtered = filterManifestForSiteRules(
+        original,
+        record.blockedHosts,
+        record.allowedHosts
+      )
+      if (filtered === null) return
+      await writeFile(manifestPath, `${JSON.stringify(filtered, null, 2)}\n`)
+    } catch (error) {
+      Logger.dev('Browser extension site rules could not be applied:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Stop offering a popup whose file is missing from the installed copy.
+   *
+   * A package can declare `action.default_popup` without shipping the file, and
+   * a copy on disk can lose it. The first notice today is the popup load itself,
+   * which fails with `ERR_FILE_NOT_FOUND` after the rail already opened a popup
+   * for it. Clearing the offer here turns that into a row warning instead, and a
+   * reinstall restores the popup because the worker reports it again.
+   */
+  private async refreshPopupAvailability(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    try {
+      const manifest = await readManifestRecord(directory)
+      if (manifest.popupPath && (await extensionPageFileExists(directory, manifest.popupPath))) {
+        if (record.popupPath !== manifest.popupPath) {
+          const patched = await this.registry.patch(record.id, { popupPath: manifest.popupPath })
+          if (patched) record.popupPath = patched.popupPath
+          this.host.publish()
+        }
+        return
+      }
+      if (!record.popupPath) return
+      const patched = await this.registry.patch(record.id, { popupPath: null })
+      if (patched) {
+        record.popupPath = patched.popupPath
+        await this.registry.warn(
+          record.id,
+          'Its popup page is missing from the installed copy, so it has no popup to open.'
+        )
+        this.host.publish()
+      }
+    } catch (error) {
+      Logger.dev('Browser extension popup availability could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /** Repair a damaged store copy before opening it, preserving its settings. */
+  async ensureExtensionPagesAvailable(extensionId: string): Promise<void> {
+    await this.ready
+    const record = this.registry.get(extensionId)
+    if (!record) throw new Error('That extension is not installed')
+    const directory = extensionSourceDirectory(this.configRoot, extensionId)
+    const manifest = await readManifestRecord(directory)
+    const pages = [manifest.popupPath, manifest.optionsPath].filter(
+      (path): path is string => path !== null
+    )
+    const available = await Promise.all(
+      pages.map((path) => extensionPageFileExists(directory, path))
+    )
+    if (available.some((exists) => !exists)) {
+      if (record.source !== 'webstore')
+        throw new Error('The extension package is missing its settings or popup page')
+      await this.updateFromWebStore(extensionId, true)
+    }
+    await this.refreshPopupAvailability(directory, this.registry.get(extensionId) ?? record)
+  }
+
+  /**
    * Hand Chromium words it knows.
    *
    * A manifest that declares a permission this runtime has never had is loaded
@@ -839,9 +1573,10 @@ export class BrowserExtensionService {
     }
   }
 
-  private removeFromSession(session: Session, extensionId: string): void {
+  private removeFromSession(state: LoadedJar, extensionId: string): void {
+    this.host.releaseViews(extensionId, state.projectId, state.boxId)
     try {
-      session.extensions.removeExtension(extensionId)
+      state.session.extensions.removeExtension(extensionId)
     } catch (error) {
       Logger.dev('Browser extension could not be unloaded:', { extensionId, error })
     }
@@ -851,7 +1586,7 @@ export class BrowserExtensionService {
     for (const [partition, state] of [...this.loaded]) {
       if (!state.ids.has(extensionId)) continue
       this.stopBridge(state, extensionId)
-      this.removeFromSession(state.session, extensionId)
+      this.removeFromSession(state, extensionId)
       state.ids.delete(extensionId)
       if (state.ids.size === 0) this.loaded.delete(partition)
     }
@@ -875,6 +1610,7 @@ export class BrowserExtensionService {
       publishedGeneration: new Map(),
       notificationSeq: new Map(),
       sidePanelSeq: new Map(),
+      actionPopupSeq: new Map(),
       published: new Map(),
       publishing: Promise.resolve()
     }
@@ -899,9 +1635,23 @@ export class BrowserExtensionService {
     name: BrowserExtensionTabEventName,
     args: unknown[]
   ): void {
+    if (name === 'onRemoved' && typeof args[0] === 'number') {
+      const partition = browserPartitionFor(projectId, boxId)
+      const policy = this.darkReaderPolicies.get(partition)
+      if (policy?.onlyTabId === args[0]) {
+        this.darkReaderPolicies.delete(partition)
+        void this.loaded.get(partition)?.bridges.get(DARK_READER_EXTENSION_ID)?.push({
+          kind: 'dark-reader-tab-policy',
+          onlyTabId: null,
+          disabledTabIds: [],
+          refresh: true
+        })
+      } else if (policy)
+        policy.disabledTabIds = policy.disabledTabIds.filter((id) => id !== args[0])
+    }
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
-    for (const bridge of state.bridges.values()) bridge.push({ kind: 'tab', name, args })
+    for (const bridge of state.bridges.values()) void bridge.push({ kind: 'tab', name, args })
   }
 
   /**
@@ -923,7 +1673,7 @@ export class BrowserExtensionService {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
     for (const bridge of state.bridges.values()) {
-      bridge.push({ kind: 'web-navigation', name, args: [details] })
+      void bridge.push({ kind: 'web-navigation', name, args: [details] })
     }
   }
 
@@ -942,12 +1692,21 @@ export class BrowserExtensionService {
       session: state.session,
       extensionId: record.id,
       pageUrl,
+      installed: this.pendingInstalledEvents.get(record.id),
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
         Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason }),
       // Sent after `startup` and after every restart, because a worker that has
       // just begun its life knows of no tab that was already open.
       tabReplay: () => this.host.tabReplay(state.projectId, state.boxId),
+      policyReplay: () => {
+        const policy = this.darkReaderPolicies.get(
+          browserPartitionFor(state.projectId, state.boxId)
+        )
+        return record.id === DARK_READER_EXTENSION_ID && policy
+          ? [{ kind: 'dark-reader-tab-policy', ...policy }]
+          : []
+      },
       // `chrome.userScripts.register` takes code and this runtime only registers
       // files, so the preamble asks for the write and waits for the answer.
       materializeUserScripts: (request) =>
@@ -968,6 +1727,7 @@ export class BrowserExtensionService {
     state.publishedGeneration.delete(extensionId)
     state.notificationSeq.delete(extensionId)
     state.sidePanelSeq.delete(extensionId)
+    state.actionPopupSeq.delete(extensionId)
     this.dismissExtensionNotifications(extensionId)
     for (const key of [...state.published.keys()]) {
       if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
@@ -1004,10 +1764,12 @@ export class BrowserExtensionService {
       state.notificationSeq.delete(extensionId)
       // Nor does its side-panel request sequence.
       state.sidePanelSeq.delete(extensionId)
+      state.actionPopupSeq.delete(extensionId)
     }
     state.publishedGeneration.set(extensionId, mail.generation)
     this.handleNotifications(state, extensionId, mail)
     this.handleSidePanelRequests(state, extensionId, mail)
+    this.handleActionPopupRequests(state, extensionId, mail.actionPopups)
     // Publishing resolves each icon's bytes, so it is queued per jar: two
     // snapshots landing out of order would draw the older state over the newer.
     state.publishing = state.publishing
@@ -1141,6 +1903,30 @@ export class BrowserExtensionService {
       this.applySidePanelRequest(state, extensionId, mail.sidePanel, entry)
     }
     state.sidePanelSeq.set(extensionId, newest)
+  }
+
+  /** Apply popup requests the worker routed through the app bridge. */
+  private handleActionPopupRequests(
+    state: LoadedJar,
+    extensionId: string,
+    requests: BrowserExtensionActionPopupRequest[]
+  ): void {
+    if (requests.length === 0) return
+    const lastSeen = state.actionPopupSeq.get(extensionId) ?? 0
+    let newest = lastSeen
+    for (const request of requests) {
+      if (request.seq <= lastSeen) continue
+      newest = Math.max(newest, request.seq)
+      this.host.openPopup({
+        projectId: state.projectId,
+        boxId: state.boxId,
+        extensionId,
+        extensionTabId: request.tabId,
+        kind: request.kind,
+        ...(request.url ? { url: request.url } : {})
+      })
+    }
+    state.actionPopupSeq.set(extensionId, newest)
   }
 
   /** One side-panel request: raise the panel for its tab, or close it. */
@@ -1380,7 +2166,7 @@ export class BrowserExtensionService {
   // ─── Paths and progress ────────────────────────────────────────────────────
 
   private storeRoot(): string {
-    return join(this.configRoot, BROWSER_EXTENSION_STORE_DIR)
+    return join(this.configRoot, resolveBrowserExtensionStoreDir())
   }
 
   private downloadRoot(): string {

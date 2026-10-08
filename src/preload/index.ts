@@ -120,7 +120,18 @@ const bridge: AppBridge = {
     ...args: InvokeArgs<Channel>
   ): Promise<InvokeResult<Channel>> => {
     assertInvokeChannel(channel)
-    return ipcRenderer.invoke(channel, ...args) as Promise<InvokeResult<Channel>>
+    return ipcRenderer.invoke(channel, ...args).then((result: unknown) => {
+      if (
+        channel === 'oven:probe' &&
+        typeof result === 'object' &&
+        result !== null &&
+        'ovenProbeError' in result &&
+        typeof result.ovenProbeError === 'string'
+      ) {
+        throw new Error(result.ovenProbeError)
+      }
+      return result as InvokeResult<Channel>
+    })
   },
   send: (channel: SendChannel, ...args: unknown[]) => {
     assertSendChannel(channel)
@@ -185,3 +196,8 @@ const bridge: AppBridge = {
 }
 
 contextBridge.exposeInMainWorld('api', bridge)
+
+// Forward device reconnection immediately; the main process verifies connectivity.
+window.addEventListener('online', () => {
+  void ipcRenderer.invoke('network:restored').catch(() => undefined)
+})

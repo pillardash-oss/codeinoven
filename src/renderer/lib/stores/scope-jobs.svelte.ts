@@ -114,6 +114,8 @@ export interface ScopeJob {
   projectId: string
   /** Bucket the job belongs to; null until a brand new scope's bucket exists. */
   scopeBucketId: string | null
+  /** Thread that initiated the run; the scope lands on this thread, never the selected one. */
+  targetThreadId: string | null
   kind: ScopeJobKind
   /** Who started the run, so the panel can say an agent did it. */
   origin: ScopeJobOrigin
@@ -152,6 +154,8 @@ export interface ScopeCreateJobInput extends ScopeWorktreeCreateInput {
 export interface ScopeCreateJobOptions {
   /** Set when the worktree is created for a scope that already exists. */
   existingBucketId?: string | null
+  /** Thread that started the run; scope assignment lands here even after a thread switch. */
+  targetThreadId?: string | null
   onCreated?: (bucketId: string) => void
 }
 
@@ -279,6 +283,7 @@ class ScopeJobStore {
     const job = this.#push({
       projectId,
       scopeBucketId: options.existingBucketId ?? null,
+      targetThreadId: options.targetThreadId ?? null,
       kind: 'create',
       title: input.title,
       isolated: input.isolated,
@@ -295,11 +300,12 @@ class ScopeJobStore {
   adopt(
     projectId: string,
     input: { bucketId: string; title: string; sourcePath: string; runSetup: boolean },
-    options: { onAdopted?: () => void } = {}
+    options: { onAdopted?: () => void; targetThreadId?: string | null } = {}
   ): string {
     const job = this.#push({
       projectId,
       scopeBucketId: input.bucketId,
+      targetThreadId: options.targetThreadId ?? null,
       kind: 'adopt',
       title: input.title,
       isolated: true,
@@ -344,6 +350,26 @@ class ScopeJobStore {
         job.projectId === projectId &&
         job.scopeBucketId === bucketId
     )
+  }
+
+  /**
+   * Running create/adopt work targeting one thread. A send parked while this
+   * exists must stay queued until the scope lands, so a message typed during a
+   * worktree build runs in the new scope instead of the old one.
+   */
+  pendingScopeJobForThread(projectId: string, threadId: string): ScopeJob | undefined {
+    return this.jobs.find(
+      (job) =>
+        job.status === 'running' &&
+        job.projectId === projectId &&
+        job.targetThreadId === threadId &&
+        (job.kind === 'create' || job.kind === 'adopt')
+    )
+  }
+
+  /** True while a scope worktree run still owns the thread's next send. */
+  hasPendingScopeJob(projectId: string, threadId: string): boolean {
+    return this.pendingScopeJobForThread(projectId, threadId) !== undefined
   }
 
   /**
@@ -621,6 +647,7 @@ class ScopeJobStore {
   #push(input: {
     projectId: string
     scopeBucketId: string | null
+    targetThreadId?: string | null
     kind: ScopeJobKind
     origin?: ScopeJobOrigin
     title: string
@@ -634,6 +661,7 @@ class ScopeJobStore {
       id: crypto.randomUUID(),
       projectId: input.projectId,
       scopeBucketId: input.scopeBucketId,
+      targetThreadId: input.targetThreadId ?? null,
       kind: input.kind,
       origin: input.origin ?? 'user',
       title: input.title,
@@ -706,11 +734,21 @@ class ScopeJobStore {
     )
     // Exact bucket match first: the worktree service serialises one job per
     // project, so a queued sibling job must never steal the live stages.
-    const job =
+    const matched =
       running.find((candidate) => candidate.scopeBucketId === event.scopeBucketId) ??
-      running.find((candidate) => candidate.scopeBucketId === null) ??
-      this.#mintAgentJob(event)
-    if (!job) return
+      running.find((candidate) => candidate.scopeBucketId === null)
+    // A terminal stage with no running job is a duplicate (setup already
+    // reported `done` and the service reported it again, or a failure was
+    // reported twice). Minting here would create a second running job that can
+    // never settle, which is exactly the stuck docked panel this guards.
+    if (!matched) {
+      if (event.stage === 'done' || event.stage === 'failed') return
+      const minted = this.#mintAgentJob(event)
+      if (!minted) return
+      this.#patchNonTerminal(minted.id, event)
+      return
+    }
+    const job = matched
     const stage: ScopeWorktreeProgress = {
       stage: event.stage,
       ...(event.detail === undefined ? {} : { detail: event.detail })
@@ -719,13 +757,41 @@ class ScopeJobStore {
       // `failed` names no step of its own; keep the step it interrupted so the
       // checklist can mark where the run stopped.
       this.#patch(job.id, { stage, failedStepId: scopeJobActiveStepId(job) })
+      // An agent run has no renderer-owned runner to settle it: the progress
+      // stream is its only lifecycle, so a terminal stage must finish the job
+      // here. User runs keep their runner as the settler so the thrown error
+      // message survives instead of being replaced by a generic one.
+      if (job.kind === 'agent') {
+        this.#patch(job.id, {
+          status: 'failed',
+          error: event.detail
+            ? `The worktree run failed (${event.detail}).`
+            : 'The worktree run failed.',
+          finishedAt: Date.now()
+        })
+        void this.#revalidateAfterFailure(job)
+      }
       return
     }
     if (event.stage === 'done') {
-      this.#patch(job.id, { stage })
+      // Settle here so an agent run (which has no runner) leaves `running`
+      // the moment its worktree exists. User runs also finish here; their
+      // runner's `#finish` right after is idempotent and its navigation
+      // handoff still runs.
+      this.#patch(job.id, { stage, status: 'succeeded', finishedAt: Date.now() })
       return
     }
-    this.#patch(job.id, {
+    this.#patchNonTerminal(job.id, event)
+  }
+
+  #patchNonTerminal(id: string, event: ScopeWorktreeProgressEvent): void {
+    const job = this.jobs.find((candidate) => candidate.id === id)
+    if (!job || job.status !== 'running') return
+    const stage: ScopeWorktreeProgress = {
+      stage: event.stage,
+      ...(event.detail === undefined ? {} : { detail: event.detail })
+    }
+    this.#patch(id, {
       stage,
       activeStepId: isWorktreeStage(event.stage) ? event.stage : job.activeStepId,
       failedStepId: null

@@ -19,7 +19,11 @@
 
 <div class="flex min-w-0 flex-1 items-center justify-center px-2">
   {#if tab && runtime}
-    <div class="titlebar-no-drag flex min-w-0 max-w-full items-center gap-2">
+    <!-- The page's title is capped by the header shell's centre width, exactly
+         like the thread title in the other views. -->
+    <div
+      class="titlebar-no-drag flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
+    >
       <span class="flex h-4 w-4 shrink-0 items-center justify-center">
         {#if runtime.loading}
           <Loader2 size={13} class="animate-spin text-muted" />

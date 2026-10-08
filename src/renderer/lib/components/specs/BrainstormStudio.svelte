@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, MessageSquare, MessageSquarePlus } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { MessageSquare, MessageSquarePlus } from '@lucide/svelte'
   import { onDestroy, onMount } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -18,10 +17,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
-  import {
-    StudioAnnotationOverlay,
-    clampPendingPosition
-  } from './studio-annotation-overlay.svelte'
+  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     BrainstormAnnotation,
@@ -36,7 +32,8 @@
   type CallbackResult = void | Promise<void>
 
   /** Next-step choices offered after a Brainstorm session. */
-  export type BrainstormNextStep = 'lofi' | 'hifi' | 'prd' | 'spec'
+  import BrainstormNextStepMenu from '../shared/BrainstormNextStepMenu.svelte'
+  import type { BrainstormNextStep } from '../shared/BrainstormNextStepMenu.svelte'
 
   interface AnnotationAnchor {
     quote: string
@@ -153,7 +150,9 @@
   const pendingSpeechTargetId = $derived(
     `brainstorm-annotation-${brainstorm.id}-${brainstorm.version}-${overlay.pending?.startOffset ?? -1}-${overlay.pending?.endOffset ?? -1}`
   )
-  const decisionSpeechTargetId = $derived(`brainstorm-decision-${brainstorm.id}-${brainstorm.version}`)
+  const decisionSpeechTargetId = $derived(
+    `brainstorm-decision-${brainstorm.id}-${brainstorm.version}`
+  )
   const speechScope = $derived({
     kind: 'project',
     projectId: brainstorm.projectId,
@@ -473,7 +472,8 @@
     if (!updated) return
     speechController.observeSent(`brainstorm-annotation-edit-${annotation.id}`, body)
     applyDocument(updated)
-    overlay.editing = updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
+    overlay.editing =
+      updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
     overlay.editingBody = overlay.editing?.body ?? ''
     overlay.editMode = false
   }
@@ -686,7 +686,7 @@
       {savePending}
       versionMenuTitle="Choose a brainstorm version"
       versionItemTitle={(version) => `Open brainstorm version ${version}`}
-      onSelectVersion={onSelectVersion}
+      {onSelectVersion}
       onUndo={undoEdit}
       onRedo={redoEdit}
       onSave={() => void saveDraft()}
@@ -704,59 +704,10 @@
           additionalNotes = ''
         }}>Discuss changes</button
       >
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={busy || nextStepBusy || !onNextStep}
-          title="Choose what to build next from this Brainstorm"
-        >
-          {nextStepBusy ? 'Working…' : 'Next step'}
-          <ChevronDown size={13} />
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            side="bottom"
-            align="end"
-            sideOffset={4}
-            collisionPadding={8}
-            strategy="fixed"
-            class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
-          >
-            <DropdownMenu.Item
-              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-              title="Prototype a low-fidelity Lo-Fi wireframe direction"
-              disabled={nextStepBusy}
-              onSelect={() => void runNextStep('lofi')}
-            >
-              <span>Prototype Lo-Fi</span>
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-              title="Prototype a single high-fidelity Hi-Fi direction"
-              disabled={nextStepBusy}
-              onSelect={() => void runNextStep('hifi')}
-            >
-              <span>Prototype Hi-Fi</span>
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-              title="Generate the product requirements document from this Brainstorm"
-              disabled={nextStepBusy}
-              onSelect={() => void runNextStep('prd')}
-            >
-              <span>Generate PRD</span>
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-              title="Finalize this Brainstorm and generate an implementation-ready Spec"
-              disabled={nextStepBusy}
-              onSelect={() => void runNextStep('spec')}
-            >
-              <span>Generate Spec</span>
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      <BrainstormNextStepMenu
+        busy={busy || nextStepBusy}
+        onNextStep={onNextStep ? (step) => void runNextStep(step) : undefined}
+      />
     {/if}
   {/snippet}
 
@@ -863,7 +814,8 @@
             <button
               class="group flex items-center gap-2 text-left"
               title={`Annotate ${section.title}`}
-              onclick={(event: MouseEvent) => openSectionAnnotation(section.id, section.title, event)}
+              onclick={(event: MouseEvent) =>
+                openSectionAnnotation(section.id, section.title, event)}
             >
               <span class="text-xl font-semibold tracking-tight">{section.title}</span>
               <MessageSquarePlus
@@ -892,9 +844,7 @@
                   title="Open annotation"
                   onclick={() => void openAnnotation(annotation)}
                 >
-                  <span class="line-clamp-2 text-xs leading-relaxed"
-                    >{annotation.body}</span
-                  >
+                  <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
                   <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
                 </button>
               {/each}
@@ -994,7 +944,7 @@
   <StudioAnnotationDetailPopover
     position={editingAnnotationPosition}
     annotation={editingAnnotation}
-    canEdit={canEdit}
+    {canEdit}
     editorMode={annotationEditMode}
     headerLabel={annotationEditMode ? 'Edit annotation' : 'Annotation'}
     dialogLabel="Brainstorm annotation"

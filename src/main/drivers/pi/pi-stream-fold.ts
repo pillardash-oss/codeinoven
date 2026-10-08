@@ -79,6 +79,30 @@ function mapPiContentBlock(
   return null
 }
 
+/**
+ * The state fields a tool part carries when the call reached a server the app
+ * published. `title` is what the trace shows for a code-mode sub-call, which
+ * would otherwise read as "Code mode" with no hint of the utility behind it;
+ * the metadata keeps the machine-readable identity for the audit and for any
+ * later surface that needs to group a call by capability.
+ */
+function nativeToolStatePatch(
+  toolName: string,
+  context: PiStreamContext
+): { title?: string; metadata?: Record<string, unknown> } {
+  const attribution = context.nativeToolOwner?.(toolName)
+  if (!attribution) return {}
+  return {
+    title: `${attribution.utilityName}: ${attribution.tool}`,
+    metadata: {
+      utilityId: attribution.utilityId,
+      utilityName: attribution.utilityName,
+      server: attribution.server,
+      tool: attribution.tool
+    }
+  }
+}
+
 function toolCallId(blockValue: unknown): string {
   const block = record(blockValue)
   return stringValue(block?.['id']) ?? ''
@@ -471,7 +495,8 @@ export function mapPiRecord(
             state: {
               status: 'running',
               input: record(entry['args']) ?? {},
-              ...(partialOutput ? { output: partialOutput } : {})
+              ...(partialOutput ? { output: partialOutput } : {}),
+              ...nativeToolStatePatch(toolName, context)
             }
           }
         }
@@ -552,7 +577,8 @@ export function mapPiRecord(
               input,
               ...(output ? { output } : {}),
               ...(failed ? { error } : {}),
-              ...(cost === undefined ? {} : { cost })
+              ...(cost === undefined ? {} : { cost }),
+              ...nativeToolStatePatch(toolName, context)
             }
           }
         }
@@ -634,7 +660,8 @@ export function mapPiRecord(
             input: existing?.state.input ?? {},
             ...(output ? { output } : {}),
             ...(failed ? { error } : {}),
-            ...(cost === undefined ? {} : { cost })
+            ...(cost === undefined ? {} : { cost }),
+            ...nativeToolStatePatch(existingToolName, context)
           }
         }
       })
@@ -796,6 +823,9 @@ export function mapPiRecord(
   }
 
   if (type === 'agent_settled') {
+    // A cancelled run can retain its last provider error; cancellation is not
+    // a terminal provider failure. Pi 1.1.0 reports it explicitly.
+    if (entry['aborted'] === true) return { events: [] }
     const session = context.session
     const lastAssistant = [...session.messages].reverse().find((message) => {
       return message.role === 'assistant'

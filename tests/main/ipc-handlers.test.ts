@@ -19,7 +19,8 @@ const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.
 vi.mock('electron', () => ({
   app: {
     getName: vi.fn(() => 'CodeInOven'),
-    getVersion: vi.fn(() => '0.1.0')
+    getVersion: vi.fn(() => '0.1.0'),
+    once: vi.fn()
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -56,8 +57,10 @@ import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../src/lib/types/settings'
+import { DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES } from '../../src/lib/types/cio-cleanup'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -109,6 +112,7 @@ const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  modelProfiles: [],
   workRoots: { design: '.cio/designs', video: '.cio/videos' },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
@@ -134,6 +138,8 @@ const defaultConfig: AppConfig = {
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: 'duckduckgo',
   browserCustomSearchEngines: [],
+  cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
@@ -195,7 +201,21 @@ describe('validateAppConfigPatch', () => {
         defaultMergeMethod: 'rebase',
         maxDiffLines: 250,
         agentBehaviorPrompt: 'Custom agent behavior.',
-        memory
+        memory,
+        modelProfiles: [
+          {
+            id: 'deep-review',
+            name: 'Deep review',
+            harnessId: 'opencode',
+            providerId: 'anthropic',
+            modelId: 'claude-opus-4-8',
+            thinkingLevel: 'high',
+            inferenceMode: 'fast',
+            permissionLevel: 'full_access',
+            accountId: 'opencode.work',
+            contextWindow: 1_000_000
+          }
+        ]
       })
     ).toMatchObject({
       theme: 'dark',
@@ -238,7 +258,21 @@ describe('validateAppConfigPatch', () => {
             source: 'manual'
           })
         ]
-      }
+      },
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access',
+          accountId: 'opencode.work',
+          contextWindow: 1_000_000
+        }
+      ]
     })
   })
 
@@ -277,6 +311,91 @@ describe('validateAppConfigPatch', () => {
       ]
     },
     { resumeWorkOnRestart: 1 },
+    { modelProfiles: 'deep-review' },
+    { modelProfiles: [{}] },
+    {
+      modelProfiles: [
+        {
+          id: 'Deep Review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access'
+        }
+      ]
+    },
+    {
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'turbo',
+          permissionLevel: 'full_access'
+        }
+      ]
+    },
+    {
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'ask_every_time'
+        }
+      ]
+    },
+    {
+      // Account handles must be strings.
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access',
+          accountId: 42
+        }
+      ]
+    },
+    {
+      // Two rows keyed by the same id would make the picker ambiguous.
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access'
+        },
+        {
+          id: 'deep-review',
+          name: 'Review again',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-5',
+          thinkingLevel: 'low',
+          inferenceMode: 'normal',
+          permissionLevel: 'auto_review'
+        }
+      ]
+    },
     {
       memory: {
         enabled: true,
@@ -618,6 +737,8 @@ describe('git IPC', () => {
     const gitDir = await mkdtemp(join(tmpdir(), 'codeinoven-git-ipc-'))
     const repo = simpleGit(gitDir)
     await repo.init()
+    await repo.addConfig('user.name', 'CodeInOven Test')
+    await repo.addConfig('user.email', 'test@codeinoven.invalid')
     await writeFile(join(gitDir, 'file.txt'), 'hello\n', 'utf-8')
     await repo.add('.')
     await repo.commit('initial')

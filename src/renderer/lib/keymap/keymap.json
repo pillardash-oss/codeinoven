@@ -120,6 +120,13 @@
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
+          "id": "threads-toggle-grouping",
+          "keys": [],
+          "label": "Group threads by status",
+          "description": "Toggles foldable status groups for the filtered Threads view.",
+          "scenario": "Threads view."
+        },
+        {
           "id": "assistant-new-task",
           "keys": ["mod", "n"],
           "label": "New task",
@@ -151,7 +158,7 @@
           "id": "nav-toggle-left-sidebar",
           "keys": ["mod", "s"],
           "label": "Toggle left sidebar",
-          "description": "Folds or unfolds the Projects/Chats/Threads sidebar (without Shift) on the plain workspace, where the save chord is otherwise unused.",
+          "description": "Folds or unfolds the sidebar (without Shift): the workspace sidebar on plain views, the app sidebar in the Browser view. Studios, conflict resolution, and dirty file tabs still own the chord for saving.",
           "scenario": "Projects, Chats, or Threads view with no studio and no dirty file tab open."
         },
         {
@@ -574,10 +581,10 @@
         },
         {
           "id": "browser-save-page",
-          "keys": ["mod", "s"],
+          "keys": [],
           "label": "Save page",
-          "description": "Saves the page to a file you choose, as one complete web page.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "description": "Saves the page to a file you choose, as one complete web page. Unbound by default so Mod+S toggles the sidebars and pages that handle it keep it; Save Page As stays in the page context menu.",
+          "scenario": "Bindable. Assign a key to save the page while a browser tab is on screen."
         },
         {
           "id": "browser-zoom-in",
@@ -620,6 +627,13 @@
           "keys": ["mod", "t"],
           "label": "New browser tab",
           "description": "Opens a new blank browser tab for the current thread.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-reopen-tab",
+          "keys": ["mod", "shift", "t"],
+          "label": "Reopen closed browser tab",
+          "description": "Brings back the tab you closed last, with its back and forward history. Reopening works until the app is quit, like a browser's own reopen.",
           "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
         },
         {
@@ -756,8 +770,22 @@
         {
           "id": "palette-model-nav",
           "keys": ["arrowup", "arrowdown"],
-          "label": "Navigate model list",
-          "description": "Moves between model rows.",
+          "label": "Navigate picker rows",
+          "description": "Moves between the rows of a picker: its model list, saved profiles, and harness filter chips.",
+          "scenario": "Model picker or one of its panels open."
+        },
+        {
+          "id": "palette-model-rail",
+          "keys": ["arrowleft"],
+          "label": "Focus model picker rail",
+          "description": "Moves focus from picker entries to the section rail.",
+          "scenario": "Model picker open."
+        },
+        {
+          "id": "palette-model-entries",
+          "keys": ["arrowright"],
+          "label": "Focus model picker entries",
+          "description": "Moves focus from the section rail to its entries.",
           "scenario": "Model picker open."
         },
         {
@@ -864,7 +892,7 @@
       "shortcuts": [
         {
           "id": "app-quit-direct",
-          "keys": ["mod", "shift", "q"],
+          "keys": ["mod", "shift", "d"],
           "label": "Quit CodeInOven",
           "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
           "scenario": "Anywhere in the app."

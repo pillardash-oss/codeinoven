@@ -41,7 +41,7 @@
       note: 'text-[0.5625rem] text-dimmed'
     },
     table: {
-      wrapper: 'space-y-2',
+      wrapper: 'grid grid-flow-col auto-cols-[minmax(8rem,1fr)] items-start gap-3 overflow-x-auto',
       label: 'text-[0.6875rem]',
       detail: 'text-[0.6875rem] font-medium text-foreground',
       note: 'text-[0.625rem] text-dimmed'
@@ -70,12 +70,22 @@
   {#each windows as limit (limit.id)}
     {@const percent = quotaPercent(limit)}
     {@const overage = overageLabel(limit)}
-    <div transition:slide={{ duration: 300 }} class="overflow-hidden">
-      <div class="mb-1 flex items-center justify-between gap-3">
+    {@const resetSummary = formatResetCountdown(limit.resetsAt)}
+    <div transition:slide={{ duration: 300 }} class="min-w-0 overflow-hidden">
+      <div
+        class={[
+          'mb-1 flex',
+          variant === 'table'
+            ? 'min-w-0 flex-col items-start gap-0.5'
+            : 'items-center justify-between gap-3'
+        ]}
+      >
         <span class="min-w-0 truncate font-medium text-muted {scale.label}" title={limit.label}>
           {limit.label}
         </span>
-        <span class="shrink-0 tabular-nums {scale.detail}">{windowDetail(limit)}</span>
+        <span class={[variant === 'table' ? 'truncate' : 'shrink-0', 'tabular-nums', scale.detail]}
+          >{windowDetail(limit)}</span
+        >
       </div>
       {#if percent !== undefined}
         <div
@@ -92,7 +102,7 @@
           ></div>
         </div>
       {/if}
-      <p class="mt-1 {scale.note}">{formatResetCountdown(limit.resetsAt)}</p>
+      <p class="mt-1 truncate {scale.note}" title={resetSummary}>{resetSummary}</p>
       {#if overage}
         <p class="mt-0.5 {scale.note}">{overage}</p>
       {/if}

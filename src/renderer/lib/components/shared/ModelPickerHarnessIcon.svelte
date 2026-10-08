@@ -4,13 +4,20 @@
 
   interface Props {
     harnessId: string
+    size?: number
   }
 
-  let { harnessId }: Props = $props()
+  let { harnessId, size = 12 }: Props = $props()
 </script>
 
 {#if getAgentIcon(harnessId)}
-  <img src={getAgentIcon(harnessId)?.iconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" />
+  <img
+    src={getAgentIcon(harnessId)?.iconUrl}
+    alt=""
+    class="shrink-0 object-contain"
+    style:width={`${size}px`}
+    style:height={`${size}px`}
+  />
 {:else}
-  <SquareTerminal size={12} class="shrink-0" />
+  <SquareTerminal {size} class="shrink-0" />
 {/if}

@@ -74,11 +74,30 @@ function attributeMap(source: string): Record<string, string> {
  * one the user asked for.
  */
 export async function resolveWebStoreRelease(extensionId: string): Promise<WebStoreRelease> {
+  const release = await requestWebStoreRelease(extensionId, null)
+  if (!release) throw new Error('The Web Store no longer serves that extension')
+  return release
+}
+
+/** Ask whether a Web Store extension has a release newer than the installed version. */
+export async function resolveWebStoreUpdate(
+  extensionId: string,
+  installedVersion: string
+): Promise<WebStoreRelease | null> {
+  return requestWebStoreRelease(extensionId, installedVersion)
+}
+
+async function requestWebStoreRelease(
+  extensionId: string,
+  installedVersion: string | null
+): Promise<WebStoreRelease | null> {
+  const version = installedVersion ? `&v=${encodeURIComponent(installedVersion)}` : ''
+  const appRequest = `id=${extensionId}${version}&uc`
   const query =
     `${WEBSTORE_UPDATE_URL}?response=updatecheck` +
     `&prodversion=${encodeURIComponent(appVersionForStore())}` +
     `&acceptformat=${ACCEPT_FORMATS}` +
-    `&x=${encodeURIComponent(`id=${extensionId}&uc`)}`
+    `&x=${encodeURIComponent(appRequest)}`
 
   const response = await net.fetch(query, { headers: { 'user-agent': USER_AGENT } })
   if (!response.ok) {
@@ -100,7 +119,7 @@ export async function resolveWebStoreRelease(extensionId: string): Promise<WebSt
   const update = attributeMap(updateTag[1])
   const status = update['status'] ?? 'unknown'
   if (status === 'noupdate') {
-    throw new Error('The Web Store no longer serves that extension')
+    return null
   }
   if (status !== 'ok') {
     throw new Error(`The Web Store refused that extension (${status})`)
@@ -149,7 +168,8 @@ export async function downloadWebStoreRelease(
     throw new Error('The package download carried no bytes')
   }
 
-  const totalBytes = release.size > 0 ? release.size : Number(response.headers.get('content-length') ?? 0)
+  const totalBytes =
+    release.size > 0 ? release.size : Number(response.headers.get('content-length') ?? 0)
   const digest = createHash('sha256')
   let receivedBytes = 0
   let lastEmit = 0

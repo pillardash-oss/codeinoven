@@ -44,6 +44,13 @@ export type {
 }
 
 export class ProjectFilesService {
+  /** Preview access is bound to an authoritative Oven thread by the main process. */
+  remoteFileReader?: (
+    projectId: string,
+    threadId: string,
+    path: string
+  ) => Promise<{ size: number; read(offset: number): Promise<Uint8Array> } | null>
+
   private readonly writeQueues = new Map<string, Promise<void>>()
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()

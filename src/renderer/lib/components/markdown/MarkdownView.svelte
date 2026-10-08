@@ -6,6 +6,8 @@
   import MarkdownTable from './MarkdownTable.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
+  import ArtifactCard from './ArtifactCard.svelte'
+  import { artifactKindForLang, artifactNeedsCodeFallback } from './artifact'
   import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
   import { groupHtmlContainers, type MarkdownNode } from './html-containers'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -32,6 +34,8 @@
     /** Markdown source   may be an incomplete, still-streaming message. */
     text: string
     class?: string
+    /** Preferred app-browser surface, while respecting the user's link setting. */
+    browserDestination?: 'context' | 'global'
     /**
      * Render raw HTML tags in the source instead of showing them as text.
      * Only for content authored on a provider whose markdown dialect includes
@@ -65,6 +69,7 @@
   let {
     text,
     class: className = '',
+    browserDestination = 'context',
     allowHtml = false,
     repository = null,
     inlineFileTags = [],
@@ -263,6 +268,18 @@
     return link instanceof HTMLAnchorElement ? link : null
   }
 
+  /** The inline `@path` file chip under the event, if any. Chips are injected
+   *  as trusted HTML rather than anchors, so they are matched by their data
+   *  attribute and revealed through the same citation path as a link. */
+  function chipFromEvent(event: Event): HTMLElement | null {
+    const chip = (event.target as Element | null)?.closest('[data-file-chip]')
+    return chip instanceof HTMLElement ? chip : null
+  }
+
+  function chipPath(chip: HTMLElement): string | null {
+    return chip.dataset.fileChip ?? null
+  }
+
   function citationFromLink(link: HTMLAnchorElement): { path: string; line?: number } | null {
     const path = link.dataset.citationPath
     const line = link.dataset.citationLine
@@ -339,6 +356,16 @@
   }
 
   function handleClick(event: MouseEvent): void {
+    const chip = chipFromEvent(event)
+    if (chip) {
+      const path = chipPath(chip)
+      if (path) {
+        event.preventDefault()
+        clearTooltip()
+        openCitation(path)
+        return
+      }
+    }
     const link = linkFromEvent(event)
     if (!link) return
     const citation = citationFromLink(link)
@@ -364,8 +391,19 @@
     if (href.startsWith('http://') || href.startsWith('https://')) {
       event.preventDefault()
       clearTooltip()
-      void openInBrowser(href)
+      void openInBrowser(href, browserDestination)
     }
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    const chip = chipFromEvent(event)
+    if (!chip) return
+    const path = chipPath(chip)
+    if (!path) return
+    event.preventDefault()
+    clearTooltip()
+    openCitation(path)
   }
 
   /** Mirror of the citation click path   used by the file context menu's
@@ -396,8 +434,11 @@
       {@html htmlFragment(node.raw, repository)}
     {:else if isCodeToken(node.token)}
       {@const language = node.token.lang?.split(/\s+/)[0]?.toLowerCase()}
+      {@const artifactKind = artifactKindForLang(language)}
       {#if language === 'mermaid' && isCompleteFence(node.token)}
         <MermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
+      {:else if artifactKind && isCompleteFence(node.token) && !artifactNeedsCodeFallback(node.token.text)}
+        <ArtifactCard code={node.token.text} kind={artifactKind} />
       {:else}
         <CodeBlock code={node.token.text} lang={language} />
       {/if}
@@ -440,6 +481,7 @@
     class={['markdown-body min-w-0 max-w-full', className]}
     role="presentation"
     onclick={handleClick}
+    onkeydown={handleKeydown}
     onpointerover={handlePointerOver}
     onpointerout={handlePointerOut}
     onfocusin={handleFocusIn}

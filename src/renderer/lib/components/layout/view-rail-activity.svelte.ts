@@ -6,11 +6,17 @@ import {
   browserDownloads,
   type BrowserDownloadOutstanding
 } from '$lib/stores/browser-downloads.svelte'
+import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-import { coordinatorHasActiveDelegates, isOrchestrationChildThread } from '$shared/types'
+import {
+  coordinatorHasActiveDelegates,
+  isOrchestrationChildThread,
+  threadTracksReadStatus
+} from '$shared/types'
 import { threadWorkingForIndicator } from './app-header-thread-status'
+import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 
 /**
@@ -22,9 +28,11 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
  * project family and therefore share the project badge; Chats and Assistant
  * each carry their own.
  *
- * The Browser has no thread family behind it at all, so its badge reports what
- * the browser itself has in flight instead: the downloads its profile has not
- * finished ({@link ViewRailActivity.browserTransfers}).
+ * The Browser is the one view whose badge is not a thread family. A browser tab
+ * owns an assistant conversation that is a real thread but is deliberately held
+ * out of every list, and the profile keeps downloading after the user leaves the
+ * view, so its item reports both ({@link ViewRailActivity.browserAssistant} and
+ * {@link ViewRailActivity.browserTransfers}).
  */
 export interface ViewFamilyActivity {
   working: number
@@ -49,6 +57,15 @@ export interface ViewBadge {
   label: string
   /** Family glyph rendered inside the count pill. */
   icon: Component
+  /** Exact accents used for unread notification dots. */
+  colors?: string[]
+}
+
+export interface ViewRailBadges {
+  activity: ViewBadge | null
+  unread: ViewBadge | null
+  /** The family has active work, regardless of the visible status label. */
+  hasWorkingThreads: boolean
 }
 
 /** The three families the rail's badges and labels are keyed by. */
@@ -157,6 +174,72 @@ export class ViewRailActivity {
     return counts
   })
 
+  /** Persisted unread threads, rebuilt from the same startup-hydrated thread
+   *  snapshot used by the sidebar. This survives app restarts and includes
+   *  routine execution threads stored in the assistant space. */
+  unreadCounts: Record<ContentThreadFamily, number> = $derived.by(() => {
+    const threads = scopeState.allScopeThreads
+    const unread: Record<ContentThreadFamily, number> = {
+      projects: 0,
+      chats: 0,
+      assistant: 0
+    }
+    const unreadById = new SvelteSet(
+      threads
+        .filter(
+          (thread) =>
+            !thread.archived &&
+            thread.status === 'completed' &&
+            threadTracksReadStatus(thread) &&
+            !thread.read
+        )
+        .map((thread) => thread.id)
+    )
+    for (const thread of threads) {
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const hasUnread =
+        unreadById.has(thread.id) ||
+        threads.some(
+          (candidate) => candidate.coordinatorThreadId === thread.id && unreadById.has(candidate.id)
+        )
+      if (hasUnread) unread[contentThreadFamily(thread)] += 1
+    }
+    return unread
+  })
+
+  /**
+   * A browser tab's assistant conversation, counted apart from every other family.
+   *
+   * These rows are held out of `scopeState.allScopeThreads` on purpose, so no
+   * family badge can ever see them and the Browser item used to report only
+   * downloads. A conversation could then sit working, or wait on a question with
+   * no card the user could find, while the rail said nothing at all.
+   *
+   * Counted with the same rules as a family ({@link ViewRailActivity.counts}), so
+   * a browser chat and a workspace chat read identically on the rail.
+   */
+  browserAssistant: ViewFamilyActivity = $derived.by((): ViewFamilyActivity => {
+    // Same retry clock as the family counts: a browser chat parked on a long
+    // scheduled retry has to leave this count on its own, without waiting for
+    // some other family's row to keep the clock alive.
+    if (agentRuns.hasPendingRetry) subscribeToRetryClock()
+    const activity = emptyFamilyActivity()
+    const now = Date.now()
+    for (const thread of browserAssistant.threads) {
+      if (thread.archived) continue
+      if (threadWorkingForIndicator(thread, now)) {
+        activity.working += 1
+        continue
+      }
+      if (thread.status === 'awaiting_approval') activity.attention += 1
+      else if (thread.status === 'failed') {
+        activity.attention += 1
+        activity.attentionError = true
+      } else if (thread.status === 'working-paused') activity.retry += 1
+    }
+    return activity
+  })
+
   /**
    * The Browser view's own rail activity: the global browser profile's
    * outstanding downloads.
@@ -187,45 +270,133 @@ export class ViewRailActivity {
  * shown, or the last project view the user was on when a view that owns another
  * family (Chat, Assistant) or no threads at all (the Browser) is on screen.
  * Chats and Assistant each have a single view and keep their badge there. The
- * Browser has no thread family to report, so its item shows the profile's
- * downloads instead (see {@link browserTransferBadge}).
+ * Browser owns no listed thread family of its own, so its item reports the tab
+ * assistant conversations behind it (see {@link browserAgentBadge}) and falls
+ * back to the profile's downloads (see {@link browserTransferBadge}).
  */
-export function viewBadgeFor(
+export function viewBadgesFor(
   optionId: HeaderViewOptionId,
   projectBadgeOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts,
-  browserTransfers: BrowserDownloadOutstanding
-): ViewBadge | null {
-  if (optionId === 'browser') return browserTransferBadge(browserTransfers)
+  unreadCounts: Record<ContentThreadFamily, number>,
+  browserTransfers: BrowserDownloadOutstanding,
+  browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity()
+): ViewRailBadges {
+  if (optionId === 'browser') {
+    return {
+      activity:
+        browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
+      unread: null,
+      hasWorkingThreads: browserAssistantActivity.working > 0
+    }
+  }
   const family = viewOptionFamily(optionId)
-  if (family === 'projects' && optionId !== projectBadgeOption) return null
+  if (family === 'projects' && optionId !== projectBadgeOption) {
+    return { activity: null, unread: null, hasWorkingThreads: false }
+  }
+  const unread = notificationPanelState.unreadRailSummary(family)
+  const threadUnreadCount = unreadCounts[family]
+  const unreadCount = Math.max(unread?.count ?? 0, threadUnreadCount)
+  const unreadBadge: ViewBadge | null =
+    unreadCount > 0
+      ? {
+          tone: 'attention',
+          count: unreadCount,
+          label: `${unreadCount} unread ${FAMILY_NOUN[family]}${unreadCount === 1 ? '' : 's'}`,
+          icon: FAMILY_ICONS[family],
+          colors:
+            unread?.colors ??
+            (family === 'assistant'
+              ? [notificationPanelState.assistantColor ?? 'var(--color-dimmed)']
+              : [family === 'chats' ? 'var(--color-chat-success)' : 'var(--color-success)'])
+        }
+      : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {
     return {
-      tone: 'working',
-      count: activity.working,
-      label: familyActivityLabel(family, activity),
-      icon
+      activity: {
+        tone: 'working',
+        count: activity.working,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge,
+      hasWorkingThreads: true
     }
   }
   if (activity.attention > 0) {
     return {
+      activity: {
+        tone: activity.attentionError ? 'error' : 'attention',
+        count: activity.attention,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge,
+      hasWorkingThreads: false
+    }
+  }
+  if (activity.retry > 0) {
+    return {
+      activity: {
+        tone: 'retry',
+        count: activity.retry,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge,
+      hasWorkingThreads: false
+    }
+  }
+  return { activity: null, unread: unreadBadge, hasWorkingThreads: false }
+}
+
+/**
+ * The Browser item's badge for the tab assistant conversations it owns.
+ *
+ * A conversation waiting on the user outranks one that is working, because
+ * working is self-resolving while a question only clears when someone answers
+ * it. It outranks the transfer badge too: a conversation blocked on the user is
+ * the one thing on this view that time alone does not clear, so it is the one
+ * thing the badge must not hide behind a download count.
+ */
+function browserAgentBadge(activity: ViewFamilyActivity): ViewBadge | null {
+  if (activity.attention > 0) {
+    return {
       tone: activity.attentionError ? 'error' : 'attention',
       count: activity.attention,
-      label: familyActivityLabel(family, activity),
-      icon
+      label: browserAssistantLabel(activity.attention, activity.attention === 1 ? 'needs' : 'need'),
+      icon: FAMILY_ICONS.chats
+    }
+  }
+  if (activity.working > 0) {
+    return {
+      tone: 'working',
+      count: activity.working,
+      label: browserAssistantLabel(activity.working, activity.working === 1 ? 'is' : 'are'),
+      icon: FAMILY_ICONS.chats
     }
   }
   if (activity.retry > 0) {
     return {
       tone: 'retry',
       count: activity.retry,
-      label: familyActivityLabel(family, activity),
-      icon
+      label: browserAssistantLabel(
+        activity.retry,
+        activity.retry === 1 ? 'is waiting to retry' : 'are waiting to retry'
+      ),
+      icon: FAMILY_ICONS.chats
     }
   }
   return null
+}
+
+/** Tooltip/aria text for a browser tab's assistant conversations: how many of
+ *  them, and what they are doing. */
+function browserAssistantLabel(count: number, verb: string): string {
+  const head = count === 1 ? '1 browser chat' : `${count} browser chats`
+  return `${head} ${verb}`
 }
 
 /**

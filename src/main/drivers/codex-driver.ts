@@ -19,16 +19,23 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
-import { ASK_SECRET_TOOL_NAME, GATEWAY_TOOLS } from '../../lib/gateway-tools'
+import {
+  ASK_SECRET_TOOL_NAME,
+  GATEWAY_TOOLS,
+  UTILITY_SUGGEST_TOOL_NAME
+} from '../../lib/gateway-tools'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
+import { formatHistoryRecap } from '../chat/chat-engine/chat-engine-message-text'
 import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
+  IdleNativeSessionReleaseResult,
   SendPromptOptions,
   SteerPromptOptions,
   UtilityRuntimeOverlay,
@@ -63,6 +70,7 @@ import {
   CODEX_QUESTION_TOOL_NAME,
   codexApprovalPolicy,
   codexEffort,
+  codexQuestionDecisionText,
   codexQuestionIds,
   codexQuestionTool,
   codexSandboxPolicy,
@@ -137,6 +145,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  resident server; {@link stopResidentHostForPathIfIdle} stops an idle one. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
 
@@ -339,6 +348,12 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
     const host = await this.ensureAppServerHost(projectPath)
     const active: CodexAppServerTurn = {
       host,
@@ -366,28 +381,78 @@ export class CodexDriver extends PersistentCliDriver {
           : [])
       ]
       const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
-      const threadResult = session.nativeSessionId
-        ? await this.appServerRequest(host, 'thread/resume', {
-            threadId: session.nativeSessionId,
+      const contextConfig =
+        options.settings.contextWindow && options.settings.providerId === 'openai'
+          ? {
+              config: {
+                model_context_window: options.settings.contextWindow,
+                model_auto_compact_token_limit: Math.floor(options.settings.contextWindow * 0.9)
+              }
+            }
+          : {}
+      const startThread = (): Promise<Record<string, unknown>> =>
+        this.appServerRequest(host, 'thread/start', {
+          ...contextConfig,
+          cwd: projectPath,
+          dynamicTools,
+          developerInstructions,
+          model: options.settings.modelId,
+          approvalPolicy: codexApprovalPolicy(
+            options.readOnly === true,
+            options.settings.permissionLevel
+          ),
+          ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+          'on-request'
+            ? { approvalsReviewer: 'user' }
+            : {}),
+          sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
+          serviceName: 'codeinoven'
+        })
+      const restoredHistory = (): string => {
+        const currentMessageId = options.userMessageId ?? session.messages.at(-1)?.id
+        return formatHistoryRecap(
+          session.messages.filter((message) => message.id !== currentMessageId),
+          // Apply the transport cap below, keeping the recent end of history.
+          // The formatter's default budget retains the oldest prefix instead.
+          { maxInputTokens: Number.MAX_SAFE_INTEGER }
+        )
+      }
+      let historyRecap = options.historyRecap
+      let threadResult: Record<string, unknown>
+      const previousNativeId = session.nativeSessionId
+      if (previousNativeId) {
+        try {
+          threadResult = await this.appServerRequest(host, 'thread/resume', {
+            threadId: previousNativeId,
+            // The app keeps its own transcript; native turn projection is unused.
+            excludeTurns: true,
+            ...contextConfig,
             dynamicTools,
             developerInstructions
           })
-        : await this.appServerRequest(host, 'thread/start', {
-            cwd: projectPath,
-            dynamicTools,
-            developerInstructions,
-            model: options.settings.modelId,
-            approvalPolicy: codexApprovalPolicy(
-              options.readOnly === true,
-              options.settings.permissionLevel
-            ),
-            ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
-            'on-request'
-              ? { approvalsReviewer: 'user' }
-              : {}),
-            sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
-            serviceName: 'codeinoven'
+        } catch (error) {
+          // Recover only an explicitly missing rollout. Auth, transport and
+          // projection errors must retain the binding and their original error.
+          if (
+            !(error instanceof Error) ||
+            error.message.trim() !== `no rollout found for thread id ${previousNativeId}`
+          ) {
+            throw error
+          }
+          historyRecap ||= restoredHistory()
+          delete session.nativeSessionId
+          this.threadSessionsByNativeId.delete(previousNativeId)
+          await this.persistSession(session)
+          Logger.info('Codex native rollout is missing; restoring mirrored history', {
+            sessionId: session.id,
+            nativeThreadId: previousNativeId
           })
+          threadResult = await startThread()
+        }
+      } else {
+        historyRecap ||= restoredHistory()
+        threadResult = await startThread()
+      }
       const thread = recordValue(threadResult['thread'])
       const nativeThreadId = stringValue(thread?.['id']) ?? session.nativeSessionId
       if (!nativeThreadId) throw new Error('Codex app-server did not return a thread ID')
@@ -399,7 +464,7 @@ export class CodexDriver extends PersistentCliDriver {
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
-        input: await this.codexInput(options.text, options.attachments),
+        input: await this.codexInput(options.text, options.attachments, session.id, historyRecap),
         cwd: projectPath,
         approvalPolicy: codexApprovalPolicy(
           options.readOnly === true,
@@ -415,7 +480,7 @@ export class CodexDriver extends PersistentCliDriver {
           options.settings.permissionLevel
         ),
         model: options.settings.modelId,
-        ...(fastInference ? { serviceTier: 'fast' } : {}),
+        serviceTier,
         effort: codexEffort(options.settings.thinkingLevel),
         summary: this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
           ? 'none'
@@ -448,7 +513,7 @@ export class CodexDriver extends PersistentCliDriver {
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, options.attachments),
+      input: await this.codexInput(options.text, options.attachments, session.id),
       expectedTurnId: active.turnId
     })
     await this.persistSession(session)
@@ -493,8 +558,12 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request, answers)
+      await this.completeDynamicQuestion(request, answers)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -506,6 +575,16 @@ export class CodexDriver extends PersistentCliDriver {
     questionIds.forEach((id, index) => {
       mappedAnswers[id] = { answers: answers[index] ?? [] }
     })
+    // A native question request can also be auto-resolved by Codex while the
+    // turn keeps running, which drops the result we write here. The turn input
+    // carries the same decision, so the answer survives either way.
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        answers
+      )
+    )
     this.writeServerResponse(request, { answers: mappedAnswers })
     this.serverRequests.delete(requestId)
   }
@@ -524,8 +603,12 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request)
+      await this.completeDynamicQuestion(request)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -534,6 +617,13 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        undefined
+      )
+    )
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
   }
@@ -543,10 +633,15 @@ export class CodexDriver extends PersistentCliDriver {
    *  conversation, so the caller reports the turn as inactive instead. */
   private serverRequestTurnIsLive(request: CodexServerRequest): boolean {
     const active = this.activeTurns.get(request.sessionId)
-    return Boolean(active && !active.finished && active.host === request.host)
+    return Boolean(
+      active && !active.finished && !active.completionReceived && active.host === request.host
+    )
   }
 
-  private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+  private async completeDynamicQuestion(
+    request: CodexServerRequest,
+    answers?: string[][]
+  ): Promise<void> {
     // A reply written after the owning turn ended reaches nothing: Codex has
     // already finished, so the answer would be silently dropped and the thread
     // would sit idle with an answered card. Report the turn as inactive so the
@@ -556,22 +651,49 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, String(request.id), this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
+    await this.relayQuestionDecision(request, text)
     this.writeServerResponse(request, {
       success: true,
       contentItems: [{ type: 'inputText', text }]
     })
     this.serverRequests.delete(String(request.id))
+  }
+
+  /**
+   * Write the user's decision onto the turn's own input channel.
+   *
+   * Codex parks a long-running `exec` script after about half a minute and
+   * hands the model a "Script running with cell ID ..." placeholder. When the
+   * user answers while that cell is parked, the app-server accepts the tool
+   * result, but the model can end its turn before the parked cell is collected,
+   * so the value never reaches the conversation: the card looks answered, the
+   * thread goes idle, and the next turn repeats the same question. Steering the
+   * live turn writes the decision as ordinary user input, which the model
+   * consumes on its next step. A turn that refuses input falls back to the
+   * result it is still blocked on, and a turn that already ended is reported as
+   * inactive by the caller so the chat engine resumes with the decision.
+   */
+  private async relayQuestionDecision(request: CodexServerRequest, text: string): Promise<void> {
+    const active = this.activeTurns.get(request.sessionId)
+    if (
+      !active?.nativeThreadId ||
+      !active.turnId ||
+      active.finished ||
+      active.host !== request.host
+    ) {
+      return
+    }
+    try {
+      await this.appServerRequest(active.host, 'turn/steer', {
+        threadId: active.nativeThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        expectedTurnId: active.turnId
+      })
+    } catch (error) {
+      if (active.finished || this.activeTurns.get(request.sessionId) !== active) return
+      Logger.dev('Codex question decision could not be steered into the live turn:', error)
+    }
   }
 
   private async continueAsyncQuestion(
@@ -590,17 +712,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
     try {
       await this.appServerRequest(active.host, 'turn/steer', {
         threadId: active.nativeThreadId,
@@ -622,7 +734,8 @@ export class CodexDriver extends PersistentCliDriver {
    *  settled without finalization (stale working state) from one that is
    *  legitimately streaming a long turn. */
   hasActiveTurn(sessionId: string): boolean {
-    return this.activeTurns.has(sessionId)
+    const active = this.activeTurns.get(sessionId)
+    return Boolean(active && !active.finished && !active.completionReceived)
   }
 
   /** Codex runs as a shared app-server daemon, so the base implementation's
@@ -632,7 +745,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  already finished is probed as idle (letting the watchdog reconcile or
    *  abort it) while a genuinely active silent turn stays preserved. */
   override async isSessionBusy(_projectPath: string, sessionId: string): Promise<boolean> {
-    return this.activeTurns.has(sessionId)
+    return this.hasActiveTurn(sessionId)
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -702,12 +815,80 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
+    await this.storage.remove(`drivers/${this.id}/inputs/${sessionId}`)
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
   override releaseProjectResources(projectPath: string): void {
     super.releaseProjectResources(projectPath)
     this.stopResidentHostForPathIfIdle(projectPath)
+  }
+
+  /**
+   * Hand an idle native thread to another CodeInOven process. Codex holds its
+   * writer lock for the lifetime of the loaded app-server thread, so closing
+   * only the project host can release it without deleting or forking history.
+   */
+  async releaseIdleSessionForTransfer(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionReleaseResult> {
+    const session = await this.requireSession(projectPath, sessionId)
+    const nativeThreadId = session.nativeSessionId
+    if (!nativeThreadId) return { owner: false, released: false }
+
+    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (
+      !host ||
+      !binding ||
+      binding.sessionId !== sessionId ||
+      binding.projectPath !== projectPath
+    ) {
+      return { owner: false, released: false }
+    }
+
+    if (this.activeTurns.has(sessionId)) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'This Codex thread still has an active turn.'
+      }
+    }
+    const hostBusy =
+      [...this.activeTurns.values()].some((active) => active.host === host) ||
+      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
+      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
+      [...this.serverRequests.values()].some(
+        (request) => request.host === host && request.sessionId !== sessionId
+      ) ||
+      host.pending.size > 0
+    if (hostBusy) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'Another Codex operation is still using this app-server.'
+      }
+    }
+
+    if (this.hostsByProjectPath.get(projectPath) === host) {
+      this.hostsByProjectPath.delete(projectPath)
+    }
+    const stopped = await this.stopAppServerHostAndWait(
+      host,
+      'Codex app-server handed an idle thread to another instance'
+    )
+    if (!stopped) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'The Codex app-server did not exit, so its thread writer is still held.'
+      }
+    }
+    for (const [threadId, sessionOwner] of this.threadSessionsByNativeId) {
+      if (sessionOwner.projectPath === projectPath) this.threadSessionsByNativeId.delete(threadId)
+    }
+    return { owner: true, released: true }
   }
 
   override dispose(): void {
@@ -726,14 +907,21 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     this.contextUsageByThreadId.clear()
-    for (const host of this.hostsByProjectPath.values()) {
+    for (const host of this.appServerHosts) {
       this.stopAppServerHost(host, 'Codex driver disposed')
     }
+    this.appServerHosts.clear()
     this.hostsByProjectPath.clear()
     this.hostsStartingByProjectPath.clear()
     this.authenticationRestartsByProjectPath.clear()
     this.serverRequests.clear()
     super.dispose()
+  }
+
+  prepareForProcessCleanup(): void {
+    for (const host of [...this.appServerHosts]) {
+      this.stopAppServerHost(host, 'CodeInOven is shutting down')
+    }
   }
 
   private async restartAppServer(projectPath: string, reason: string): Promise<void> {
@@ -751,12 +939,48 @@ export class CodexDriver extends PersistentCliDriver {
   private stopAppServerHost(host: CodexAppServerHost, reason: string): void {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(reason))
     }
     host.pending.clear()
     if (!host.child.killed) host.child.kill()
+  }
+
+  private async stopAppServerHostAndWait(
+    host: CodexAppServerHost,
+    reason: string
+  ): Promise<boolean> {
+    const exited = this.waitForAppServerExit(host.child)
+    this.stopAppServerHost(host, reason)
+    return exited
+  }
+
+  private waitForAppServerExit(
+    child: CodexAppServerHost['child'],
+    timeoutMs = 5_000
+  ): Promise<boolean> {
+    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
+      return Promise.resolve(true)
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (exited: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.removeListener('exit', onExit)
+        resolve(exited)
+      }
+      const onExit = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      timer.unref?.()
+      child.once('exit', onExit)
+      if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
+        finish(true)
+      }
+    })
   }
 
   private stopResidentHostForPathIfIdle(projectPath: string): void {
@@ -799,17 +1023,26 @@ export class CodexDriver extends PersistentCliDriver {
       stopped: false,
       pending: new Map()
     }
+    this.appServerHosts.add(host)
     this.bindAppServer(host)
     // The shared app-server is app-scoped: register it under APP_SCOPE (undefined
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    await this.appServerRequest(host, 'initialize', {
-      clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-      capabilities: { experimentalApi: true }
-    })
-    this.appServerNotify(host, 'initialized')
-    return host
+    try {
+      await this.appServerRequest(host, 'initialize', {
+        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+        capabilities: { experimentalApi: true }
+      })
+      this.appServerNotify(host, 'initialized')
+      return host
+    } catch (error) {
+      this.stopAppServerHost(
+        host,
+        error instanceof Error ? error.message : 'Codex app-server initialization failed'
+      )
+      throw error
+    }
   }
 
   private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
@@ -1141,6 +1374,10 @@ export class CodexDriver extends PersistentCliDriver {
       status === 'failed'
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
         : active.failureIssue
+    // Mark the native turn terminal before the async telemetry refresh below.
+    // A card answer arriving during that refresh must resume from persisted
+    // history instead of being written into the completed turn.
+    active.completionReceived = true
     void this.completeAppServerTurn(active, message, issue)
   }
 
@@ -1213,6 +1450,13 @@ export class CodexDriver extends PersistentCliDriver {
         return
       }
       void this.callUtilityTool(active, params).then((result) => {
+        if (
+          (params['tool'] === ASK_SECRET_TOOL_NAME ||
+            params['tool'] === UTILITY_SUGGEST_TOOL_NAME) &&
+          (active.finished || active.completionReceived)
+        ) {
+          return
+        }
         host.child.stdin?.write(`${JSON.stringify({ id, result })}\n`)
       })
       return
@@ -1291,11 +1535,13 @@ export class CodexDriver extends PersistentCliDriver {
           'content-type': 'application/json'
         },
         body: JSON.stringify(recordValue(params['arguments']) ?? {}),
-        // The secret card is human-paced, so that one call waits as long as the
-        // app's own deadline   the endpoint carries it   while every other tool
-        // stays bounded by the short gateway timeout.
+        // The secret and suggestion cards are human-paced, so those calls wait as
+        // long as the app's own deadline   the endpoint carries it   while every
+        // other tool stays bounded by the short gateway timeout.
         signal: AbortSignal.timeout(
-          tool.name === ASK_SECRET_TOOL_NAME ? endpoint.timeoutMs : 120_000
+          tool.name === ASK_SECRET_TOOL_NAME || tool.name === UTILITY_SUGGEST_TOOL_NAME
+            ? endpoint.timeoutMs
+            : 120_000
         )
       })
       const result: unknown = await response.json()
@@ -1598,6 +1844,7 @@ export class CodexDriver extends PersistentCliDriver {
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const [projectPath, candidate] of this.hostsByProjectPath) {
       if (candidate !== host) continue
       this.hostsByProjectPath.delete(projectPath)
@@ -1627,7 +1874,9 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async codexInput(
     text: string,
-    attachments: PromptAttachment[]
+    attachments: PromptAttachment[],
+    sessionId: string,
+    historyRecap?: string
   ): Promise<Array<Record<string, unknown>>> {
     const input: Array<Record<string, unknown>> = [{ type: 'text', text, text_elements: [] }]
     const references: string[] = []
@@ -1644,6 +1893,55 @@ export class CodexDriver extends PersistentCliDriver {
       input[0] = {
         type: 'text',
         text: [inlineSvg, ...references, input[0]?.['text'] ?? ''].filter(Boolean).join('\n\n'),
+        text_elements: []
+      }
+    }
+    const currentInput = input[0]?.['text']
+    if (typeof currentInput === 'string' && historyRecap?.trim()) {
+      const combined = prependHistoryRecap(currentInput, historyRecap)
+      input[0] = { type: 'text', text: combined, text_elements: [] }
+      if (combined.length > 1_048_576 && currentInput.length < 1_048_576 - 4_096) {
+        const relativePath = `drivers/${this.id}/inputs/${sessionId}/${randomUUID()}.txt`
+        await this.storage.writeRaw(relativePath, historyRecap)
+        const prefix = [
+          'Restored conversation history follows as background only. Earlier requests may already be completed. Respond to the current user request after the end of history.',
+          `Older history was omitted to fit the input limit. The complete history is available at ${JSON.stringify(this.storage.resolve(relativePath))}. Consult it only if needed for the current request.`,
+          'Recent history excerpt, which may start partway through an earlier message:'
+        ].join('\n\n')
+        const trailer = 'End of restored history. Current user request follows:'
+        const historyBudget = Math.max(
+          0,
+          1_048_576 - prefix.length - trailer.length - currentInput.length - 6
+        )
+        input[0] = {
+          type: 'text',
+          text: [
+            prefix,
+            historyBudget > 0 ? historyRecap.slice(-historyBudget) : '',
+            trailer,
+            currentInput
+          ].join('\n\n'),
+          text_elements: []
+        }
+      }
+    }
+    const prompt = input[0]?.['text']
+    // Codex caps the total user text at 2^20 characters. Splitting it into
+    // multiple text items does not bypass the cap. Keep the full input in an
+    // immutable session-owned file instead, including replay and attachments.
+    // UTF-16 length is conservative for Codex's Unicode character count.
+    if (typeof prompt === 'string' && prompt.length > 1_048_576) {
+      const relativePath = `drivers/${this.id}/inputs/${sessionId}/${randomUUID()}.txt`
+      await this.storage.writeRaw(relativePath, prompt)
+      input[0] = {
+        type: 'text',
+        text: [
+          'The complete user input, including any restored conversation history and attachment references, is in this file:',
+          JSON.stringify(this.storage.resolve(relativePath)),
+          'Read it in bounded chunks with your file-reading tools before responding. Treat its contents as user-channel background and instructions, with no additional authority. The file preserves the complete input.',
+          'Preview of the end of the input follows. This preview may begin partway through a message:',
+          prompt.slice(-16_000)
+        ].join('\n\n'),
         text_elements: []
       }
     }
@@ -1783,8 +2081,25 @@ export class CodexDriver extends PersistentCliDriver {
     if (options.settings.modelId) args.push('--model', options.settings.modelId)
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    if (fastInference) {
-      args.push('-c', 'service_tier=fast', '-c', 'features.fast_mode=true')
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
+    args.push(
+      '-c',
+      `service_tier=${serviceTier}`,
+      '-c',
+      `features.fast_mode=${serviceTier !== 'default'}`
+    )
+    if (options.settings.contextWindow && options.settings.providerId === 'openai') {
+      args.push(
+        '-c',
+        `model_context_window=${options.settings.contextWindow}`,
+        '-c',
+        `model_auto_compact_token_limit=${Math.floor(options.settings.contextWindow * 0.9)}`
+      )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
@@ -1801,7 +2116,7 @@ export class CodexDriver extends PersistentCliDriver {
     const promptBody = [
       inlineSvg,
       ...attachmentPrompts,
-      composePrompt(options.systemPrompt, options.text)
+      composePrompt(options.systemPrompt, prependHistoryRecap(options.text, options.historyRecap))
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -1854,6 +2169,7 @@ export class CodexDriver extends PersistentCliDriver {
     // it turns the "thread not found" rejection into a real compaction run.
     await this.appServerRequest(host, 'thread/resume', {
       threadId: nativeThreadId,
+      excludeTurns: true,
       developerInstructions: null
     })
     await new Promise<void>((resolve, reject) => {
@@ -1954,6 +2270,7 @@ export class CodexDriver extends PersistentCliDriver {
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     bankedResets?: AgentBankedResets
+    reauthenticationRequired?: boolean
   } | null> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
@@ -1970,6 +2287,14 @@ export class CodexDriver extends PersistentCliDriver {
       return telemetry
     } catch (error) {
       Logger.dev('Codex on-demand account usage refresh unavailable:', error)
+      if (
+        error instanceof Error &&
+        /401 Unauthorized[\s\S]*token_expired|token_expired[\s\S]*401 Unauthorized/iu.test(
+          error.message
+        )
+      ) {
+        return { rateLimits: [], reauthenticationRequired: true }
+      }
       return null
     } finally {
       if (temporaryHost) {
@@ -2037,7 +2362,10 @@ export class CodexDriver extends PersistentCliDriver {
       this.contextUsageByThreadId.set(nativeThreadId, { host, resolve, timer })
     })
     try {
-      await this.appServerRequest(host, 'thread/resume', { threadId: nativeThreadId })
+      await this.appServerRequest(host, 'thread/resume', {
+        threadId: nativeThreadId,
+        excludeTurns: true
+      })
     } catch (error) {
       const waiter = this.contextUsageByThreadId.get(nativeThreadId)
       if (waiter) clearTimeout(waiter.timer)

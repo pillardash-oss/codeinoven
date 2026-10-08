@@ -84,7 +84,6 @@ function openCodeUpdateHandoff(
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u
-
 /**
  * Whether a resolved harness binary belongs to the CodeInOven application
  * itself rather than a user install   e.g. `node_modules/.bin/pi.exe` inside
@@ -105,8 +104,37 @@ function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
 }
 
 /** Pull the first `major.minor.patch` sequence out of a `--version` line. */
-function extractVersion(output: string): string | undefined {
+export function extractHarnessVersion(output: string): string | undefined {
   return output.match(VERSION_PATTERN)?.[1]?.replace(/^v/u, '')
+}
+
+/**
+ * The harness's own documented self-update arguments, or undefined when it has
+ * none. Remote ovens and the local embedded-terminal handoff both read these,
+ * so a harness's updater is described once.
+ */
+export function harnessSelfUpdateArgs(harnessId: string): string[] | undefined {
+  return UPDATE_ARGS[harnessId]
+}
+
+/**
+ * The latest published version of a harness, or undefined when CodeInOven has no
+ * verified source for it (Muse Code publishes no release feed the app tracks).
+ * A lookup failure is returned as a discriminated result instead of thrown,
+ * because "could not check" must never read as "up to date".
+ */
+export async function latestHarnessVersion(
+  harnessId: string
+): Promise<{ ok: true; version: string } | { ok: false; detail: string }> {
+  const source = UPDATE_SOURCES[harnessId]
+  if (!source) return { ok: false, detail: 'No update source is configured for this harness.' }
+  try {
+    const latest = await fetchLatest(source)
+    return { ok: true, version: extractHarnessVersion(latest) ?? latest }
+  } catch (error) {
+    Logger.dev(`[harness-update] ${harnessId} lookup failed:`, error)
+    return { ok: false, detail: 'The latest version could not be checked. Are you online?' }
+  }
 }
 
 async function fetchLatest(source: UpdateSource): Promise<string> {
@@ -228,7 +256,7 @@ export class HarnessUpdateService {
       })
     }
 
-    const currentVersion = provider.version ? extractVersion(provider.version) : undefined
+    const currentVersion = provider.version ? extractHarnessVersion(provider.version) : undefined
     if (provider.executionTarget?.kind === 'bundled' || isAppOwnedInstall(provider.resolvedPath)) {
       return this.settle(harnessId, {
         ...base,
@@ -260,7 +288,7 @@ export class HarnessUpdateService {
       })
     }
 
-    const latestClean = extractVersion(latestVersion) ?? latestVersion
+    const latestClean = extractHarnessVersion(latestVersion) ?? latestVersion
     if (!currentVersion || !latestClean) {
       return this.settle(harnessId, {
         ...base,

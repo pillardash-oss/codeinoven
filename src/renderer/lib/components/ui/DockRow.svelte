@@ -1,5 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { NativeDockController } from '$lib/native-dock-controller.svelte'
+  import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
+  import type { NativeDockInteraction } from '$shared/native-dock'
   import type { Attachment } from 'svelte/attachments'
   import PopoverDragHandle from './PopoverDragHandle.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -45,11 +48,53 @@
    * is dragging it. Reading the box is what keeps the occlusion publication and
    * the CSS position in agreement.
    */
-  const box = $derived(
+  const placementBox = $derived(
     draggedTo === null
       ? dockBox(placement, size, viewport)
       : { x: draggedTo.x, y: draggedTo.y, width: size.width, height: size.height }
   )
+
+  const native = new NativeDockController(
+    `dock-${crypto.randomUUID()}`,
+    onNativeInteraction,
+    (width, height) => {
+      if (size.width !== width || size.height !== height) size = { width, height }
+      return {
+        ...placementBox,
+        y: Math.max(TOAST_OVERLAY_TOP, placementBox.y),
+        width,
+        height
+      }
+    }
+  )
+  const nativeEnabled = $derived(browserVisibility.canUseNativeDock && !native.failed)
+  const box = $derived(
+    nativeEnabled
+      ? { ...placementBox, y: Math.max(TOAST_OVERLAY_TOP, placementBox.y) }
+      : placementBox
+  )
+
+  function onNativeInteraction(report: NativeDockInteraction): void {
+    if (report.kind === 'edge') {
+      const edge = edgeForKey(report.key)
+      if (edge) place(dockPlacementOnEdge(edge, box, viewport))
+    } else if (report.kind === 'drag') {
+      if (!dragging) {
+        dragging = true
+        dragOrigin = { x: box.x, y: box.y }
+      }
+      draggedTo = clampDockPosition(
+        dragOrigin.x + report.dx,
+        dragOrigin.y + report.dy,
+        size,
+        viewport
+      )
+      if (report.done) {
+        dragging = false
+        place(dockPlacementForDrop({ ...draggedTo, ...size }, viewport))
+      }
+    }
+  }
 
   /** The row can only be placed once it has been measured. */
   const measured = $derived(size.width >= 1 && size.height >= 1)
@@ -61,20 +106,22 @@
       const rect = element.getBoundingClientRect()
       size = { width: rect.width, height: rect.height }
     }
+    const releaseNative = native.mount(element)
     update()
     const observer = new ResizeObserver(update)
     observer.observe(element)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      releaseNative()
+    }
   }
 
-  // The dock floats above the workspace, but the in-app browser is a native view
-  // the compositor paints above every DOM surface, so the browser has to detach
-  // its view while this row covers it. Moving the row does not resize it, so the
-  // rectangle is published from position state rather than from an observer that
-  // would never fire   which is also what makes the browser reappear the moment
-  // the dock is dragged out of the overlap.
   $effect(() => {
-    if (!measured) return
+    native.update(measured && nativeEnabled, box)
+  })
+
+  $effect(() => {
+    if (!measured || nativeEnabled) return
     browserVisibility.publishOcclusion(occlusionKey, box)
     return () => browserVisibility.clearOcclusion(occlusionKey)
   })
@@ -149,10 +196,12 @@
 <!-- `visibility` rather than `display`: the row has to be measurable before it
      knows where it goes, and hiding it from layout would keep it unmeasured. -->
 <div
-  class="fixed z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1.5 {dragging
+  class="fixed z-50 flex w-max max-w-[calc(100vw-2rem)] items-stretch gap-1.5 {dragging
     ? ''
     : 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'}"
-  style="left: {box.x}px; top: {box.y}px; visibility: {measured ? 'visible' : 'hidden'};"
+  style="left: {box.x}px; top: {box.y}px; visibility: {measured
+    ? 'visible'
+    : 'hidden'}; opacity: {native.ready ? 0 : 1}; pointer-events: {native.ready ? 'none' : 'auto'};"
   {@attach measure}
 >
   <!--
@@ -164,6 +213,7 @@
     class="flex shrink-0 cursor-grab touch-none items-center rounded-lg border bg-surface px-0.5 text-dimmed shadow-xl transition-colors select-none hover:bg-elevated hover:text-foreground {dragging
       ? 'cursor-grabbing'
       : ''}"
+    data-native-dock-handle
     role="presentation"
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}

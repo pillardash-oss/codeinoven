@@ -655,6 +655,9 @@
               {onToggleFavorite}
               {onReorderFavorite}
               thinkingLevel={selectedPhaseModel.thinkingLevel}
+              runtimeSettings={selectedPhaseModel}
+              onSelectRuntime={(runtime) =>
+                queuePhaseSelection(phase.id, { ...selectedPhaseModel, ...runtime })}
               onSelectThinking={(level) =>
                 updatePhaseModel(
                   phase.id,
@@ -810,6 +813,9 @@
                       {onToggleFavorite}
                       {onReorderFavorite}
                       thinkingLevel={selectedTaskModel.thinkingLevel}
+                      runtimeSettings={selectedTaskModel}
+                      onSelectRuntime={(runtime) =>
+                        queueTaskSelection(task.id, task, { ...selectedTaskModel, ...runtime })}
                       onSelectThinking={(level) =>
                         updateTaskModel(
                           task.id,

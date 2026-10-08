@@ -357,25 +357,26 @@ describe('normalizeMemoryEntryForLocation', () => {
 })
 
 describe('MEMORY_SCOPE_OPTIONS', () => {
-  it('names the three audiences plainly in settings', () => {
+  it('names all audiences plainly in settings', () => {
     expect(MEMORY_SCOPE_OPTIONS.settings.map((option) => option.label)).toEqual([
       'Projects',
       'Chats',
-      'Assistants'
+      'Assistant',
+      'Browser chats'
     ])
     expect(MEMORY_SCOPE_OPTIONS.settings.every((option) => !option.located)).toBe(true)
   })
 
-  it('maps the project sidebar Global option to the projects audience', () => {
+  it('maps the project sidebar All projects option to the projects audience', () => {
     const global = MEMORY_SCOPE_OPTIONS['sidebar-projects'][0]
-    expect(global.label).toBe('Global')
+    expect(global.label).toBe('All projects')
     expect(global.value).toBe('projects')
     expect(global.located).toBe(false)
   })
 
-  it('maps the chat sidebar Global option to the chat audience', () => {
+  it('maps the chat sidebar All chats option to the chat audience', () => {
     const global = MEMORY_SCOPE_OPTIONS['sidebar-chats'][0]
-    expect(global.label).toBe('Global')
+    expect(global.label).toBe('All chats')
     expect(global.value).toBe('chat')
     expect(global.located).toBe(false)
   })

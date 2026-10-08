@@ -5,6 +5,7 @@
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
@@ -42,6 +43,9 @@
     /** True when this run belongs to another CodeInOven instance, which is where
      *  its live output and stop control are. */
     foreignRun?: boolean
+    /** What the app is doing before the harness streams, e.g. preparing a remote
+     *  checkout or cloning a repository. */
+    note?: string | null
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -65,6 +69,10 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    accountId?: string | null
+    ovenLabel?: string | null
+    ovenIsLocal?: boolean
+    ovenAppearance?: OvenAppearance
     isFast?: boolean
     projectId?: string
     threadId?: string
@@ -83,6 +91,7 @@
     done = false,
     rehydrated = false,
     foreignRun = false,
+    note = null,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -96,6 +105,10 @@
     harnessId,
     harnessName,
     accountLabel,
+    accountId,
+    ovenLabel,
+    ovenIsLocal,
+    ovenAppearance,
     isFast = false,
     projectId,
     threadId,
@@ -294,6 +307,24 @@
     maybePageOlderEntries(element)
   }
 
+  /** A short trace can have older entries available without overflowing its
+   *  inner scroller. In that case there is no scroll offset to reach the top,
+   *  so a wheel-up gesture on the trace itself is the paging signal. */
+  function onTraceWheel(event: WheelEvent): void {
+    const element = traceScrollEl
+    if (
+      !element ||
+      event.deltaY >= 0 ||
+      element.scrollHeight - element.clientHeight > TRACE_SCROLL_THRESHOLD ||
+      (windowStartIndex === 0 && !olderPartsAvailable) ||
+      loadingOlderParts
+    ) {
+      return
+    }
+    event.stopPropagation()
+    expandTracePage()
+  }
+
   // New live parts follow the trace only while the user remains at its bottom.
   // A user scroll-up is preserved. Scroll chaining is left enabled: reaching the
   // top of a finished trace's inner scroller hands the gesture to the outer
@@ -421,6 +452,7 @@
       bind:this={traceScrollEl}
       class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
+      onwheel={onTraceWheel}
     >
       {#each pagedParts as part (part.id)}
         <WorkingTraceRow
@@ -441,6 +473,7 @@
         <WorkingTraceStatus
           {rehydrated}
           {foreignRun}
+          {note}
           startTime={effectiveStartTime}
           {elapsed}
           {modelLabel}
@@ -451,6 +484,10 @@
           {harnessId}
           {harnessName}
           {accountLabel}
+          {accountId}
+          {ovenLabel}
+          {ovenIsLocal}
+          {ovenAppearance}
         />
       {/if}
     </div>

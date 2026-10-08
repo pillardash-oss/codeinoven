@@ -1,17 +1,25 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import {
+    latestWorkingTraceParts,
+    mergeWorkingParts,
+    shouldMountWorkingTrace
+  } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
-  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import type { OvenAppearance, OvenState } from '$shared/ovens'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import {
+    CONVERSATION_METADATA_BADGE_CLASS,
+    CONVERSATION_METADATA_ICONS
+  } from './conversation-metadata-badges'
 
   import {
     AudioLines,
     ArrowUpRight,
-    Brain,
     Check,
     ChevronDown,
     Clock,
@@ -74,6 +82,8 @@
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
+  import InlineMediaFigure from './InlineMediaFigure.svelte'
+  import InlineImageFigure from './InlineImageFigure.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -117,6 +127,8 @@
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -134,6 +146,7 @@
     saveIndependentAuditIntent,
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
+  import type OvenControls from './OvenControls.svelte'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
@@ -158,6 +171,7 @@
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -175,6 +189,7 @@
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
@@ -303,6 +318,7 @@
     isActivityOnlyUserMessage,
     isTurnCompleted,
     lastTurnStartIndex,
+    pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
     turnStartPromptsBefore,
@@ -346,6 +362,10 @@
   } from './thread-history'
   import { threadScrollPositions } from './thread-scroll-memory'
 
+  const ThinkingMetadataIcon = CONVERSATION_METADATA_ICONS.thinking
+  const AccountMetadataIcon = CONVERSATION_METADATA_ICONS.account
+  const LocalMetadataIcon = CONVERSATION_METADATA_ICONS.local
+
   type WorkingModelSelection = Pick<
     ThreadSettings,
     'harnessId' | 'accountId' | 'providerId' | 'modelId' | 'thinkingLevel'
@@ -366,6 +386,13 @@
     assistantRoutineName?: string | null
     /** Whether the routine already has a saved how-to. */
     assistantHowToComplete?: boolean
+    /**
+     * A run of this assistant task that another instance is streaming, when the
+     * task itself is not foreign. A run executes on its own thread, so the task
+     * looks idle here while its run works elsewhere; this renders that run's
+     * transfer card above the composer without locking the task's own composer.
+     */
+    assistantForeignRunThreadId?: string | null
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -430,6 +457,7 @@
     assistantRoutineId = null,
     assistantRoutineName = null,
     assistantHowToComplete = false,
+    assistantForeignRunThreadId = null,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -687,6 +715,29 @@
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
   let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
+  /**
+   * The durable work of a turn that settled without ever mirroring an assistant
+   * message: a provider error, a user stop, a paused will-retry wait.
+   *
+   * The live pending block above only exists while the run is busy, and the
+   * assistant-message branch below only exists once an assistant row is
+   * mirrored, so a settled turn with neither had no renderer at all: the trace
+   * the reader was watching vanished on the error and only the user's message
+   * was left, even though the durable fold still held every part. This keeps
+   * that work on screen for as long as it is the transcript's own turn, in the
+   * settled (not busy) presentation, and yields to the assistant branch the
+   * moment the assistant row lands. */
+  let settledTurnParts = $derived.by(() => {
+    if (conversationBusy || brainstormReportRefreshing) return []
+    if (pendingTurnAnchorIndex(structureMessages) === -1) return []
+    // Only when no assistant row exists at all. An earlier assistant turn is
+    // itself a mount point for this fold (`streamWorkingPartsForTurn` keeps
+    // every part the mirror does not already carry before that turn), so
+    // mounting a second card here would render the same work twice.
+    if (lastTurnStartIndex(structureMessages) !== -1) return []
+    const parts = streamWorkingPartsForPendingTurn()
+    return latestWorkingTraceParts(parts).length > 0 ? parts : []
+  })
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -1189,6 +1240,12 @@
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
+  let ovenControl: OvenControls | undefined = $state(undefined)
+  async function openOvenPicker(): Promise<void> {
+    await import('./OvenControls.svelte')
+    await tick()
+    await ovenControl?.openPicker()
+  }
   let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
     if (chatMode) return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -1202,6 +1259,8 @@
       bucket,
       source: project?.source,
       host: project?.host,
+      oven: ovenPicker,
+      onOpenOven: () => void openOvenPicker(),
       project: project
         ? {
             name: project.name,
@@ -2969,7 +3028,8 @@
   let plainEngineeringAuditAvailable = $derived(
     studioOnlyAuditWorkflow &&
       (engineeringOn || plainAuditTriggered) &&
-      spec?.status === 'approved' &&
+      (spec?.status === 'approved' ||
+        (!spec && brainstormWorkflow?.finalizedBrainstormVersion !== undefined)) &&
       (auditState === 'offered' ||
         auditState === 'running' ||
         auditState === 'reworking' ||
@@ -3044,7 +3104,7 @@
     // "Run audit" there is what commits the choice durably.
     if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
-    if (plainEngineeringAuditAvailable && spec) return 'audit'
+    if (plainEngineeringAuditAvailable) return 'audit'
     return null
   })
 
@@ -3158,13 +3218,13 @@
       }
     }
     const auditSpec = spec
-    if (!auditSpec) return null
+    if (!auditSpec && !brainstormWorkflow?.finalizedBrainstormVersion) return null
     return {
       component: 'achievement',
       props: {
         mode: 'audit',
         specTitle: thread.title,
-        specSummary: auditSpec.content.resolutionSummary,
+        specSummary: auditSpec?.content.resolutionSummary ?? brainstorm?.content.summary ?? '',
         auditThread: durableAuditThread,
         auditState,
         reportAvailable: auditReport !== null,
@@ -3468,7 +3528,13 @@
       harnessId: agentDefaults.worker?.harnessId ?? settings.harnessId,
       providerId: agentDefaults.worker?.providerId ?? settings.providerId,
       modelId: agentDefaults.worker?.modelId ?? settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: agentDefaults.worker
+        ? agentDefaults.worker.inferenceMode
+        : settings.inferenceMode,
+      contextWindow: agentDefaults.worker
+        ? agentDefaults.worker.contextWindow
+        : settings.contextWindow
     }
   }
 
@@ -3477,7 +3543,9 @@
       harnessId: settings.harnessId,
       providerId: settings.providerId,
       modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow
     }
   }
 
@@ -3492,6 +3560,11 @@
 
   /** Current activity label   shows agent status only in Engineering. */
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
+  /** What the app is doing before the harness streams (preparing a remote
+   *  checkout, cloning a repository), when main published such a note. */
+  let workingStatusNote = $derived(
+    providerStatus?.state === 'working' ? (providerStatus.note ?? null) : null
+  )
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
     if (activePlanningEntry === 'brainstorm') return 'Researching and discussing'
@@ -4203,6 +4276,15 @@
           if (alive) harnessAccounts = []
         })
     })
+    scheduleDeferredWork('threadView:ovens', () => {
+      void invoke('oven:state')
+        .then((state) => {
+          if (alive) ovensForAttribution = state
+        })
+        .catch(() => {
+          if (alive) ovensForAttribution = null
+        })
+    })
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
@@ -4221,6 +4303,21 @@
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
+
+    // Agent events are this view's only live channel, and a controller-driven
+    // conversation needs it for the one thing it has no other surface for: the
+    // human gate. Its `handleAgentEvent` branch reconciles the pending-question
+    // queue, so a card the agent raises while the panel is mounted appears
+    // instead of leaving the turn parked on a question nobody can see. The
+    // subscription is installed before the controller branch returns because that
+    // branch is a separate return path: registering it further down made the
+    // whole controller half of `handleAgentEvent` unreachable, which is how a
+    // browser tab's assistant chat could ask a question and never show it.
+    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
+      const event = args[0] as AgentEvent
+      if (!event) return
+      handleAgentEvent(event)
+    })
 
     if (controller) {
       controller.mount()
@@ -4243,6 +4340,7 @@
 
       return () => {
         alive = false
+        unsubscribe?.()
         // Save scroll position so switching back snaps to the right place
         if (scrollEl) {
           threadScrollPositions.set(mountedThreadId, {
@@ -4328,12 +4426,6 @@
       void refreshCapabilitySkills()
     })
 
-    // Subscribe to agent events for streaming
-    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
-      const event = args[0] as AgentEvent
-      if (!event) return
-      handleAgentEvent(event)
-    })
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
@@ -5687,6 +5779,13 @@
       idleAttentionHandled = false
       return
     }
+    // A scope worktree still building for this thread holds the queue: the
+    // message must wait for the scope switch, not run in the old checkout.
+    // Reset the guard so the scope job settling retries automatically.
+    if (!hasController && scopeJobs.hasPendingScopeJob(projectId, id)) {
+      idleAttentionHandled = false
+      return
+    }
     const pending = queuedMessage
     const pendingAttachments = queuedAttachments
     const pendingPromptContext = queuedPromptContext
@@ -5735,6 +5834,21 @@
     idleAttentionHandled = true
     void handleIdleAttention()
   }
+
+  /**
+   * Flush a scope-parked send once its worktree run settles. The queue hold
+   * above resets its guard while the run is pending, so the settling job
+   * transitioning out of `running` must wake the dispatcher; otherwise the
+   * parked message waits until the next unrelated idle event.
+   */
+  $effect(() => {
+    if (hasController) return
+    const stillPending = scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (stillPending) return
+    if (!queuedMessage && !queuedHasContent) return
+    if (busy) return
+    scheduleIdleAttention()
+  })
 
   /** Clear the in-memory head entry and dequeue the persisted head message.
    *  Remaining queued messages stay in the FIFO for the next idle turn. */
@@ -5998,7 +6112,13 @@
     const dependencyThreads = startAfterThreads.filter(
       (reference) => reference.id !== thread.id && reference.id.length > 0
     )
-    if (dependencyThreads.length > 0 || (busy && !direct)) {
+    // A scope worktree still building for this thread owns the next send: park
+    // the message behind the scope switch so it runs in the new scope instead
+    // of the old one. Direct steers cannot bypass it because the checkout the
+    // message must run in does not exist yet.
+    const pendingScopeSwitch =
+      !hasController && scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (dependencyThreads.length > 0 || (busy && !direct) || pendingScopeSwitch) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext
@@ -6250,6 +6370,15 @@
       } catch (error) {
         errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
       }
+      // A stop is the user's own statement that the run is over, so this surface
+      // has to agree with it immediately. Main writes `interrupted` without
+      // broadcasting a session status, and a harness too wedged to answer an
+      // abort never sends an idle of its own, so waiting for an event to clear
+      // the run left the Stop control live forever and every later press did
+      // nothing visible. Settling locally is what makes the stop observable.
+      agentRuns.setIdle(controller.projectId, controller.conversationId)
+      providerStatus = null
+      clearLocalTurn()
       return
     }
 
@@ -7618,7 +7747,9 @@
       harnessId: selection.harnessId,
       providerId: selection.providerId,
       modelId: selection.modelId,
-      thinkingLevel: selection.thinkingLevel
+      thinkingLevel: selection.thinkingLevel,
+      inferenceMode: selection.inferenceMode,
+      contextWindow: selection.contextWindow
     }
 
     settings = updated
@@ -8506,9 +8637,43 @@
 
   /** Next-step choices from the Brainstorm studio after a session. */
   async function brainstormNextStep(
-    step: 'lofi' | 'hifi' | 'prd' | 'spec',
+    step: 'lofi' | 'hifi' | 'prd' | 'spec' | 'implement',
     draft: BrainstormDocument
   ): Promise<void> {
+    if (brainstormBusy || busy) return
+    if (step === 'implement') {
+      brainstormBusy = true
+      brainstormError = ''
+      try {
+        const finalized = await invoke(
+          'brainstorm:implement',
+          draft.projectId,
+          draft.threadId,
+          draft.id,
+          draft.version
+        )
+        applyBrainstormDocument(finalized)
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        showSpecStudio = false
+        await sendMessage(
+          'Implement the agreed direction from this Brainstorm.',
+          [],
+          undefined,
+          true,
+          `The user selected Implement directly from Brainstorm version ${finalized.version}. Use this document as the implementation brief. Complete the implementation and relevant validation.\n\n${JSON.stringify(finalized.content)}`,
+          [],
+          [],
+          workflowActionPresentation('Implement Brainstorm', '')
+        )
+      } catch (error) {
+        brainstormError =
+          error instanceof Error ? error.message : 'Brainstorm implementation failed.'
+        errorMessage = brainstormError
+      } finally {
+        brainstormBusy = false
+      }
+      return
+    }
     if (step === 'lofi' || step === 'hifi') {
       const note =
         step === 'lofi'
@@ -8805,6 +8970,20 @@
     }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
   }
 
+  /** Ultrafast requires an advertised native Codex tier. */
+  function ultrafastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
+    return (
+      harnessId === 'codex' &&
+      providerId === 'openai' &&
+      providers.some(
+        (provider) =>
+          provider.harnessId === harnessId &&
+          provider.id === providerId &&
+          provider.models.some((model) => model.id === modelId && model.ultrafastSupported)
+      )
+    )
+  }
+
   /** True when the selected model exposes a fast tier, per the live catalog. */
   function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
@@ -8851,7 +9030,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
       const updatedWorker = await invoke(
@@ -9393,14 +9573,17 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     auditSettings = normalized
     const auditor = {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
-      thinkingLevel: normalized.thinkingLevel
+      thinkingLevel: normalized.thinkingLevel,
+      inferenceMode: normalized.inferenceMode,
+      contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9427,7 +9610,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9444,7 +9628,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -10253,7 +10438,9 @@
             harnessId: auditSettings.harnessId,
             providerId: auditSettings.providerId,
             modelId: auditSettings.modelId,
-            thinkingLevel: auditSettings.thinkingLevel
+            thinkingLevel: auditSettings.thinkingLevel,
+            inferenceMode: auditSettings.inferenceMode,
+            contextWindow: auditSettings.contextWindow
           }
         : undefined
     // Fast inference only exists for models that actually support it. A model
@@ -10318,7 +10505,9 @@
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
         modelId: normalized.modelId,
-        thinkingLevel: normalized.thinkingLevel
+        thinkingLevel: normalized.thinkingLevel,
+        inferenceMode: normalized.inferenceMode,
+        contextWindow: normalized.contextWindow
       })
     }
     // Persist immediately so the choice survives navigation away from this view.
@@ -10688,27 +10877,6 @@
   }
 
   /**
-   * Answer a secret request with an instruction instead of a value. The main
-   * process reuses whatever the device already holds for the requested names
-   * (this thread, another thread, or a utility credential) and hands the
-   * instruction to the agent, so a value the user cannot reach any more never has
-   * to be asked for twice.
-   */
-  async function handleSecretAlternative(requestId: string, alternative: string): Promise<void> {
-    await invoke(
-      'agent:answerSecretAlternative',
-      thread.projectId,
-      thread.id,
-      requestId,
-      alternative
-    )
-    resolvedQuestionRequestIds.add(requestId)
-    pendingQuestionRequests = pendingQuestionRequests.filter(
-      (request) => request.requestId !== requestId
-    )
-  }
-
-  /**
    * Hold a secret card's countdown while the user works on it: the same
    * interaction that pauses a question (an update with no next index) clears the
    * request's deadline. The card owns the best-effort handling, so a pause that
@@ -10819,6 +10987,7 @@
           [
             `- ${option.label}`,
             option.description ? `  ${option.description}` : '',
+            option.instruction ? `  Instruction the user must follow: ${option.instruction}` : '',
             option.recommended ? '  (recommended by the agent)' : ''
           ]
             .filter(Boolean)
@@ -10938,9 +11107,34 @@
           (account) =>
             account.id === selection.accountId && account.providerId === selection.providerId
         )?.label ?? null,
+      accountId: selection.accountId ?? null,
+      ovenLabel: ovenLabelForId(settings.ovenId),
+      ovenIsLocal: !settings.ovenId || settings.ovenId === LOCAL_OVEN_ID,
+      ovenAppearance: ovenAppearanceForId(settings.ovenId),
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
+
+  let ovensForAttribution = $state.raw<OvenState | null>(null)
+  function ovenLabelForId(id?: string | null): string {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    return (
+      ovensForAttribution?.ovens.find((oven) => oven.id === ovenId)?.name ??
+      (ovenId === LOCAL_OVEN_ID ? 'Local' : 'Oven')
+    )
+  }
+
+  function ovenAppearanceForId(id?: string | null): OvenAppearance {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    const oven = ovensForAttribution?.ovens.find((candidate) => candidate.id === ovenId)
+    return oven
+      ? {
+          icon: oven.icon,
+          color: oven.color,
+          ...(oven.customSvg ? { customSvg: oven.customSvg } : {})
+        }
+      : { icon: 'cpu', color: '#6b7280' }
+  }
 
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
@@ -11175,6 +11369,20 @@
     publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
+
+{#snippet ovenPicker()}
+  {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
+    <OvenControlsComponent
+      bind:this={ovenControl}
+      {thread}
+      {settings}
+      {busy}
+      onSettingsChange={updateSettings}
+    />
+  {:catch}
+    <span class="text-xs text-danger" role="alert">Oven controls could not be loaded.</span>
+  {/await}
+{/snippet}
 
 {#if messageViewer}
   {@const viewerItem = messageViewer.items[messageViewer.index]}
@@ -11586,7 +11794,30 @@
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
-            {#if msg.role === 'user'}
+            {#if msg.inlineArtifact}
+              <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
+                {#each msg.parts as part (part.id)}
+                  {#if part.type === 'text'}
+                    <MarkdownView text={part.text} />
+                  {:else if part.type === 'file' && isImageMime(part.mime)}
+                    <InlineImageFigure
+                      url={part.url}
+                      mime={part.mime}
+                      filename={part.filename ?? 'Image'}
+                      {imageUrls}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
+                    <InlineMediaFigure
+                      src={part.url}
+                      kind={isVideoMime(part.mime) ? 'video' : 'audio'}
+                      filename={part.filename ?? 'Media'}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {/if}
+                {/each}
+              </div>
+            {:else if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
                 <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
@@ -11637,7 +11868,7 @@
                           >{formatDurationMs(previousTurnAudit.duration)}</span
                         >
                         <span>·</span>
-                        <span>{formatTime(previousTurnAudit.endTime)}</span>
+                        <MessageTimestamp at={previousTurnAudit.endTime} />
                       </div>
                     {/if}
                     {@const inlineTags = inlineFileTagsForMessage(msg)}
@@ -11709,10 +11940,39 @@
                         />
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
-                        <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
-                          {#each msg.parts as part (part.id)}
-                            {#if part.type === 'file'}
-                              {@const imageFile = isImageMime(part.mime)}
+                        {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
+                        {@const imageParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> => isImageMime(p.mime)
+                        )}
+                        {@const otherParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> => !isImageMime(p.mime)
+                        )}
+                        <!-- Attached images render large and inline (two-up
+                             on wide transcripts), each expanding into the
+                             fullscreen viewer with sibling navigation. -->
+                        {#if imageParts.length > 0}
+                          <div
+                            class="mt-2 grid grid-cols-1 gap-2 border-t border-border pt-2 xl:grid-cols-2"
+                          >
+                            {#each imageParts as part (part.id)}
+                              <FileCitationContextMenu
+                                projectId={thread.projectId}
+                                citation={citationForFilePart(part)}
+                              >
+                                <InlineImageFigure
+                                  url={part.url}
+                                  mime={part.mime}
+                                  filename={part.filename ?? part.url.split('/').pop() ?? 'image'}
+                                  {imageUrls}
+                                  onExpand={() => openMessageViewer(msg, part)}
+                                />
+                              </FileCitationContextMenu>
+                            {/each}
+                          </div>
+                        {/if}
+                        {#if otherParts.length > 0}
+                          <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
+                            {#each otherParts as part (part.id)}
                               {@const mediaKind = isVideoMime(part.mime)
                                 ? 'video'
                                 : isAudioMime(part.mime)
@@ -11725,41 +11985,7 @@
                                 Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
                               {@const partName =
                                 part.filename ?? part.url.split('/').pop() ?? 'file'}
-                              {#if imageFile}
-                                <FileCitationContextMenu
-                                  projectId={thread.projectId}
-                                  citation={citationForFilePart(part)}
-                                >
-                                  <button
-                                    type="button"
-                                    class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
-                                    title="Preview {part.filename ?? 'image'}"
-                                    aria-label="Preview {part.filename ?? 'image'}"
-                                    onclick={() => openMessageViewer(msg, part)}
-                                  >
-                                    <img
-                                      src={imageUrls.getUrl(part.url)}
-                                      alt={part.filename ?? 'image'}
-                                      class="h-16 w-24 object-cover"
-                                      onerror={(e: Event) =>
-                                        void imageUrls.bindImage(
-                                          part.url,
-                                          part.mime,
-                                          e.currentTarget as HTMLImageElement
-                                        )}
-                                    />
-                                    <div
-                                      class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
-                                    >
-                                      <span
-                                        class="text-[0.625rem] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
-                                      >
-                                        Preview
-                                      </span>
-                                    </div>
-                                  </button>
-                                </FileCitationContextMenu>
-                              {:else if mediaKind}
+                              {#if mediaKind}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
@@ -11796,14 +12022,11 @@
                                   )}
                                 </FileCitationContextMenu>
                               {/if}
-                            {/if}
-                          {/each}
-                        </div>
+                            {/each}
+                          </div>
+                        {/if}
                       {/if}
                     </div>
-                    {#if msg.error}
-                      <p class="mt-1 self-end text-xs text-danger">Not sent: {msg.error}</p>
-                    {/if}
                     <div
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
@@ -11852,7 +12075,7 @@
                         {/if}
                       </div>
                       <span class="text-[0.625rem] text-dimmed">·</span>
-                      <span class="text-[0.625rem] text-dimmed">{formatTime(msg.createdAt)}</span>
+                      <MessageTimestamp at={msg.createdAt} class="text-[0.625rem] text-dimmed" />
                     </div>
                   {/if}
                 </div>
@@ -11865,6 +12088,11 @@
               {@const provider = messageProvider(msg, providers)}
               {@const modelLabel = messageModelLabel(msg, allModels)}
               {@const msgThinking = messageThinkingLevel(msg, allModels)}
+              {@const msgOvenAppearance = msg.ovenAppearance ?? ovenAppearanceForId(msg.ovenId)}
+              {@const msgOvenLabel = msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
+              {@const msgOvenIsLocal = msg.ovenId
+                ? msg.ovenId === LOCAL_OVEN_ID
+                : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
               {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
@@ -11949,6 +12177,18 @@
                         accountLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.accountLabel
                           : msg.accountLabel}
+                        accountId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.accountId
+                          : msg.accountId}
+                        ovenLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenLabel
+                          : (msg.ovenLabel ?? ovenLabelForId(msg.ovenId))}
+                        ovenIsLocal={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenIsLocal
+                          : msgOvenIsLocal}
+                        ovenAppearance={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenAppearance
+                          : msgOvenAppearance}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -12163,27 +12403,54 @@
                                 </span>
                                 {#if msgThinking}
                                   <span
-                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
+                                    class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
                                     title={`Thinking level: ${msgThinking}`}
                                     aria-label={`Thinking level: ${msgThinking}`}
                                   >
-                                    <Brain size={9} />
+                                    <ThinkingMetadataIcon size={9} />
                                     {msgThinking}
                                   </span>
                                 {/if}
                               {/if}
-                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}
+                              {#if msg.accountId || msg.accountLabel}
                                 <span
-                                  class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-                                  title={`Account: ${msg.accountLabel}`}
-                                  aria-label={`Account: ${msg.accountLabel}`}
+                                  class={CONVERSATION_METADATA_BADGE_CLASS}
+                                  title={`Account: ${msg.accountLabel ?? 'Default'}`}
+                                  aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                                 >
-                                  {msg.accountLabel}
+                                  <AccountMetadataIcon size={10} />
+                                  {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                                 </span>
                               {/if}
-                              <span class="text-[0.625rem] text-dimmed"
-                                >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
+                              <span
+                                class={CONVERSATION_METADATA_BADGE_CLASS}
+                                title={`Oven: ${msgOvenLabel}`}
+                                aria-label={`Oven: ${msgOvenLabel}`}
                               >
+                                {#if msgOvenIsLocal}
+                                  <LocalMetadataIcon size={10} class="shrink-0" />
+                                {:else}
+                                  <img
+                                    class="h-3 w-3 shrink-0"
+                                    alt=""
+                                    src={msgOvenAppearance.customSvg
+                                      ? getCustomSvgDataUrl(
+                                          msgOvenAppearance.customSvg,
+                                          msgOvenAppearance.color
+                                        )
+                                      : getIconSvgDataUrl(
+                                          msgOvenAppearance.icon,
+                                          msgOvenAppearance.color
+                                        )}
+                                  />
+                                {/if}
+                                {msgOvenLabel}
+                              </span>
+                              <MessageTimestamp
+                                at={msg.completedAt ?? msg.createdAt}
+                                prefix="· "
+                                class="text-[0.625rem] text-dimmed"
+                              />
                               {#if turnDuration !== null}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDurationMs(turnDuration)}</span
@@ -12212,11 +12479,12 @@
             {/if}
           {/each}
 
-          {#if pendingLiveTurn}
+          {#if pendingLiveTurn || settledTurnParts.length > 0}
             <WorkingTrace
-              parts={pendingLiveTurnParts}
+              parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
               open
-              busy
+              busy={Boolean(pendingLiveTurn)}
+              note={workingStatusNote}
               latest
               {active}
               olderPartsAvailable={streamHasOlder}
@@ -12229,6 +12497,10 @@
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
               accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
@@ -12696,6 +12968,14 @@
                 />
               </div>
             {/if}
+            {#if assistantForeignRunThreadId}
+              <div class="mb-3">
+                <ForeignRunCard
+                  projectId={thread.projectId}
+                  threadId={assistantForeignRunThreadId}
+                />
+              </div>
+            {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
               {#key pendingImageDescriptorError.id}
                 <ImageDescriptorErrorCard
@@ -12849,7 +13129,6 @@
                     request={pendingRequest}
                     scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                     onSubmit={handleSecretSubmit}
-                    onAlternative={handleSecretAlternative}
                     onDismiss={handleQuestionDismiss}
                     onExplain={handleQuestionExplain}
                     onQuickChat={handleQuestionQuickChat}
@@ -13023,10 +13302,7 @@
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
                 onOpenPrototype={openPrototypePreview}
-                finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
-                  ? 'Finalize Brainstorm'
-                  : 'Prepare spec'}
-                onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+                onNextStep={(step) => brainstormNextStep(step, readyBrainstorm)}
                 {settings}
                 {providers}
                 projectId={thread.projectId}

@@ -1,7 +1,9 @@
+#include <errno.h>
 #include <gtk/gtk.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,8 +12,32 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "embedded_icon.h"
+
+extern char **environ;
+
+// Supervisor state mirrors the macOS launcher: stay alive, forward signals,
+// and exit with Electron's status instead of execv() PID reuse.
+static pid_t electron_child_pid = -1;
+static pid_t splash_helper_pid = -1;
+
+static void forward_signal_to_children(int signal_number) {
+  const int forwarded = signal_number == SIGINT ? SIGINT : SIGTERM;
+  if (electron_child_pid > 0) kill(electron_child_pid, forwarded);
+  if (splash_helper_pid > 0) kill(splash_helper_pid, SIGTERM);
+}
+
+static void install_signal_forwarding(void) {
+  struct sigaction action = {0};
+  action.sa_handler = forward_signal_to_children;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  sigaction(SIGTERM, &action, NULL);
+  sigaction(SIGINT, &action, NULL);
+  sigaction(SIGHUP, &action, NULL);
+}
 
 static GtkWidget *placeholder_window = NULL;
 static GdkPixbuf *icon_pixbuf = NULL;
@@ -206,9 +232,39 @@ int main(int argc, char **argv) {
   if (child_argv == NULL) return 74;
   child_argv[0] = child_path;
   for (int index = 1; index < argc; index += 1) child_argv[index] = argv[index];
-  execv(child_path, child_argv);
-  if (helper_pid > 0) kill(helper_pid, SIGTERM);
+  // Spawn Electron as a fresh supervised child (never execv PID reuse), then
+  // exit with its status so shutdown and tooling observe Electron's code.
+  pid_t electron_pid = -1;
+  const int electron_spawn = posix_spawn(&electron_pid, child_path, NULL, NULL, child_argv, environ);
+  if (electron_spawn != 0) {
+    free(child_argv);
+    if (helper_pid > 0) kill(helper_pid, SIGTERM);
+    free(child_path);
+    return 75;
+  }
   free(child_argv);
+  electron_child_pid = electron_pid;
+  splash_helper_pid = helper_pid;
+  install_signal_forwarding();
+
+  int electron_status = 0;
+  pid_t waited = -1;
+  do {
+    waited = waitpid(electron_pid, &electron_status, 0);
+  } while (waited < 0 && errno == EINTR);
+  electron_child_pid = -1;
+
+  // The GTK helper kills itself on parent death (PDEATHSIG) once this
+  // supervisor exits, but still terminate it promptly on Electron's exit.
+  if (helper_pid > 0) {
+    kill(helper_pid, SIGTERM);
+    int helper_status = 0;
+    waitpid(helper_pid, &helper_status, WNOHANG);
+  }
+  splash_helper_pid = -1;
   free(child_path);
-  return 75;
+  if (waited < 0) return 76;
+  if (WIFEXITED(electron_status)) return WEXITSTATUS(electron_status);
+  if (WIFSIGNALED(electron_status)) return 128 + WTERMSIG(electron_status);
+  return 76;
 }

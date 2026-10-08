@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -17,6 +18,7 @@ import {
   validateBoolean,
   validateEntityId
 } from './primitives'
+import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 
 const THREAD_STATUSES = new Set<ThreadStatus>([
   'created',
@@ -45,7 +47,7 @@ const THINKING_LEVELS = new Set<ThreadSettings['thinkingLevel']>([
   'max',
   'ultra'
 ])
-const INFERENCE_MODES = new Set<InferenceMode>(['normal', 'fast'])
+const INFERENCE_MODES = new Set<InferenceMode>(['normal', 'fast', 'ultrafast'])
 const TITLE_MODES = new Set<NonNullable<ThreadSettings['titleMode']>>(['model', 'deterministic'])
 const PERMISSION_LEVELS = new Set<ThreadSettings['permissionLevel']>(['auto_review', 'full_access'])
 const PROJECT_SOURCES = new Set<NonNullable<CreateProjectInput['source']>>(['local', 'ssh'])
@@ -56,6 +58,8 @@ const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrac
 const THREAD_TITLE_SOURCES = new Set<ThreadTitleSource>(['default', 'auto', 'manual'])
 
 const THREAD_SETTINGS_FIELDS = new Set([
+  'ovenId',
+  'ovenPath',
   'harnessId',
   'providerId',
   'accountId',
@@ -63,6 +67,7 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'titleMode',
   'thinkingLevel',
   'inferenceMode',
+  'contextWindow',
   'permissionLevel',
   'assignmentMode',
   'loopMode',
@@ -78,7 +83,9 @@ const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'providerId',
   'modelId',
   'accountId',
-  'thinkingLevel'
+  'thinkingLevel',
+  'inferenceMode',
+  'contextWindow'
 ])
 const CREATE_PROJECT_FIELDS = new Set([
   'name',
@@ -145,8 +152,20 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   if (input.accountId !== undefined) {
     settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
   }
+  settings.ovenId =
+    input.ovenId === undefined ? LOCAL_OVEN_ID : validateEntityId(input.ovenId, 'Oven ID')
+  if (input.ovenPath !== undefined) {
+    settings.ovenPath = validateBoundedString(input.ovenPath, 'Oven workspace', 1, 4096)
+    if (/[\0\r\n]/u.test(settings.ovenPath)) throw new TypeError('Invalid Oven workspace path')
+  }
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')
+  }
+  if (input.contextWindow !== undefined) {
+    const tokens = validateBoundedInteger(input.contextWindow, 'context window', 200_000, 1_000_000)
+    if (![200_000, 272_000, 1_000_000].includes(tokens))
+      throw new TypeError('Invalid context window')
+    settings.contextWindow = tokens
   }
   if (input.titleMode !== undefined) {
     settings.titleMode = assertEnum(input.titleMode, TITLE_MODES, 'title mode')
@@ -172,6 +191,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const auditor = assertRecord(input.loopAuditor, 'Achievement auditor')
     rejectUnknownFields(auditor, AGENT_MODEL_SELECTION_FIELDS, 'Achievement auditor')
     settings.loopAuditor = {
+      ...validateModelRuntimeSettings(auditor),
       harnessId: validateEntityId(auditor.harnessId, 'Achievement auditor harness ID'),
       providerId: validateBoundedString(
         auditor.providerId,
@@ -200,6 +220,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const descriptor = assertRecord(input.imageDescriptor, 'Image descriptor')
     rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor')
     settings.imageDescriptor = {
+      ...validateModelRuntimeSettings(descriptor),
       harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor harness ID'),
       providerId: validateBoundedString(
         descriptor.providerId,
@@ -228,6 +249,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const descriptor = assertRecord(input.imageDescriptorFallback, 'Image descriptor fallback')
     rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor fallback')
     settings.imageDescriptorFallback = {
+      ...validateModelRuntimeSettings(descriptor),
       harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor fallback harness ID'),
       providerId: validateBoundedString(
         descriptor.providerId,

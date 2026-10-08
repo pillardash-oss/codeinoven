@@ -1,71 +1,61 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { fly } from 'svelte/transition'
-  import { cubicOut } from 'svelte/easing'
-  import { motionDuration } from '$lib/motion'
-  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import {
-    Plus,
-    SquarePen,
-    Bot,
-    BrainCircuit,
-    Bug,
-    Clock1,
-    Cloud,
-    FileDiff,
-    MonitorCog,
-    FolderTree,
-    GlobeCode,
-    Hammer,
-    History,
-    Info,
-    MessageCircleDashed,
-    SquareTerminal,
-    StickyNote,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import { contentThreadFamily } from '$lib/content-view-threads'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
+  import { feature } from '$lib/feature-registry'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
-  import SidebarSearchControl from './SidebarSearchControl.svelte'
-  import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
-  import ContextSidebar from '../layout/ContextSidebar.svelte'
-  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
-  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
-  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
-  import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
-  import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
-  import { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
-  import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
-  import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
-  import WorkspaceSidebar from './WorkspaceSidebar.svelte'
-  import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
-  import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
-  import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
-  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
-  import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
-  import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
-  import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
-  import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
-  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
-  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
+  import { motionDuration } from '$lib/motion'
+  import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
-  import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-  import { scheduleDeferredWork } from '$lib/deferred-work'
-  import { projectActionsState } from '$lib/stores/project-actions.svelte'
-  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
-  import { contentThreadFamily } from '$lib/content-view-threads'
-  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
+  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TemporaryChatContextTab
+  } from '$lib/stores/context-sidebar.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
+  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
+  import { projectActionsState } from '$lib/stores/project-actions.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
+  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
+  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+  import {
     assistantEffectiveSettings,
-    threadSettings,
-    chatEffectiveSettings
+    chatEffectiveSettings,
+    threadSettings
   } from '$lib/stores/thread-settings.svelte'
+  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import {
+    findEmptyNewThread,
+    pinnedThreadSort,
+    threadOrderKey,
+    threadSort,
+    threadStatusSort,
+    threadStatusSortKey,
+    threadVisitKey,
+    workspaceState
+  } from '$lib/stores/workspace.svelte'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -73,68 +63,13 @@
     settingsForNewThread,
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { toPosixPath } from '$shared/paths'
   import {
     routinePrimaryModel,
     settingsWithRoutineModel,
     withDefaultRoutinePrimary
   } from '$shared/routine-agents'
-  import { providerStore } from '$lib/stores/providers.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
-  import {
-    contextSidebarState,
-    type ContextSidebarTab,
-    type TemporaryChatContextTab
-  } from '$lib/stores/context-sidebar.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
-  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { speechController } from '$lib/speech/speech-controller.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
-  import { toPosixPath } from '$shared/paths'
-  import { toast } from 'svelte-sonner'
-  import { logRendererError } from '$lib/system/renderer-logger'
-  import {
-    threadSort,
-    pinnedThreadSort,
-    threadStatusSort,
-    threadStatusSortKey,
-    findEmptyNewThread,
-    threadVisitKey
-  } from '$lib/stores/workspace.svelte'
-  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
-  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
-  import {
-    buildThreadSwitcherEntries,
-    type ThreadSwitcherEntry
-  } from '../threads/thread-switcher-entries'
-  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
-  import { threadHasVisibleWork } from './workspace-thread-helpers'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
-  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
-  import {
-    coordinatorHasActiveDelegates,
-    activeThreadRowId,
-    INBOX_PROJECT_ID,
-    DRAFT_CHAT_THREAD_ID,
-    ASSISTANT_SPACE_ID,
-    ASSISTANT_SETUP_TITLE,
-    DEFAULT_THREAD_TITLE,
-    DEFAULT_SCOPE_BUCKET_ID,
-    isThreadBusy,
-    isOrchestrationChildThread,
-    conversationScopeId,
-    threadTracksReadStatus,
-    usesThreadWorkspaceMount
-  } from '$shared/types'
   import type {
     AgentModelSelection,
     AgentPart,
@@ -146,6 +81,80 @@
     Thread,
     ThreadSettings
   } from '$shared/types'
+  import {
+    activeThreadRowId,
+    ASSISTANT_SETUP_TITLE,
+    ASSISTANT_SPACE_ID,
+    conversationScopeId,
+    coordinatorHasActiveDelegates,
+    DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
+    DRAFT_CHAT_THREAD_ID,
+    INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    isThreadBusy,
+    threadTracksReadStatus,
+    usesThreadWorkspaceMount
+  } from '$shared/types'
+  import {
+    Bot,
+    BrainCircuit,
+    Bug,
+    Clock1,
+    Cloud,
+    FileDiff,
+    FolderTree,
+    GlobeCode,
+    Hammer,
+    History,
+    Info,
+    MessageCircleDashed,
+    MonitorCog,
+    Plus,
+    SquarePen,
+    SquareTerminal,
+    TriangleAlert
+  } from '@lucide/svelte'
+  import { tick } from 'svelte'
+  import { toast } from 'svelte-sonner'
+  import { cubicOut } from 'svelte/easing'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import { fly } from 'svelte/transition'
+  import {
+    groupRunsByRoutine,
+    groupRunsByTask,
+    assistantForeignThread
+  } from '../assistant/assistant-view'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
+  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
+  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
+  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
+  import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
+  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
+  import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
+  import {
+    buildThreadSwitcherEntries,
+    type ThreadSwitcherEntry
+  } from '../threads/thread-switcher-entries'
+  import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
+  import SidebarSearchControl from './SidebarSearchControl.svelte'
+  import { threadHasVisibleWork } from './workspace-thread-helpers'
+  import { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
+  import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
+  import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
+  import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
+  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
+  import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
+  import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
+  import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
+  import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
+  import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
+  import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
@@ -155,6 +164,10 @@
     /** True while the Scope page is on screen   thread switches must keep the
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
+    /** True while the getting-started tour is on screen. That tour explains the
+     *  left sidebar, so the shell paints it even when the view's sidebar has
+     *  nothing in it yet, which is exactly the state a first run is in. */
+    setupTourOpen?: boolean
     navigate: (view: MainView) => void
     /** The project view a Ctrl+Tab return to the project family lands on: the
      *  view the user last used for the family, which is also the one the rail's
@@ -170,6 +183,7 @@
     mode,
     active = true,
     scopeViewActive = false,
+    setupTourOpen = false,
     navigate,
     lastProjectViewLanding = () => 'projects',
     config,
@@ -576,6 +590,16 @@
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
+      // Open first and read after. The read is an SSH round trip that can outlast
+      // the click that asked for it, so awaiting it here made a down Oven look
+      // like a dead button. Opened first, the panel shows its loading layer and,
+      // when the Oven cannot answer, the reason with a retry.
+      contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      void projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
+      return
+    }
     // Conversations browse their own app-owned workspace directory instead of a
     // project root (a chat's artifact directory, an assistant task's working
     // directory); the mount must be registered before the root listing.
@@ -592,7 +616,12 @@
   }
 
   function openDiff(): void {
-    if (!selectedThread || activeProject?.source !== 'local' || !activeProject.path) return
+    if (!selectedThread) return
+    if (
+      !(selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') &&
+      (activeProject?.source !== 'local' || !activeProject.path)
+    )
+      return
     contextSidebarState.openDiff(selectedThread.projectId, selectedThread.id)
   }
 
@@ -601,14 +630,45 @@
     return contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
   }
 
-  function openNewBrowser(): string | null {
-    // A new tab starts blank: no URL is loaded, the address bar stays empty,
-    // and the page only loads once the user types an address. It takes the
-    // keyboard with it, so the user can start typing without reaching for the
-    // address bar first.
-    const tabId = contextSidebarState.openBrowser('')
-    if (tabId) browserAddressFocus.request(tabId)
-    return tabId
+  /**
+   * Open one new browser tab and settle every surface that shows a browser tab
+   * on it: the sidebar strip, the full screen overlay while it is up, and the
+   * caret in the address bar.
+   *
+   * The strip's create button and the browser's own new-tab chord are the same
+   * request, so they share this. They could not always: the chord is claimed in
+   * the page's `before-input-event` and comes back as a panel shortcut, because
+   * a key pressed in a native page never arrives as a DOM event. Answering it
+   * separately is how it came to open a tab the full screen overlay never
+   * showed, and every step below would have to be written twice from then on.
+   *
+   * A new tab starts blank: no URL is loaded, the address bar stays empty, and
+   * the page only loads once the user types an address. It takes the keyboard
+   * with it, so the user can start typing without reaching for the address bar
+   * first.
+   *
+   * `sourceTab` names the container when the request came from a page: the tab
+   * the chord was pressed in owns the conversation the new tab joins, so a key
+   * can never open a tab in a strip the user is not looking at. A click, and a
+   * chord pressed in the sidebar's own chrome, name nothing and take the
+   * conversation on screen.
+   */
+  function openNewBrowserTab(sourceTab?: Extract<ContextSidebarTab, { kind: 'browser' }>): void {
+    const tabId = sourceTab
+      ? contextSidebarState.openBrowserForContext(
+          '',
+          sourceTab.projectId,
+          sourceTab.threadId,
+          undefined,
+          true
+        )
+      : contextSidebarState.openBrowser('')
+    if (!tabId) return
+    // The overlay records the tab it is showing separately from the strip, so it
+    // has to be told. It is up only while one of its tabs is on screen, which is
+    // exactly when this is the surface the user is looking at.
+    if (browserFullscreenTabId) browserFullscreenTabId = tabId
+    browserAddressFocus.request(tabId)
   }
 
   function openDebugger(): void {
@@ -661,6 +721,7 @@
     'actions',
     'browser',
     'thread-note',
+    'sticky-notes',
     'temporary-chat',
     'attention'
   ])
@@ -869,6 +930,12 @@
    *  otherwise the right sidebar like every other tool. */
   function toggleTerminal(): void {
     if (!selectedThread) return
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      toggleDockPanel('oven', () =>
+        contextSidebarState.openOven(selectedThread.projectId, selectedThread.id)
+      )
+      return
+    }
 
     if (contextSidebarState.terminalPlacement === 'bottom') {
       // The bottom dock is an independent region, so the rail toggles the dock
@@ -906,9 +973,12 @@
         )
   )
 
-  /** Project files and diffs only exist for local projects with a real path. */
+  /** Workspace tools target either a local project or the selected Oven. */
   let projectToolsAvailable = $derived(
-    Boolean(activeProject?.source === 'local' && activeProject.path)
+    Boolean(
+      (activeProject?.source === 'local' && activeProject.path) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+    )
   )
 
   /** Whether the file tree can be opened for the thread on screen: a local
@@ -930,6 +1000,29 @@
   function jumpToHistoryMessage(id: string): void {
     showHistoryMenu = false
     workspaceState.jumpToMessage?.(id)
+  }
+
+  /** The Oven registry is read once so the rail can draw the Oven's own mark. */
+  $effect(() => {
+    const ovenId = selectedThread?.settings?.ovenId
+    if (ovenId && ovenId !== 'local') void ovens.ensure()
+  })
+
+  /**
+   * The Oven panel names itself.
+   *
+   * The sidebar header shows the Oven's own mark and name instead of the generic
+   * title the tab was opened with, so the panel reads as that box and nothing
+   * else. The Oven is the one the thread's last turn ran on, which is the value
+   * main writes onto the thread when a turn is sent.
+   */
+  function ovenTabPresentation(tab: ContextSidebarTab) {
+    if (tab.kind !== 'oven') return null
+    const thread = selectedThread
+    if (!thread || thread.projectId !== tab.projectId || thread.id !== tab.threadId) return null
+    const identity = ovens.identity(thread.settings?.ovenId)
+    if (!identity || identity.local) return null
+    return { title: identity.name, iconUrl: identity.iconUrl, color: identity.color }
   }
 
   /**
@@ -984,6 +1077,25 @@
       : []
 
     const workspaceTools: ContextDockItem[] = []
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      // The Oven's tool stands for the Oven itself: its own mark and colour ride
+      // the rail, and its name is what the tooltip and the accessible name say.
+      const identity = ovens.identity(selectedThread.settings.ovenId)
+      workspaceTools.push({
+        id: 'oven',
+        label: identity?.name ?? 'Oven',
+        icon: SquareTerminal,
+        ...(identity && !identity.local
+          ? { appearance: { color: identity.color, iconUrl: identity.iconUrl } }
+          : {}),
+        active: dockKindActive('oven'),
+        onSelect: () =>
+          toggleDockPanel('oven', () =>
+            contextSidebarState.openOven(selectedThread.projectId, selectedThread.id)
+          )
+      })
+    }
+
     // Conversations surface their own app-owned workspace directory as the file
     // tree: a chat's artifact directory, or an assistant task's working
     // directory (the routine's root).
@@ -1015,13 +1127,14 @@
       )
     }
     if (!isConversation && workspaceState.terminalAvailable) {
-      workspaceTools.push({
-        id: 'terminal',
-        label: terminalOpen ? 'Hide terminal' : 'Show terminal',
-        icon: SquareTerminal,
-        active: terminalOpen,
-        onSelect: toggleTerminal
-      })
+      if (!selectedThread.settings?.ovenId || selectedThread.settings.ovenId === 'local')
+        workspaceTools.push({
+          id: 'terminal',
+          label: terminalOpen ? 'Hide terminal' : 'Show terminal',
+          icon: SquareTerminal,
+          active: terminalOpen,
+          onSelect: toggleTerminal
+        })
       const runningActions = projectActionsState.runningCount(selectedThread.projectId)
       workspaceTools.push({
         id: 'actions',
@@ -1121,8 +1234,10 @@
     const threadNote: ContextDockItem[] = [
       {
         id: 'note',
-        label: hasThreadNote ? 'Note available' : 'Add note',
-        icon: StickyNote,
+        label: hasThreadNote
+          ? `${feature('thread-note').name} available`
+          : `Add a ${feature('thread-note').name.toLowerCase()}`,
+        icon: feature('thread-note').icon,
         active: dockKindActive('thread-note'),
         tone: hasThreadNote ? 'warning' : undefined,
         onSelect: () =>
@@ -1233,6 +1348,7 @@
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
+  let browserFullscreenThreadId = $state<string | null>(null)
 
   /** The terminal tab actually shown fullscreen, or null when the recorded id no
    *  longer names an open terminal.
@@ -1254,15 +1370,43 @@
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
   function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
-    const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
-    const remaining = openTabs.filter((tab) => tab.id !== tabId)
     closeContextTab(tabId)
-    // Nothing left of that kind: the surface has no tab to show, so the record
-    // has to go with it rather than point at the tab that just closed.
-    const fallback = remaining.at(-1)?.id ?? null
-    if (kind === 'terminal') terminalFullscreenTabId = fallback
-    else browserFullscreenTabId = fallback
+    if (kind === 'terminal') {
+      // Nothing left of that kind: the surface has no tab to show, so the record
+      // has to go with it rather than point at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'terminal' && tab.id !== tabId
+      )
+      terminalFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
+    // The store already fell back when the tab closed, so its active browser tab
+    // is the one to show. Reading it here instead of the last browser-kind tab
+    // keeps the overlay inside the conversation on screen even while other
+    // projects' browser tabs are open, and nulls it when nothing is left.
+    browserFullscreenTabId = contextSidebarState.activeBrowserTabId
   }
+
+  /**
+   * Keep the full screen browser on the sidebar's active browser tab.
+   *
+   * The overlay records the tab it shows separately from the sidebar's store,
+   * and that store's active tab moves from many places: a tab a page opened, a
+   * reopened tab, a close that fell back, a tab selected in the overlay's own
+   * strip. Mirroring it here means the two can never drift apart, so minimizing
+   * always lands on the tab the user was reading rather than the one that was
+   * active when the fullscreen opened.
+   */
+  $effect(() => {
+    if (!browserFullscreenTabId) return
+    if (!active || selectedThread?.id !== browserFullscreenThreadId) {
+      browserFullscreenTabId = null
+      return
+    }
+    const activeBrowserTabId = contextSidebarState.activeBrowserTabId
+    if (activeBrowserTabId === browserFullscreenTabId) return
+    browserFullscreenTabId = activeBrowserTabId
+  })
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -1273,6 +1417,21 @@
    *  panel down. Only changing projects remounts it. */
   let gitPanelProjectId = $state<string | null>(null)
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
+  /**
+   * Whether the keep-mounted Git panel is the surface the user is looking at.
+   *
+   * A remote thread has no turn checkpoints, because those track writes this app
+   * made locally, so its Changes tab shows the Oven’s own Git state through this
+   * same panel instead of mounting a second one.
+   */
+  let gitPanelVisible = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return false
+    if (tab.kind === 'git') return true
+    if (tab.kind !== 'diff' || !('projectId' in tab)) return false
+    const ovenId = selectedThread?.settings?.ovenId
+    return !!ovenId && ovenId !== 'local' && tab.projectId === selectedThread?.projectId
+  })
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
     const openProjectId = activeProject?.id ?? null
@@ -1287,7 +1446,7 @@
       }
       return
     }
-    if (tab.kind !== 'git') {
+    if (tab.kind !== 'git' && !gitPanelVisible) {
       if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
@@ -1446,6 +1605,7 @@
   function openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'browser') {
+      browserFullscreenThreadId = selectedThread?.id ?? null
       browserFullscreenTabId = tabId
       terminalFullscreenTabId = null
     }
@@ -1504,11 +1664,12 @@
     // brings it back from the rail, otherwise it would reappear immediately.
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     if (tab.kind === 'browser') {
-      if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
-      // A thread browser tab that is closed takes its Back/Forward stack with it.
-      // There is no hibernation on this surface, so a destroy here is always the
-      // tab really going away, and the last tab of a thread browser going this way
-      // is that browser being closed: no tab of it is left to own a history.
+      // A thread browser tab that is closed takes its Back/Forward stack out of
+      // the strip with it, but main keeps it in the session's reopen set so
+      // Cmd/Ctrl+Shift+T can bring the tab back on the page it was left on.
+      // Quitting the app clears that set. There is no hibernation on this surface,
+      // so a destroy here is otherwise the tab really going away.
+      browserStore()?.closeSourcePeek(tab.id)
       void invoke('browser:destroy', tab.id, 'closed')
     }
     // Symmetric with the browser: closing the terminal that is showing fullscreen
@@ -1517,6 +1678,9 @@
       terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
+    if (tab.kind === 'browser' && browserFullscreenTabId === tab.id) {
+      browserFullscreenTabId = contextSidebarState.activeBrowserTabId
+    }
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
     }
@@ -1591,6 +1755,21 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /**
+   * The run of the open assistant task that another instance is streaming, when
+   * the task itself is not. A run executes on its own thread, so opening the
+   * task would otherwise show no card for work happening elsewhere; ThreadView
+   * renders the transfer card for this run above the composer.
+   */
+  let selectedAssistantForeignRunThreadId = $derived.by(() => {
+    const thread = selectedThread
+    if (mode !== 'assistant' || !thread || thread.projectId !== ASSISTANT_SPACE_ID) return null
+    const runs = assistantRunsByTask.get(thread.id) ?? []
+    const foreign = assistantForeignThread(thread, runs, (projectId, threadId) =>
+      foreignRuns.isForeign(projectId, threadId)
+    )
+    return foreign && foreign.id !== thread.id ? foreign.id : null
+  })
   /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
   let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
@@ -1730,6 +1909,57 @@
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
 
+  /** Every thread the Threads timeline lists, before its project filter. */
+  let timelineThreads = $derived(
+    allThreads.filter(
+      (thread) =>
+        !thread.archived &&
+        thread.projectId !== INBOX_PROJECT_ID &&
+        thread.projectId !== ASSISTANT_SPACE_ID
+    )
+  )
+
+  /**
+   * Whether the active view's left sidebar has anything to show.
+   *
+   * Emptiness is judged on the view's own lists before any search or project
+   * filter, because collapsing the sidebar over a filter the user applied would
+   * take away the very control they filtered with. Loading counts as content, so
+   * the sidebar never blinks away while the first page is still arriving.
+   */
+  let workspaceSidebarHasContent = $derived.by(() => {
+    if (loading || workspaceState.specStudioOpen) return true
+    if (mode === 'assistant') {
+      // A run is content too: a thread opened from a notification can be a run
+      // whose task sits beyond the bounded recent slice, and its row must still
+      // have a sidebar to appear in.
+      return (
+        assistantRoutineList.length > 0 || assistantTasks.length > 0 || assistantRuns.length > 0
+      )
+    }
+    if (mode === 'chats') {
+      return pinnedInboxThreads.length > 0 || standaloneThreads.length > 0
+    }
+    if (mode === 'threads') return timelineThreads.length > 0
+    // Projects: the tree needs a project or a thread, and the scoped stage board
+    // docks its own rail over it.
+    return (
+      Boolean(scopeState.sidebarContext) ||
+      pinnedProjects.length > 0 ||
+      regularProjects.length > 0 ||
+      pinnedThreads.length > 0
+    )
+  })
+
+  /**
+   * Whether the left sidebar is painted at all. A sidebar with nothing in it is
+   * not rendered, so no dock and no edge-hover overlay offer a panel with no
+   * content; the getting-started tour keeps it on screen because the sidebar
+   * itself is what one of its steps explains, and a first run is exactly the
+   * moment the sidebar is empty.
+   */
+  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || setupTourOpen)
+
   // ─── Data loading ────────────────────────────────────────────────────────
 
   /** Keep keyed sidebar rows safe even when hydration and live updates overlap. */
@@ -1740,6 +1970,58 @@
       seen.add(thread.id)
       return true
     })
+  }
+
+  /** Whether a sidebar row already carries everything a refresh would give it.
+   *  Only the fields the row draws are compared: the list must not be rebuilt
+   *  for a thread whose settings or context usage moved. */
+  function sidebarRowUnchanged(existing: Thread, incoming: Thread): boolean {
+    return (
+      existing.updatedAt === incoming.updatedAt &&
+      existing.lastActivity === incoming.lastActivity &&
+      existing.status === incoming.status &&
+      existing.title === incoming.title &&
+      existing.pinned === incoming.pinned &&
+      existing.read === incoming.read &&
+      existing.routineId === incoming.routineId
+    )
+  }
+
+  /**
+   * Fold a page of thread snapshots into the sidebar list in one pass.
+   *
+   * {@link upsertThreadInList} takes a row on its own: it walks the list twice
+   * and then rebuilds the whole array through `flatMap`, which allocates a
+   * one-element array per row it keeps. Folding a refresh page that way cost two
+   * walks and a hundred-odd allocations per row, which measured as a hundred and
+   * fifty milliseconds of blocked main thread behind every return to the
+   * workspace. A page is a list, so it merges as one.
+   */
+  function mergeThreadsInList(threads: readonly Thread[]): void {
+    // Same scratch-index reasoning as the scope store's merge: never read
+    // reactively, and a SvelteMap would put a signal behind every lookup.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      // Orchestration children are internals; see `upsertThreadInList`.
+      if (isOrchestrationChildThread(thread)) continue
+      incoming.set(thread.id, thread)
+    }
+    if (incoming.size === 0) return
+    let changed = false
+    const next = allThreads.map((existing) => {
+      const replacement = incoming.get(existing.id)
+      if (replacement === undefined) return existing
+      incoming.delete(existing.id)
+      if (sidebarRowUnchanged(existing, replacement)) return existing
+      changed = true
+      return replacement
+    })
+    // A thread the list has not seen takes the head, matching the single-row path.
+    const additions = [...incoming.values()]
+    if (additions.length > 0) changed = true
+    if (!changed) return
+    allThreads = additions.length === 0 ? next : [...additions, ...next]
   }
 
   /** Insert or refresh a thread in the sidebar list. The bounded hydration
@@ -1765,18 +2047,7 @@
     const hasDuplicate = allThreads.some(
       (candidate, candidateIndex) => candidateIndex !== index && candidate.id === thread.id
     )
-    if (
-      !hasDuplicate &&
-      existing.updatedAt === thread.updatedAt &&
-      existing.lastActivity === thread.lastActivity &&
-      existing.status === thread.status &&
-      existing.title === thread.title &&
-      existing.pinned === thread.pinned &&
-      existing.read === thread.read &&
-      existing.routineId === thread.routineId
-    ) {
-      return
-    }
+    if (!hasDuplicate && sidebarRowUnchanged(existing, thread)) return
     let replaced = false
     allThreads = allThreads.flatMap((candidate) => {
       if (candidate.id !== thread.id) return [candidate]
@@ -1793,6 +2064,39 @@
   $effect(() => {
     const selected = workspaceState.selectedThread
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
+  })
+
+  /** Assistant runs whose parent task is being fetched, so one selection never
+   *  fires two reads for the same run. */
+  const pendingAssistantParentReads = new SvelteSet<string>()
+
+  // An assistant run renders nested under its task. Selecting one from a
+  // notification can land on a run whose task sits beyond the bounded recent
+  // hydration slice, so the parent is fetched and added before the row is drawn
+  //   without it the run has no row to nest under, the sidebar cannot reveal
+  // it, and the thread looks like it opened nowhere at all.
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread || mode !== 'assistant') return
+    if (thread.projectId !== ASSISTANT_SPACE_ID) return
+    const parentId = thread.assistantTaskId
+    if (!parentId) return
+    if (allThreads.some((candidate) => candidate.id === parentId)) return
+    if (pendingAssistantParentReads.has(parentId)) return
+    pendingAssistantParentReads.add(parentId)
+    void (async () => {
+      try {
+        const parent = await invoke('thread:get', ASSISTANT_SPACE_ID, parentId)
+        if (parent) {
+          upsertThreadInList(parent)
+          scopeState.updateThread(parent)
+        }
+      } catch {
+        // A run whose task is gone still opens on its own; nothing to add.
+      } finally {
+        pendingAssistantParentReads.delete(parentId)
+      }
+    })()
   })
 
   // Full user-message history is prefetched by ThreadView shortly after mount
@@ -1956,6 +2260,23 @@
         ? (assistantBrowserScopes.get(threadId) ?? threadId)
         : conversationScopeId(projectId, threadId, null)
     )
+    // The same resolver pattern names a conversation's own box: a project's
+    // name, a routine's name, or a chat's title. It is read lazily by the
+    // browser's box control, so the reactive lists are tracked where it is
+    // called rather than here.
+    contextSidebarState.setThreadBrowserScopeLabelResolver((projectId, threadId) => {
+      if (projectId === ASSISTANT_SPACE_ID) {
+        const thread = allThreads.find((candidate) => candidate.id === threadId)
+        const routine = thread?.routineId
+          ? assistantRoutineList.find((candidate) => candidate.id === thread.routineId)
+          : null
+        return routine?.name ?? thread?.title ?? 'Assistant'
+      }
+      if (projectId === INBOX_PROJECT_ID) {
+        return allThreads.find((candidate) => candidate.id === threadId)?.title ?? 'Chat'
+      }
+      return projects.find((candidate) => candidate.id === projectId)?.name ?? 'Project'
+    })
   })
 
   $effect(() => {
@@ -1963,13 +2284,20 @@
       // A tab opened by the global browser belongs to the global strip, which
       // adopts it in its own store; the workspace sidebar must not mirror it.
       if (context?.projectId === GLOBAL_BROWSER_PROJECT_ID) return
+      if (context?.peek) {
+        const ownerThreadId =
+          contextSidebarState.threadIdForProject(context.projectId) ?? context.threadId
+        void loadBrowser().then((browser) => browser.adoptOpenRequest(url, context, ownerThreadId))
+        return
+      }
       if (context) {
         contextSidebarState.openBrowserForContext(
           url,
           context.projectId,
           context.threadId,
           context.requestedTabId,
-          context.reveal
+          context.reveal,
+          context.boxId
         )
         return
       }
@@ -1991,17 +2319,14 @@
         closeContextTab(tabId)
         return
       }
-      // A new tab opens in the container the focused tab belongs to, so a key
-      // pressed in a thread's browser can never open a tab the strip is not
-      // showing. It takes the keyboard like one opened from the strip does.
-      const newTabId = contextSidebarState.openBrowserForContext(
-        '',
-        tab.projectId,
-        tab.threadId,
-        undefined,
-        true
-      )
-      browserAddressFocus.request(newTabId)
+      if (action === 'reopen-tab') {
+        contextSidebarState.reopenClosedBrowserTab()
+        return
+      }
+      if (action !== 'new-tab') return
+      // The tab that held the keyboard names the container, so a chord can never
+      // open a tab in a strip the user is not looking at.
+      openNewBrowserTab(tab)
     })
   })
 
@@ -2074,6 +2399,14 @@
   // The app header owns the view switcher now; the workspace only registers
   // the per-view quick actions that render next to it.
   $effect(() => {
+    // The workspace owns the header's quick-action slot only while it is the
+    // surface on screen, or while the Scope Board (which it also draws) is.
+    // Every other top-level view publishes its own actions and this effect must
+    // leave them alone - the browser does exactly that, and its teardown clears
+    // the slot. Reading `active` here is also what re-runs the effect the moment
+    // the workspace comes back, which is what restores a view's actions after a
+    // trip to the browser; without it the slot stayed empty on return.
+    if (!active && !scopeViewActive) return
     if (workspaceState.specStudioOpen) {
       viewActions.set('none', [])
       return
@@ -2379,6 +2712,13 @@
     // A mode switch settles the incoming list itself, once its own rows are
     // mounted: this run would measure the position of the list being replaced.
     if (sidebarModeSettlePending) return
+    // The assistant sidebar is a separate, lazily imported component: re-run the
+    // reveal once its scroller attaches, and once the sidebar had to appear for
+    // the very run this is revealing, so a row that mounted a tick late is still
+    // brought into view.
+    void sidebarScroller
+    void workspaceSidebarVisible
+    void mode
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads
@@ -2463,6 +2803,11 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = uniqueThreadList(threadList).length
       hasMoreHistory = false
+      // Restore what the last session left in the durable inbox, alongside the
+      // thread-state hydration below. Deliberately not awaited: hydration
+      // already refills the statuses it can see on its own, and the restored
+      // entries merge in whenever the read lands (both paths dedupe on id).
+      void notificationPanelState.restoreFromStore()
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       // Publish the workspace with deterministic fallback icons immediately.
@@ -2592,6 +2937,18 @@
    * visible again after a trip to Settings or Scope. The full loadData() pass
    * is intentionally not re-run: it would reset folder expansion and re-restore
    * the thread, and the open thread never unmounts so it needs no re-fetch.
+   *
+   * The thread re-sync **merges** into the list rather than replacing it.
+   * `thread:listRecentPerProject` is the bounded first-paint slice   ten rows per
+   * project   while the Threads view hydrates up to two hundred rows from the
+   * global list. Replacing the list with the slice unmounted every hydrated row,
+   * and the Threads view's own hydration then rebuilt them right after the
+   * switch: the list visibly shrank to the slice and grew back over about a
+   * second, in two blocking passes. Merging refreshes the rows the slice knows
+   * about (a rename, a status change, a thread created while the workspace was
+   * hidden) and leaves the hydrated ones in place, so the re-sync never has to
+   * undo itself. The pager bookkeeping is deliberately left alone for the same
+   * reason: the rows it accounts for are still in the list.
    */
   async function refreshListData(): Promise<void> {
     try {
@@ -2601,45 +2958,117 @@
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
-      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = uniqueThreadList(threadList).length
-      hasMoreHistory = false
+      mergeThreadsInList(uniqueThreads)
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(uniqueThreads)
+      // Hand the scope store the list this workspace holds now, not the bounded
+      // slice: its own merge protects board-hydrated projects, but the Threads
+      // view's hydrated rows live here, and seeding the scope store with the
+      // slice alone would drop them from the docked sidebar and the board.
+      // Archived rows and the reserved browser container stay out, exactly as
+      // `scopeState.updateThread` filters them on every other ingestion path.
+      scopeState.setThreads(
+        uniqueThreadList(allThreads).filter(
+          (thread) => !thread.archived && thread.projectId !== GLOBAL_BROWSER_PROJECT_ID
+        )
+      )
       void rescueDraftThreads()
     } catch {
       // Non-fatal   keep the current lists on failure.
     }
   }
 
-  /** Threads whose unsent composer content fell outside the bounded first-paint
-   *  hydration - drafts persist in renderer storage only (never the DB), so the
-   *  SQL slice cannot know about them. Drafts load unbounded, like unread:
-   *  each is fetched with `thread:get` and merged into both the project-list
-   *  (`allThreads`) and the scope store so it shows everywhere immediately,
-   *  pinned to its project list via the draft sort. */
+  /**
+   * Draft refs a pass already resolved as unreachable for a reason that is
+   * reversible, so one app run asks about each exactly once.
+   *
+   * A thread that was archived, or that is an orchestration child, is excluded
+   * from the listing by design and can be unarchived later, so its draft has to
+   * survive. But re-asking on every pass is what turned a stored draft into a
+   * per-switch cost: the sidebar refresh runs on every return to the workspace,
+   * and each pass re-fetched the same rows to reach the same verdict. A ref that
+   * becomes reachable again shows up in `allThreads`, which the candidate check
+   * already skips, so remembering the verdict can never hide a live draft.
+   */
+  const unreachableDraftRefs = new SvelteSet<string>()
+
+  /** One draft ref's identity as a set key. */
+  function draftRefKey(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
+  }
+
+  /** How many draft refs are resolved at once. Draft rescue only ever fetches
+   *  refs the bounded slice did not cover, which is small once the dead ones are
+   *  gone, but it must not become a serial waterfall or a burst that hammers the
+   *  single-flight database worker when it is not. */
+  const DRAFT_RESCUE_CONCURRENCY = 8
+
+  /**
+   * Threads whose unsent composer content fell outside the bounded first-paint
+   * hydration - drafts persist in renderer storage only (never the DB), so the
+   * SQL slice cannot know about them. Drafts load unbounded, like unread:
+   * each is fetched with `thread:get` and merged into both the project-list
+   * (`allThreads`) and the scope store so it shows everywhere immediately,
+   * pinned to its project list via the draft sort.
+   *
+   * The fetch is where this used to cost a third of a second on every return to
+   * the workspace: one `thread:get` per stored draft, awaited in sequence, for a
+   * set that only ever grew because a draft whose thread had been deleted was
+   * never dropped. A ref whose row is gone is now forgotten on the spot, other
+   * verdicts are remembered for the run, and the refs that remain are resolved a
+   * few at a time.
+   */
   let rescuingDraftThreads = false
   async function rescueDraftThreads(): Promise<void> {
     if (rescuingDraftThreads) return
     rescuingDraftThreads = true
     try {
-      for (const ref of rendererRecovery.listDraftThreadRefs()) {
-        if (
-          allThreads.some((t) => t.id === ref.threadId) ||
-          scopeState.allScopeThreads.some((t) => t.id === ref.threadId)
-        ) {
-          continue
+      const known = new Set([
+        ...allThreads.map((thread) => thread.id),
+        ...scopeState.allScopeThreads.map((thread) => thread.id)
+      ])
+      const candidates = rendererRecovery
+        .listDraftThreadRefs()
+        .filter(
+          (ref) =>
+            !known.has(ref.threadId) &&
+            !unreachableDraftRefs.has(draftRefKey(ref.projectId, ref.threadId))
+        )
+      const gone: Array<{ projectId: string; threadId: string }> = []
+      let next = 0
+      const resolveOne = async (): Promise<void> => {
+        while (next < candidates.length) {
+          const ref = candidates[next]
+          next += 1
+          if (!ref) continue
+          let thread: Thread | null
+          try {
+            thread = await invoke('thread:get', ref.projectId, ref.threadId)
+          } catch {
+            // A read that failed says nothing about the thread, so neither the
+            // draft nor a verdict may be drawn from it: leave both for the next
+            // pass rather than forgetting content on a transient error.
+            continue
+          }
+          if (!thread) {
+            gone.push(ref)
+            continue
+          }
+          if (thread.archived || isOrchestrationChildThread(thread)) {
+            unreachableDraftRefs.add(draftRefKey(ref.projectId, ref.threadId))
+            continue
+          }
+          upsertThreadInList(thread)
+          scopeState.updateThread(thread)
         }
-        const thread = await invoke('thread:get', ref.projectId, ref.threadId)
-        if (!thread || thread.archived || isOrchestrationChildThread(thread)) continue
-        upsertThreadInList(thread)
-        scopeState.updateThread(thread)
       }
+      const workers = Math.min(DRAFT_RESCUE_CONCURRENCY, candidates.length)
+      await Promise.all(Array.from({ length: workers }, resolveOne))
+      rendererRecovery.forgetDraftRefs(gone)
       // Threads flagged drafting in the DB (this or another instance's draft
       // commits) must surface too, even when they fell outside the bounded
       // first-paint slice: a thread being dictated in another window can never
@@ -2651,8 +3080,8 @@
         if (
           thread.archived ||
           isOrchestrationChildThread(thread) ||
-          allThreads.some((t) => t.id === thread.id) ||
-          scopeState.allScopeThreads.some((t) => t.id === thread.id)
+          allThreads.some((candidate) => candidate.id === thread.id) ||
+          scopeState.allScopeThreads.some((candidate) => candidate.id === thread.id)
         ) {
           continue
         }
@@ -2670,6 +3099,40 @@
   $effect(() => {
     const projectId = scopeState.sidebarContext?.projectId
     if (projectId) void scopeState.ensureProjectThreadsLoaded(projectId)
+  })
+
+  /**
+   * Return the caret to the chat composer when the shell takes the screen back
+   * from a takeover view (Settings, the Scope board, the global browser).
+   *
+   * A switch between content views needs nothing here: it changes the thread,
+   * which remounts the conversation and the composer's own autofocus puts the
+   * caret back. A return from a takeover view keeps the same thread, so nothing
+   * remounts and the caret used to stay on the control that was clicked. The
+   * switch is the user asking for the conversation, so the composer on screen
+   * takes the keyboard exactly as it does after a thread switch.
+   *
+   * The request waits for the next frame rather than running in this flush: the
+   * composer probe measures the element it is about to focus, which forces a
+   * style and layout pass, and the switch flush is the wrong place to pay for
+   * one. A frame is early enough that the caret is back before the user can
+   * reach the keyboard.
+   *
+   * A surface with its own focus trap (modal, sheet, palette) keeps the keyboard
+   * it owns, the same guard the double-modifier composer gesture uses, because
+   * a view shortcut can still fire behind such a surface.
+   */
+  let composerFocusWasActive: boolean | null = null
+  $effect(() => {
+    const nowActive = active
+    const returnedToShell = composerFocusWasActive === false && nowActive
+    composerFocusWasActive = nowActive
+    if (!returnedToShell || isOverlayOpen()) return
+    const frame = requestAnimationFrame(() => {
+      if (isOverlayOpen()) return
+      focusVisibleComposer()
+    })
+    return () => cancelAnimationFrame(frame)
   })
 
   let wasActive: boolean | null = null
@@ -2698,8 +3161,47 @@
    *  recent slice simply never included an old done thread would distort the
    *  order. Switching to Threads view hydrates the global recent list, bounded
    *  to 200 combined rows with last-activity as the source of truth; deeper
-   *  history stays available through the existing "Load older threads" pager. */
+   *  history stays available through the existing "Load older threads" pager.
+   *
+   *  The 200-row window only ranks by activity, so on its own it hides a
+   *  non-done thread that has gone quiet and every thread of a pinned scope,
+   *  even though the view ranks those above the done rows that did load. Those
+   *  arrive through a second, side-loaded hydration query
+   *  (`thread:listAlwaysVisible`) that never gates the window, so the view keeps
+   *  its instant first-paint slice and the guarantee set joins it as it lands. */
   const THREADS_VIEW_HYDRATION_LIMIT = 200
+
+  /**
+   * Fold a hydrated page over `allThreads`. `thread:listRecent` carries
+   * harness-usage decoration, while the bounded first-paint slice
+   * (`thread:listRecentPerProject`) deliberately omits it. Adding only the ids
+   * the list had never seen left every first-paint row on its usage-less copy,
+   * so a thread that used several harnesses over its session only ever drew the
+   * fallback from `settings.harnessId`. Known rows must take the page's copy;
+   * unseen rows append after the list. A scratch index for this one pass, never
+   * read reactively.
+   */
+  function foldHydratedThreads(threads: Thread[]): void {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      if (isOrchestrationChildThread(thread)) continue
+      incoming.set(thread.id, thread)
+    }
+    let changed = false
+    const refreshed = allThreads.map((existing) => {
+      const replacement = incoming.get(existing.id)
+      if (replacement === undefined) return existing
+      incoming.delete(existing.id)
+      if (replacement === existing) return existing
+      changed = true
+      return replacement
+    })
+    const additions = [...incoming.values()]
+    if (additions.length > 0) changed = true
+    if (changed) allThreads = additions.length > 0 ? [...refreshed, ...additions] : refreshed
+  }
+
   let threadsViewHydrating = false
   async function ensureThreadsViewFullyLoaded(): Promise<void> {
     if (threadsViewHydrating) return
@@ -2709,17 +3211,9 @@
         limit: THREADS_VIEW_HYDRATION_LIMIT,
         offset: 0
       })
-      const uniqueCurrentThreads = uniqueThreadList(allThreads)
-      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
-      const additions = uniqueThreadList(page).filter(
-        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
-      )
-      for (const thread of page) {
-        if (!thread.archived) scopeState.updateThread(thread)
-      }
-      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
-        allThreads = [...uniqueCurrentThreads, ...additions]
-      }
+      const uniquePage = uniqueThreadList(page)
+      scopeState.mergeThreads(uniquePage)
+      foldHydratedThreads(uniquePage)
       historyOffset = Math.max(historyOffset, page.length)
       hasMoreHistory = page.length === THREADS_VIEW_HYDRATION_LIMIT
     } finally {
@@ -2727,8 +3221,30 @@
     }
   }
 
+  /**
+   * The Threads view's guarantee set, side-loaded beside the recency window:
+   * pinned rows, non-done rows, and every row of a pinned scope. It resolves on
+   * its own and folds in when it lands, so the window's own hydration and the
+   * first-paint slice are never made to wait on it.
+   */
+  let threadsViewGuaranteesHydrating = false
+  async function hydrateThreadsViewGuarantees(): Promise<void> {
+    if (threadsViewGuaranteesHydrating) return
+    threadsViewGuaranteesHydrating = true
+    try {
+      const alwaysVisible = await invoke('thread:listAlwaysVisible')
+      const unique = uniqueThreadList(alwaysVisible)
+      scopeState.mergeThreads(unique)
+      foldHydratedThreads(unique)
+    } finally {
+      threadsViewGuaranteesHydrating = false
+    }
+  }
+
   $effect(() => {
-    if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
+    if (mode !== 'threads' || !active) return
+    void ensureThreadsViewFullyLoaded()
+    void hydrateThreadsViewGuarantees()
   })
 
   /** The chat a Chats view with nothing to restore should land on: the last chat
@@ -2818,9 +3334,7 @@
       const additions = uniqueThreadList(page).filter(
         (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
       )
-      for (const thread of page) {
-        if (!thread.archived) scopeState.updateThread(thread)
-      }
+      scopeState.mergeThreads(page)
       if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
         allThreads = [...uniqueCurrentThreads, ...additions]
       }
@@ -2954,36 +3468,27 @@
     }
   }
 
-  async function handleThreadMove(
+  /**
+   * Persist a drop in a sidebar list.
+   *
+   * `ordered` is the arrangement the pane was showing when the user dropped the
+   * row, so the anchor is written against the neighbours the user actually saw,
+   * whatever order that pane keeps (project folders, chats, or the status-grouped
+   * Threads view). The dragged row takes a "frozen recency" anchor between those
+   * neighbours' effective keys, so it holds that slot while newer activity can
+   * still bubble above it.
+   */
+  async function handleThreadDrop(
     projectId: string,
-    draggedId: string,
-    targetId: string,
-    position: 'before' | 'after',
-    includePinned = false
+    ordered: readonly Thread[],
+    draggedId: string
   ): Promise<void> {
-    const projectThreads = allThreads
-      .filter((t) => t.projectId === projectId && !t.archived && (includePinned || !t.pinned))
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
-    const fromIdx = projectThreads.findIndex((t) => t.id === draggedId)
-    const toIdx = projectThreads.findIndex((t) => t.id === targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-
-    const dragged = projectThreads[fromIdx]
-    projectThreads.splice(fromIdx, 1)
-    const adjustedTo = projectThreads.findIndex((t) => t.id === targetId)
-    if (adjustedTo === -1) return
-    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, dragged)
-
-    // Assign a "frozen recency" anchor between the dragged thread's new
-    // neighbours' effective keys, so it holds position while newer activity
-    // can still bubble above it. The dragged thread's index in the new list is
-    // where its anchor must sit.
-    const idx = projectThreads.findIndex((t) => t.id === draggedId)
-    const above = projectThreads[idx - 1]
-    const below = projectThreads[idx + 1]
-    const effectiveKey = (t: Thread) => Math.max(t.sortOrder ?? 0, t.lastActivity)
-    const aboveKey = above ? effectiveKey(above) : Number.MAX_SAFE_INTEGER
-    const belowKey = below ? effectiveKey(below) : 0
+    const idx = ordered.findIndex((t) => t.id === draggedId)
+    if (idx === -1) return
+    const above = ordered[idx - 1]
+    const below = ordered[idx + 1]
+    const aboveKey = above ? threadOrderKey(above) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? threadOrderKey(below) : 0
     let sortOrder: number
     if (above && below) {
       sortOrder = (aboveKey + belowKey) / 2
@@ -3649,6 +4154,8 @@
       providerId: settings.providerId,
       modelId: settings.modelId,
       ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow,
       ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
     }
   }
@@ -3782,6 +4289,26 @@
 
   async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
     await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
+  }
+
+  async function skipNextAssistantRoutineRun(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipNextRoutineRun(routine.id)
+      toast.success('Next routine run skipped', { description: routine.name })
+    } catch (error) {
+      reportError(error, 'The next scheduled run could not be skipped.')
+      throw error
+    }
+  }
+
+  async function skipAssistantRoutineRunsToday(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipRoutineRunsToday(routine.id)
+      toast.success("Today's routine runs skipped", { description: routine.name })
+    } catch (error) {
+      reportError(error, "Today's scheduled runs could not be skipped.")
+      throw error
+    }
   }
 
   /**
@@ -4146,8 +4673,10 @@
 <svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
-  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
-  {#if mode === 'assistant'}
+  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own.
+       A view with nothing in its sidebar paints no sidebar at all, so an empty
+       panel is never put in front of the user. -->
+  {#if workspaceSidebarVisible && mode === 'assistant'}
     {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
       <AssistantSidebar
         bind:scroller={sidebarScroller}
@@ -4168,13 +4697,16 @@
         onHandedOffTask={handleAssistantHandoff}
         onHideHowTo={(task) => void hideAssistantHowTo(task)}
         onDeleteRoutine={deleteAssistantRoutine}
+        onHasRoutineRunsToday={(routine) => assistantRoutines.hasRoutineRunsToday(routine.id)}
+        onSkipNextRoutineRun={skipNextAssistantRoutineRun}
+        onSkipRoutineRunsToday={skipAssistantRoutineRunsToday}
         onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
         onMoveRoutine={(draggedId, targetId, position) =>
           void moveAssistantRoutine(draggedId, targetId, position)}
         onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
       />
     {/await}
-  {:else}
+  {:else if workspaceSidebarVisible}
     <WorkspaceSidebar
       bind:scroller={sidebarScroller}
       {mode}
@@ -4192,6 +4724,7 @@
       {standaloneThreads}
       {pinnedTimelineThreads}
       {unpinnedTimelineThreads}
+      {draftThreadKeys}
       {hasMoreHistory}
       {historyLoading}
       {projectPageLoading}
@@ -4207,7 +4740,7 @@
       onTogglePin={togglePin}
       onDelete={handleDelete}
       onFork={forkThread}
-      onThreadMove={handleThreadMove}
+      onThreadDrop={handleThreadDrop}
       onPinnedThreadMove={handlePinnedThreadMove}
       onTimelinePinnedMove={handleTimelinePinnedMove}
       onProjectMove={handleProjectMove}
@@ -4244,6 +4777,8 @@
         {config}
         {updateConfig}
         restoreKey={chatsComposerRestoreKey}
+        sidebarHasContent={workspaceSidebarHasContent}
+        assistantForeignRunThreadId={selectedAssistantForeignRunThreadId}
         onNavigate={navigate}
         onForked={handleForkedThread}
         onContinueInProject={handleContinuedInProject}
@@ -4260,11 +4795,14 @@
       {#if sidebarVisible || sidebarHostsFullscreenEditor}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
+            {active}
             {gitPanelProjectId}
             {gitPanelScopeBucketId}
+            {gitPanelVisible}
             {terminalFullscreenTabId}
             {browserFullscreenTabId}
             {activeProject}
+            {selectedThread}
             {projectIcons}
             {browser}
             {coordinator}
@@ -4296,6 +4834,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
+            tabPresentation={ovenTabPresentation}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -4306,7 +4845,8 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onNewTerminal={openNewTerminal}
-            onNewBrowser={openNewBrowser}
+            onNewBrowser={() => openNewBrowserTab()}
+            onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
           />
         </div>
       {/if}
@@ -4367,9 +4907,9 @@
   {/await}
 {/snippet}
 
-<!-- Every browser surface waits for `browserStore()` so its chunk is not even
-     fetched on a launch that never reaches the browser. The store arrives with
-     the runtime, which is also what warms these chunks. -->
+<!-- Global-browser surfaces wait for `browserStore()` so their chunks are not
+     fetched on a launch that never reaches the browser. Thread-browser
+     fullscreen is loaded separately below when a thread tab asks for it. -->
 {#if browserStore()}
   {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
     <WorkspaceBrowserDataModal {browser} {projects} />
@@ -4398,12 +4938,13 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-{#if browserStore()}
+{#if browserFullscreenTabId}
   {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
       tabId={browserFullscreenTabId}
       onTabIdChange={(id) => (browserFullscreenTabId = id)}
-      onNewBrowser={openNewBrowser}
+      onNewBrowser={() => openNewBrowserTab()}
+      onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
       onCloseTab={(id) => closeFullscreenTab('browser', id)}
     />
   {/await}

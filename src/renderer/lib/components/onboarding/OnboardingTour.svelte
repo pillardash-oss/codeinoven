@@ -19,21 +19,30 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import {
+    SETUP_SPOTLIGHT_STEPS,
+    VIEW_TOURS,
+    viewTourLabel,
+    type WorkspaceTourView
+  } from './onboarding-tour-steps'
 
   interface Props {
+    /** Which tour is running: the first-run setup sequence, or one content
+     *  view's own tour. */
+    tour?: 'setup' | WorkspaceTourView
+    /**
+     * Position inside the running tour. The setup tour numbers its screens
+     * (0 welcome, 1-5 the spotlights, 6 the first project, 7+ the first
+     * agent); a view tour has no other screens, so it numbers its spotlights
+     * from 0.
+     */
     step: number
     onStepChange: (step: number) => void
-    onChooseProject: () => void
-    onBrowseHarnesses: () => void
+    /** Setup tour only: open the project picker. */
+    onChooseProject?: () => void
+    /** Setup tour only: leave for the harness list in Settings. */
+    onBrowseHarnesses?: () => void
     onFinish: () => void
-  }
-
-  interface SpotlightStep {
-    step: number
-    selector: string
-    eyebrow: string
-    title: string
-    description: string
   }
 
   interface TargetRect {
@@ -43,57 +52,26 @@
     height: number
   }
 
-  let { step, onStepChange, onChooseProject, onBrowseHarnesses, onFinish }: Props = $props()
+  let {
+    tour = 'setup',
+    step,
+    onStepChange,
+    onChooseProject,
+    onBrowseHarnesses,
+    onFinish
+  }: Props = $props()
 
-  const isMac = navigator.platform.toUpperCase().includes('MAC')
-  const viewKey = (key: string): string => (isMac ? `⌘${key}` : `Ctrl+${key}`)
-
-  const spotlightSteps: SpotlightStep[] = [
-    {
-      step: 1,
-      selector: '[data-onboarding="view-switcher"]',
-      eyebrow: 'View rail',
-      title: 'Switch views from the left rail',
-      description: `The rail down the left edge switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), Chats is for work that does not need a project (${viewKey('0')}), and Assistant holds routines and tasks (${viewKey('9')}).`
-    },
-    {
-      step: 2,
-      selector: '[data-onboarding="project-sidebar"]',
-      eyebrow: 'Left Sidebar',
-      title: 'Threads and Projects',
-      description:
-        'The sidebar holds your projects and conversations. Pick a project, then open a thread or start a new one.'
-    },
-    {
-      step: 3,
-      selector: '[data-onboarding="conversation"]',
-      eyebrow: 'Conversation',
-      title: 'Work with the agent here',
-      description:
-        'Messages, questions, plans, approvals, and results all stay in this main area. You can follow the work without opening a terminal.'
-    },
-    {
-      step: 4,
-      selector: '[data-onboarding="composer"]',
-      eyebrow: 'Send and steer',
-      title: 'Type what you want done',
-      description:
-        "The composer accepts plain instructions, file attachments of all kinds. You can also dictate with the microphone, or tap it to read the agent's response. Check the sound settings for more"
-    },
-    {
-      step: 5,
-      selector: '[data-onboarding="notifications"]',
-      eyebrow: 'Context and alerts',
-      title: 'Tools open on the right',
-      description:
-        'Notifications, files, Git changes, terminals, sources, and memory open in the right sidebar. The bell collects completed work and anything that needs you.'
-    }
-  ]
-
-  const activeSpotlight = $derived(spotlightSteps.find((item) => item.step === step))
-  const sendShortcut = isMac ? '⌘ Enter' : 'Ctrl + Enter'
-  const steerShortcut = isMac ? '⌘ ⇧ Enter' : 'Ctrl + Shift + Enter'
-  const spotlightCount = spotlightSteps.length
+  const steps = $derived(tour === 'setup' ? SETUP_SPOTLIGHT_STEPS : VIEW_TOURS[tour].steps)
+  const tourLabel = $derived(tour === 'setup' ? 'Getting started tour' : viewTourLabel(tour))
+  /** Position inside `steps`: the setup tour spends its first screen on the
+   *  welcome card and its last two on project and agent setup. */
+  const spotlightIndex = $derived(tour === 'setup' ? step - 1 : step)
+  const activeSpotlight = $derived(steps[spotlightIndex])
+  const spotlightCount = $derived(steps.length)
+  const onLastSpotlight = $derived(spotlightIndex === spotlightCount - 1)
+  /** Box root to place the callout from before it has rendered, so a step that
+   *  carries key rows is never positioned from a box that is too short. */
+  const calloutEstimate = $derived(activeSpotlight?.shortcuts ? 270 : 220)
 
   let targetRect = $state<TargetRect | null>(null)
   let calloutTop = $state(0)
@@ -129,7 +107,7 @@
     }
 
     const cardWidth = 340
-    const cardHeight = calloutEl?.offsetHeight ?? (step === 4 ? 270 : 220)
+    const cardHeight = calloutEl?.offsetHeight ?? calloutEstimate
     const gap = 16
     const below = targetRect.top + targetRect.height + gap
     const above = targetRect.top - cardHeight - gap
@@ -150,17 +128,25 @@
   $effect(() => {
     if (!activeSpotlight) return
     void tick().then(() => {
-      if (calloutEl && Math.abs(calloutEl.offsetHeight - (step === 4 ? 270 : 220)) > 1) {
+      if (calloutEl && Math.abs(calloutEl.offsetHeight - calloutEstimate) > 1) {
         measureTarget()
       }
     })
   })
 
   function nextStep(): void {
+    // A view tour is only its spotlights, so the last one finishes the tour;
+    // the setup tour continues into the project and agent screens.
+    if (tour !== 'setup') {
+      if (onLastSpotlight) onFinish()
+      else onStepChange(step + 1)
+      return
+    }
     onStepChange(step < 5 ? step + 1 : 6)
   }
 
   function previousStep(): void {
+    if (tour !== 'setup' && step === 0) return
     onStepChange(Math.max(0, step - 1))
   }
 
@@ -202,7 +188,7 @@
   }}
 />
 
-{#if step === 0}
+{#if tour === 'setup' && step === 0}
   <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="lg" closeOnBackdrop={false}>
     <div class="space-y-6">
       <div class="flex items-start gap-4">
@@ -313,8 +299,8 @@
           <button
             type="button"
             class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Skip setup"
-            aria-label="Skip setup"
+            title={tour === 'setup' ? 'Skip setup' : 'Close tour'}
+            aria-label={tour === 'setup' ? 'Skip setup' : 'Close tour'}
             onclick={onFinish}
           >
             <X size={15} />
@@ -322,46 +308,55 @@
         </div>
         <p class="mt-2 text-sm leading-relaxed text-muted">{activeSpotlight.description}</p>
 
-        {#if step === 4}
+        {#if activeSpotlight.shortcuts}
           <div class="mt-4 grid gap-2">
-            <div class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2">
-              <span class="text-xs text-muted">Send a message</span>
-              <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
-                >{sendShortcut}</kbd
+            {#each activeSpotlight.shortcuts as shortcut (shortcut.label)}
+              <div
+                class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2"
               >
-            </div>
-            <div class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2">
-              <span class="text-xs text-muted">Steer a working agent now</span>
-              <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
-                >{steerShortcut}</kbd
-              >
-            </div>
+                <span class="text-xs text-muted">{shortcut.label}</span>
+                <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
+                  >{shortcut.keys}</kbd
+                >
+              </div>
+            {/each}
           </div>
         {/if}
 
         <div class="mt-5 flex items-center justify-between">
-          <div class="flex gap-1" aria-label={`Tour step ${step} of ${spotlightCount}`}>
-            {#each spotlightSteps as item (item.step)}
+          <div
+            class="flex gap-1"
+            aria-label={`${tourLabel} step ${spotlightIndex + 1} of ${spotlightCount}`}
+          >
+            {#each steps as tourStep (tourStep.selector)}
               <span
-                class={`h-1.5 rounded-full ${item.step === step ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
+                class={`h-1.5 rounded-full ${tourStep.selector === activeSpotlight.selector ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
               ></span>
             {/each}
           </div>
           <div class="flex gap-2">
-            <button
-              type="button"
-              class="flex h-8 items-center gap-1 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              onclick={previousStep}
-            >
-              <ArrowLeft size={13} /> Back
-            </button>
+            {#if tour === 'setup' || step > 0}
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                onclick={previousStep}
+              >
+                <ArrowLeft size={13} /> Back
+              </button>
+            {/if}
             <button
               bind:this={nextButton}
               type="button"
               class="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
               onclick={nextStep}
             >
-              {step === 5 ? 'Set up' : 'Next'}
+              {tour === 'setup'
+                ? step === 5
+                  ? 'Set up'
+                  : 'Next'
+                : onLastSpotlight
+                  ? 'Done'
+                  : 'Next'}
               <ArrowRight size={13} />
             </button>
           </div>
@@ -369,7 +364,7 @@
       </div>
     </div>
   </Portal>
-{:else if step === 6}
+{:else if tour === 'setup' && step === 6}
   <Modal open title="Add your first project" onClose={onFinish} size="lg" closeOnBackdrop={false}>
     <div class="space-y-5">
       <div class="flex items-start gap-4">
@@ -411,7 +406,7 @@
       </div>
     </div>
   </Modal>
-{:else}
+{:else if tour === 'setup'}
   <Modal
     open
     title="Connect your first coding agent"

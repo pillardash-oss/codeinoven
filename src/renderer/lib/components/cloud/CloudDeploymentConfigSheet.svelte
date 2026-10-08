@@ -11,6 +11,7 @@
     CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
+    type CloudDeploymentContainerOwner,
     type CloudDeploymentProviderKind
   } from '$shared/types'
 
@@ -84,6 +85,12 @@
   let availableContainers = $state<CloudDeploymentContainer[]>([])
   let availableLoading = $state(false)
   let availableError = $state('')
+  /**
+   * Containers another project already monitors, so the picker can say whose
+   * they are. A provider account reports every container it hosts, so the list
+   * on its own gives no hint that a container already belongs to someone else.
+   */
+  let containerOwners = $state<CloudDeploymentContainerOwner[]>([])
   let saving = $state(false)
   let error = $state('')
   /** The project's current config, loaded on open. */
@@ -151,8 +158,9 @@
     availableContainers.filter((container) => {
       const query = containerSearch.trim().toLowerCase()
       if (query === '') return true
-      // Match against the provider label, id, url, and any custom label this
-      // project has already assigned to the same container id.
+      // Match against the provider label, id, url, the owning project's name
+      // (so "which project is this container in?" is searchable), and any custom
+      // label this project has already assigned to the same container id.
       const known = config?.project.containers.find(
         (mapping) => mapping.id === container.id && mapping.providerKind === container.providerKind
       )
@@ -161,6 +169,7 @@
         container.id,
         container.url ?? '',
         container.project ?? '',
+        ownerByContainerId.get(container.id)?.projectName ?? '',
         known?.label ?? ''
       ]
         .join(' ')
@@ -186,6 +195,27 @@
             : selectedExistingAccountId !== '')
       : containerProviderKind !== '' && (selectedContainerIds.size > 0 || containerId.trim() !== '')
   )
+
+  /** Which project already monitors each container id, for a quick lookup. */
+  const ownerByContainerId = $derived(
+    new Map(containerOwners.map((owner) => [owner.containerId, owner]))
+  )
+
+  /**
+   * The other projects represented in the current selection. Monitoring a
+   * container another project also monitors is legitimate (one app can serve
+   * two repos), so this is a warning rather than a block: what must not happen
+   * is it arriving unnoticed, because the container list spans every project on
+   * the account.
+   */
+  const otherProjectOwners = $derived([
+    ...new Set(
+      [...selectedContainerIds]
+        .map((id) => ownerByContainerId.get(id))
+        .filter((owner): owner is CloudDeploymentContainerOwner => owner !== undefined)
+        .map((owner) => owner.projectName)
+    )
+  ])
 
   /** Accounts this project has attached for the currently selected provider. */
   const attachedForSelectedKind = $derived(
@@ -219,6 +249,7 @@
     availableContainers = []
     availableLoading = false
     availableError = ''
+    containerOwners = []
     selectedContainerIds.clear()
     config = null
     error = ''
@@ -283,6 +314,7 @@
     containerSearch = ''
     availableContainers = []
     availableError = ''
+    containerOwners = []
     selectedContainerIds.clear()
     error = ''
   }
@@ -434,17 +466,23 @@
     containerLabel = ''
     selectedContainerIds.clear()
     try {
-      const result = await invoke(
-        'cloudDeploy:availableContainers',
-        projectId,
-        containerProviderKind,
-        containerAccountId === '' ? undefined : containerAccountId
-      )
+      const [result, owners] = await Promise.all([
+        invoke(
+          'cloudDeploy:availableContainers',
+          projectId,
+          containerProviderKind,
+          containerAccountId === '' ? undefined : containerAccountId
+        ),
+        // Ownership is decoration, not data the add depends on: a failure here
+        // must never block adding a container, so it resolves to no owners.
+        invoke('cloudDeploy:containerOwners', projectId, containerProviderKind).catch(() => [])
+      ])
       if (Array.isArray(result)) {
         availableContainers = result
       } else {
         availableError = result.accessError
       }
+      containerOwners = owners
     } catch (loadError) {
       availableError =
         loadError instanceof Error ? loadError.message : 'Containers could not be loaded.'
@@ -952,7 +990,9 @@
               <button
                 type="button"
                 class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
-                title="Create or attach another {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account, then continue adding containers"
+                title="Create or attach another {PROVIDER_DISPLAY_NAMES[
+                  containerProviderKind
+                ]} account, then continue adding containers"
                 onclick={() => addAccountForContainerProvider()}
               >
                 <Plus size={13} />
@@ -962,8 +1002,8 @@
           </div>
           {#if containerAccounts.length === 0}
             <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
-              No {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account is attached to this
-              project. Add one to browse its containers.
+              No {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account is attached to this project.
+              Add one to browse its containers.
             </p>
           {/if}
         {/if}
@@ -1048,6 +1088,7 @@
                 <div class="max-h-52 space-y-1 overflow-y-auto pr-0.5">
                   {#each filteredAvailable as container (container.id)}
                     {@const selected = selectedContainerIds.has(container.id)}
+                    {@const owner = ownerByContainerId.get(container.id)}
                     <button
                       type="button"
                       class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors {selected
@@ -1070,6 +1111,11 @@
                         <span class="block truncate font-mono text-[0.625rem] text-dimmed">
                           {container.id}
                         </span>
+                        {#if owner}
+                          <span class="mt-0.5 block truncate text-[0.5625rem] text-warning">
+                            Monitored by {owner.projectName}
+                          </span>
+                        {/if}
                       </span>
                       {#if selected}
                         <CheckCircle2 size={14} class="shrink-0 text-primary" />
@@ -1077,6 +1123,13 @@
                     </button>
                   {/each}
                 </div>
+                {#if otherProjectOwners.length > 0}
+                  <p class="rounded-lg bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning">
+                    {otherProjectOwners.join(', ')}
+                    {otherProjectOwners.length === 1 ? ' monitors' : ' monitor'} containers you selected.
+                    Adding them here tracks them in this project too.
+                  </p>
+                {/if}
               {/if}
             {/if}
           {/if}

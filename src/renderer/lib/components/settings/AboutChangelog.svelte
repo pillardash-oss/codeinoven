@@ -60,7 +60,7 @@
     </div>
   {:else if changelog}
     <div class="max-h-96 overflow-y-auto pr-1">
-      <MarkdownView text={changelog.notes} />
+      <MarkdownView text={changelog.notes} browserDestination="global" />
     </div>
   {:else if error}
     <div class="flex items-center gap-3 text-xs text-dimmed">

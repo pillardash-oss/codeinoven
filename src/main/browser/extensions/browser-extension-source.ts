@@ -23,7 +23,7 @@
  */
 
 import { createHash, generateKeyPairSync } from 'node:crypto'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import JSZip from 'jszip'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
@@ -65,6 +65,8 @@ export interface ExtensionSourceSummary {
   description: string
   /** Extension-root-relative popup document, or null. */
   popupPath: string | null
+  /** Extension-root-relative options document, or null. */
+  optionsPath: string | null
   /** Every permission the extension declares, deduplicated and in declaration order. */
   declaredPermissions: string[]
   /** The `declarative_net_request` rulesets it ships, with whether each is
@@ -80,6 +82,7 @@ export interface ManifestRecord {
   version: string
   description: string
   popupPath: string | null
+  optionsPath: string | null
   declaredPermissions: string[]
   ruleResources: { id: string; enabled: boolean }[]
   /** The `key` the manifest pins, if it already had one. */
@@ -275,6 +278,21 @@ function popupPathOf(manifest: Record<string, unknown>): string | null {
   return null
 }
 
+function optionsPathOf(manifest: Record<string, unknown>): string | null {
+  const direct = manifest['options_page']
+  if (typeof direct === 'string' && direct.length > 0) {
+    const cleaned = direct.replace(/^\/+/u, '')
+    if (cleaned.length > 0) return cleaned
+  }
+  const ui = asRecord(manifest['options_ui'])
+  const page = ui['page']
+  if (typeof page === 'string' && page.length > 0) {
+    const cleaned = page.replace(/^\/+/u, '')
+    if (cleaned.length > 0) return cleaned
+  }
+  return null
+}
+
 /**
  * The address of an extension's declared popup document, or null when the
  * declaration cannot name a document inside the extension's own files.
@@ -287,14 +305,44 @@ function popupPathOf(manifest: Record<string, unknown>): string | null {
  */
 export function extensionPopupUrl(id: string, popupPath: string | null): string | null {
   if (!popupPath) return null
+  return extensionPageUrl(id, popupPath)
+}
+
+/**
+ * The address of one file inside an installed extension, or null when the path
+ * cannot name a document inside its own files. Shared by popup and options
+ * pages so both resolve the same way.
+ */
+export function extensionPageUrl(id: string, pagePath: string | null): string | null {
+  if (!pagePath) return null
   let resolved: URL
   try {
-    resolved = new URL(popupPath, `chrome-extension://${id}/`)
+    resolved = new URL(pagePath, `chrome-extension://${id}/`)
   } catch {
     return null
   }
   if (resolved.protocol !== 'chrome-extension:' || resolved.host !== id) return null
   return resolved.href
+}
+
+/**
+ * Whether a manifest-declared page is really a file inside the extension's own
+ * folder. A package can declare a popup its files do not contain, and the only
+ * thing that currently notices is the popup load itself, which fails with
+ * `ERR_FILE_NOT_FOUND` after the rail already opened a tab for it.
+ */
+export async function extensionPageFileExists(
+  extensionDir: string,
+  pagePath: string | null
+): Promise<boolean> {
+  if (!pagePath) return false
+  const absolute = join(extensionDir, pagePath)
+  if (!isInside(extensionDir, absolute)) return false
+  try {
+    return (await stat(absolute)).isFile()
+  } catch {
+    return false
+  }
 }
 
 function backgroundOf(manifest: Record<string, unknown>): ManifestRecord['background'] {
@@ -327,6 +375,7 @@ export async function readManifestRecord(extensionDir: string): Promise<Manifest
     version: typeof manifest['version'] === 'string' ? manifest['version'] : '0',
     description: await resolveManifestText(extensionDir, manifest, manifest['description']),
     popupPath: popupPathOf(manifest),
+    optionsPath: optionsPathOf(manifest),
     declaredPermissions: declaredPermissionsOf(manifest),
     ruleResources: ruleResourcesOf(manifest),
     key: typeof manifest['key'] === 'string' ? manifest['key'] : null,
@@ -531,6 +580,7 @@ export function summariseExtensionSource(record: ManifestRecord): ExtensionSourc
     version: record.version,
     description: record.description,
     popupPath: record.popupPath,
+    optionsPath: record.optionsPath,
     declaredPermissions: record.declaredPermissions,
     ruleResources: record.ruleResources,
     manifestVersion: record.manifestVersion

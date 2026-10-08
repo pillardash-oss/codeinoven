@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, ChevronLeft, Plus } from '@lucide/svelte'
+  import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
@@ -8,11 +9,12 @@
   /**
    * The browser boxes panel, docked in the browser's right rail.
    *
-   * A box is a named cookie jar, so this is where the profile's identities live:
-   * one row per box, its colour and icon, how many tabs use it, and which one the
-   * tab on screen is in. It belongs to the profile rather than to a page, so it is
-   * present with the strip empty, which is also where a user makes their first
-   * box before any tab exists.
+   * A box is the profile's named jar, one Chromium session every context that
+   * picks it shares, so this is where the profile's identities live: one row per
+   * box, its colour and icon, how many tabs use it, and which one the tab on
+   * screen is in. It belongs to the profile rather than to a page or a context, so
+   * it is present with the strip empty, which is also where a user makes their
+   * first box before any tab exists.
    *
    * Making a box is a page of the panel, not a dialog: the list sits one chevron
    * back, and the form is the panel's own work. Changing one is a fold on its row,
@@ -56,7 +58,7 @@
 </script>
 
 {#if creating}
-  <div class="flex h-full min-h-0 flex-col">
+  <div class="flex h-full min-h-0 flex-col" in:fly={{ x: 18, duration: 150 }}>
     <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
       <button
         type="button"
@@ -146,7 +148,11 @@
           </div>
 
           {#if expanded}
-            <div id="box-settings-{box.id}" class="mb-1 rounded-lg border p-3">
+            <div
+              id="box-settings-{box.id}"
+              class="mb-1 rounded-lg border p-3"
+              transition:slide={{ duration: 150 }}
+            >
               <BrowserBoxEditor {box} onDeleted={() => (expandedBoxId = null)} />
             </div>
           {/if}

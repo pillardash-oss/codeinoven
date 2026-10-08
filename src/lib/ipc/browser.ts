@@ -2,11 +2,14 @@
  * The reserved ownership context of the global (personal) browser workspace.
  *
  * Every browser tab is keyed by a `(projectId, threadId)` pair in the main
- * process, and the session partition is derived from `projectId`. The global
- * browser deliberately rides the same machinery with one reserved pair, which
- * gives it a single durable profile (`persist:codeinoven-browser:browser-global`)
- * shared by every global tab, isolated from every project's browser and from
- * the agent-controlled project sessions.
+ * process, and its session partition is normally derived from `projectId`. A tab
+ * that names a box is the exception: a box is one jar for the whole profile, so
+ * every context that picks it joins the one Chromium profile it names. The
+ * global browser deliberately rides the same machinery with one reserved pair,
+ * which gives its own jar a single durable profile
+ * (`persist:codeinoven-browser:browser-global`) shared by every global tab,
+ * isolated from every project's own jar and from the agent-controlled project
+ * sessions.
  *
  * The pair names no user-visible project or thread, so `BrowserService` treats
  * a global tab as project-less and main resolves its dialog and permission
@@ -67,6 +70,8 @@ export interface BrowserPopupWindow {
   /** Favicon data URL the popup reported, or null until it declares one. */
   favicon: string | null
   loading: boolean
+  /** Changes when an extension action explicitly asks the app to show this page. */
+  activationSequence: number
   /**
    * The extension whose own popup this is, or null when a page opened it with
    * `window.open`.
@@ -102,7 +107,8 @@ export interface BrowserExtensionSidePanel {
   extensionName: string
   /** The app browser tab this panel belongs to. */
   appTabId: string
-  /** The project and box the panel's jar belongs to, so the rail scopes it. */
+  /** The project whose tab hosts the panel, so the rail scopes it. The panel's
+   *  jar is whatever that tab runs in, the project's own or a shared box. */
   projectId: string
   /** The extension-relative path it asked to show. */
   path: string
@@ -151,6 +157,8 @@ export interface BrowserPageState {
    */
   projectId: string
   threadId: string
+  /** Selected cookie box, or null for this context's own jar. */
+  boxId: string | null
   url: string
   title: string
   /** Favicon data URL reported by the page, or null until the page declares one. */
@@ -372,10 +380,18 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'toggleDevTools',
   'closeTab',
   'newTab',
+  'reopenTab',
   'toggleNotes',
   'find',
   'findNext',
-  'findPrevious'
+  'findPrevious',
+  'nav-projects',
+  'nav-threads',
+  'nav-projects-with-scope',
+  'nav-scope',
+  'nav-chats',
+  'nav-browser',
+  'nav-assistant'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -416,13 +432,14 @@ export interface BrowserSwitcherKey {
 
 /**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip or holds the find bar: focusing the address bar, closing or opening a
- * tab, showing the tab's notes, and find.
+ * strip or holds the find bar: focusing the address bar, closing, opening or
+ * reopening a tab, showing the tab's notes, and find.
  */
 export type BrowserPanelShortcutAction =
   | 'focus-address'
   | 'close-tab'
   | 'new-tab'
+  | 'reopen-tab'
   | 'toggle-notes'
   | 'find'
   | 'find-next'
@@ -442,7 +459,7 @@ export interface BrowserFindRequest {
   text: string
   /** The direction the session moves in. */
   forward: boolean
-  /** Continue the existing session instead of starting a new one. */
+  /** Start a new Chromium find session; false steps within the current one. */
   findNext: boolean
   /** Match the text case-sensitively. */
   matchCase: boolean
@@ -475,10 +492,20 @@ export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activa
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
+  /** Ephemeral native page, adopted into the saved tab list only on expansion. */
+  peek?: boolean
+  /** Browser tab whose page opened this peek or sibling. */
+  sourceTabId?: string
   projectId: string
   threadId: string
   requestedTabId?: string
   reveal: boolean
+  /**
+   * The rectangle on screen a peek's opening flight starts from, in the window's
+   * own pixels: the link the user clicked, or a box around the click when the
+   * page named no link. Absent for a tab, which has no source to grow out of.
+   */
+  origin?: BrowserViewBounds | null
   /**
    * The box the created or revealed tab runs in, or null/absent for the
    * context's own jar. Main resolves it from the owning tab, so the renderer's
@@ -495,6 +522,8 @@ export interface BrowserPermissionPromptContext {
   queueSize: number
   /** Owning project (and thread) label; null shows only the website. */
   projectLabel: string | null
+  /** macOS denied access after the user allowed the site-level request. */
+  systemAccessDenied: boolean
 }
 
 /** A permission requested by a page inside the project-scoped browser session. */
@@ -604,6 +633,8 @@ export interface BrowserExtension {
   source: BrowserExtensionSource
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
+  /** A newer Web Store version found by the background check, or null. */
+  updateAvailableVersion: string | null
   /** A data URL of the extension's own manifest icon, or null when it declares
    *  none. The extension supplies the bytes, so it is drawn as an image only. */
   iconDataUrl: string | null
@@ -611,7 +642,9 @@ export interface BrowserExtension {
   enabled: boolean
   /**
    * The jars it runs in: box ids, with the empty string standing for the
-   * context's own jar (no box). A jar it is not listed in never loads it, which is
+   * context's own jar (no box). A box id is one identity of the profile rather
+   * than of a context, so every context that picks that box loads the extension
+   * in the same shared jar. A jar it is not listed in never loads it, which is
    * the whole point of containing an extension per box: an extension costs a
    * renderer in each jar that loads it. An empty list means installed but loaded
    * nowhere yet, which is how every install starts.
@@ -619,6 +652,12 @@ export interface BrowserExtension {
   boxes: string[]
   /** The popup document the extension declares, or null when it has none. */
   popupPath: string | null
+  /** The options document the extension declares, or null when it has none. */
+  optionsPath: string | null
+  /** Hosts where this extension never runs. Empty means no per-site block. */
+  blockedHosts: string[]
+  /** When non-empty, the only hosts where this extension runs. */
+  allowedHosts: string[]
   /**
    * Whether the user pinned it into the browser view's header.
    *

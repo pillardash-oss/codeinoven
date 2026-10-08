@@ -23,6 +23,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   BROWSER_LIBRARY_SAVE_COALESCE_MS,
+  MAX_BROWSER_BOOKMARK_GROUPS,
   MAX_BROWSER_BOOKMARKS,
   browserBookmarkMatches,
   browserLibraryHost,
@@ -30,17 +31,23 @@ import {
   normalizeBrowserLibraryUrl,
   parseBrowserBookmarksSnapshot,
   type BrowserBookmark,
+  type BrowserBookmarkGroup,
   type BrowserBookmarksSnapshot
 } from '$shared/browser/browser-library'
 import {
+  DEFAULT_BOX_ID,
+  MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
-  isStorableBrowserFavicon
+  isStorableBrowserFavicon,
+  type BrowserAppearance
 } from '$shared/browser/global-browser-tabs'
 import { faviconState } from './favicons.svelte'
 import { reportError } from './app-errors.svelte'
 
 /** An empty list, shared so a panel's derived value does not churn on every read. */
 const EMPTY_BOOKMARKS: BrowserBookmark[] = []
+/** The empty group list, shared for the same reason as {@link EMPTY_BOOKMARKS}. */
+const EMPTY_GROUPS: BrowserBookmarkGroup[] = []
 
 /**
  * What the bookmark editor sends back.
@@ -61,6 +68,9 @@ export interface BrowserBookmarkEdit {
 export class BrowserBookmarkState {
   /** Every saved page, in the order the user put them in. */
   bookmarks: BrowserBookmark[] = $state(EMPTY_BOOKMARKS)
+
+  /** Every saved-page group, in the order the user put them in. */
+  groups: BrowserBookmarkGroup[] = $state(EMPTY_GROUPS)
 
   /** True once the stored list has been read; nothing is written before then. */
   hydrated = $state(false)
@@ -88,7 +98,7 @@ export class BrowserBookmarkState {
     // record never got fills itself in. It rides a report the app is already
     // sending, so it is not a lookup of its own, and it is the only way the list
     // is ever filled in later.
-    subscribe('browser:state', (state) => this.notePageIcon(state.url, state.favicon))
+    subscribe('browser:state', (state) => this.notePageIcon(state.url, state.favicon, state.boxId))
     void this.hydrate()
   }
 
@@ -98,14 +108,19 @@ export class BrowserBookmarkState {
   }
 
   /** The saved page for an address, or null. */
-  find(url: string): BrowserBookmark | null {
+  find(url: string, boxId: string | null = null): BrowserBookmark | null {
     const normalized = normalizeBrowserLibraryUrl(url)
     if (normalized === null) return null
-    return this.bookmarks.find((bookmark) => bookmark.url === normalized) ?? null
+    const box = boxId === DEFAULT_BOX_ID ? null : boxId
+    return (
+      this.bookmarks.find(
+        (bookmark) => bookmark.url === normalized && (bookmark.boxId ?? null) === box
+      ) ?? null
+    )
   }
 
-  isBookmarked(url: string): boolean {
-    return this.find(url) !== null
+  isBookmarked(url: string, boxId: string | null = null): boolean {
+    return this.find(url, boxId) !== null
   }
 
   /** The loaded data URL for a saved page's picked image icon, when it has one. */
@@ -137,27 +152,38 @@ export class BrowserBookmarkState {
    * whether the page is bookmarked afterwards, so a surface that toggles can say
    * what happened without re-reading the list.
    */
-  toggle(url: string, title: string, favicon: string | null = null): boolean {
-    const existing = this.find(url)
+  toggle(
+    url: string,
+    title: string,
+    favicon: string | null = null,
+    boxId: string | null = null
+  ): boolean {
+    const existing = this.find(url, boxId)
     if (existing) {
       this.remove(existing.id)
       return false
     }
-    return this.add(url, title, favicon) !== null
+    return this.add(url, title, favicon, boxId) !== null
   }
 
   /** Save a page. A page already saved is left as it is, so clicking the star
    *  twice never makes two rows for one address. */
-  add(url: string, title: string, favicon: string | null = null): BrowserBookmark | null {
+  add(
+    url: string,
+    title: string,
+    favicon: string | null = null,
+    boxId: string | null = null
+  ): BrowserBookmark | null {
     const normalized = normalizeBrowserLibraryUrl(url)
     if (normalized === null) return null
-    const existing = this.find(normalized)
+    const existing = this.find(normalized, boxId)
     if (existing) return existing
     if (this.bookmarks.length >= MAX_BROWSER_BOOKMARKS) return null
     const trimmed = title.trim()
     const bookmark: BrowserBookmark = {
       id: `bookmark:${crypto.randomUUID()}`,
       url: normalized,
+      boxId: boxId === DEFAULT_BOX_ID ? null : boxId,
       // A page that never reported a title is still worth saving: its host is the
       // label every surface shows in that case.
       title: trimmed === '' ? browserLibraryHost(normalized) : trimmed,
@@ -165,7 +191,8 @@ export class BrowserBookmarkState {
       favicon: isStorableBrowserFavicon(favicon) ? favicon : null,
       iconType: null,
       customSvg: null,
-      imagePath: null
+      imagePath: null,
+      groupId: null
     }
     this.mutatedSinceBoot = true
     this.bookmarks = [bookmark, ...this.bookmarks]
@@ -189,7 +216,14 @@ export class BrowserBookmarkState {
     if (!existing) return null
     const url = normalizeBookmarkAddress(edit.url)
     if (url === null) return 'Enter a web address, like https://example.com.'
-    if (this.bookmarks.some((candidate) => candidate.id !== id && candidate.url === url)) {
+    if (
+      this.bookmarks.some(
+        (candidate) =>
+          candidate.id !== id &&
+          candidate.url === url &&
+          (candidate.boxId ?? null) === (existing.boxId ?? null)
+      )
+    ) {
       return 'Another saved page already has that address.'
     }
     const trimmed = edit.title.trim()
@@ -226,7 +260,8 @@ export class BrowserBookmarkState {
    *
    * The one reordering primitive. The panel's drag and its move commands both
    * resolve the neighbour they mean and land here, so the gesture and the menu can
-   * never order the list differently.
+   * never order the list differently. A page dropped beside another adopts that
+   * page's group, which is what makes a drag across a fold a move into it.
    */
   moveBefore(id: string, beforeId: string | null): void {
     if (beforeId === id) return
@@ -234,12 +269,180 @@ export class BrowserBookmarkState {
     if (!moving) return
     const rest = this.bookmarks.filter((bookmark) => bookmark.id !== id)
     const target = beforeId === null ? -1 : rest.findIndex((bookmark) => bookmark.id === beforeId)
+    const insertIndex = target < 0 ? rest.length : target
+    const groupId = beforeId === null ? moving.groupId : (rest[target]?.groupId ?? moving.groupId)
+    const placed = groupId === moving.groupId ? moving : { ...moving, groupId }
     const next = [...rest]
-    next.splice(target < 0 ? rest.length : target, 0, moving)
-    if (next.every((bookmark, index) => bookmark.id === this.bookmarks[index]?.id)) return
+    next.splice(insertIndex, 0, placed)
+    if (
+      next.every(
+        (bookmark, index) =>
+          bookmark.id === this.bookmarks[index]?.id &&
+          bookmark.groupId === this.bookmarks[index]?.groupId
+      )
+    ) {
+      return
+    }
     this.mutatedSinceBoot = true
     this.bookmarks = next
     this.persist()
+  }
+
+  /**
+   * File a saved page under a group, or take it out of one when `groupId` is null.
+   *
+   * This is the gesture a drop on a fold header makes: the page joins the group at
+   * the end of its run, so a drag that lands on a header reads the way it looks.
+   */
+  moveToGroup(id: string, groupId: string | null): void {
+    this.moveToGroupBefore(id, groupId, null)
+  }
+
+  /**
+   * File a saved page under a group and place it in one step.
+   *
+   * A drop that lands on a row names both the group and the position, so this is
+   * one write rather than a move followed by a reorder. A null `beforeId` leaves
+   * the page at the end of its group's run.
+   */
+  moveToGroupBefore(id: string, groupId: string | null, beforeId: string | null): void {
+    if (groupId !== null && !this.groups.some((group) => group.id === groupId)) return
+    const bookmark = this.bookmarks.find((candidate) => candidate.id === id)
+    if (!bookmark) return
+    const rest = this.bookmarks.filter((candidate) => candidate.id !== id)
+    let insertIndex: number
+    if (beforeId !== null) {
+      const target = rest.findIndex((candidate) => candidate.id === beforeId)
+      insertIndex = target < 0 ? rest.length : target
+    } else {
+      const lastIndex = groupId === null ? -1 : rest.findLastIndex((c) => c.groupId === groupId)
+      insertIndex = lastIndex < 0 ? rest.length : lastIndex + 1
+    }
+    const next = [...rest]
+    next.splice(insertIndex, 0, { ...bookmark, groupId })
+    if (
+      next.every(
+        (candidate, index) =>
+          candidate.id === this.bookmarks[index]?.id &&
+          candidate.groupId === this.bookmarks[index]?.groupId
+      )
+    ) {
+      return
+    }
+    this.mutatedSinceBoot = true
+    this.bookmarks = next
+    this.persist()
+  }
+
+  // ─── Groups ─────────────────────────────────────────────────────────────
+
+  /** One group by id, or null once it has been removed. */
+  groupById(id: string): BrowserBookmarkGroup | null {
+    return this.groups.find((group) => group.id === id) ?? null
+  }
+
+  /** The saved pages filed under a group, in list order. */
+  inGroup(id: string): BrowserBookmark[] {
+    return this.bookmarks.filter((bookmark) => bookmark.groupId === id)
+  }
+
+  /**
+   * Make a group and return its id.
+   *
+   * At the cap the call is a no-op that returns an unusable id, the way the tab
+   * group cap is enforced, so a caller cannot keep making folds without bound.
+   */
+  createGroup(name: string, appearance: Partial<BrowserAppearance> = {}): string {
+    const id = `bookmark-group:${crypto.randomUUID()}`
+    if (this.groups.length >= MAX_BROWSER_BOOKMARK_GROUPS) return id
+    this.mutatedSinceBoot = true
+    this.groups = [
+      ...this.groups,
+      {
+        id,
+        name: name.trim().slice(0, MAX_BROWSER_GROUP_NAME_LENGTH) || 'New group',
+        color: appearance.color ?? null,
+        iconType: appearance.iconType ?? null,
+        customSvg: appearance.customSvg ?? null,
+        imagePath: appearance.imagePath ?? null
+      }
+    ]
+    this.persist()
+    if (appearance.imagePath) void this.ensureGroupIconLoaded(id)
+    return id
+  }
+
+  updateGroup(id: string, patch: Partial<Omit<BrowserBookmarkGroup, 'id'>>): void {
+    const group = this.groups.find((candidate) => candidate.id === id)
+    if (!group) return
+    this.mutatedSinceBoot = true
+    this.groups = this.groups.map((candidate) => {
+      if (candidate.id !== id) return candidate
+      let name = candidate.name
+      if (patch.name !== undefined) {
+        const trimmed = patch.name.trim().slice(0, MAX_BROWSER_GROUP_NAME_LENGTH)
+        if (trimmed) name = trimmed
+      }
+      return {
+        ...candidate,
+        name,
+        color: patch.color !== undefined ? patch.color : candidate.color,
+        iconType: patch.iconType !== undefined ? patch.iconType : candidate.iconType,
+        customSvg: patch.customSvg !== undefined ? patch.customSvg : candidate.customSvg,
+        imagePath: patch.imagePath !== undefined ? patch.imagePath : candidate.imagePath
+      }
+    })
+    // A new or cleared image must not keep showing the previous one's bytes.
+    if (patch.imagePath !== undefined) {
+      this.iconUrls.delete(id)
+      void this.ensureGroupIconLoaded(id)
+    }
+    this.persist()
+  }
+
+  /** Remove a group. Its pages stay saved and become ungrouped, because losing a
+   *  fold must never lose a bookmark. */
+  deleteGroup(id: string): void {
+    if (!this.groups.some((group) => group.id === id)) return
+    this.mutatedSinceBoot = true
+    this.groups = this.groups.filter((group) => group.id !== id)
+    this.iconUrls.delete(id)
+    this.bookmarks = this.bookmarks.map((bookmark) =>
+      bookmark.groupId === id ? { ...bookmark, groupId: null } : bookmark
+    )
+    this.persist()
+  }
+
+  /** Move a group to sit just before `beforeId`, or to the end when it is null. */
+  moveGroupBefore(id: string, beforeId: string | null): void {
+    if (beforeId === id) return
+    const moving = this.groups.find((group) => group.id === id)
+    if (!moving) return
+    const rest = this.groups.filter((group) => group.id !== id)
+    const target = beforeId === null ? -1 : rest.findIndex((group) => group.id === beforeId)
+    const next = [...rest]
+    next.splice(target < 0 ? rest.length : target, 0, moving)
+    if (next.every((group, index) => group.id === this.groups[index]?.id)) return
+    this.mutatedSinceBoot = true
+    this.groups = next
+    this.persist()
+  }
+
+  /** Read a group's picked image icon into a data URL, once. Best-effort: a
+   *  missing file leaves the group on its colour or library icon. */
+  async ensureGroupIconLoaded(id: string): Promise<void> {
+    const group = this.groups.find((candidate) => candidate.id === id)
+    if (!group?.imagePath) {
+      this.iconUrls.delete(id)
+      return
+    }
+    if (this.iconUrls.has(id)) return
+    try {
+      const url = await invoke('file:readAsDataUrl', group.imagePath)
+      if (url) this.iconUrls.set(id, url)
+    } catch {
+      // Icon loading is best-effort; the resolver's fallback remains.
+    }
   }
 
   remove(id: string): void {
@@ -261,6 +464,7 @@ export class BrowserBookmarkState {
   async clear(): Promise<void> {
     this.cancelPendingSave()
     this.bookmarks = EMPTY_BOOKMARKS
+    this.groups = EMPTY_GROUPS
     try {
       await invoke('browser:clearBookmarks')
     } catch (error) {
@@ -305,9 +509,9 @@ export class BrowserBookmarkState {
    * from the next visit to that page. Only a record with no icon at all is filled,
    * and only its own address, so an icon the user chose is never overwritten.
    */
-  private notePageIcon(url: string, favicon: string | null): void {
+  private notePageIcon(url: string, favicon: string | null, boxId: string | null): void {
     if (!isStorableBrowserFavicon(favicon)) return
-    const bookmark = this.find(url)
+    const bookmark = this.find(url, boxId)
     if (!bookmark) return
     if (
       bookmark.favicon !== null ||
@@ -333,9 +537,12 @@ export class BrowserBookmarkState {
     } catch (error) {
       reportError(error, 'The saved bookmarks could not be read.')
     }
-    const bookmarks = parseBrowserBookmarksSnapshot(stored).bookmarks
-    if (bookmarks.length > 0) {
-      this.bookmarks = this.mutatedSinceBoot ? this.merge(bookmarks) : bookmarks
+    const parsed = parseBrowserBookmarksSnapshot(stored)
+    if (parsed.bookmarks.length > 0) {
+      this.bookmarks = this.mutatedSinceBoot ? this.merge(parsed.bookmarks) : parsed.bookmarks
+    }
+    if (parsed.groups.length > 0) {
+      this.groups = this.mutatedSinceBoot ? this.mergeGroups(parsed.groups) : parsed.groups
     }
     this.hydrated = true
     if (this.mutatedSinceBoot) this.persist()
@@ -346,12 +553,30 @@ export class BrowserBookmarkState {
    *  the file held that it did not. */
   private merge(stored: readonly BrowserBookmark[]): BrowserBookmark[] {
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const known = new Set(this.bookmarks.map((bookmark) => bookmark.url))
+    const known = new Set(
+      this.bookmarks.map((bookmark) => JSON.stringify([bookmark.boxId ?? null, bookmark.url]))
+    )
     const merged = [...this.bookmarks]
     for (const bookmark of stored) {
-      if (known.has(bookmark.url)) continue
-      known.add(bookmark.url)
+      const identity = JSON.stringify([bookmark.boxId ?? null, bookmark.url])
+      if (known.has(identity)) continue
+      known.add(identity)
       merged.push(bookmark)
+    }
+    return merged
+  }
+
+  /** The stored groups folded under the ones this session already made, one group
+   *  per id: this session's groups first, then whatever the file held that it did
+   *  not. */
+  private mergeGroups(stored: readonly BrowserBookmarkGroup[]): BrowserBookmarkGroup[] {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const known = new Set(this.groups.map((group) => group.id))
+    const merged = [...this.groups]
+    for (const group of stored) {
+      if (known.has(group.id)) continue
+      known.add(group.id)
+      merged.push(group)
     }
     return merged
   }
@@ -365,7 +590,10 @@ export class BrowserBookmarkState {
   private flush(): void {
     this.cancelPendingSave()
     if (!this.hydrated) return
-    const snapshot: BrowserBookmarksSnapshot = { bookmarks: $state.snapshot(this.bookmarks) }
+    const snapshot: BrowserBookmarksSnapshot = {
+      bookmarks: $state.snapshot(this.bookmarks),
+      groups: $state.snapshot(this.groups)
+    }
     void invoke('browser:saveBookmarks', snapshot).catch((error: unknown) => {
       reportError(error, 'The bookmarks could not be saved.')
     })

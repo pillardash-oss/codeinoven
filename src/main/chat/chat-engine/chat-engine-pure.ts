@@ -5,6 +5,7 @@ import { createHash } from 'crypto'
 import { homedir } from 'node:os'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
+import { broadcastAppToast } from '../../ipc/app-toast'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -964,13 +965,14 @@ export const SECRET_ANSWER_PLACEHOLDER = '[secret set]'
 
 /**
  * Validate a `cio_ask_secret` submission against its pending request. Every
- * secret question must be answered exactly once with a non-empty value, and no
- * submission may name an unknown secret. Returns the values in question order.
+ * secret question must be answered exactly once, either with a non-empty value
+ * or with a non-empty alternative instruction, and no submission may name an
+ * unknown secret. Returns the answers in question order.
  */
 export function validateSecretSubmissions(
   submissions: unknown,
   questions: AgentQuestion[]
-): Array<{ secretId: string; value: string }> {
+): Array<{ secretId: string; value: string } | { secretId: string; alternative: string }> {
   const expected: string[] = []
   for (const question of questions) {
     if (question.secretRequest !== true) continue
@@ -979,7 +981,7 @@ export function validateSecretSubmissions(
   }
   if (expected.length === 0) throw new TypeError('This request is not a secret request')
   if (!Array.isArray(submissions)) throw new TypeError('Secret submissions must be an array')
-  const values = new Map<string, string>()
+  const answers = new Map<string, { value: string } | { alternative: string }>()
   for (const entry of submissions) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       throw new TypeError('Secret submission must be an object')
@@ -987,19 +989,30 @@ export function validateSecretSubmissions(
     const record = entry as Record<string, unknown>
     const secretId = record['secretId']
     const value = record['value']
+    const alternative = record['alternative']
     if (typeof secretId !== 'string' || !expected.includes(secretId)) {
       throw new TypeError(`Secret submission names an unknown secret: ${String(secretId)}`)
     }
-    if (typeof value !== 'string' || value.length === 0) {
-      throw new TypeError('Secret value must not be empty')
+    if (answers.has(secretId)) throw new TypeError(`Duplicate secret submission: ${secretId}`)
+    if (typeof value === 'string' && value.length > 0) {
+      if (typeof alternative === 'string' && alternative.length > 0) {
+        throw new TypeError(
+          'Secret submission must carry exactly one non-empty value or alternative instruction'
+        )
+      }
+      answers.set(secretId, { value })
+    } else if (typeof alternative === 'string' && alternative.length > 0) {
+      answers.set(secretId, { alternative })
+    } else {
+      throw new TypeError(
+        'Secret submission must carry exactly one non-empty value or alternative instruction'
+      )
     }
-    if (values.has(secretId)) throw new TypeError(`Duplicate secret submission: ${secretId}`)
-    values.set(secretId, value)
   }
   return expected.map((secretId) => {
-    const value = values.get(secretId)
-    if (value === undefined) throw new TypeError(`Secret value missing for: ${secretId}`)
-    return { secretId, value }
+    const answer = answers.get(secretId)
+    if (answer === undefined) throw new TypeError(`Secret answer missing for: ${secretId}`)
+    return { secretId, ...answer }
   })
 }
 
@@ -1029,9 +1042,7 @@ export function deliverBroadcast(event: AgentEvent): void {
 }
 
 export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'app:toast', { message, type })
-  }
+  broadcastAppToast({ message, type })
 }
 
 export function chatSkillPaths(driverId: string): string[] {

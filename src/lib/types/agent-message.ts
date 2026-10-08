@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from './common'
+import type { OvenAppearance } from '../ovens'
 import type { PromptProjectReference, PromptReference } from './agent'
 import type {
   AgentMessageOrigin,
@@ -20,8 +21,30 @@ import type {
 export interface AgentQuestionOption {
   label: string
   description?: string
+  /**
+   * Optional step-by-step text the user must follow to produce this answer
+   * (a command to paste, a sequence to run). It is never sent back to the
+   * agent: the UI surfaces it in a copyable modal so the user can act on it.
+   */
+  instruction?: string
   /** Explicit provider recommendation, or inferred from a “(Recommended)” label. */
   recommended?: boolean
+}
+
+/**
+ * A capability an agent proposed for the user to install, carried on the
+ * question that renders as the suggestion card. The app installs the proposed
+ * bundle through Utilities only when the user accepts.
+ */
+export interface AgentUtilitySuggestionEntry {
+  /** Stable id the settlement is correlated against. */
+  id: string
+  /** Bundle/display name shown as the card title. */
+  name: string
+  /** Utility kinds the proposal installs, for the one-line summary. */
+  kinds: string[]
+  /** Plain-language reason from the agent, shown as the card body. */
+  reason: string
 }
 
 /** A structured question the agent is asking the user. */
@@ -52,6 +75,12 @@ export interface AgentQuestion {
   secretEnvironmentVariable?: string
   /** Utility this secret is bound to as a credential, when the agent named one. */
   secretUtilityId?: string
+  /**
+   * The question proposes installing a discovered capability. It renders as the
+   * suggestion card and is answered by the canonical question submission; the
+   * app installs the proposal only when the user picks the install option.
+   */
+  utilitySuggestion?: AgentUtilitySuggestionEntry
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */
@@ -82,15 +111,24 @@ export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
 export type AgentQuestionResolution = 'answered' | 'dismissed' | 'timed_out'
 
 /**
- * One secret value the user pasted into a `cio_ask_secret` card. The value is
+ * One entry of a `cio_ask_secret` submission. Each requested secret is answered
+ * on its own: with a pasted value, or with an instruction that lets the app
+ * reuse a value the device already holds for it. The value, when present, is
  * transient: it is consumed by the main process (vault + harness environment)
  * and never persisted in the thread transcript or returned to the renderer.
  */
-export interface AgentSecretSubmission {
-  /** Id of the secret question the value answers. */
-  secretId: string
-  value: string
-}
+export type AgentSecretSubmission =
+  | {
+      /** Id of the secret question the value answers. */
+      secretId: string
+      value: string
+    }
+  | {
+      /** Id of the secret question the instruction answers. */
+      secretId: string
+      /** What the agent should use or do instead of a pasted value. */
+      alternative: string
+    }
 
 /** A renderable piece of an agent message. */
 export type AgentPart =
@@ -196,6 +234,8 @@ export interface AgentArtifact {
 
 /** A message in the agent conversation. */
 export interface AgentMessage {
+  /** App-published artifact row independent of the assistant turn trace. */
+  inlineArtifact?: boolean
   id: string
   role: 'user' | 'assistant'
   /** Who produced the display-facing record. */
@@ -217,6 +257,11 @@ export interface AgentMessage {
   harnessId?: string
   /** Credential container that produced this message. */
   accountId?: string
+  /** Local or remote Oven that executed this turn. */
+  ovenId?: string
+  /** Oven name captured with the turn so renaming does not alter history. */
+  ovenLabel?: string
+  ovenAppearance?: OvenAppearance
   /** Historical label snapshot. Renaming an account does not rewrite old turns. */
   accountLabel?: string
   /** Reasoning effort in effect when this message's turn ran, when known. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick, untrack } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -12,6 +12,8 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
+  import BrowserBlankTab from './BrowserBlankTab.svelte'
+  import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import BrowserFindBar from './BrowserFindBar.svelte'
@@ -52,9 +54,16 @@
   interface Props {
     tab: BrowserContextTab
     fullscreen?: boolean
+    /**
+     * Reported with the replacement tab id when this tab is reopened in another
+     * box. A surface that tracks the tab by its own id (the full screen overlay)
+     * follows it here; the sidebar needs no callback because the store already
+     * moved its active tab.
+     */
+    onTabReplaced?: (tabId: string) => void
   }
 
-  let { tab, fullscreen = false }: Props = $props()
+  let { tab, fullscreen = false, onTabReplaced }: Props = $props()
 
   /** The surface this instance renders on. A fullscreen instance outranks every
    *  sidebar instance, so the store resolves which one owns the single native
@@ -75,6 +84,8 @@
   const tabInitialUrl = tab.url
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
+  // svelte-ignore state_referenced_locally
+  const tabBoxId = tab.boxId
 
   /** This page's entry in the store's list of native rectangles on screen. Keyed
    *  by surface as well as tab: the full screen dialog and a sidebar panel can
@@ -86,6 +97,7 @@
       tabId,
       projectId: tabProjectId,
       threadId: tabThreadId,
+      boxId: tabBoxId,
       url: tabInitialUrl,
       title: tabInitialTitle,
       favicon: null,
@@ -104,12 +116,15 @@
   }
 
   let contentElement = $state<HTMLDivElement>()
+  /** The chrome's current address, updated immediately on submit and reconciled
+   *  when the page reports its committed URL. */
   let address = $state(initialPageState().url)
   /** The address bar, which is the field the user types an address in. It is
    *  taken imperatively because taking the keyboard for a tab the user just
    *  opened is a gesture, not a state this panel holds. */
   let addressBar = $state<BrowserAddressBar | undefined>(undefined)
   let pageState = $state<BrowserPageState>(initialPageState())
+  let stateRevision = 0
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
   let contentRect = $state<BrowserViewBounds | null>(null)
@@ -118,8 +133,17 @@
    *  surface, an inactive workspace, the thread switcher), which surface owns
    *  the single native view, and whether a floating DOM overlay covers this
    *  frame   so this panel never has to combine them itself. */
+  $effect(() => {
+    const bounds = contentRect
+    if (bounds) browserVisibility.publishPageFrame(nativeFrameKey, tabId, bounds)
+    else browserVisibility.clearPageFrame(nativeFrameKey)
+    return () => browserVisibility.clearPageFrame(nativeFrameKey)
+  })
+
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
+  /** A blank tab has no address yet: show the empty state instead of a native page. */
+  let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
    * Whether element inspection is armed on this tab.
    *
@@ -282,7 +306,7 @@
    * claim the same screen space.
    */
   $effect(() => {
-    const frame = panelVisible && !pageState.loadError ? contentRect : null
+    const frame = panelVisible && !pageState.loadError && !isBlank ? contentRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
       return
@@ -317,11 +341,24 @@
     // A tab showing the error card has no page to place. The attachment is not
     // applied on that edge, but the resize observer and the sidebar's entry
     // animation keep calling here, so this guard is what stops them putting the
-    // empty native view back over the card.
-    if (pageState.loadError) return
+    // empty native view back over the card. A blank tab is the same: its empty
+    // state is DOM, so no native page may cover it.
+    if (pageState.loadError || isBlank) return
     try {
-      const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
-      pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
+      const currentUrl = (tab as BrowserContextTab | null)?.url ?? tabInitialUrl
+      const revision = stateRevision
+      const snapshot = await invoke(
+        'browser:show',
+        tabId,
+        tabProjectId,
+        tabThreadId,
+        currentUrl,
+        bounds,
+        // The tab's box, so a page the user opened in a shared box runs against
+        // that jar rather than the scope's own.
+        tabBoxId
+      )
+      if (stateRevision === revision) applyPageState(snapshot)
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, an overlay may appear, or the sidebar may
       // move on. Only one native view can exist at a time, so a stale attach
@@ -341,11 +378,12 @@
   function navigate(url: string): void {
     address = url
     contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url).catch(() => {})
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {
     if (next.tabId !== tabId) return
+    stateRevision++
     pageState = next
     if (next.url) address = next.url
     // Also routes the audio and capture state into the tab strip, so the tab's
@@ -481,7 +519,7 @@
 </script>
 
 <div
-  {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
+  {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
   <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
@@ -526,14 +564,25 @@
     {/if}
     <BrowserAddressBar
       bind:this={addressBar}
-      url={pageState.url}
+      url={address}
       projectId={tabProjectId}
       threadId={tabThreadId}
+      boxId={tabBoxId}
       {secure}
       loading={pageState.loading}
       {siteMenuOpen}
       onOpenSiteMenu={openSiteMenu}
       onNavigate={navigate}
+    />
+    <BrowserBoxButton
+      projectId={tabProjectId}
+      threadId={tabThreadId}
+      boxId={tabBoxId}
+      labelled={fullscreen}
+      onChange={(boxId) => {
+        const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
+        if (replacementId) onTabReplaced?.(replacementId)
+      }}
     />
     <button
       type="button"
@@ -648,6 +697,13 @@
         canGoBack={pageState.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {:else if isBlank}
+      <BrowserBlankTab
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        onNavigate={navigate}
       />
     {/if}
   </div>

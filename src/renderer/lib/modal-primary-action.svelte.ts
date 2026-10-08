@@ -85,6 +85,18 @@ function isDismissButton(element: HTMLElement): boolean {
   return element.hasAttribute(DISMISS_BUTTON_ATTRIBUTE)
 }
 
+/**
+ * The first text-entry field a panel should put the caret in on open.
+ *
+ * Shared by every modal surface so "focus the first field" resolves against one
+ * definition of "field": the canonical `ui/Modal.svelte` on open, and a docked
+ * panel through its owner hook. Mirrors the focus rule in the app's modal
+ * conventions: the first input the user would type into, else nothing.
+ */
+export function findFirstTextField(panel: HTMLElement): HTMLElement | undefined {
+  return firstFocusable(panel, INPUT_FIELD_SELECTOR)
+}
+
 /** Resolve a panel's primary action button via the shared selector chain. */
 export function findPanelPrimaryAction(panel: HTMLElement): HTMLElement | undefined {
   const footerActions = Array.from(

@@ -1,32 +1,41 @@
 <script lang="ts">
-  import { invoke } from '$lib/ipc.svelte'
-  import { toast } from 'svelte-sonner'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
-  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
-  import { browserStore } from '$lib/stores/browser-access.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
-  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
-  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
-  import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
+  import {
+    Bell,
+    ChevronLeft,
+    ChevronRight,
+    FileText,
+    Globe,
+    Loader2,
+    Search,
+    StickyNotes
+  } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
-  import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
+  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
+  import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
+  import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
+  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
 
   type View = MainView
 
@@ -76,6 +85,17 @@
   let notificationsPanelActive = $derived(
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
+  let stickyNotesPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes'
+  )
+
+  async function toggleStickyNotes(): Promise<void> {
+    if (onBrowser) {
+      const { globalBrowser } = await import('$lib/stores/global-browser.svelte')
+      globalBrowser.hideContextSidebarForAppPanel()
+    }
+    contextSidebarState.toggleStickyNotes()
+  }
 
   /** The assistant dot's colour is the assistant space's own accent colour,
    *  carried on its notifications, so an assistant run never reads as a
@@ -367,7 +387,19 @@
       {/await}
     {/if}
 
-    <!-- Notification bell   available in all views -->
+    <!-- Sticky notes and notifications stay available in every view. -->
+    <button
+      class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {stickyNotesPanelActive
+        ? 'bg-elevated text-foreground'
+        : ''}"
+      aria-label={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
+      aria-pressed={stickyNotesPanelActive}
+      title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
+      onclick={() => void toggleStickyNotes()}
+    >
+      <StickyNotes size={16} />
+    </button>
+
     <button
       class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
         ? 'bg-elevated text-foreground'
@@ -411,6 +443,12 @@
 <style>
   .app-header {
     container-type: inline-size;
+    /* The centre of the header (the open thread's title, or the browser page's
+       title) is capped to this width: a long title truncates inside the middle
+       band of the bar instead of stretching towards the view switcher and the
+       right-hand actions, so it never reaches over the panels below it. `rem`
+       keeps the cap in step with the Appearance font size. */
+    --app-header-center-max-width: min(100%, 32rem);
   }
 
   @container (max-width: 1100px) {

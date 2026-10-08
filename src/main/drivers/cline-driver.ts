@@ -271,6 +271,7 @@ export class ClineDriver extends PersistentCliDriver {
       messageId: `cline:${session.id}:${turnIndex}:1`,
       createdAt: Date.now(),
       parts: [],
+      textBuffers: new Map(),
       questionRequestIds: new Set()
     })
 

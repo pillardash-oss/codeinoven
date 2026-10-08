@@ -25,6 +25,7 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
       'Use ${CIO_ASK_USER_TOOL_NAME} when a decision, preference, or clarification from the user is needed before continuing.',
       'Ask one to ${questionCap} short questions at a time. Put the recommended option first and add (Recommended) to its label.',
       'Keep option labels short. Put context and tradeoffs in each option description, not in the question text.',
+      'When an option asks the user to run or paste something to produce the answer, put that exact text in the instruction field of the option instead of the description, so the user can copy it from the answer card without transcribing it. Never place a command, script, or multi-step procedure in the description.',
       'Custom answers are always available; do not add an Other option.'
     ],
     parameters: Type.Object({
@@ -40,7 +41,13 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
               label: Type.String({ description: 'Short option label (1-5 words).' }),
               description: Type.String({
                 description: 'One short sentence explaining the impact or tradeoff.'
-              })
+              }),
+              instruction: Type.Optional(
+                Type.String({
+                  description:
+                    'Exact text the user must run or paste to produce this answer (a command, a script, or a short ordered procedure). Rendered in a copyable modal; do not duplicate it in the description.'
+                })
+              )
             }),
             {
               description: 'Two or more choices.',

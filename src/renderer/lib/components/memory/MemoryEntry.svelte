@@ -19,6 +19,7 @@
     entry: MemoryEntry
     index: number
     projectId?: string
+    nativeScope?: boolean
     scopeOptions: readonly MemoryScopeOption[]
     /** Projects offered by the "Specific project" picker. */
     projects?: readonly ScopeProject[]
@@ -39,6 +40,7 @@
     entry,
     index,
     projectId,
+    nativeScope = false,
     scopeOptions,
     projects = [],
     threads = [],
@@ -254,6 +256,7 @@
         <div>
           <span class="mb-1 block text-xs font-medium text-muted">Scope</span>
           <MemoryScopeSelect
+            native={nativeScope}
             scopes={entry.scopes}
             options={scopeOptions}
             onScopesChange={(nextScopes) => onUpdate(index, 'scopes', nextScopes)}

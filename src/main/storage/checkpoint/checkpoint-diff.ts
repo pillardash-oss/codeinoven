@@ -159,6 +159,8 @@ function splitLines(content: string): string[] {
 }
 
 interface DecodedDiffWindow {
+  beforeStartLine?: number
+  afterStartLine?: number
   before: string | undefined
   after: string | undefined
   truncated: boolean
@@ -184,8 +186,8 @@ export function decodeDiffWindow(
     const truncated = content.length > maxBytes
     const text = decoder.decode(content.subarray(0, maxBytes))
     return before
-      ? { before: text, after: undefined, truncated }
-      : { before: undefined, after: text, truncated }
+      ? { before: text, after: undefined, beforeStartLine: 1, truncated }
+      : { before: undefined, after: text, afterStartLine: 1, truncated }
   }
 
   const minLength = Math.min(before.length, after.length)
@@ -211,10 +213,18 @@ export function decodeDiffWindow(
   if (snapped + maxBytes >= changeEnd) start = snapped
 
   const end = Math.min(start + maxBytes, Math.max(before.length, after.length))
-  const beforeText = decoder.decode(before.subarray(start, Math.min(end, before.length)))
-  const afterText = decoder.decode(after.subarray(start, Math.min(end, after.length)))
+  const beforeStart = lineStartIndex(before, Math.min(start, before.length))
+  const afterStart = lineStartIndex(after, Math.min(start, after.length))
+  const beforeText = decoder.decode(before.subarray(beforeStart, Math.min(end, before.length)))
+  const afterText = decoder.decode(after.subarray(afterStart, Math.min(end, after.length)))
   const truncated = start > 0 || before.length > end || after.length > end
-  return { before: beforeText, after: afterText, truncated }
+  return {
+    before: beforeText,
+    after: afterText,
+    beforeStartLine: sourceLineAt(before, beforeStart),
+    afterStartLine: sourceLineAt(after, afterStart),
+    truncated
+  }
 }
 
 /** Index just after the last newline at or before `index`, or 0. */
@@ -223,4 +233,17 @@ function lineStartIndex(data: Uint8Array, index: number): number {
   let current = index
   while (current > 0 && data[current - 1] !== 0x0a) current -= 1
   return current
+}
+
+/** Count newline bytes without decoding or allocating the skipped source. */
+function sourceLineAt(data: Uint8Array, offset: number): number {
+  let line = 1
+  for (
+    let index = data.indexOf(0x0a);
+    index >= 0 && index < offset;
+    index = data.indexOf(0x0a, index + 1)
+  ) {
+    line += 1
+  }
+  return line
 }

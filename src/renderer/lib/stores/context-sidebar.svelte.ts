@@ -10,6 +10,7 @@ import {
   ATTENTION_TAB_ID,
   attentionTab,
   NOTIFICATIONS_TAB,
+  STICKY_NOTES_TAB,
   TEMPORARY_CHAT_INACTIVITY_MS,
   type ContextSidebarTab,
   type MemorySection,
@@ -42,6 +43,7 @@ export type {
   MemoryContextTab,
   MemorySection,
   NotificationContextTab,
+  StickyNotesContextTab,
   SourcesContextTab,
   SubagentContextTab,
   TemporaryChatContextTab,
@@ -50,7 +52,7 @@ export type {
   TerminalPlacement,
   ThreadNoteContextTab
 } from './context-sidebar-types'
-export { EXPLAIN_SELECTION_PROMPT } from './context-sidebar-types'
+export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-types'
 
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
@@ -66,6 +68,8 @@ class ContextSidebarState {
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
+  /** Global sticky notes share the right sidebar region with notifications. */
+  private stickyNotesVisible = $state(false)
   /** The auto-resolved decision panel, held with the conversation it belongs to.
    *  Mutually exclusive with notifications: only one owns the sidebar at a time. */
   private attentionScope = $state<{ projectId: string; threadId: string } | null>(null)
@@ -80,6 +84,14 @@ class ContextSidebarState {
    */
   private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
     null
+  /**
+   * How the sidebar names a conversation scope's own box. The workspace owns the
+   * only list of projects, routines and threads, so it registers this one
+   * resolver; until then a scope's box is named generically.
+   */
+  private threadBrowserScopeLabelResolver = $state<
+    ((projectId: string, threadId: string) => string) | null
+  >(null)
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
@@ -101,6 +113,7 @@ class ContextSidebarState {
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.stickyNotesVisible = false
       this.attentionScope = null
     }
   })
@@ -111,6 +124,7 @@ class ContextSidebarState {
     threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.stickyNotesVisible = false
       this.attentionScope = null
     }
   })
@@ -137,12 +151,25 @@ class ContextSidebarState {
     )
   }
 
+  /** Register the workspace's scope-to-name resolver (see
+   *  `threadBrowserScopeLabelResolver`). */
+  setThreadBrowserScopeLabelResolver(
+    resolver: (projectId: string, threadId: string) => string
+  ): void {
+    this.threadBrowserScopeLabelResolver = resolver
+  }
+
+  private threadBrowserScopeLabel(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeLabelResolver?.(projectId, threadId) ?? 'This conversation'
+  }
+
   get tabs(): ContextSidebarTab[] {
     return [
       ...(this.tabContexts.activeProjectContext?.tabs ?? EMPTY_TABS),
       ...(this.tabContexts.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
       ...this.browser.activeTabs,
       ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : []),
+      ...(this.stickyNotesVisible ? [STICKY_NOTES_TAB] : []),
       ...(this.attentionScope
         ? [attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)]
         : [])
@@ -153,6 +180,12 @@ class ContextSidebarState {
    *  through a component prop. The sidebar store remains the sole owner. */
   temporaryChatTab(tabId: string): TemporaryChatContextTab | null {
     return this.tabContexts.temporaryChatTab(tabId)
+  }
+
+  /** Live temporary (side) chats hanging off one thread, so a thread row can
+   *  mark that a side chat exists without owning the tab contexts. */
+  temporaryChatsFor(projectId: string, threadId: string): TemporaryChatContextTab[] {
+    return this.tabContexts.temporaryChatsFor(projectId, threadId)
   }
 
   get activeTabId(): string | null {
@@ -172,6 +205,18 @@ class ContextSidebarState {
   }
 
   /**
+   * The browser tab the sidebar's browser region is on for the conversation on
+   * screen, or null when it holds none.
+   *
+   * The full screen browser shows this tab: it is the single source of truth
+   * the overlay mirrors, so a tab a link opened, a reopened tab or a close that
+   * fell back all land the overlay on the tab the user is actually reading.
+   */
+  get activeBrowserTabId(): string | null {
+    return this.browser.activeTabIdOrLast()
+  }
+
+  /**
    * Tabs shown in the right sidebar. When the terminal is docked at the
    * bottom, terminal tabs live in the dock and are excluded here; otherwise
    * every tab (including terminals) renders in the sidebar.
@@ -187,12 +232,15 @@ class ContextSidebarState {
     const withNotifications = this.notificationsVisible
       ? [...positionedTabs, NOTIFICATIONS_TAB]
       : positionedTabs
+    const withStickyNotes = this.stickyNotesVisible
+      ? [...withNotifications, STICKY_NOTES_TAB]
+      : withNotifications
     return this.attentionScope
       ? [
-          ...withNotifications,
+          ...withStickyNotes,
           attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)
         ]
-      : withNotifications
+      : withStickyNotes
   }
 
   /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
@@ -210,6 +258,7 @@ class ContextSidebarState {
    */
   get sidebarVisible(): boolean {
     if (this.notificationsVisible) return true
+    if (this.stickyNotesVisible) return true
     if (this.attentionScope) return true
     if (this.browser.visible && this.browser.activeTabs.length > 0) return true
     return this.activeThreadId !== null && (this.tabContexts.activeProjectContext?.visible ?? false)
@@ -265,6 +314,7 @@ class ContextSidebarState {
         : (terminalTabs.at(-1)?.id ?? null)
 
     this.notificationsVisible = false
+    this.stickyNotesVisible = false
     if (placement === 'bottom') {
       context.terminalDockOpen = true
       context.terminalActiveTabId = activeTerminalId
@@ -285,6 +335,7 @@ class ContextSidebarState {
   /** Active tab id for the right sidebar (ignores terminal tabs). */
   get sidebarActiveTabId(): string | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB.id
+    if (this.stickyNotesVisible) return STICKY_NOTES_TAB.id
     if (this.attentionScope) return ATTENTION_TAB_ID
     if (this.browser.visible) {
       return this.browser.activeTabIdOrLast()
@@ -316,6 +367,7 @@ class ContextSidebarState {
   /** The tab the sidebar content should render for. */
   get sidebarActiveTab(): ContextSidebarTab | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB
+    if (this.stickyNotesVisible) return STICKY_NOTES_TAB
     if (this.attentionScope) {
       return attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)
     }
@@ -342,6 +394,7 @@ class ContextSidebarState {
     rowThreadId?: string
   ): void {
     const keepNotificationsVisible = this.notificationsVisible
+    const keepStickyNotesVisible = this.stickyNotesVisible
     // The decision panel is keyed to one conversation, so it survives a switch
     // only while that same conversation stays open.
     const keepAttentionVisible =
@@ -364,9 +417,11 @@ class ContextSidebarState {
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
+    this.stickyNotesVisible = keepStickyNotesVisible
     if (!keepAttentionVisible) this.attentionScope = null
     this.browser.visible =
       !keepNotificationsVisible &&
+      !keepStickyNotesVisible &&
       !keepAttentionVisible &&
       !projectChanged &&
       this.browser.visible &&
@@ -389,7 +444,8 @@ class ContextSidebarState {
    * toggle shortcut (Cmd/Ctrl+Shift+S) can bring back exactly what the user was
    * looking at instead of guessing from whatever panel is still remembered.
    */
-  private lastRegion: 'context' | 'browser' | 'notifications' | 'attention' = 'context'
+  private lastRegion: 'context' | 'browser' | 'notifications' | 'sticky-notes' | 'attention' =
+    'context'
 
   /**
    * Toggle the sidebar region without picking a panel for it: hide whatever is
@@ -408,6 +464,10 @@ class ContextSidebarState {
       // Notifications are hidden right now, so this reveals them again (and
       // detaches the browser view the same way the header button does).
       this.toggleNotifications()
+      return true
+    }
+    if (this.lastRegion === 'sticky-notes') {
+      this.showStickyNotes()
       return true
     }
     if (this.lastRegion === 'attention' && this.activeProjectId && this.activeThreadId) {
@@ -435,6 +495,11 @@ class ContextSidebarState {
     if (this.notificationsVisible) {
       this.lastRegion = 'notifications'
       this.notificationsVisible = false
+      return
+    }
+    if (this.stickyNotesVisible) {
+      this.lastRegion = 'sticky-notes'
+      this.stickyNotesVisible = false
       return
     }
     if (this.attentionScope) {
@@ -533,6 +598,10 @@ class ContextSidebarState {
     this.tabContexts.openSources(projectId, threadId)
   }
 
+  openOven(projectId: string, threadId: string): void {
+    this.tabContexts.openOven(projectId, threadId)
+  }
+
   openGit(projectId: string, threadId: string): void {
     this.tabContexts.openGit(projectId, threadId)
   }
@@ -557,9 +626,35 @@ class ContextSidebarState {
     projectId: string,
     threadId: string,
     requestedTabId?: string,
-    reveal = false
+    reveal = false,
+    boxId?: string | null
   ): string {
-    return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal)
+    return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal, boxId)
+  }
+
+  /** The label of a conversation scope's own box, for the thread browser's box
+   *  control: a project's name, a routine's name, or a chat's title. */
+  browserScopeBoxLabel(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeLabel(projectId, threadId)
+  }
+
+  /**
+   * Reopen one thread-browser tab in another box, applying the choice to the
+   * conversation's later tabs too. Null names the scope's own jar. Returns the
+   * replacement tab id, or null when the tab is gone or already in that box.
+   */
+  setBrowserTabBox(tabId: string, boxId: string | null): string | null {
+    return this.browser.reopenInBox(tabId, boxId)
+  }
+
+  /**
+   * Reopen the most recently closed browser tab of the conversation on screen,
+   * restoring its Back/Forward history. Session-scoped: quitting the app clears
+   * what can be reopened. Returns the reopened tab id, or null when this
+   * conversation has nothing to reopen.
+   */
+  reopenClosedBrowserTab(): string | null {
+    return this.browser.reopenLastClosedTab()
   }
 
   /**
@@ -704,10 +799,32 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
+      this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false
       this.attentionScope = null
     }
+  }
+
+  /** Toggle sticky notes in the shared right sidebar. */
+  toggleStickyNotes(): void {
+    if (this.stickyNotesVisible) {
+      this.hide()
+      return
+    }
+    this.showStickyNotes()
+  }
+
+  /** Show sticky notes from a host's own right sidebar tab strip. */
+  showStickyNotes(): void {
+    this.stickyNotesVisible = true
+    this.notificationsVisible = false
+    this.attentionScope = null
+    this.lastRegion = 'sticky-notes'
+    if (this.browser.visible) this.browser.detachView()
+    this.browser.visible = false
+    const context = this.tabContexts.activeProjectContext
+    if (context) context.visible = false
   }
 
   /**
@@ -730,6 +847,7 @@ class ContextSidebarState {
     if (this.browser.visible) this.browser.detachView()
     this.browser.visible = false
     this.notificationsVisible = false
+    this.stickyNotesVisible = false
   }
 
   /**
@@ -822,6 +940,10 @@ class ContextSidebarState {
   }
 
   focus(id: string): void {
+    if (id === STICKY_NOTES_TAB.id) {
+      this.showStickyNotes()
+      return
+    }
     if (this.browser.has(id)) {
       this.browser.focus(id)
       return
@@ -830,6 +952,10 @@ class ContextSidebarState {
   }
 
   close(id: string): void {
+    if (id === STICKY_NOTES_TAB.id) {
+      this.hide()
+      return
+    }
     if (id === NOTIFICATIONS_TAB.id) {
       this.notificationsVisible = false
       return

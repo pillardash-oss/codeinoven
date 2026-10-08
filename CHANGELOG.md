@@ -7,6 +7,15 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- **An assistant run running in another instance is transferable in place.** An
+  assistant task and its runs are different threads, so opening the task showed
+  nothing when one of its runs streamed in a sibling CodeInOven window, because
+  the ownership notice belongs to the run thread. The task and run rows now wear
+  the still **running in another instance** window mark instead of a spinner and
+  carry a transfer action, opening the task shows its foreign run's transfer
+  card above the composer while the task stays usable, and a run thread opened
+  directly shows the card it always did.
+
 - **OpenCode is one harness, driven at whichever version is installed.**
   OpenCode V1 and V2 both install as the `opencode` command (the vendor's V2
   installer replaces a package-managed V1 binary, and a package-managed V2
@@ -149,6 +158,26 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **The main instance is now an explicit, remembered choice.** Picking **Make this the main
+  instance** in a secondary window used to be honored only while that exact process lived:
+  once it restarted, ownership fell back to the longest-running live process, so a leftover
+  or development launch could take the schedule without the user asking. The transfer now
+  records the chosen app's stable identity (its executable path) alongside the pid, so a
+  later launch of that same app reclaims the schedule across restarts. While the chosen app
+  is not running the election still applies, so scheduled work is never stranded, and the
+  designated app takes the schedule back when it returns.
+
+- **A waiting update is now something you can act on.** The rail's update control used to
+  go dead the moment a downloaded update hit the install gate, showing "Update waiting for
+  N active threads to finish" with no way to respond, so a thread the app still believed
+  was working could hold an update off indefinitely. Clicking it now opens a confirmation
+  that names what is actually in the way — the working threads grouped by project, and any
+  live terminals — in the same shape the close-while-working prompt uses, with a
+  **Stop work & install** action that stops all of it and installs. The Settings update
+  panel offers the same **Review…** entry point. The gate's patience is unchanged: nothing
+  is stopped and no timeout applies unless the user asks, and the status behind it is only
+  ever settled by the thread's own harness reporting itself idle, never by a timer.
+
 - A capability installed without explicit harness targeting now applies to every harness,
   present and future. A missing `harnessBindings` used to normalize to an empty list, which
   `resolve` reads as "no harness", so the setup contract had to make the agent enumerate
@@ -176,6 +205,20 @@ All notable changes to CodeInOven are documented here. This project follows
   longer proposed for memory.
 
 ### Fixed
+
+- An update can no longer hang on ghost active threads. The install gate read the
+  chat engine's `working` status, which is recorded when a turn is dispatched and
+  never revised unless the harness reports the turn's end, so a turn the harness
+  could not run stayed "working" for the life of the process and the app waited on
+  it forever. After an update that is exactly what happens: the launch resumes the
+  interrupted threads before the deferred install asks anything, and a session
+  whose harness changed under it never comes back. The gate now asks the harness
+  what it is actually running before it decides, settles the sessions nothing is
+  running through the normal turn-end path (status, thread, checkpoint and
+  notifications all settle together), and needs that answer twice in a row so a
+  compaction or retry gap is never mistaken for a finished thread. A live terminal
+  now also blocks the install again: the engine's narrower working count used to
+  replace the terminal count instead of adding to it.
 
 - Automatic memory proposals no longer treat feature requests as durable
   preferences. The deterministic gate stops recognising request phrasing

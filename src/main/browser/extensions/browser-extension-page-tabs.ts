@@ -21,6 +21,8 @@
  */
 
 import pageTabsSource from './compat/cio-page-tabs.js?raw'
+import storageEventsSource from './compat/cio-storage-events.js?raw'
+import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
 
 /** Where a push leaves the tab, read by the page's wrappers on every call. */
 export const EXTENSION_PAGE_TAB_GLOBAL = '__cioPageTabsSnapshot'
@@ -55,5 +57,51 @@ export interface BrowserExtensionPageTab {
  * already holding keeps answering from the fresh one.
  */
 export function extensionPageTabsScript(tab: BrowserExtensionPageTab): string {
-  return `globalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
+  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
+}
+
+/** Name of the generated preload file, written into the extension store root. */
+export const EXTENSION_PAGE_TABS_PRELOAD_FILE = 'cio-page-tabs-preload.js'
+
+/** The one channel the preload asks on, answered synchronously by main. */
+export const EXTENSION_PAGE_TABS_CHANNEL = 'cio:page-tabs'
+
+/**
+ * The preload an extension page is created with, which is what makes the wrappers
+ * above land in time.
+ *
+ * Pushing the wrappers from main is a race the page usually wins: an extension
+ * popup decides which site it is on while its own bundle evaluates, so a wrapper
+ * installed after `did-finish-load` arrives once the decision has already been
+ * made from focus, and the popup renders "not a website" with the fix sitting in
+ * the document unused. Measured on the real uBlock Origin Lite build.
+ *
+ * A preload is the only injection point that runs before the page's own scripts,
+ * and it runs in an isolated world, so the snapshot is asked for synchronously and
+ * handed to the page's own world before anything of the extension's executes. The
+ * wrapper source is inlined here rather than sent per call: one read of this file
+ * at view creation, and one small payload per document.
+ *
+ * The page's answer is the app's own tab record, never focus, because the popup
+ * holds the keyboard by design. A preload that cannot reach main installs the
+ * wrappers with no snapshot: they then leave the runtime's own answer alone except
+ * for dropping the extension surfaces this app hosts, which is still the correct
+ * list.
+ */
+export function extensionPageTabsPreloadSource(): string {
+  return `const { webFrame, ipcRenderer } = require('electron')
+if (location.protocol === 'chrome-extension:') {
+  let tab = null
+  try {
+    tab = ipcRenderer.sendSync(${JSON.stringify(EXTENSION_PAGE_TABS_CHANNEL)}, location.protocol)
+  } catch (error) {
+    tab = null
+  }
+  const source =
+    ${JSON.stringify(darkReaderStorageSource)} + '\\n;\\n' +
+    ${JSON.stringify(storageEventsSource)} + '\\n;\\n' +
+    'globalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ' + JSON.stringify(tab) + '\\n' + ${JSON.stringify(pageTabsSource)}
+  webFrame.executeJavaScript(source).catch(() => {})
+}
+`
 }

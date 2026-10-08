@@ -128,11 +128,15 @@ function refusalResult(
 const TRANSPORT_REFUSAL =
   'MCP server `/Applications/CuaDriver.app/Contents/MacOS/cua-driver` failed: daemon transport error forwarding `get_window_state`: daemon closed'
 
-/** A driver connection scripted per test: every `callTool` is recorded in order. */
+/** A driver connection scripted per test: every `callTool` is recorded in order.
+ *
+ * `usable` is what a live connection reports; a test that needs the monitor to
+ * reconnect a retired one can override it through the returned object. */
 function scriptedDriver(handle: (name: string, input: Record<string, unknown>) => unknown) {
   const calls: DriverCall[] = []
   const close = vi.fn(async () => undefined)
   const client = {
+    usable: true,
     listTools: async (): Promise<unknown[]> => [],
     callTool: async (name: string, input: Record<string, unknown>) => {
       calls.push({ name, input })

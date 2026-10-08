@@ -6,10 +6,14 @@ import type { ThinkingPreset } from '$shared/types'
 export interface ComposerSlashActionsOptions {
   getShowChatModes: () => boolean
   getFileSystemMode: () => boolean | undefined
+  getModelSettingsVisible: () => boolean
   getSupportsThinking: () => boolean
   getAccountPickerVisible: () => boolean
+  /** The profiles panel is live (a composer whose settings a profile can commit). */
+  getProfilesPickerVisible: () => boolean
   /** The scope shoe's picker is live (project mode, new thread). */
   getScopePickerVisible: () => boolean
+  getOvenPickerVisible: () => boolean
   getThinkingPresets: () => ThinkingPreset[]
   getActions: () => readonly ActionDefinition[]
 }
@@ -44,6 +48,30 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
         source: composerActionSource,
         keywords: ['model', 'favorites', 'provider']
       },
+      ...(options.getModelSettingsVisible()
+        ? [
+            {
+              id: 'selector:model-setting',
+              title: '/model-setting',
+              description: 'Choose model speed and context window',
+              category: 'model',
+              source: composerActionSource,
+              keywords: ['settings', 'speed', 'context', 'window', 'fast']
+            } satisfies ActionDefinition
+          ]
+        : []),
+      ...(options.getProfilesPickerVisible()
+        ? [
+            {
+              id: 'selector:profiles',
+              title: '/profile',
+              description: 'Open the model picker on your saved profiles and harnesses',
+              category: 'model',
+              source: composerActionSource,
+              keywords: ['profile', 'profiles', 'preset', 'setup', 'harness', 'filter']
+            } satisfies ActionDefinition
+          ]
+        : []),
       ...(options.getSupportsThinking()
         ? [
             {
@@ -66,6 +94,18 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
               source: composerActionSource,
               keywords: ['account', 'user', 'profile', 'login', 'credential']
             }
+          ]
+        : []),
+      ...(options.getOvenPickerVisible()
+        ? [
+            {
+              id: 'selector:oven',
+              title: '/oven',
+              description: 'Choose the Oven for this project chat',
+              category: 'mode',
+              source: composerActionSource,
+              keywords: ['oven', 'ssh', 'remote', 'local']
+            } satisfies ActionDefinition
           ]
         : []),
       ...(options.getScopePickerVisible()

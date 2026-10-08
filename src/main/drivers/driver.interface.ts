@@ -9,14 +9,26 @@ import type {
   ThreadSettings,
   ProviderCatalog,
   HarnessCommand,
+  NativeMcpPublicationResult,
+  NativeMcpServerFailure,
+  NativeUtilityInvocation,
   PermissionReply,
   ResolvedUtility,
+  NativeMcpUtilityBinding,
   UtilityKind
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
+
+/** A steer failed because its transport is gone; do not resend it as a new turn. */
+export class SteerDeliveryFailedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'SteerDeliveryFailedError'
+  }
+}
 
 /**
  * A provider kept an interactive question after the turn process that owned it
@@ -268,6 +280,16 @@ export interface SendPromptOptions {
   agent?: string
   /** Injected system prompt when Engineering is enabled. */
   systemPrompt?: string
+  /**
+   * Restored conversation history for a rebuilt session (fork, account or
+   * harness switch, edited/deleted history, lost session). It is delivered in
+   * the USER channel as its own delimited message, never the system prompt,
+   * because the replay mixes the user's words, tool output, and file content.
+   * The driver must add it at send time only and never persist it into the
+   * mirror's transport, so the next recap is built from a transcript that
+   * cannot already contain one.
+   */
+  historyRecap?: string
   /** Exact harness tool IDs allowed for this turn; omitted to use harness defaults. */
   allowedTools?: string[]
   /** Force the response through the harness's validated structured-output tool. */
@@ -456,6 +478,15 @@ export interface HarnessDriver {
    * rehydrate on next use.
    */
   releaseProjectResources?(projectPath: string): Promise<void> | void
+
+  /**
+   * Release an idle native session before another app instance resumes it.
+   * Drivers that do not hold cross-process native writers omit this operation.
+   */
+  releaseIdleSessionForTransfer?(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionReleaseResult>
 
   /** Send a prompt; responses stream back via the event callback. Non-blocking. */
   sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void>
@@ -669,6 +700,20 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
+   * Publish the MCP utilities this thread has activated to a harness that runs
+   * MCP servers itself (pi's own MCP host). Absent for every harness that only
+   * reaches MCP servers through the app gateway, which is what keeps the gateway
+   * the one transport there. Answers with the server name each utility took, so
+   * the gateway can tell the model which namespace to call from a script, plus
+   * the utilities the harness would not run, so the user can be told.
+   */
+  publishUtilityMcpServers?(
+    projectPath: string,
+    sessionId: string,
+    utilities: readonly NativeMcpUtilityBinding[]
+  ): Promise<NativeMcpPublicationResult>
+
+  /**
    * Publish the owning thread's plan and progress for checkpoint rebuilds.
    * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
    * session-keyed file; every other harness ignores the call. `null` clears it,
@@ -708,6 +753,7 @@ export interface HarnessDriver {
     bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
+    reauthenticationRequired?: boolean
   } | null>
 
   /**
@@ -782,9 +828,32 @@ export interface HarnessDriver {
   /** Register the callback that receives streaming AgentEvents. */
   onEvent(callback: AgentEventCallback): void
 
+  /**
+   * Register the callback that receives one call a script made to a server the
+   * harness's own MCP host runs (pi's `mcp__<server>__<tool>`). A harness with
+   * no MCP host of its own never calls it.
+   */
+  onNativeUtilityCall?(callback: (invocation: NativeUtilityInvocation) => void): void
+
+  /**
+   * Register the callback that receives a server the harness's own MCP host
+   * would not run, so the app can tell the user instead of leaving it on the
+   * harness's stderr.
+   */
+  onNativeMcpFailure?(callback: (failure: NativeMcpServerFailure) => void): void
+
+  /** Mark owned subprocesses as intentionally stopping before the process registry kills them. */
+  prepareForProcessCleanup?(): void
+
   /** Tear down all pooled resources (called on app quit). */
   dispose(): void
 }
+
+/** Result of asking one process to release a native session it may own. */
+export type IdleNativeSessionReleaseResult =
+  | { owner: false; released: false }
+  | { owner: true; released: true }
+  | { owner: true; released: false; reason: string }
 
 /** Main-process observer used by drivers to attribute process trees to sessions. */
 export interface AgentProcessObserver {

@@ -4,6 +4,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { flashElement } from '$lib/reveal-flash'
+  import { formatBytes } from '$lib/format/bytes'
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
@@ -11,18 +12,28 @@
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
   } from '$lib/stores/app-config.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { CIO_CLEANUP_CATEGORIES } from '$shared/cio-cleanup'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
+  import { formatDateTime } from '$shared/date-time-format'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    CIO_CLEANUP_CATEGORY_IDS,
+    DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+    DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
     MAX_BACKGROUND_WAKE_LEAD_MS,
+    MAX_CIO_CLEANUP_RETENTION_DAYS,
     MAX_MAX_CONFLICT_FILE_BYTES,
     MIN_BACKGROUND_WAKE_LEAD_MS,
+    MIN_CIO_CLEANUP_RETENTION_DAYS,
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
+    type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
     type SkillMarketEntry,
@@ -42,8 +53,8 @@
     Moon,
     RefreshCw,
     Search,
-    SlidersHorizontal,
-    Sun
+    Sun,
+    type LucideIcon
   } from '@lucide/svelte'
   import { onMount, tick } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -55,8 +66,10 @@
   import ProvidersView from '../providers/ProvidersView.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Modal from '../ui/Modal.svelte'
+  import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
+  import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import BrowserSettingsTab from './BrowserSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
@@ -68,6 +81,7 @@
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import OvensSettings from './OvensSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
@@ -107,6 +121,7 @@
   let notificationTestFailed = $state(false)
   let notificationPermission = $state<SystemNotificationPermissionStatus | null>(null)
   let nightlyModalOpen = $state(false)
+  let blockersModalOpen = $state(false)
   let channelBusy = $state(false)
 
   type UtilitiesRoute =
@@ -250,7 +265,7 @@
   const tabs: Array<{
     id: SettingsSection
     label: string
-    icon: typeof SlidersHorizontal
+    icon: LucideIcon
   }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
     id: entry.section,
     label: entry.title,
@@ -335,6 +350,63 @@
 
     void updateConfig({ threadLimit: value })
   }
+
+  function saveCioCleanupRetentionDays(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (
+      !Number.isInteger(value) ||
+      value < MIN_CIO_CLEANUP_RETENTION_DAYS ||
+      value > MAX_CIO_CLEANUP_RETENTION_DAYS
+    ) {
+      input.value = String(config.cioCleanupRetentionDays)
+      return
+    }
+
+    void updateConfig({ cioCleanupRetentionDays: value })
+  }
+
+  /**
+   * Exclude one `.cio` folder from the sweep, or let it be swept again.
+   *
+   * Excluding never deletes anything by itself: it tells every future run to
+   * keep that folder whole, which is how a design folder nobody opened for
+   * months survives the daily pass.
+   */
+  function saveCioCleanupCategory(id: CioCleanupCategoryId, excluded: boolean): void {
+    const current = config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+    void updateConfig({
+      cioCleanupExcludedCategories: CIO_CLEANUP_CATEGORY_IDS.filter((category) =>
+        category === id ? excluded : current.includes(category)
+      )
+    })
+  }
+
+  /** Whether one `.cio` folder is currently excluded from the sweep. */
+  function isCioCleanupCategoryExcluded(id: CioCleanupCategoryId): boolean {
+    return (
+      config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+    ).includes(id)
+  }
+
+  /** The last finished cleanup run, phrased for the settings report line. */
+  const cioCleanupLastRunText = $derived.by(() => {
+    const run = cioCleanupStore.state.lastRun
+    if (!run) return null
+
+    const parts = [
+      `Last run: ${formatDateTime(run.finishedAt)}`,
+      `${run.entriesRemoved} removed`,
+      formatBytes(run.bytesRemoved),
+      `${run.targetsSwept} folder${run.targetsSwept === 1 ? '' : 's'}`
+    ]
+    if (run.phase === 'cancelled') parts.push('Stopped')
+    if (run.phase === 'failed') parts.push('Failed')
+    if (run.error) parts.push(run.error)
+    return parts.join(' · ')
+  })
 
   function saveQuestionTimeout(event: Event): void {
     const input = event.currentTarget
@@ -505,6 +577,17 @@
     const base = updaterState.status.currentVersion ?? '0.1.0'
     return base.includes('nightly') ? base : isNightlyChannel ? `${base}-nightly` : base
   })
+
+  /**
+   * Load the blockers, then show the modal over the settings page.
+   *
+   * Same contract as the rail's entry point: the read decides whether there is
+   * anything to show, so a click that raced the gate opening on its own does not
+   * put a destructive action on screen for work that has already finished.
+   */
+  async function openUpdateBlockersModal(): Promise<void> {
+    if (await updateBlockers.prepare()) blockersModalOpen = true
+  }
 
   /** Toggle ON opens the confirmation modal; only a confirmed choice persists. */
   function onNightlyToggleRequested(enabled: boolean): void {
@@ -1154,6 +1237,104 @@
               </div>
             </div>
           </div>
+
+          <!-- CIO Cleanup -->
+          <div id="settings-block-general-cio-cleanup" class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+              CIO Cleanup
+            </h3>
+            <p class="mb-3 text-xs leading-relaxed text-dimmed">
+              Stale content of every workspace's <code>.cio</code> scratch folder (projects, scopes, chats,
+              assistant routines, and browser tabs) is removed once a day. Folders you exclude below are
+              never touched.
+            </p>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Keep scratch for</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Default is {DEFAULT_CIO_CLEANUP_RETENTION_DAYS} days; the next run uses the new value
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_CIO_CLEANUP_RETENTION_DAYS}
+                    max={MAX_CIO_CLEANUP_RETENTION_DAYS}
+                    step="1"
+                    value={config.cioCleanupRetentionDays}
+                    disabled={!settingsReady}
+                    aria-label="CIO Cleanup retention days"
+                    onchange={saveCioCleanupRetentionDays}
+                  />
+                  days
+                </label>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run cleanup now</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    A manual run shows progress in a dockable panel; the daily run stays silent
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  title="Run CIO Cleanup now"
+                  disabled={!settingsReady || cioCleanupStore.state.running}
+                  onclick={() => void cioCleanupStore.runNow()}
+                >
+                  <RefreshCw
+                    size={13}
+                    class={cioCleanupStore.state.running ? 'animate-spin' : ''}
+                  />
+                  Run cleanup now
+                </button>
+              </div>
+              <div class="border-t pt-3">
+                <p class="text-sm font-medium">Folders</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  A folder switched on is kept whole, whatever its age. The rest are swept once
+                  their content has been idle for the retention window.
+                </p>
+                <div class="mt-3 space-y-3">
+                  {#each CIO_CLEANUP_CATEGORIES as category (category.id)}
+                    <div class="flex items-center justify-between gap-4">
+                      <div>
+                        <p class="text-sm font-medium">{category.label}</p>
+                        <p class="text-xs leading-relaxed text-dimmed">{category.description}</p>
+                      </div>
+                      <Switch
+                        checked={isCioCleanupCategoryExcluded(category.id)}
+                        onchange={(excluded) => saveCioCleanupCategory(category.id, excluded)}
+                        aria-label={`Exclude ${category.label} from CIO Cleanup`}
+                        disabled={!settingsReady}
+                      />
+                    </div>
+                  {/each}
+                </div>
+              </div>
+              <div class="border-t pt-3">
+                {#if cioCleanupLastRunText}
+                  <p class="text-xs leading-relaxed text-muted tabular-nums">
+                    {cioCleanupLastRunText}
+                  </p>
+                {:else}
+                  <p class="text-xs leading-relaxed text-dimmed">CIO Cleanup has not run yet.</p>
+                {/if}
+                <p class="mt-1 text-xs leading-relaxed text-dimmed">
+                  Exclusions come from the file tree's right-click menu inside <code>.cio</code>
+                  ("Exclude from CIO Cleanup"){#if cioCleanupStore.state.exclusions.length > 0},
+                    with
+                    {cioCleanupStore.state.exclusions.length}
+                    {cioCleanupStore.state.exclusions.length === 1
+                      ? 'active exclusion'
+                      : 'active exclusions'}{/if}.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     {:else if section === 'browser'}
@@ -1252,6 +1433,13 @@
       <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
+    {:else if section === 'ovens'}
+      <OvensSettings
+        onOpenHarnessSettings={() => {
+          settingsUiState.harnessesTab = 'harnesses'
+          onNavigateSection('harnesses')
+        }}
+      />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
@@ -1276,7 +1464,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
               data-external-url={WEBSITE_URL}
-              onclick={() => void openInBrowser(WEBSITE_URL)}
+              onclick={() => void openInBrowser(WEBSITE_URL, 'global')}
             >
               <VendorIcon name="CodeInOven" size={15} />
               Website
@@ -1286,7 +1474,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
               data-external-url={GITHUB_URL}
-              onclick={() => void openInBrowser(GITHUB_URL)}
+              onclick={() => void openInBrowser(GITHUB_URL, 'global')}
             >
               <VendorIcon name="GitHub" size={15} />
               GitHub
@@ -1296,7 +1484,7 @@
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
               data-external-url={X_URL}
-              onclick={() => void openInBrowser(X_URL)}
+              onclick={() => void openInBrowser(X_URL, 'global')}
             >
               <svg
                 viewBox="0 0 24 24"
@@ -1347,15 +1535,29 @@
                 Update <strong>{updaterState.status.availableVersion}</strong> ready to install
               </span>
             </div>
+            {#if updaterState.status.blockedReason}
+              <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
+                <AlertCircle size={13} class="shrink-0" />
+                <span>{updaterState.status.blockedReason}</span>
+              </div>
+            {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} />
+              <Clock size={13} class="shrink-0" />
               <span>
                 Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
                 1
                   ? 's'
                   : ''} to finish before installing…
               </span>
+              <button
+                type="button"
+                class="shrink-0 whitespace-nowrap rounded border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
+                title="Show what the update is waiting on, and offer to stop it and install now"
+                onclick={openUpdateBlockersModal}
+              >
+                Review…
+              </button>
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
@@ -1535,6 +1737,8 @@
           </div>
         </div>
 
+        <AboutCommunity {config} {settingsReady} {updateConfig} />
+
         <!-- Latest release notes, channel-aware, rendered as markdown -->
         <AboutChangelog />
       </div>
@@ -1552,6 +1756,16 @@
     headerIcon={Search}
     onSelect={handleSettingsSearch}
     onClose={() => (settingsUiState.searchOpen = false)}
+  />
+{/if}
+
+{#if blockersModalOpen}
+  <UpdateBlockersModal
+    payload={updateBlockers.payload}
+    onDismiss={() => {
+      blockersModalOpen = false
+      updateBlockers.close()
+    }}
   />
 {/if}
 

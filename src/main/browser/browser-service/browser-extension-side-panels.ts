@@ -77,6 +77,18 @@ export class BrowserExtensionSidePanels {
 
   constructor(private readonly viewHost: BrowserExtensionSidePanelHost) {}
 
+  /** A hidden panel keeps its extension session alive until its page closes. */
+  liveJars(): { projectId: string; boxId: string | null }[] {
+    const jars: { projectId: string; boxId: string | null }[] = []
+    for (const record of this.panels.values()) {
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) {
+        jars.push({ projectId: record.projectId, boxId: record.boxId })
+      }
+    }
+    return jars
+  }
+
   /**
    * Host one extension's side panel.
    *
@@ -93,6 +105,10 @@ export class BrowserExtensionSidePanels {
     boxId: string | null
     appTabId: string
     extensionTabId: number
+    /** Absolute path of the page-tabs preload, or null when it could not be written.
+     *  Without it the panel still opens; its `chrome.tabs` answers come from the
+     *  push that follows each load instead of arriving before the page's own code. */
+    preload: string | null
     path: string
     url: string
   }): void {
@@ -106,6 +122,10 @@ export class BrowserExtensionSidePanels {
     const view = new WebContentsView({
       webPreferences: {
         session: input.session,
+        // The wrappers that answer this page's `chrome.tabs.query` have to be in
+        // the document before the extension's own bundle reads them, which only a
+        // preload manages. See `browser-extension-page-tabs.ts`.
+        preload: input.preload ?? undefined,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -232,6 +252,22 @@ export class BrowserExtensionSidePanels {
     for (const record of [...this.panels.values()]) {
       if (matches(record)) this.close(record.extensionId, reason)
     }
+  }
+
+  /**
+   * The app tab whose page one panel's own document acts on.
+   *
+   * A panel is a `WebContents` this app hosts on an extension's behalf, so a
+   * document asking "which tab am I acting on" from inside one cannot be answered
+   * from focus. This is the registry's own record of that, and it is what the
+   * page-tabs preload is answered with.
+   */
+  tabIdForContents(contentsId: number): string | undefined {
+    for (const record of this.panels.values()) {
+      const page = pageOf(record)
+      if (page && page.id === contentsId) return record.appTabId
+    }
+    return undefined
   }
 
   /** Close every panel the browser holds, for a teardown that outranks them. */

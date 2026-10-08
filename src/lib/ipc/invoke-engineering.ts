@@ -256,6 +256,10 @@ export const invokeEngineeringContract = {
     ],
     BrainstormDocument
   >,
+  'brainstorm:implement': {} as Contract<
+    [projectId: string, threadId: string, brainstormId: string, version: number],
+    BrainstormDocument
+  >,
   'brainstorm:finalize': {} as Contract<
     [projectId: string, threadId: string, brainstormId: string, version: number, note?: string],
     BrainstormDocument

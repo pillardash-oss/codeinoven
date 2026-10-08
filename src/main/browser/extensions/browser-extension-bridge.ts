@@ -29,7 +29,7 @@
  * starts a view, pushes, drains, and goes away with the load it belongs to.
  */
 
-import { WebContentsView, type Session } from 'electron'
+import { WebContentsView, webContents, type Session } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import {
@@ -74,7 +74,17 @@ export interface BrowserExtensionMailbox {
    *  Main acts only on the requests newer than the last sequence it saw, and a
    *  restarted worker starts its own sequence over with no memory. */
   sidePanel: BrowserExtensionSidePanelMailbox
+  /** Action popups the worker asked the app to open, oldest first. */
+  actionPopups: BrowserExtensionActionPopupRequest[]
   bridgeCommands: number
+}
+
+/** One popup surface request from the extension worker. */
+export interface BrowserExtensionActionPopupRequest {
+  seq: number
+  tabId: number
+  kind: 'action' | 'open-window' | 'hide-window' | 'focus-window' | 'focus-browser'
+  url?: string
 }
 
 /** The kinds of OS-notification request an extension can make through
@@ -138,6 +148,8 @@ export interface BrowserExtensionBridgeDeps {
   extensionId: string
   /** The bridge page's absolute `chrome-extension://` address. */
   pageUrl: string
+  /** One install/update event to deliver when this bridge first wakes its worker. */
+  installed?: BrowserExtensionInstalledDetails
   /** One snapshot, every time it changes, and once more when the worker
    *  restarted (so main can drop what the dead life left behind). */
   onMailbox: (mail: BrowserExtensionMailbox, restarted: boolean) => void
@@ -149,6 +161,8 @@ export interface BrowserExtensionBridgeDeps {
    * already open and the runtime gives it no way to ask.
    */
   tabReplay?: () => { name: string; args: unknown[] }[]
+  /** Temporary app-owned policies must precede document messages on restart. */
+  policyReplay?: () => unknown[]
   /** The bridge page could not be brought up, so nothing can be delivered. */
   onUnavailable: (reason: string) => void
   /**
@@ -158,6 +172,12 @@ export interface BrowserExtensionBridgeDeps {
    * compatibility preamble asks for the write here and waits for the answer.
    */
   materializeUserScripts?: (request: UserScriptFileRequest) => Promise<UserScriptFileResult>
+}
+
+/** Chromium's details for the install/update event the app synthesizes. */
+export interface BrowserExtensionInstalledDetails {
+  reason: 'install' | 'update'
+  previousVersion?: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -283,10 +303,42 @@ function toSidePanelMailbox(value: unknown): BrowserExtensionSidePanelMailbox {
   }
 }
 
+/** A popup request from the mailbox, with only the fields the host needs. */
+function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupRequest | null {
+  const record = asRecord(value)
+  const seq = record['seq']
+  const tabId = record['tabId']
+  const rawKind = record['kind']
+  const kind =
+    rawKind === 'open-window' ||
+    rawKind === 'hide-window' ||
+    rawKind === 'focus-window' ||
+    rawKind === 'focus-browser'
+      ? rawKind
+      : 'action'
+  const rawUrl = record['url']
+  if (
+    typeof seq !== 'number' ||
+    !Number.isFinite(seq) ||
+    seq <= 0 ||
+    typeof tabId !== 'number' ||
+    !Number.isFinite(tabId) ||
+    tabId < 0
+  ) {
+    return null
+  }
+  if (typeof rawUrl === 'string' && rawUrl.length > 4096) return null
+  const request: BrowserExtensionActionPopupRequest = { seq, tabId, kind }
+  if (typeof rawUrl === 'string') request.url = rawUrl
+  if ((kind === 'open-window' || kind === 'focus-window') && !request.url) return null
+  return request
+}
+
 export class BrowserExtensionBridge {
   private view: WebContentsView | null = null
   private poll: ReturnType<typeof setInterval> | null = null
   private draining = false
+  private readingFrames = false
   private disposed = false
   /** The worker life the last snapshot came from. */
   private generation = ''
@@ -294,6 +346,10 @@ export class BrowserExtensionBridge {
   private lastSeq = 0
   /** The last user-script file request answered, so one is never written twice. */
   private lastUserScriptRequest = 0
+  private resolveReady: (ready: boolean) => void = () => {}
+  private readonly ready = new Promise<boolean>((resolve) => {
+    this.resolveReady = resolve
+  })
 
   constructor(private readonly deps: BrowserExtensionBridgeDeps) {}
 
@@ -320,15 +376,21 @@ export class BrowserExtensionBridge {
       this.stop()
     }, BRIDGE_LOAD_TIMEOUT_MS)
     loaded
-      .then(() => {
+      .then(async () => {
         clearTimeout(timer)
         if (this.disposed || this.view !== view) return
+        if (this.deps.installed) {
+          await this.push({ kind: 'installed', details: this.deps.installed })
+        }
         // A worker that has just been loaded has no notion of a session start;
         // this is the one event that says the jar it runs in is awake.
-        this.push({ kind: 'startup' })
-        this.replayTabs()
+        await this.push({ kind: 'startup' })
+        await this.replayTabs()
+        if (this.disposed || this.view !== view) return
+        this.resolveReady(true)
         this.poll = setInterval(() => {
           void this.drain()
+          void this.answerFrameRequests()
           void this.writeUserScriptFiles()
           void this.reassertUserScripts()
         }, MAILBOX_POLL_INTERVAL_MS)
@@ -344,26 +406,122 @@ export class BrowserExtensionBridge {
    *  is started by the message itself, and a push into a dying view is dropped
    *  rather than queued, because a tab event that arrives late is worse than one
    *  that does not arrive. */
-  push(command: unknown): void {
+  push(command: unknown): Promise<void> {
     const view = this.view
-    if (!view || this.disposed) return
+    if (!view || this.disposed) return Promise.resolve()
     const contents: Electron.WebContents | undefined = view.webContents
-    if (!contents || contents.isDestroyed()) return
+    if (!contents || contents.isDestroyed()) return Promise.resolve()
     const script = `globalThis.__cioBridgeReceive && globalThis.__cioBridgeReceive(${JSON.stringify(command)})`
-    void contents.executeJavaScript(script, true).catch(() => undefined)
+    return contents.executeJavaScript(script, true).then(
+      () => undefined,
+      () => undefined
+    )
+  }
+
+  /** Await document cleanup before unloading invalidates content-script contexts. */
+  async request(command: Record<string, unknown>): Promise<void> {
+    if (!(await this.ready)) throw new Error('The extension bridge could not load')
+    const contents = this.view?.webContents
+    if (!contents || this.disposed || contents.isDestroyed()) {
+      throw new Error('The extension bridge is unavailable')
+    }
+    await contents.executeJavaScript(
+      `globalThis.__cioBridgeRequest(${JSON.stringify(command)})`,
+      true
+    )
   }
 
   /**
    * Hand the worker the tab state it cannot ask for itself.
    *
-   * No-ops when there is nothing to say, which is the common case for a jar whose
-   * tabs are all hibernated: an empty replay would only wake a worker to tell it
-   * nothing.
+   * The completion command releases extension startup queries even for a jar with
+   * no live tabs.
    */
-  private replayTabs(): void {
+  private async replayTabs(): Promise<void> {
+    for (const command of this.deps.policyReplay?.() ?? []) await this.push(command)
     const events = this.deps.tabReplay?.() ?? []
-    for (const event of events) {
-      this.push({ kind: 'tab', name: event.name, args: event.args })
+    const commands = events.map((event) => ({
+      kind: 'tab',
+      name: event.name,
+      args: event.args
+    }))
+    for (let offset = 0; offset < commands.length; offset += 64) {
+      await this.pushBatch(commands.slice(offset, offset + 64))
+    }
+    await this.push({ kind: 'tab-replay-complete' })
+  }
+
+  /** Send a small batch in one renderer call so large tab strips do not turn
+   *  startup into one IPC round trip per event. */
+  private pushBatch(commands: unknown[]): Promise<void> {
+    const view = this.view
+    if (!view || this.disposed) return Promise.resolve()
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return Promise.resolve()
+    let serialized: string | undefined
+    try {
+      serialized = JSON.stringify(commands)
+    } catch {
+      return Promise.resolve()
+    }
+    if (!serialized) return Promise.resolve()
+    const script = `(() => { const receive = globalThis.__cioBridgeReceive; if (typeof receive !== 'function') return; for (const command of ${serialized}) receive(command) })()`
+    return contents.executeJavaScript(script, true).then(
+      () => undefined,
+      () => undefined
+    )
+  }
+
+  /** Return real frame IDs and parent IDs only for this extension's session. */
+  private async answerFrameRequests(): Promise<void> {
+    const view = this.view
+    if (!view || this.disposed || this.readingFrames) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.readingFrames = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainFrameRequests ? globalThis.__cioBridgeDrainFrameRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 8)) {
+        const request = asRecord(value)
+        const id = request['id']
+        const tabId = request['tabId']
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) continue
+        const tab =
+          typeof tabId === 'number' && Number.isSafeInteger(tabId)
+            ? webContents.fromId(tabId)
+            : undefined
+        const frames =
+          tab && !tab.isDestroyed() && tab.session === this.deps.session
+            ? tab.mainFrame.framesInSubtree
+                .filter((frame) => !frame.detached)
+                .map((frame) => ({
+                  frameId: frame === tab.mainFrame ? 0 : frame.frameTreeNodeId,
+                  parentFrameId: !frame.parent
+                    ? -1
+                    : frame.parent === tab.mainFrame
+                      ? 0
+                      : frame.parent.frameTreeNodeId,
+                  processId: frame.processId,
+                  url: frame.url,
+                  errorOccurred: false,
+                  documentLifecycle: 'active'
+                }))
+            : null
+        void this.push({ kind: 'frames-result', id, frames })
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension frame lookup could not finish:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.readingFrames = false
     }
   }
 
@@ -409,6 +567,12 @@ export class BrowserExtensionBridge {
               .filter((item): item is BrowserExtensionNotificationRecord => item !== null)
           : [],
         sidePanel: toSidePanelMailbox(parsed['sidePanel']),
+        actionPopups: Array.isArray(parsed['actionPopups'])
+          ? parsed['actionPopups']
+              .slice(-16)
+              .map(toActionPopupRequest)
+              .filter((item): item is BrowserExtensionActionPopupRequest => item !== null)
+          : [],
         bridgeCommands: typeof parsed['bridgeCommands'] === 'number' ? parsed['bridgeCommands'] : 0
       }
       this.generation = generation
@@ -416,7 +580,7 @@ export class BrowserExtensionBridge {
       // A restarted worker is a fresh life: it holds no memory of the tabs the
       // dead one was told about, so the jar's tab state is handed over again
       // before anything it recorded is published as its new state.
-      if (restarted) this.replayTabs()
+      if (restarted) void this.replayTabs()
       this.deps.onMailbox(mail, restarted)
     } catch (error) {
       // A read that failed or a snapshot that could not be parsed is skipped; the
@@ -511,6 +675,7 @@ export class BrowserExtensionBridge {
   }
 
   private stop(): void {
+    this.resolveReady(false)
     if (this.poll) {
       clearInterval(this.poll)
       this.poll = null

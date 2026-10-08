@@ -26,6 +26,11 @@ every expected confirmation before a destructive lifecycle action.
   indexes all resolve through the scope.
 - An unhealthy managed scope **never falls back** to the project directory.
   It fails closed with a typed health category.
+- A scope that is no longer on the board is **removed, not unhealthy**: there is
+  no checkout to verify and no Repair action to run. The board read reassigns
+  every thread still pointing at it to the project-rooted Default scope, and the
+  thread compatibility roots (turns, files, teardown) follow them there. Git
+  operations keep refusing a removed scope like any other unavailable target.
 
 ## 2. Migration
 

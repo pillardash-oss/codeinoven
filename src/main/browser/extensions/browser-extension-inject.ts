@@ -34,6 +34,8 @@ import { join } from 'node:path'
 import type { BrowserExtensionInjection } from '../../../lib/ipc/browser'
 import bridgePageSource from './compat/cio-bridge.page.html?raw'
 import bridgeScriptSource from './compat/cio-bridge.js?raw'
+import storageEventsSource from './compat/cio-storage-events.js?raw'
+import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
 
 export const COMPAT_PREAMBLE_FILE_NAME = 'cio-compat-preamble.js'
 export const COMPAT_BOOTSTRAP_FILE_NAME = 'cio-compat-bootstrap.js'
@@ -62,7 +64,7 @@ const PREAMBLE_END_MARKER = '// ── CIO compatibility preamble ends here'
  *  terminator is added here rather than trusted to the preamble's own formatting,
  *  where a formatter may drop it. */
 function prependedPreamble(preambleSource: string): string {
-  return `${preambleSource.replace(/\s+$/u, '')}\n;\n`
+  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\n${preambleSource.replace(/\s+$/u, '')}\n;\n`
 }
 
 /** Write `contents` only when the file does not already hold them, so refreshing

@@ -56,6 +56,7 @@ import type {
   PullRequestReviewResult,
   RepositoryMentionUser,
   ThreadSettings,
+  WorkflowCancelResult,
   WorkflowRerunMode,
   WorkflowRerunResult
 } from '../types'
@@ -436,6 +437,15 @@ export const invokeGitContract = {
     WorkflowRerunResult
   >,
   /**
+   * Cancel a queued or in-progress workflow run, which stops its running jobs
+   * and skips the rest. Returns the mutation envelope so a read-only grant
+   * surfaces its permission prompt instead of a bare failure.
+   */
+  'deployment:cancelRun': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number],
+    WorkflowCancelResult
+  >,
+  /**
    * Read a project's cloud deployment config, or null when none exists. The
    * config is persisted by main under the CodeInOven config directory; the
    * renderer never touches the filesystem or Node APIs for it.
@@ -565,6 +575,16 @@ export const invokeGitContract = {
       accountId?: string
     ],
     import('../types').CloudDeploymentContainer[] | { accessError: string }
+  >,
+  /**
+   * Which OTHER projects already monitor a provider kind's containers, resolved
+   * from their per-project container mappings. The picker lists every container
+   * on the account, so this is what lets it show that a container belongs to
+   * another project instead of letting a project claim it silently.
+   */
+  'cloudDeploy:containerOwners': {} as Contract<
+    [projectId: string, providerKind: import('../types').CloudDeploymentProviderKind],
+    import('../types').CloudDeploymentContainerOwner[]
   >,
   /**
    * Latest snapshot for one configured container, or null when the provider

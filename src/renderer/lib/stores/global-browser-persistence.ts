@@ -63,6 +63,7 @@ export function persistedGroupFromRuntime(group: GlobalBrowserGroup): PersistedB
     name: group.name,
     description: group.description,
     pinned: group.pinned,
+    collapsed: group.collapsed === true,
     color: group.color,
     iconType: group.iconType,
     customSvg: group.customSvg,

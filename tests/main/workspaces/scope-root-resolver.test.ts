@@ -200,14 +200,20 @@ describe('ScopeRootResolver', () => {
     ).rejects.toThrow(ScopeRootUnavailableError)
   })
 
-  it('reports unknown scopes as unregistered', async () => {
+  it('marks a scope that is no longer on the board as removed', async () => {
     const { resolver } = await setup()
     const resolution = await resolver.resolve({ projectId: 'p1', scopeBucketId: 'nope' })
+    // Resolution stays fail-closed for Git callers, but the failure now says
+    // the scope is gone, so the thread adapter can follow its threads to the
+    // Default scope instead of pointing at a Repair action that cannot exist.
     expect(resolution.ok).toBe(false)
-    if (!resolution.ok) expect(resolution.health.category).toBe('unregistered')
+    if (!resolution.ok) {
+      expect(resolution.health.category).toBe('unregistered')
+      expect(resolution.scopeRemoved).toBe(true)
+    }
   })
 
-  it('exposes a fail-closed ThreadScopeRootProvider adapter', async () => {
+  it('follows a removed scope to Default and keeps unhealthy ones fail-closed', async () => {
     const expected = getScopeRootPath('p1', 'feature')
     mkdirSync(expected, { recursive: true })
     const { resolver, bucketId } = await setup({
@@ -216,9 +222,16 @@ describe('ScopeRootResolver', () => {
     const provider = scopeRootProvider(resolver)
     await expect(provider.resolveCompatibilityRoot('p1', 'default')).resolves.toBe(projectDir)
     await expect(provider.resolveCompatibilityRoot('p1', bucketId)).resolves.toBe(expected)
-    await expect(provider.resolveCompatibilityRoot('p1', 'missing')).rejects.toThrow(
-      ScopeRootUnavailableError
-    )
+    // The board carries no such scope: its threads are reassigned to Default by
+    // the board read, so their compatibility roots follow them there.
+    await expect(provider.resolveCompatibilityRoot('p1', 'missing')).resolves.toBe(projectDir)
     await expect(provider.resolveCompatibilityRoot('p1', undefined)).resolves.toBeNull()
+
+    // A managed scope still on the board but broken keeps failing closed: that
+    // one has a Repair action, so it must never silently run in the project.
+    const unhealthy = await setup()
+    await expect(
+      scopeRootProvider(unhealthy.resolver).resolveCompatibilityRoot('p1', unhealthy.bucketId)
+    ).rejects.toThrow(ScopeRootUnavailableError)
   })
 })

@@ -850,6 +850,9 @@ export class Database {
       this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
+      this.migrateAgentMessageOvenColumn(connection)
+      this.migrateAgentMessageOvenLabelColumn(connection)
+      this.migrateAgentMessageOvenAppearanceColumn(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateAgentMessageNormalizedUsageColumn(connection)
       this.migrateActiveTurnOwnerColumn(connection)
@@ -861,8 +864,10 @@ export class Database {
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
       this.migrateCustomSvgIcons(connection)
+      this.migrateStickyNoteImagePath(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
+      this.migrateRoutineExecution(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
     })()
@@ -878,6 +883,17 @@ export class Database {
       if (!columns.has('custom_svg')) {
         connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
       }
+    }
+  }
+
+  private migrateStickyNoteImagePath(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('image_path')) {
+      connection.exec('ALTER TABLE sticky_notes ADD COLUMN image_path TEXT')
     }
   }
 
@@ -1004,6 +1020,23 @@ export class Database {
     }
     if (!columns.has('priority')) {
       connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
+    }
+  }
+
+  /**
+   * Add the routine execution-target column to databases created before a
+   * routine could name an Oven its runs execute on. Fresh databases already
+   * carry it, and the guarded `ALTER TABLE` is idempotent. An existing routine
+   * keeps the column NULL, which means this computer.
+   */
+  private migrateRoutineExecution(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('execution')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN execution TEXT')
     }
   }
 
@@ -1486,6 +1519,40 @@ export class Database {
     }
     if (!columns.has('account_label')) {
       connection.exec('ALTER TABLE agent_messages ADD COLUMN account_label TEXT')
+    }
+  }
+
+  /** Existing transcript mirrors predate per-turn Oven attribution. */
+  private migrateAgentMessageOvenColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('oven_id')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_id TEXT')
+    }
+  }
+
+  private migrateAgentMessageOvenLabelColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('oven_label')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_label TEXT')
+    }
+  }
+
+  private migrateAgentMessageOvenAppearanceColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('oven_appearance_json')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_appearance_json TEXT')
     }
   }
 

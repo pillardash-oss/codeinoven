@@ -3,6 +3,7 @@ import { toPosixPath } from '../../../lib/paths'
 import type { AgentPart } from '../../../lib/types'
 
 export const MUTATING_FILE_TOOLS = new Set([
+  'applydiff',
   'applypatch',
   'delete',
   'deletefile',
@@ -10,6 +11,7 @@ export const MUTATING_FILE_TOOLS = new Set([
   'editfile',
   'filechange',
   'multiedit',
+  'insertcontent',
   'multireplacefilecontent',
   'notebookedit',
   'patch',
@@ -26,6 +28,7 @@ export const MUTATING_FILE_TOOLS = new Set([
 export const UNBOUNDED_MUTATING_TOOLS = new Set([
   'bash',
   'commandexecution',
+  'executecommand',
   'execute',
   'runcommand',
   'shell',

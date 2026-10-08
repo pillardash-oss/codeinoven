@@ -38,6 +38,8 @@ export interface AgentProviderIssue {
   harnessId: string
   retryable: boolean
   retryAt?: number
+  /** App admission deadline, including the provider reset buffer. */
+  autoResumeAt?: number
   attempt?: number
   statusCode?: number
 }
@@ -61,6 +63,13 @@ export type AgentSessionStatus =
         maxAttempts: number
         updatedAt: number
       }
+      /**
+       * Transient note for preparation the app itself performs before the
+       * harness streams: preparing a remote checkout, cloning a repository, or
+       * synchronizing an account on an Oven. Cleared by the next status that
+       * carries no note.
+       */
+      note?: string
     }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }
@@ -85,6 +94,13 @@ export type SpecGenerationTraceUpdate =
 export type AssignmentGenerationTraceUpdate = SpecGenerationTraceUpdate
 
 export type AgentEvent =
+  | {
+      type: 'artifact.rendered'
+      sessionId: string
+      projectId: string
+      threadId: string
+      message: AgentMessage
+    }
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
   | {
       type: 'checkpoint.updated'

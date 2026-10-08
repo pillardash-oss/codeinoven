@@ -5,7 +5,7 @@
  * audit's budgets over each **eagerly-loaded initial JS closure** — the entry
  * plus the chunks Vite emits as modulepreloads:
  *
- * - initial JavaScript raw ≤ 5.5 MiB and gzip ≤ 1.3 MiB
+ * - initial JavaScript raw ≤ 5.75 MiB and gzip ≤ 1.5 MiB
  *
  * Truly lazy dynamic imports and their modulepreload dep arrays are excluded
  * from the measurement, so the check measures exactly what the app loads to
@@ -22,12 +22,14 @@ import { resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 
 const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
-// The post-split baseline is ~4.30 MB raw / ~0.92 MB gzip. These thresholds
-// leave modest build-hash/minifier variance while still rejecting the former
-// 7.95 MB raw / 1.99 MB gzip eager closure.
-const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.5 * 1024 * 1024
+// The eager closure grows with every feature shipped on the first screen: the
+// November baseline of ~5.56 MB raw / ~1.38 MB gzip on macOS is the current
+// floor, and these thresholds leave room for build-hash/minifier variance as
+// well as the ~35 KiB heavier gzip the Windows minifier emits, while still
+// rejecting a runaway eager import.
+const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.75 * 1024 * 1024
 // Windows Minifier output runs ~35 KiB heavier gzip than macOS/Linux.
-const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1400 * 1024
+const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1500 * 1024
 
 interface DesktopChunkBudget {
   url: string

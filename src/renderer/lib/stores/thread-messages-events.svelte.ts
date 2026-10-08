@@ -83,7 +83,9 @@ export class ThreadMessagesEvents {
     // leaves the part untouched; skip the re-render entirely.
     if (updated === msg.parts[partIndex]) return
     msg.parts[partIndex] = updated
-    entry.messages = [...entry.messages]
+    // notifyStreaming republishes this thread once per frame. Keep the live
+    // message-array reference stable so token-sized deltas don't copy the full
+    // transcript each time one arrives.
     this.cache.notifyStreaming(projectId, threadId)
   }
 
@@ -278,6 +280,10 @@ export class ThreadMessagesEvents {
   }
 
   handle(event: AgentEvent): void {
+    if (event.type === 'artifact.rendered') {
+      this.cache.mergePage(event.projectId, event.threadId, [event.message])
+      return
+    }
     if (event.type === 'brainstorm.trace') {
       this.#applyBrainstormTrace(event.projectId, event.threadId, event.update)
       return

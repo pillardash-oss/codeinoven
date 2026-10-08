@@ -5,6 +5,7 @@ import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/drive
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
+import type { UtilitySuggestionDecision } from '../../../lib/utility-suggestion'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -90,6 +91,8 @@ export interface SessionInfo {
   driverId: string
   /** Credential container that owns this native session. */
   accountId?: string
+  /** Oven selected when the active turn was dispatched. */
+  activeTurnOvenId?: string
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
@@ -320,6 +323,12 @@ export interface PendingPermissionInfo {
   request: PermissionRequest
   policy: PermissionDecisionResult
   resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
+  /**
+   * Set for an app-owned browser action on the page the user is viewing. The
+   * gateway tool call that asked is still open, so it settles here instead of
+   * being answered through a harness.
+   */
+  settleBrowserAction?: (approved: boolean, alternative?: string) => void
 }
 
 export interface PendingQuestionInfo {
@@ -338,6 +347,17 @@ export interface PendingQuestionInfo {
    * harness: the values never travel to a driver.
    */
   settleSecret?: (resolution: AgentSecretResolution) => void
+  /** The secret card was explicitly answered, dismissed, or timed out. */
+  resumeSecretAfterSettlement?: boolean
+  /**
+   * Set for an app-owned `cio_util_suggest` request. The gateway tool call that
+   * proposed the capability is still open, so the user's decision settles here
+   * instead of being answered through a harness: only the gateway installs, and
+   * only after this reports "accepted".
+   */
+  settleUtilitySuggestion?: (decision: UtilitySuggestionDecision) => void
+  /** The suggestion card was answered, dismissed, or timed out. */
+  resumeUtilitySuggestionAfterSettlement?: boolean
 }
 
 /**

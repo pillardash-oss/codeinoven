@@ -12,11 +12,10 @@ import {
   mapCodexRateLimits,
   mapCodexUsage
 } from '../../../src/main/drivers/codex-driver'
+import { CODEX_QUESTION_INSTRUCTION } from '../../../src/main/drivers/codex/codex-tools'
 import { InactiveQuestionTurnError } from '../../../src/main/drivers/driver.interface'
 
 const spawnMock = vi.hoisted(() => vi.fn())
-const codexQuestionInstruction =
-  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>()
   return { ...original, spawn: spawnMock }
@@ -35,6 +34,20 @@ class FakeChild extends EventEmitter {
       const method = typeof payload['method'] === 'string' ? payload['method'] : undefined
       if (id === undefined || !method) return true
       const params = payload['params'] as Record<string, unknown> | undefined
+      // Simulate a Codex installation whose native history projection is
+      // unavailable. Resuming without requesting turns must still work.
+      if (method === 'thread/resume' && params?.['excludeTurns'] !== true) {
+        queueMicrotask(() =>
+          this.emitPayload({
+            id,
+            error: {
+              message:
+                'failed to list thread history: thread-store internal error: failed to access thread history: error returned from database: (code: 1) no such table: thread_turns'
+            }
+          })
+        )
+        return true
+      }
       const result =
         method === 'thread/start' || method === 'thread/resume'
           ? {
@@ -261,7 +274,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: `Internal memory contract\n\n${codexQuestionInstruction}`,
+          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}`,
           dynamicTools: expect.arrayContaining([
             expect.objectContaining({ name: 'cio_ask_user' }),
             ...dynamicTools
@@ -381,6 +394,24 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       id: 'question-1',
       result: { answers: { scope: { answers: ['Current project'] } } }
     })
+    // Codex can auto-resolve a question request and keep the turn running, which
+    // drops the result written above, so the decision also rides the turn's own
+    // input channel and reaches the model on its next step.
+    expect(sharedChild.requests()).toContainEqual({
+      id: 4,
+      method: 'turn/steer',
+      params: {
+        threadId: 'native-1',
+        input: [
+          {
+            type: 'text',
+            text: expect.stringContaining('"answers":["Current project"]'),
+            text_elements: []
+          }
+        ],
+        expectedTurnId: 'turn-1'
+      }
+    })
     sharedChild.emitPayload({
       method: 'error',
       params: {
@@ -428,7 +459,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       userMessageId: 'steer-1'
     })
     expect(sharedChild.requests()).toContainEqual({
-      id: 4,
+      id: 5,
       method: 'turn/steer',
       params: {
         threadId: 'native-1',
@@ -493,7 +524,12 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     })
     await driver.sendPrompt('/project', {
       sessionId,
-      settings: { ...settings, permissionLevel: 'full_access' },
+      settings: {
+        ...settings,
+        permissionLevel: 'full_access',
+        inferenceMode: 'ultrafast',
+        contextWindow: 1_000_000
+      },
       text: 'second',
       attachments: []
     })
@@ -503,7 +539,9 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       method: 'thread/resume',
       params: {
         threadId: 'native-1',
-        developerInstructions: codexQuestionInstruction,
+        excludeTurns: true,
+        config: { model_context_window: 1_000_000, model_auto_compact_token_limit: 900_000 },
+        developerInstructions: CODEX_QUESTION_INSTRUCTION,
         dynamicTools: expect.arrayContaining([
           expect.objectContaining({ name: 'cio_ask_user' }),
           ...dynamicTools
@@ -514,6 +552,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'turn/start',
         params: expect.objectContaining({
+          serviceTier: 'ultrafast',
           sandboxPolicy: { type: 'dangerFullAccess' }
         })
       })
@@ -1404,6 +1443,7 @@ describe.skipIf(process.platform === 'win32')('mapCodexRateLimits', () => {
         method: 'thread/resume',
         params: {
           threadId: 'native-1',
+          excludeTurns: true,
           developerInstructions: null
         }
       })

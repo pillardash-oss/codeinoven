@@ -729,22 +729,43 @@ ${fence}`
         <Loader2 size={16} class="animate-spin" />
         Loading containers…
       </div>
-    {:else if containers.length === 0 && !anyAccessError}
-      <EmptyState
-        icon={Cloud}
-        title="No containers added yet"
-        description="Pick the containers (projects or applications) on your provider account to monitor. Status and logs appear here once added."
-      >
-        {#snippet action()}
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() => openConfigSheet('container')}
-          >
-            Add container
-          </button>
-        {/snippet}
-      </EmptyState>{:else if !hasFilteredResults}
+    {:else if containers.length === 0}
+      <!-- A provider that cannot be reached is the reason there is nothing to
+           show, so its error leads rather than reading as "nothing configured". -->
+      {#if anyAccessError}
+        <EmptyState
+          icon={CircleX}
+          title="Deployments unavailable"
+          description={Object.values(accessErrors).join(' · ')}
+        >
+          {#snippet action()}
+            <button
+              type="button"
+              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              onclick={() => openConfigSheet('provider')}
+            >
+              Reconnect account
+            </button>
+          {/snippet}
+        </EmptyState>
+      {:else}
+        <EmptyState
+          icon={Cloud}
+          title="No containers added yet"
+          description="Pick the containers (projects or applications) on your provider account to monitor. Status and logs appear here once added."
+        >
+          {#snippet action()}
+            <button
+              type="button"
+              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              onclick={() => openConfigSheet('container')}
+            >
+              Add container
+            </button>
+          {/snippet}
+        </EmptyState>
+      {/if}
+    {:else if !hasFilteredResults}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
         <Search size={16} class="text-dimmed" />
         <p class="text-[0.6875rem] font-medium text-foreground">No matching containers</p>

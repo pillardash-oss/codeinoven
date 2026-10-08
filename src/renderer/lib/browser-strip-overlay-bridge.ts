@@ -74,7 +74,7 @@ export function projectStripChrome(): BrowserStripOverlayChrome {
     loading: runtime?.loading ?? false,
     canGoBack: runtime?.canGoBack ?? false,
     canGoForward: runtime?.canGoForward ?? false,
-    bookmarked: address !== '' && browserBookmarks.isBookmarked(address),
+    bookmarked: address !== '' && browserBookmarks.isBookmarked(address, tab?.boxId ?? null),
     storeOffer: offer ? storeOfferChrome(offer) : null
   }
 }

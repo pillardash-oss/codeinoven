@@ -14,6 +14,8 @@
     onClose: () => void
     /** Present when creating a worktree for an existing custom scope. */
     existingBucketId?: string | null
+    /** Thread that started the run; forwarded so sends can queue behind it. */
+    targetThreadId?: string | null
     /** Pre-fills the display name — e.g. from a failed scope search. */
     initialName?: string
     onCreated?: (bucketId: string) => void
@@ -28,6 +30,7 @@
     projectId,
     onClose,
     existingBucketId = null,
+    targetThreadId = null,
     initialName = '',
     onCreated,
     onStarted
@@ -134,12 +137,14 @@
     }
     const targetProjectId = projectId
     const targetBucketId = existingBucketId
+    const targetThread = targetThreadId
     const handleCreated = onCreated
     const handleStarted = onStarted
     onClose()
     handleStarted?.()
     scopeJobs.create(targetProjectId, input, {
       existingBucketId: targetBucketId,
+      targetThreadId: targetThread,
       onCreated: handleCreated
     })
   }

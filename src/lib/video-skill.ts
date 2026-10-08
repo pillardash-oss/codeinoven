@@ -1,4 +1,9 @@
-import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
+import {
+  expertDelegationGuidance,
+  EXPERT_FALLBACK_GUIDANCE,
+  NO_EXPERTS,
+  type EffectiveExperts
+} from './experts'
 import {
   DEFAULT_WORK_ROOTS,
   workRootGuidance,
@@ -169,9 +174,9 @@ ${expertDelegationGuidance(experts, 'video')}
 
 Pictures, clips and sound are files rather than answers, so the app generates them with the model the user assigned to that craft. Call \`generate\` with \`kind\` set to \`image\`, \`video\` or \`audio\`, a complete brief in \`prompt\`, and \`name\` with \`directory\` when the asset belongs beside a particular composition. The reply carries the project-relative path, which the composition references relatively. \`options\` is for a provider-specific field the model documents, such as an aspect ratio or a duration.
 
-A craft with no model assigned is refused by name. Then say which craft needs a model rather than substituting a placeholder: the user assigns it in Settings, Design. A generator the user installed in Utilities is still there to reach, and its answer is a link you save with \`save-media\`; generation links expire, so never reference one from a composition.
+${EXPERT_FALLBACK_GUIDANCE}
 
-When neither an assignment nor a capability exists for work the composition needs, say which work needs one and ask. Never choose a model yourself, never stand in for a generator, and never leave an empty frame where the user asked for a real asset.`
+Use your own tools when a craft is unassigned. Report a capability limitation only after checking available generation tools. Never leave an empty frame where the user asked for a real asset.`
 }
 
 /**

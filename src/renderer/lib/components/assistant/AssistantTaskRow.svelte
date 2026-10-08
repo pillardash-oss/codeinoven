@@ -1,11 +1,23 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, Pin, RotateCcw } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    AppWindow,
+    ArrowRightLeft,
+    Clock1,
+    Hammer,
+    Loader2,
+    Pin,
+    RotateCcw
+  } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -49,6 +61,12 @@
     nextRunAt: number | null
     /** Human-readable schedule label (schedule override or owning routine). */
     scheduleLabel?: string | null
+    /**
+     * The task a hoisted run belongs to, shown on the run's line. A run lifted to
+     * its routine's own level has no parent row above it, so without this its
+     * line would name only a time and no run would be tellable from another.
+     */
+    contextLabel?: string | null
     onSelect: (task: Thread) => void
     /** The full thread action set, so a task behaves exactly like a thread row. */
     onRename: (task: Thread, newName: string) => Promise<void>
@@ -60,6 +78,14 @@
     onHandedOff: (forked: Thread) => void
     /** Hide a routine's how-to thread (the only state its row can change). */
     onHideHowTo: (task: Thread) => void
+    /**
+     * The thread another instance is running for this row: the task or run
+     * itself when its own turn is foreign, or (for a task row) one of its runs
+     * that is. A run executes on its own thread, so a task can look idle here
+     * while one of its runs streams elsewhere. Null when nothing this row owns
+     * is running in another instance.
+     */
+    foreignThread?: Thread | null
   }
 
   let {
@@ -71,6 +97,7 @@
     missed,
     nextRunAt,
     scheduleLabel = null,
+    contextLabel = null,
     onSelect,
     onRename,
     onTogglePin,
@@ -78,7 +105,8 @@
     onFork,
     onOpenNotes,
     onHandedOff,
-    onHideHowTo
+    onHideHowTo,
+    foreignThread = null
   }: Props = $props()
 
   const isRun = $derived(variant === 'run')
@@ -101,12 +129,19 @@
   const iconKey = $derived(taskRowIconKey(task))
   const howToThread = $derived(isAssistantSetupThread(task))
 
-  /** Line 2: next-run time for scheduled tasks, last-run time for unscheduled
-   *  tasks, and the run's own last activity for a run row. */
+  /** Line 2: task schedule/activity, run activity, or the setup thread's role.
+   *  A row whose thread is actually producing work says so instead of reporting
+   *  a stale schedule time, and a hoisted run names the task it belongs to. */
   const runLine = $derived.by(() => {
+    const working = runWorking || isThreadLiveWorking(task)
+    if (isRun) {
+      subscribeMinute()
+      const line = working ? 'Running now' : runRowLine(task, Date.now())
+      return contextLabel ? `${contextLabel} · ${line}` : line
+    }
+    if (howToThread) return 'How-to conversation'
     subscribeMinute()
-    if (isRun) return runRowLine(task, Date.now())
-    return taskRunLine(task, nextRunAt, Date.now())
+    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now())
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
@@ -127,8 +162,74 @@
    */
   const statusBadge = $derived(statusBadgeForThread(task, isWorking))
   const isRetryPaused = $derived(task.status === 'working-paused')
-  const isForeignRun = $derived(foreignRuns.isForeign(task.projectId, task.id))
+  /** Work this row owns is running in another window, so this row can neither
+   *  stream it nor drive it; it offers the transfer instead of a spinner. */
+  const isForeignRun = $derived(foreignThread !== null)
+  const foreignTransfer = $derived(
+    foreignThread ? foreignRuns.transferState(foreignThread.projectId, foreignThread.id) : null
+  )
+  /**
+   * The row's status badge. A foreign row keeps the working colour but gets the
+   * still window mark, exactly as a normal thread row does, because a spinner
+   * would promise live output this window never receives. Otherwise it is the
+   * app's canonical mapping, so an assistant row wears exactly the colour every
+   * other thread surface gives the same state.
+   */
+  const rowBadge = $derived.by(() => {
+    if (missed)
+      return {
+        stage: undefined,
+        tone: 'missed' as const,
+        kind: undefined,
+        variant: 'dot' as const,
+        icon: null,
+        animated: false,
+        title: 'A scheduled run was missed'
+      }
+    if (isForeignRun)
+      return {
+        stage: undefined,
+        tone: 'working' as const,
+        kind: undefined,
+        variant: 'icon' as const,
+        icon: AppWindow,
+        animated: false,
+        title: 'Running in another instance'
+      }
+    return {
+      stage: statusBadge.stage,
+      tone: statusBadge.tone,
+      kind: statusBadge.kind,
+      variant: statusBadge.variant ?? ('dot' as const),
+      icon: null,
+      animated: statusBadge.animated,
+      title: statusBadge.label
+    }
+  })
+
+  /** Ask the owning instance to hand the foreign run over, then stream it here. */
+  function transferForeignRun(): void {
+    const target = foreignThread
+    if (!target) return
+    void foreignRuns.transfer(target.projectId, target.id)
+  }
   const stageLabel = $derived(threadStatusPolicy(task.status).label)
+  const isRecording = $derived(speechController.isRecordingThread(task.id))
+  const isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(task.id))
+  const isTranscribing = $derived(
+    !isRecording && !isSpeaking && speechController.isTranscribingThread(task.id)
+  )
+  const voiceSendStage = $derived(
+    isTranscribing ? speechController.voiceSendStageForThread(task.id) : null
+  )
+  const indicator = $derived.by((): ThreadIndicator | null => {
+    if (isRecording) return 'recording'
+    if (isSpeaking) return 'speaking'
+    if (!isTranscribing) return null
+    if (voiceSendStage === 'steer') return 'transcribing-steer'
+    if (voiceSendStage === 'send') return 'transcribing-send'
+    return 'transcribing'
+  })
 
   /** A task's own menu only; a run keeps the identical thread menu (rename, pin,
    *  fork, notes, copy id, delete), since a run is a thread too. */
@@ -322,19 +423,26 @@
           </span>
         {/if}
       </span>
-      <span class="mt-0.5 flex items-center gap-1.5">
+      <span class="mt-0.5 flex min-w-0 items-center gap-1.5">
         <StatusBadge
-          stage={missed ? undefined : statusBadge.stage}
-          tone={missed ? 'missed' : statusBadge.tone}
-          kind={missed ? undefined : statusBadge.kind}
-          variant={missed ? 'dot' : (statusBadge.variant ?? 'dot')}
-          animated={!missed && statusBadge.animated}
+          stage={rowBadge.stage}
+          tone={rowBadge.tone}
+          kind={rowBadge.kind}
+          variant={rowBadge.variant}
+          icon={rowBadge.icon}
+          animated={rowBadge.animated}
           size="sm"
-          title={missed ? 'A scheduled run was missed' : statusBadge.label}
+          title={rowBadge.title}
         />
-        <span class="truncate text-[0.625rem] text-dimmed" title={scheduleLabel ?? undefined}>
+        <span
+          class="min-w-0 flex-1 truncate text-[0.625rem] text-dimmed"
+          title={scheduleLabel ?? undefined}
+        >
           {runLine}
         </span>
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
+        {/if}
       </span>
     </span>
   </button>
@@ -349,6 +457,22 @@
       ? 'bg-selected'
       : 'bg-elevated'}"
   >
+    {#if isForeignRun}
+      <button
+        type="button"
+        class="flex size-6 shrink-0 items-center justify-center rounded-md text-info transition-colors hover:bg-info/15 disabled:opacity-40"
+        title="Transfer this run to this instance"
+        aria-label="Transfer this run to this instance"
+        disabled={foreignTransfer?.pending ?? false}
+        onclick={transferForeignRun}
+      >
+        {#if foreignTransfer?.pending}
+          <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+        {:else}
+          <ArrowRightLeft size={13} aria-hidden="true" />
+        {/if}
+      </button>
+    {/if}
     <ThreadDropdown
       bind:open={showMenu}
       items={actionsMenu.items}

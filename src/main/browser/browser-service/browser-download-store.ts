@@ -12,13 +12,14 @@
  * every field is validated and bounded on load and every dropped entry is simply
  * absent from the result.
  *
- * More than one app instance can share one config root (the installed app and a
- * development instance), so the file is treated as shared state: a write re-reads
- * it and merges this instance's records over it by id, newest write wins, instead
- * of replacing the other instance's downloads with this one's view.
+ * Each launch keeps its own file (packaged prod vs unpackaged dev), so a
+ * write re-reads only its own file and merges this instance's records over
+ * it by id instead of replacing another launch's downloads with this one's
+ * view.
  */
 
 import type { BrowserDownloadState } from '../../../lib/ipc-contract'
+import { isUnpackagedElectronLaunch } from '../../../lib/utils'
 import { Logger } from '../../system/logger'
 
 /** Minimal persistence surface this store needs (a `StorageEngine` satisfies it
@@ -29,6 +30,17 @@ export interface DownloadPersistence {
 }
 
 export const BROWSER_DOWNLOADS_FILE = 'browser/downloads.json'
+
+/**
+ * Where this launch reads and writes download records. Dev uses a `-dev`
+ * variant so its records never merge with prod's. Prod keeps the file.
+ */
+export function resolveBrowserDownloadsFile(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return BROWSER_DOWNLOADS_FILE.replace(/\.json$/, '-dev.json')
+  }
+  return BROWSER_DOWNLOADS_FILE
+}
 
 const STORE_VERSION = 1
 /** Ceiling on the file's records. A downloads list is a working surface, not an
@@ -242,7 +254,7 @@ export class BrowserDownloadStore {
    *  cannot be read is "no records", never an error the caller has to handle. */
   private async readRaw(): Promise<unknown> {
     try {
-      return await this.persistence.read<unknown>(BROWSER_DOWNLOADS_FILE)
+      return await this.persistence.read<unknown>(resolveBrowserDownloadsFile())
     } catch (error: unknown) {
       Logger.error('Browser download records could not be read:', error)
       return null
@@ -251,7 +263,7 @@ export class BrowserDownloadStore {
 
   private async writeFile(records: readonly PersistedBrowserDownload[]): Promise<void> {
     try {
-      await this.persistence.write(BROWSER_DOWNLOADS_FILE, {
+      await this.persistence.write(resolveBrowserDownloadsFile(), {
         version: STORE_VERSION,
         downloads: records
       })

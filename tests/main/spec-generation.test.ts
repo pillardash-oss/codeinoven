@@ -409,8 +409,7 @@ describe('ChatEngine final prompt composition', () => {
       assignmentCoordinatorSystemPrompt: '',
       behaviorPrompt,
       utilityInstructions: '',
-      behaviorMode: 'implement',
-      historyRecap: ''
+      behaviorMode: 'implement'
     })
     expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(1)
     expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(0)
@@ -429,8 +428,7 @@ describe('ChatEngine final prompt composition', () => {
       assignmentCoordinatorSystemPrompt: '',
       behaviorPrompt,
       utilityInstructions: '',
-      behaviorMode: 'brainstorm',
-      historyRecap: ''
+      behaviorMode: 'brainstorm'
     })
     expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
     expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
@@ -445,8 +443,7 @@ describe('ChatEngine final prompt composition', () => {
       assignmentCoordinatorSystemPrompt: '',
       behaviorPrompt,
       utilityInstructions: '',
-      behaviorMode: 'chat',
-      historyRecap: ''
+      behaviorMode: 'chat'
     })
     expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(0)
     expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
@@ -463,8 +460,7 @@ describe('ChatEngine final prompt composition', () => {
       memoryInstruction: 'Memory instruction.',
       imageDescriptorNote: '',
       behaviorPrompt,
-      utilityInstructions: '',
-      historyRecap: ''
+      utilityInstructions: ''
     })
     expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
     expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
@@ -482,8 +478,7 @@ describe('ChatEngine final prompt composition', () => {
       memoryInstruction: 'Memory instruction.',
       imageDescriptorNote: '',
       behaviorPrompt,
-      utilityInstructions: '',
-      historyRecap: ''
+      utilityInstructions: ''
     })
     expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
     expect(normalizedOccurrences(composed, 'Brainstorm session before specification')).toBe(1)

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import { Workflow } from '@lucide/svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
@@ -18,7 +17,14 @@
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
-  import { TASK_RUN_PREVIEW, previewRuns, routineSiblingRuns } from './assistant-view'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import {
+    TASK_RUN_PREVIEW,
+    assistantForeignThread,
+    assistantSubjectName,
+    previewRuns,
+    routineSiblingRuns
+  } from './assistant-view'
 
   interface Props {
     routines: Routine[]
@@ -53,6 +59,9 @@
     /** Hide a routine's how-to thread (its row has no other state change). */
     onHideHowTo: (task: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
+    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
+    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
+    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     /** Group a dragged task into a routine. */
@@ -78,6 +87,9 @@
     onHandedOffTask,
     onHideHowTo,
     onDeleteRoutine,
+    onHasRoutineRunsToday,
+    onSkipNextRoutineRun,
+    onSkipRoutineRunsToday,
     onTogglePinRoutine,
     onMoveRoutine,
     onAssignTask
@@ -141,6 +153,20 @@
     const ids = new SvelteSet<string>()
     for (const run of assistantRoutines.missedRuns) {
       if (run.routineId) ids.add(run.routineId)
+    }
+    return ids
+  })
+
+  /** Routine rows surface unread work without requiring each task list to open. */
+  const unreadRoutineIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    for (const task of tasks) {
+      if (task.routineId && !task.read) ids.add(task.routineId)
+    }
+    for (const runs of runsByRoutine.values()) {
+      for (const run of runs) {
+        if (run.routineId && !run.read) ids.add(run.routineId)
+      }
     }
     return ids
   })
@@ -216,6 +242,26 @@
   /** Every on-screen assistant task by id, so a run's parent can be resolved
    *  even when that parent renders outside the routine's own list. */
   const tasksById = $derived(new Map(tasks.map((task) => [task.id, task])))
+
+  /**
+   * The task name a hoisted run row reports. A run lifted to its routine's own
+   * level has no parent row above it to say which task it ran, so without this
+   * every hoisted run read as a bare time. A run nested under its task already
+   * sits below that task's name, so it needs nothing. The name resolves through
+   * `assistantSubjectName`, so a routine's Getting started host keeps naming the
+   * routine instead of leaking "Getting started" onto its own runs.
+   */
+  function runContextLabel(
+    run: Thread,
+    nested: boolean,
+    routineName: string | null
+  ): string | null {
+    if (nested) return null
+    if (!run.assistantTaskId) return null
+    const parent = tasksById.get(run.assistantTaskId)
+    if (!parent) return null
+    return assistantSubjectName(parent, routineName, '') || null
+  }
 
   /** The runs a routine shows at its own level, beside its task rows (see
    *  `routineSiblingRuns`). */
@@ -331,7 +377,8 @@
   color: string | undefined,
   key: string,
   ariaLabel: string,
-  nested: boolean
+  nested: boolean,
+  routineName: string | null = null
 )}
   {#if runs.length > 0}
     <div
@@ -340,13 +387,16 @@
       aria-label={ariaLabel}
     >
       {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
+        {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
         <AssistantTaskRow
           task={run}
           variant="run"
+          foreignThread={runForeignThread}
           {color}
           active={run.id === selectedThreadId}
           missed={false}
           nextRunAt={null}
+          contextLabel={runContextLabel(run, nested, routineName)}
           onSelect={onOpenTask}
           onRename={onRenameTask}
           onTogglePin={onTogglePinTask}
@@ -379,11 +429,14 @@
 )}
   <AssistantTaskRow
     {task}
+    foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
+      foreignRuns.isForeign(projectId, threadId)
+    )}
     {color}
     active={task.id === selectedThreadId}
     missed={missedThreadIds.has(task.id)}
     nextRunAt={assistantRoutines.nextRunForTask(task)}
-    runWorking={taskRunWorking(task.id)}
+    runWorking={nestRuns && taskRunWorking(task.id)}
     onSelect={select}
     onRename={onRenameTask}
     onTogglePin={onTogglePinTask}
@@ -405,119 +458,118 @@
       role="list"
       aria-label="Routines and tasks"
     >
-      {#if orderedRoutines.length === 0 && pinnedTasks.length === 0 && standaloneTasks.length === 0}
-        <div class="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-          <Workflow size={18} class="text-dimmed" />
-          <p class="text-[0.6875rem] text-dimmed">
-            No routines or tasks yet. Create a routine or a task from the header.
-          </p>
-        </div>
-      {:else}
-        <!-- Pinned tasks lead the list, above the routines: the shared
-             PinnedSection owns the header, the fold state, and the row list,
-             and the assistant supplies its own task row to it. -->
-        <PinnedSection
-          sectionKey="assistant"
-          label="Pinned"
-          threads={pinnedTasks}
-          activeThreadId={selectedThreadId}
-          onOpen={openPinnedTask}
-          onRename={onRenameTask}
-          onTogglePin={onTogglePinTask}
-          onDelete={onDeleteTask}
-          onFork={onForkTask}
-        >
-          {#snippet row(task: Thread)}
-            {@render taskWithRuns(task, routineColorFor(task), openPinnedTask, true)}
-          {/snippet}
-        </PinnedSection>
+      <!-- No empty note here: the shell paints this sidebar only while it holds a
+           routine or a task, and the view's own empty state is what invites the
+           first one. -->
+      <!-- Pinned tasks lead the list, above the routines: the shared
+           PinnedSection owns the header, the fold state, and the row list,
+           and the assistant supplies its own task row to it. -->
+      <PinnedSection
+        sectionKey="assistant"
+        label="Pinned"
+        threads={pinnedTasks}
+        activeThreadId={selectedThreadId}
+        onOpen={openPinnedTask}
+        onRename={onRenameTask}
+        onTogglePin={onTogglePinTask}
+        onDelete={onDeleteTask}
+        onFork={onForkTask}
+      >
+        {#snippet row(task: Thread)}
+          {@render taskWithRuns(task, routineColorFor(task), openPinnedTask, true)}
+        {/snippet}
+      </PinnedSection>
 
-        {#each orderedRoutines as routine (routine.id)}
-          {@const routineTaskList = routineTasks(routine.id)}
-          {@const routineRunList = runsOfRoutine(routine.id)}
-          {@const visibleTasks = filteredRoutineTasks(routine)}
-          {@const searching = routineSearchOpen.has(routine.id)}
-          {@const query = routineSearchQueries.get(routine.id) ?? ''}
-          {@const siblingRunRows = siblingRuns(routine)}
-          {@const isExpanded = routineExpanded(routine, siblingRunRows)}
-          <AssistantRoutineRow
-            {routine}
-            expanded={isExpanded}
-            working={routineWorking(routine.id)}
-            missed={missedRoutineIds.has(routine.id)}
-            runCount={routineRunList.length}
-            iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
-            nextRunAt={routineNextRun(routine.id)}
-            searchOpen={searching}
-            searchQuery={query}
-            onToggle={toggleRoutine}
-            onSearchOpenChange={(r, open) => (open ? openRoutineSearch(r) : closeRoutineSearch(r))}
-            onSearchQueryChange={(r, value) => routineSearchQueries.set(r.id, value)}
-            onCreateTask={onCreateTaskInRoutine}
-            onOpenHowTo={onOpenRoutineHowTo}
-            onEdit={startEdit}
-            onTogglePin={onTogglePinRoutine}
-            onDelete={(r) => (deleteTarget = r)}
-            {onMoveRoutine}
-            onDropTask={onAssignTask}
-          />
-          {#if isExpanded}
-            <div class="mb-1 ml-2 border-l border-border pl-1.5">
-              {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
-                <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
+      {#each orderedRoutines as routine (routine.id)}
+        {@const routineTaskList = routineTasks(routine.id)}
+        {@const routineRunList = runsOfRoutine(routine.id)}
+        {@const visibleTasks = filteredRoutineTasks(routine)}
+        {@const searching = routineSearchOpen.has(routine.id)}
+        {@const query = routineSearchQueries.get(routine.id) ?? ''}
+        {@const siblingRunRows = siblingRuns(routine)}
+        {@const isExpanded = routineExpanded(routine, siblingRunRows)}
+        <AssistantRoutineRow
+          {routine}
+          expanded={isExpanded}
+          working={routineWorking(routine.id)}
+          unread={unreadRoutineIds.has(routine.id)}
+          missed={missedRoutineIds.has(routine.id)}
+          runCount={routineRunList.length}
+          iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
+          nextRunAt={routineNextRun(routine.id)}
+          searchOpen={searching}
+          searchQuery={query}
+          onToggle={toggleRoutine}
+          onSearchOpenChange={(r, open) => (open ? openRoutineSearch(r) : closeRoutineSearch(r))}
+          onSearchQueryChange={(r, value) => routineSearchQueries.set(r.id, value)}
+          onCreateTask={onCreateTaskInRoutine}
+          onOpenHowTo={onOpenRoutineHowTo}
+          onEdit={startEdit}
+          onTogglePin={onTogglePinRoutine}
+          onDelete={(r) => (deleteTarget = r)}
+          {onHasRoutineRunsToday}
+          {onSkipNextRoutineRun}
+          {onSkipRoutineRunsToday}
+          {onMoveRoutine}
+          onDropTask={onAssignTask}
+        />
+        {#if isExpanded}
+          <div class="mb-1 ml-2 border-l border-border pl-1.5">
+            {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
+              <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
+            {:else}
+              {#each visibleTasks as task (task.id)}
+                {@render taskWithRuns(
+                  task,
+                  routine.color,
+                  (selected) => {
+                    // Working inside a routine keeps it open: the user's own
+                    // call, so the automatic rule cannot fold it back.
+                    routineFoldChoice.set(routine.id, true)
+                    onOpenTask(selected)
+                    onOpenRoutineHowTo(routine)
+                  },
+                  taskNestsRuns(task, routine)
+                )}
               {:else}
-                {#each visibleTasks as task (task.id)}
-                  {@render taskWithRuns(
-                    task,
-                    routine.color,
-                    (selected) => {
-                      // Working inside a routine keeps it open: the user's own
-                      // call, so the automatic rule cannot fold it back.
-                      routineFoldChoice.set(routine.id, true)
-                      onOpenTask(selected)
-                      onOpenRoutineHowTo(routine)
-                    },
-                    taskNestsRuns(task, routine)
-                  )}
-                {:else}
-                  {#if siblingRunRows.length === 0}
-                    <p class="px-2 py-1 text-[0.625rem] text-dimmed">
-                      {routineTaskList.length > 0
-                        ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
-                        : 'No tasks in this routine yet.'}
-                    </p>
-                  {/if}
-                {/each}
-              {/if}
-              {@render runRows(
-                siblingRunRows,
-                routine.color,
-                `routine:${routine.id}`,
-                `Runs of ${routine.name}`,
-                false
-              )}
-            </div>
-          {/if}
-        {/each}
-
-        {#if standaloneTasks.length > 0}
-          <div
-            class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
-          >
-            Tasks
-          </div>
-          {#each standaloneTasks as task (task.id)}
-            {@render taskWithRuns(
-              task,
-              undefined,
-              (selected) => {
-                onOpenTask(selected)
-                onOpenTaskHowTo(selected)
-              },
-              true
+                {#if siblingRunRows.length === 0}
+                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">
+                    {routineTaskList.length > 0
+                      ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
+                      : 'No tasks in this routine yet.'}
+                  </p>
+                {/if}
+              {/each}
+            {/if}
+            {@render runRows(
+              siblingRunRows,
+              routine.color,
+              `routine:${routine.id}`,
+              `Runs of ${routine.name}`,
+              false,
+              routine.name
             )}
-          {/each}
+          </div>
         {/if}
+      {/each}
+
+      {#if standaloneTasks.length > 0}
+        <div
+          class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+        >
+          Tasks
+        </div>
+        {#each standaloneTasks as task (task.id)}
+          {@render taskWithRuns(
+            task,
+            undefined,
+            (selected) => {
+              onOpenTask(selected)
+              onOpenTaskHowTo(selected)
+            },
+            true
+          )}
+        {/each}
       {/if}
     </div>
   </div>

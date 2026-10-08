@@ -1,12 +1,34 @@
 import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
+import os from 'node:os'
 import { Logger } from '../system/logger'
-import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
+import type {
+  CloseConfirmationProject,
+  UpdateBlockerTerminal,
+  UpdateBlockers,
+  UpdaterChangelog,
+  UpdaterStatus
+} from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
 import {
+  INSTALL_ATTEMPT_LIMIT,
+  INSTALL_DISPATCH_FILE,
+  INSTALL_FAILURE_FILE,
+  nextFailureState,
+  nextInstallPermitted,
+  purgeAbandonedInstallStaging,
+  readMacBundleIdentifier,
+  resolveDispatchOutcome,
+  suppressedInstallReason,
+  type InstallDispatch,
+  type InstallFailureState,
+  type StagingSweepContext
+} from './updater-install-recovery'
+import {
+  getAppCacheDir,
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
   selectUpdateArtifact,
@@ -33,6 +55,34 @@ const { autoUpdater } = electronUpdater
 /** Anything that can report how much interactive work would be interrupted by a restart. */
 export interface SessionActivitySource {
   activeSessionCount(): number
+  /**
+   * Optional narrower count: only the work actively being produced, leaving the
+   * waiting, queued and child work {@link activeSessionCount} also includes out
+   * of it. The chat engine implements it so the install gate mirrors the header
+   * pulse instead of blocking on a card the user has not answered yet.
+   */
+  workingSessionCount?(): number
+  /**
+   * Optional authoritative sweep run before an install decision: settle the work
+   * this source believes is running but cannot corroborate, and return how much
+   * it settled. A source whose count is a direct observation of live resources
+   * (a terminal session) has nothing to reconcile and omits this.
+   */
+  reconcileUnverifiedWork?(): Promise<number>
+  /**
+   * Everything behind this source's count that is not a working thread, such as a
+   * live terminal session. Listed in the same force-install modal as the threads,
+   * because a restart takes both down and the user is being asked to approve
+   * exactly that.
+   */
+  describeOtherSessions?(): UpdateBlockerTerminal[]
+  /**
+   * Stop everything this source counts. Reached only from the force-install
+   * override the user explicitly confirms, so it may interrupt live work. Must be
+   * best-effort and never throw: one source failing to stop must not keep the
+   * others running.
+   */
+  terminateActiveWork?(): Promise<void>
 }
 
 interface PendingInstallState {
@@ -43,18 +93,26 @@ interface PendingInstallState {
 export class UpdaterService {
   private storage: StorageEngine
   private chatEngine: SessionActivitySource | null = null
+  /** How to name the working threads behind the engine's count, for the modal. */
+  private workingThreadReport: (() => CloseConfirmationProject[]) | undefined
   private activitySources: SessionActivitySource[] = []
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
   private deferredInstallPoll: ReturnType<typeof setInterval> | null = null
+  /** True while a deferred-install decision is reconciling its activity sources. */
+  private deferredInstallDeciding = false
   private installPending = false
   private installApproved = false
   /** True while the user explicitly asked for a check (Settings)   its failure is reportable. */
   private explicitCheckInFlight = false
   /** True while a check initiated by this service is still resolving. */
   private checkInFlight = false
-  private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
+  private changelogCache: {
+    changelog: UpdaterChangelog | null
+    fetchedAt: number
+    nightlyChannel: boolean
+  } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
   /** Channel the last check resolved, so the seed picks the matching mirror directory. */
@@ -68,6 +126,24 @@ export class UpdaterService {
    * that relaunches windowless when nothing was on screen.
    */
   private forceUpdateInBackground = false
+  /**
+   * Brackets the quit lifecycle around an install. `begin` runs right before
+   * `autoUpdater.quitAndInstall()` so the bootstrap can clear background mode's
+   * park gate (otherwise the updater's own `app.quit()` is swallowed and the
+   * update never applies); `end` runs when the install cannot proceed, so a
+   * failed install leaves the app parkable in the menu bar as before.
+   */
+  private updateQuitHooks: { begin: () => void; end: () => void } | null = null
+  /**
+   * Installs of the current version that were handed to the platform installer
+   * and never applied. A macOS ShipIt signature rejection produces no error
+   * event, so the failure is only observable as "we relaunched on the old
+   * version"; see `reconcileInstallDispatch`. The record bounds how many times
+   * the automatic path may try the same build.
+   */
+  private installFailure: InstallFailureState | null = null
+  /** True between handing the payload to the platform installer and its exit. */
+  private installDispatched = false
   /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
    * Skill freshness rides this cadence instead of running a timer of its own.
@@ -104,9 +180,14 @@ export class UpdaterService {
         version: info.version,
         files: info.files
       }
+      // A different version than the one that failed starts with a clean slate.
+      if (this.installFailure !== null && this.installFailure.version !== info.version) {
+        void this.clearInstallFailure()
+      }
       this.updateState({
         state: 'available',
-        availableVersion: info.version
+        availableVersion: info.version,
+        blockedReason: undefined
       })
       void this.handleAutoDownload()
     })
@@ -115,7 +196,8 @@ export class UpdaterService {
       Logger.dev('Updater: no update available')
       this.pendingUpdateInfo = null
       this.forceUpdateInBackground = false
-      this.updateState({ state: 'idle' })
+      this.updateQuitHooks?.end()
+      this.updateState({ state: 'idle', blockedReason: undefined })
     })
 
     autoUpdater.on('download-progress', (progress) => {
@@ -139,6 +221,17 @@ export class UpdaterService {
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
       this.forceUpdateInBackground = false
+      // An install that fails inside the process never reaches the platform
+      // installer, so record it here instead of waiting for the relaunch to
+      // reveal it: macOS ShipIt, the NSIS installer, and the AppImage runtime
+      // all fail silently from our side.
+      if (this.installDispatched) {
+        this.installDispatched = false
+        void this.recordInstallFailure(this._status.availableVersion)
+      }
+      // An install that failed before it could quit must not leave the park gate
+      // disabled: the app has to stay parkable in the menu bar.
+      this.updateQuitHooks?.end()
       // During a check, the rejected check promise settles the state (see
       // `settleCheckFailure`)   the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
@@ -157,13 +250,109 @@ export class UpdaterService {
     })
   }
 
-  setChatEngine(engine: SessionActivitySource | null): void {
+  /**
+   * Register the chat engine as the primary activity source, and with it how the
+   * working threads behind its count are named for the force-install modal.
+   *
+   * The engine knows how many sessions are working but not their titles or
+   * projects: those live in the database, which the engine has no business
+   * querying for an install prompt. `workingThreads` is therefore supplied by the
+   * bootstrap, sharing the one report the close gate already asks for.
+   */
+  setChatEngine(
+    engine: SessionActivitySource | null,
+    workingThreads?: () => CloseConfirmationProject[]
+  ): void {
     this.chatEngine = engine
+    this.workingThreadReport = engine ? workingThreads : undefined
   }
 
-  /** Register an extra activity source (for example live terminal sessions). */
+  /**
+   * Register how an update install brackets the quit lifecycle. Background mode
+   * parks on the `app.quit()` the updater triggers, which would leave a
+   * downloaded update unapplied, so the bootstrap clears the park gate for the
+   * duration of the install through these hooks.
+   */
+  attachUpdateQuitHooks(hooks: { begin: () => void; end: () => void }): void {
+    this.updateQuitHooks = hooks
+  }
+
+  /**
+   * Register an extra activity source (for example live terminal sessions). */
   addActivitySource(source: SessionActivitySource): void {
     this.activitySources.push(source)
+  }
+
+  /**
+   * Describe everything standing between the app and the update it is waiting to
+   * install, for the force-install modal.
+   *
+   * `activeCount` comes from the gate itself, so the modal's wording is derived
+   * from the same number the rail is already showing. The lists come from each
+   * source's own detail and can trail it by a poll, which is why the count is
+   * sent separately rather than recomputed from the lists.
+   */
+  blockers(): UpdateBlockers {
+    const terminals: UpdateBlockerTerminal[] = []
+    for (const source of this.activitySources) {
+      try {
+        terminals.push(...(source.describeOtherSessions?.() ?? []))
+      } catch (error: unknown) {
+        Logger.error('Updater: failed to describe blocking activity', error)
+      }
+    }
+    let projects: CloseConfirmationProject[] = []
+    try {
+      projects = this.workingThreadReport?.() ?? []
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to describe working threads', error)
+    }
+    return {
+      version: this._status.availableVersion ?? '',
+      activeCount: this.activeSessionCount(),
+      projects,
+      terminals
+    }
+  }
+
+  /**
+   * Stop every activity source, then install without waiting for anything.
+   *
+   * The user's explicit override, reached only from the force-install modal and
+   * only while an install is actually being held back. Two things happen in this
+   * order on purpose. The work is stopped first, so the harness connections a
+   * turn holds open are terminated by the same path a forced close uses instead
+   * of being torn down mid-dispatch by the installer's exit; and the install then
+   * reuses {@link quitAndInstallNow}, so a forced install records its dispatch,
+   * clears the pending file and clears background mode's park gate exactly as an
+   * ungated one does.
+   *
+   * The guard is `installPending` rather than the reported state, because the
+   * state the modal is reached in is `waiting`   there is nothing to override
+   * once a pending install is gone, and the case that matters is a click that
+   * lands after the gate opened on its own, which is exactly what a cleared
+   * `installPending` catches.
+   *
+   * Nothing here is recoverable once the user has asked, so a source that fails
+   * to stop is reported and the install still proceeds: leaving the app open
+   * behind an update they already approved would be the worse outcome.
+   */
+  async forceInstall(): Promise<void> {
+    if (!this.installPending) return
+    // The override wins outright. Clearing the gate first means a poll already
+    // reconciling reads a cleared `installPending` when it resumes and never
+    // dispatches a second install behind this one.
+    this.installPending = false
+    this.clearDeferredInstall()
+    for (const source of [this.chatEngine, ...this.activitySources]) {
+      if (!source?.terminateActiveWork) continue
+      try {
+        await source.terminateActiveWork()
+      } catch (error: unknown) {
+        Logger.error('Updater: could not stop active work before installing', error)
+      }
+    }
+    this.quitAndInstallNow()
   }
 
   /**
@@ -197,8 +386,11 @@ export class UpdaterService {
 
   start(): void {
     if (this.timer || !this._status.canAutoUpdate) return
-    void this.resumePendingInstall()
-    void this.checkForUpdates()
+    void (async () => {
+      await this.reconcileInstallDispatch()
+      await this.resumePendingInstall()
+      await this.checkForUpdates()
+    })()
     this.timer = setInterval(() => {
       void this.checkForUpdates()
     }, UPDATE_CHECK_INTERVAL_MS)
@@ -307,17 +499,24 @@ export class UpdaterService {
    * the feed cannot be resolved   the renderer shows a quiet fallback.
    */
   async fetchChangelog(): Promise<UpdaterChangelog | null> {
-    if (this.changelogCache && Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS) {
-      return this.changelogCache.changelog
-    }
     let nightlyChannel = false
     try {
       nightlyChannel = (await this.storage.getConfig()).updateChannel === 'nightly'
     } catch (error: unknown) {
       Logger.error('Updater: failed to read update channel for changelog', error)
     }
+    if (
+      this.changelogCache?.nightlyChannel === nightlyChannel &&
+      Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS
+    ) {
+      return this.changelogCache.changelog
+    }
     try {
-      const response = await fetch(GITHUB_RELEASES_URL, {
+      // The latest stable endpoint cannot be crowded out by frequent nightlies.
+      const releaseUrl = nightlyChannel
+        ? GITHUB_RELEASES_URL
+        : 'https://api.github.com/repos/pillardash-oss/codeinoven/releases/latest'
+      const response = await fetch(releaseUrl, {
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(10_000)
       })
@@ -328,7 +527,8 @@ export class UpdaterService {
         prerelease?: unknown
         body?: unknown
       }
-      const releases = (await response.json()) as GhRelease[]
+      const payload = (await response.json()) as GhRelease | GhRelease[]
+      const releases = Array.isArray(payload) ? payload : [payload]
       const nightlyPattern = /^v\d+\.\d+\.\d+-nightly[.-]\d+$/
       const entry = releases.find((release) =>
         nightlyChannel
@@ -345,7 +545,7 @@ export class UpdaterService {
               notes: entry.body.slice(0, CHANGELOG_MAX_NOTES_CHARS)
             }
           : null
-      this.changelogCache = { changelog, fetchedAt: Date.now() }
+      this.changelogCache = { changelog, fetchedAt: Date.now(), nightlyChannel }
       return changelog
     } catch (error: unknown) {
       Logger.error('Updater: changelog fetch failed', error)
@@ -465,7 +665,11 @@ export class UpdaterService {
    */
   quitAndInstall(): void {
     if (this._status.state !== 'downloaded') return
+    // Clicking through the guard is the user overriding it, so the attempts for
+    // this version start over rather than resuming at the limit.
+    void this.clearInstallFailure()
     this.installApproved = true
+    this.updateState({ blockedReason: undefined })
     void this.persistPendingInstall()
     void this.installWhenIdle()
   }
@@ -479,7 +683,7 @@ export class UpdaterService {
     if (this._status.state !== 'downloaded') return
     this.installPending = true
     await this.persistPendingInstall()
-    this.performDeferredInstall()
+    await this.evaluateDeferredInstall()
   }
 
   private async handleAutoDownload(): Promise<void> {
@@ -498,11 +702,30 @@ export class UpdaterService {
       await this.installWhenIdle()
       return
     }
+    // A menu bar "Check for Updates" is a direct request and always wins over
+    // the guard; so does an explicit install, which reaches `installWhenIdle`
+    // without passing through here at all.
     if (!this.forceUpdateInBackground) {
       const config = await this.storage.getConfig()
       if (!config.autoInstallUpdates) return
+      if (!this.installPermittedForTarget()) return
     }
     await this.installWhenIdle()
+  }
+
+  /**
+   * Whether the unattended path may hand the offered version to the platform
+   * installer. A version whose install already failed keeps the update visible
+   * and installable by hand; it just stops being retried on every launch.
+   */
+  private installPermittedForTarget(): boolean {
+    const version = this._status.availableVersion
+    if (!version) return true
+    if (nextInstallPermitted(this.installFailure, version, Date.now())) return true
+    const reason = suppressedInstallReason(this.installFailure, version)
+    Logger.error(`Updater: automatic install suppressed   ${reason ?? ''}`)
+    this.updateState({ state: 'downloaded', blockedReason: reason ?? undefined })
+    return false
   }
 
   /** Resume an install that was pending when the previous launch shut down. */
@@ -512,8 +735,10 @@ export class UpdaterService {
       if (!pending?.pending) return
       this.installPending = true
       this.installApproved = pending.approved === true
-      if (this._status.state === 'downloaded') {
-        this.performDeferredInstall()
+      // The resume is unattended, so a version that already failed stays out.
+      if (!this.forceUpdateInBackground && this._status.state === 'downloaded') {
+        if (!this.installPermittedForTarget()) return
+        await this.evaluateDeferredInstall()
       }
     } catch (error: unknown) {
       Logger.error('Updater: failed to resume pending install', error)
@@ -531,27 +756,168 @@ export class UpdaterService {
     }
   }
 
-  private performDeferredInstall(): void {
-    if (!this.installPending) return
-    const activeCount = this.activeSessionCount()
-    if (activeCount === 0) {
-      this.quitAndInstallNow()
-      return
+  /**
+   * Settle the install we handed to the platform installer on the previous
+   * launch. macOS validates the staged bundle's signature after the app is
+   * already gone, so a rejected install comes back as a silent relaunch on the
+   * old version with no error event anywhere. Comparing the recorded dispatch
+   * with the version now running is the only signal that works on all three
+   * platforms, and it is what stops the relaunch storm: a failure is counted,
+   * the abandoned staging is swept, and the automatic path stops re-arming the
+   * same build.
+   */
+  private async reconcileInstallDispatch(): Promise<void> {
+    try {
+      const dispatch = await this.storage.read<InstallDispatch>(INSTALL_DISPATCH_FILE)
+      const failure = await this.storage.read<InstallFailureState>(INSTALL_FAILURE_FILE)
+      const outcome = resolveDispatchOutcome(dispatch, app.getVersion())
+      if (outcome.outcome === 'applied') {
+        await this.storage.remove(INSTALL_DISPATCH_FILE)
+        if (dispatch !== null) {
+          Logger.dev(`Updater: install of ${outcome.version} applied`)
+        }
+        await this.clearInstallFailure()
+        return
+      }
+      if (outcome.outcome === 'none') {
+        this.installFailure = failure
+        return
+      }
+      const record = nextFailureState(failure, outcome.version, outcome.dispatchedAt)
+      this.installFailure = record
+      await this.storage.remove(INSTALL_DISPATCH_FILE)
+      await this.storage.write(INSTALL_FAILURE_FILE, record)
+      Logger.error(
+        `Updater: install of ${outcome.version} did not apply (attempt ${record.attempts} of ${INSTALL_ATTEMPT_LIMIT})`
+      )
+      await this.purgeStaging(record.attempts >= INSTALL_ATTEMPT_LIMIT)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to reconcile the previous install', error)
     }
+  }
 
-    this.updateState({ state: 'waiting' })
-    this.broadcastWaitingForThreads(activeCount)
+  /**
+   * Count an install that failed in-process and sweep the staging it left.
+   * The dispatch record is cleared as well: the failure is already known, so
+   * the next launch has nothing left to reconcile and must not count it twice.
+   */
+  private async recordInstallFailure(version: string | undefined): Promise<void> {
+    if (!version) return
+    const record = nextFailureState(this.installFailure, version, Date.now())
+    this.installFailure = record
+    Logger.error(
+      `Updater: install of ${version} failed (attempt ${record.attempts} of ${INSTALL_ATTEMPT_LIMIT})`
+    )
+    try {
+      await this.storage.remove(INSTALL_DISPATCH_FILE)
+      await this.storage.write(INSTALL_FAILURE_FILE, record)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to persist the install failure record', error)
+    }
+    await this.purgeStaging(record.attempts >= INSTALL_ATTEMPT_LIMIT)
+  }
 
-    this.clearDeferredInstall()
-    this.deferredInstallPoll = setInterval(() => {
-      const remaining = this.activeSessionCount()
-      if (remaining === 0) {
-        this.clearDeferredInstall()
+  private async clearInstallFailure(): Promise<void> {
+    if (this.installFailure === null) return
+    this.installFailure = null
+    try {
+      await this.storage.remove(INSTALL_FAILURE_FILE)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to clear the install failure record', error)
+    }
+  }
+
+  /**
+   * Drop the staging the platform's installer abandoned, and once the attempts
+   * for this build are used up also the cached payload, so the next retry
+   * fetches fresh bytes instead of replaying the artifact that was rejected.
+   */
+  private async purgeStaging(dropPendingPayload: boolean): Promise<void> {
+    const cacheLocation = resolveUpdaterCacheLocation()
+    let bundleId: string | null = null
+    if (process.platform === 'darwin') {
+      bundleId = await readMacBundleIdentifier(process.resourcesPath)
+      if (bundleId === null) {
+        Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
+      }
+    }
+    const context: StagingSweepContext = {
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      cacheHome: getAppCacheDir(process.platform, os.homedir()),
+      updaterCacheDir: cacheLocation?.cacheDir ?? null,
+      bundleId,
+      appName: app.getName().toLowerCase()
+    }
+    try {
+      await purgeAbandonedInstallStaging(context, { dropPendingPayload })
+    } catch (error: unknown) {
+      Logger.error('Updater: staging sweep failed', error)
+    }
+  }
+
+  /**
+   * Decide whether the deferred install can run now, and keep watching if not.
+   * A no-op unless an install is actually pending.
+   *
+   * The decision is reconciled before it is taken, never after: a source that
+   * infers work from an optimistic status has to be asked to settle what it
+   * cannot corroborate first, or a session the app calls "working" with no
+   * harness behind it holds the gate open forever. That is the shape of the
+   * deadlock this gate could reach after an update   the launch that resumes the
+   * interrupted threads runs before this one, so the recovered threads are
+   * `working` before the first question is even asked, and an update whose
+   * install was still pending waits for threads that will never finish.
+   */
+  private async evaluateDeferredInstall(): Promise<void> {
+    // One decision at a time. Reconciling is asynchronous, so a poll landing
+    // mid-reconcile would otherwise run a second decision beside the first and
+    // hand the same payload to the platform installer twice.
+    if (!this.installPending || this.deferredInstallDeciding) return
+    this.deferredInstallDeciding = true
+    try {
+      await this.reconcileUnverifiedWork()
+      // Reconciling awaits, and `installPending` can flip across that await: a
+      // stop, or the user's own force-install override clearing the gate. The
+      // decision below acts on it, so it is re-read here instead of trusted from
+      // before the await.
+      if (!this.installPending) return
+
+      const activeCount = this.activeSessionCount()
+      if (activeCount === 0) {
         this.quitAndInstallNow()
         return
       }
-      this.broadcastWaitingForThreads(remaining)
-    }, DEFERRED_POLL_MS)
+
+      this.updateState({ state: 'waiting' })
+      this.broadcastWaitingForThreads(activeCount)
+
+      this.clearDeferredInstall()
+      this.deferredInstallPoll = setInterval(() => {
+        void this.evaluateDeferredInstall()
+      }, DEFERRED_POLL_MS)
+    } finally {
+      this.deferredInstallDeciding = false
+    }
+  }
+
+  /**
+   * Ask every source that infers activity to settle what it cannot corroborate.
+   * A source that fails is left exactly as it reported itself: this narrows a
+   * count that may be wrong, it never invents one.
+   */
+  private async reconcileUnverifiedWork(): Promise<void> {
+    for (const source of [this.chatEngine, ...this.activitySources]) {
+      if (!source?.reconcileUnverifiedWork) continue
+      try {
+        const settled = await source.reconcileUnverifiedWork()
+        if (settled > 0) {
+          Logger.info('Updater: settled uncorroborated active work before installing', { settled })
+        }
+      } catch (error: unknown) {
+        Logger.error('Updater: failed to reconcile active work', error)
+      }
+    }
   }
 
   private activeSessionCount(): number {
@@ -560,9 +926,14 @@ export class UpdaterService {
     // `waiting` sessions, pending permissions/questions, compactions,
     // brainstorm/loop runs do not pulse the header and must not block
     // "Restart to update".
-    const engine = this.chatEngine as unknown as { workingSessionCount?: () => number } | null
-    if (engine?.workingSessionCount) return engine.workingSessionCount()
-    let count = this.chatEngine?.activeSessionCount() ?? 0
+    //
+    // The extra sources count on top of the engine's answer rather than being
+    // replaced by it. A live terminal is real work a restart would destroy, and
+    // the engine's working-session badge cannot see one; returning the badge
+    // alone silently dropped every terminal from this gate.
+    let count = this.chatEngine?.workingSessionCount
+      ? this.chatEngine.workingSessionCount()
+      : (this.chatEngine?.activeSessionCount() ?? 0)
     for (const source of this.activitySources) {
       count += source.activeSessionCount()
     }
@@ -581,17 +952,37 @@ export class UpdaterService {
     this.installPending = false
     this.installApproved = false
     this.updateState({ state: 'idle' })
+    // The install runs in a process that outlives us (ShipIt, the NSIS
+    // installer, the AppImage runtime) and reports nothing back, so record what
+    // we handed over. `reconcileInstallDispatch` reads it on the next launch to
+    // learn whether the update actually landed.
+    const targetVersion = this._status.availableVersion
     void this.storage
       .write(PENDING_INSTALL_FILE, { pending: false, approved: false })
       .catch((error: unknown) => {
         Logger.error('Updater: failed to clear pending install', error)
       })
+    if (targetVersion) {
+      this.installDispatched = true
+      void this.storage
+        .write(INSTALL_DISPATCH_FILE, {
+          version: targetVersion,
+          dispatchedAt: Date.now()
+        } satisfies InstallDispatch)
+        .catch((error: unknown) => {
+          Logger.error('Updater: failed to record the install dispatch', error)
+        })
+    }
     // A background update installs silently and, when nothing was on screen,
     // leaves a marker so the relaunched app comes back in the menu bar instead
     // of throwing a window at the user.
     const background = this.forceUpdateInBackground
     this.forceUpdateInBackground = false
     if (background && BrowserWindow.getAllWindows().length === 0) markBackgroundRelaunch()
+    // The install must be a real quit. Background mode would otherwise park on
+    // the app.quit() that quitAndInstall triggers, and the update would never be
+    // applied; `begin` clears that gate and `end` (on failure) restores it.
+    this.updateQuitHooks?.begin()
     autoUpdater.quitAndInstall(background, background)
   }
 

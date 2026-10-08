@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { createHash } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
-import type { Plugin, PluginOption } from 'vite'
+import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
@@ -141,6 +141,59 @@ function refuseEmptyChunks(environment: 'main' | 'preload'): Plugin {
   }
 }
 
+/** Electron Vite's regex shim injector mistakes imports inside generated Pi
+ * extension template strings for bundle imports. Supply the shim through the
+ * output banner instead, where it always remains at module scope. */
+function useModuleScopeCommonJsShim(): Plugin {
+  return {
+    name: 'codeinoven:module-scope-commonjs-shim',
+    configResolved(config) {
+      const shim = config.plugins.find((plugin) => plugin.name === 'vite:esm-shim')
+      if (shim) shim.renderChunk = undefined
+    }
+  }
+}
+
+/** Remote deployment uploads one file, so its build cannot share desktop chunks. */
+function standaloneOvenService(): Plugin {
+  let mode = 'production'
+  return {
+    name: 'codeinoven:standalone-oven-service',
+    configResolved(config) {
+      mode = config.mode
+    },
+    async generateBundle() {
+      const result = await build({
+        configFile: false,
+        mode,
+        logLevel: 'warn',
+        ssr: { noExternal: true },
+        build: {
+          ssr: resolve(__dirname, 'src/main/ovens/remote/oven-service-entry.ts'),
+          write: false,
+          minify: false,
+          target: 'node22',
+          rolldownOptions: { output: { format: 'es', codeSplitting: false } }
+        }
+      })
+      if ('on' in result) throw new Error('The Oven service build must not run in watch mode.')
+      const outputs = Array.isArray(result) ? result : [result]
+      const chunks = outputs
+        .flatMap((output) => output.output)
+        .filter((output) => output.type === 'chunk')
+      if (chunks.length !== 1)
+        throw new Error('The Oven service must build into exactly one standalone file.')
+      for (const moduleId of chunks[0].moduleIds) this.addWatchFile(moduleId)
+      this.emitFile({ type: 'asset', fileName: 'oven-service.mjs', source: chunks[0].code })
+    }
+  }
+}
+
+const mainCommonJsBanner = `import { createRequire as __cioCreateRequire } from 'node:module';
+const __filename = import.meta.filename;
+const __dirname = import.meta.dirname;
+const require = __cioCreateRequire(import.meta.url);`
+
 export function rendererPlugins(): PluginOption[] {
   return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
 }
@@ -155,11 +208,13 @@ export default defineConfig(({ mode }) => {
   ])
   return {
     main: {
-      plugins: [refuseEmptyChunks('main')],
+      plugins: [refuseEmptyChunks('main'), useModuleScopeCommonJsShim(), standaloneOvenService()],
       define: {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).
         __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion),
+        // Public ingestion token, never a PostHog personal API key.
+        __CODEINOVEN_POSTHOG_TOKEN__: JSON.stringify(env.CODEINOVEN_POSTHOG_TOKEN ?? ''),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
@@ -185,6 +240,11 @@ export default defineConfig(({ mode }) => {
           external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
           input: {
             index: resolve(__dirname, 'src/main/index.ts')
+          },
+          output: {
+            format: 'es',
+            banner: mainCommonJsBanner,
+            entryFileNames: (chunk) => (chunk.name === 'oven-service' ? '[name].mjs' : '[name].js')
           }
         }
       }

@@ -1,6 +1,9 @@
+import { ovenRootKey } from '$lib/oven-root-target'
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { ovenSurfaceCacheKey, readOvenSurface, writeOvenSurface } from '$lib/oven-surface-cache'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { parseOvenRootKey } from '$shared/oven-root-routing'
 import { loadRepositoryPreflight } from '$lib/repository-preflight-cache'
 import {
   GITHUB_PROBE_TTL_MS,
@@ -118,6 +121,20 @@ interface GitChromeSnapshot {
 }
 
 /**
+ * What a remote checkout's Git read is kept as between sessions.
+ *
+ * The working tree is what the panel paints, and the chrome is what its header
+ * needs to be useful, so both are kept together: a cached tree with no branch
+ * name would be a worse first paint than none.
+ */
+interface CachedGitSurface {
+  status: GitStatus
+  branches: GitBranchInfo[]
+  remotes: GitRemoteInfo[]
+  stashes: GitStashEntry[]
+}
+
+/**
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
  */
@@ -203,6 +220,25 @@ export class GitState {
    */
   private readonly chromeByTarget = new SvelteMap<string, GitChromeSnapshot>()
 
+  /**
+   * Whether the working tree on screen is the last-known read kept for this
+   * Oven, painted before the live read answers. Read by the pair of panels that
+   * show Git, so a cached tree is dimmed and marked rather than passed off as
+   * the checkout's current state.
+   */
+  private cachedStatus = $state(false)
+
+  /**
+   * Why the working-tree read itself failed, or null.
+   *
+   * Kept apart from `error`, which every Git surface writes to (a pull request
+   * action, a deployment lookup, an authentication probe). The Oven surface
+   * overlay answers for the checkout read and nothing else; sharing `error`
+   * would let a failed pull request on a healthy Oven claim the Oven could not
+   * be read.
+   */
+  private statusError = $state<string | null>(null)
+
   /** Local git state and operations: status, branches, remotes, stashes, conflicts. */
   private readonly local = new GitLocalOperations({
     markBusy: (operation, busy) => this.markBusy(operation, busy),
@@ -264,6 +300,28 @@ export class GitState {
 
   set status(value: GitStatus | null) {
     this.local.status = value
+  }
+
+  /**
+   * The Oven checkout this panel's Git state belongs to, or null when the
+   * active target is a local project.
+   *
+   * The active scope key is the one thing every read already targets, so it is
+   * also what says whether the content came from an Oven and which one, without
+   * re-reading the selected thread at render time.
+   */
+  get remoteTarget(): { threadId: string; ovenId: string } | null {
+    return parseOvenRootKey(this.activeScopeBucketId)
+  }
+
+  /** Whether the working tree on screen is the last-known read from the Oven. */
+  get showingCachedStatus(): boolean {
+    return this.cachedStatus
+  }
+
+  /** Why the last working-tree read failed, for the Oven surface overlay. */
+  get workingTreeError(): string | null {
+    return this.statusError
   }
 
   get branches(): GitBranchInfo[] {
@@ -420,12 +478,49 @@ export class GitState {
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
   activate(projectId: string, scopeBucketId?: string): void {
-    const nextScopeBucketId = scopeBucketId ?? null
+    const nextScopeBucketId = ovenRootKey(projectId) ?? scopeBucketId ?? null
     if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
     this.activationGeneration += 1
     this.activeProjectId = projectId
     this.activeScopeBucketId = nextScopeBucketId
     this.clearProjectState()
+    this.hydrateFromCache(nextScopeBucketId)
+  }
+
+  /**
+   * Paint what this Oven last answered, before asking it again.
+   *
+   * A remote checkout's Git read is an SSH round trip, so the panel would
+   * otherwise open on "Checking repository" and then a blank tree for a
+   * repository that has been read many times. The live read replaces this the
+   * moment it lands; `showingCachedStatus` is what tells the panel to dim it
+   * until then, so the cached tree is never passed off as current.
+   */
+  private hydrateFromCache(scopeBucketId: string | null): void {
+    const target = parseOvenRootKey(scopeBucketId)
+    if (!target) return
+    const cached = readOvenSurface<CachedGitSurface>(
+      ovenSurfaceCacheKey('git', target.ovenId, target.threadId)
+    )
+    if (!cached || !cached.status) return
+    this.status = cached.status
+    this.branches = Array.isArray(cached.branches) ? cached.branches : []
+    this.remotes = Array.isArray(cached.remotes) ? cached.remotes : []
+    this.stashes = Array.isArray(cached.stashes) ? cached.stashes : []
+    this.cachedStatus = true
+  }
+
+  /** Keep a remote checkout's Git read for its next open. */
+  private rememberSurfaceCache(scopeBucketId: string | null): void {
+    const target = parseOvenRootKey(scopeBucketId)
+    const status = this.status
+    if (!target || !status) return
+    writeOvenSurface(ovenSurfaceCacheKey('git', target.ovenId, target.threadId), {
+      status,
+      branches: this.branches,
+      remotes: this.remotes,
+      stashes: this.stashes
+    } satisfies CachedGitSurface)
   }
 
   /**
@@ -438,6 +533,7 @@ export class GitState {
     this.activeProjectId = projectId
     this.activeScopeBucketId = scopeBucketId
     this.clearProjectState()
+    this.hydrateFromCache(scopeBucketId)
     this.scheduleRefresh(projectId)
   }
 
@@ -491,7 +587,7 @@ export class GitState {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
-    const scopeBucketId = thread?.scopeBucketId ?? null
+    const scopeBucketId = ovenRootKey(project.id) ?? thread?.scopeBucketId ?? null
     // A scope target is what Git cares about, not a thread. Switching between
     // two threads of the same project and scope changes nothing here, so this
     // returns before touching status: no read, no blank panel, no worktree
@@ -688,6 +784,8 @@ export class GitState {
     this.githubPermission = null
     this.conflictsMode = false
     this.statusReadAt = 0
+    this.cachedStatus = false
+    this.statusError = null
   }
 
   /**
@@ -785,6 +883,7 @@ export class GitState {
     /** Whether this round has already published working tree state. */
     let publishedStatus = false
     this.error = null
+    this.statusError = null
     try {
       // The chrome reads are started first so they overlap the status read, but
       // nothing downstream waits on them. Staging and committing are local
@@ -831,10 +930,15 @@ export class GitState {
       if (!stillCurrent()) return
       if (!status) {
         this.error = 'Git status could not be loaded'
-        this.status = null
+        this.statusError = 'Git status could not be loaded'
+        // A cached tree is deliberately kept: the surface shows it dimmed behind
+        // the error rather than going blank for a checkout that has been read.
+        if (!this.cachedStatus) this.status = null
         return
       }
       this.status = status
+      this.cachedStatus = false
+      this.statusError = null
       publishedStatus = true
       this.statusReadAt = Date.now()
       // Conflicts mode is only meaningful while actual conflicts exist - once
@@ -863,6 +967,7 @@ export class GitState {
       this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
       this.stashes = stashes
+      this.rememberSurfaceCache(targetScope)
       if (!freshChrome) {
         // Remember what this target's chrome answered while it is still fresh,
         // and drop the entries nobody can reuse any more so the map cannot grow
@@ -889,7 +994,11 @@ export class GitState {
       // A chrome read is what failed here when status has already landed, and a
       // failed branch listing is not a reason to stop staging files: the
       // published status is left in place and only its own failure clears it.
-      if (!publishedStatus) this.status = null
+      // A cached tree stays for the same reason the panel shows it at all.
+      if (!publishedStatus) {
+        this.statusError = this.error
+        if (!this.cachedStatus) this.status = null
+      }
     } finally {
       this.markBusy('refresh', false)
     }
@@ -1454,6 +1563,21 @@ export class GitState {
     mode: WorkflowRerunMode
   ): Promise<boolean> {
     return this.deployments.rerunWorkflowRun(projectId, owner, repo, runId, mode)
+  }
+
+  /**
+   * Cancel a queued or in-progress workflow run, then drop the cached views so
+   * the run is read again as it settles into `cancelled` instead of showing the
+   * stale active state. Returns false when GitHub refused (the reason lands in
+   * `error`).
+   */
+  cancelWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number
+  ): Promise<boolean> {
+    return this.deployments.cancelWorkflowRun(projectId, owner, repo, runId)
   }
 
   startGitHubDeviceFlow() {

@@ -1,4 +1,6 @@
 import type { Database } from '../../main/database/database'
+import { Logger } from '../../main/system/logger'
+import { scopedBucketIdsFromBoard } from './thread-manager-capacity'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   DEFAULT_SCOPE_WORKTREE_DEFAULTS,
@@ -216,10 +218,78 @@ export class ScopeManager {
       board = defaultBoard()
     }
     this.assertInvariants(board)
+    this.reassignStrandedThreads(projectId, board)
     if (!row || this.needsPersistence(board, row.data)) {
       this.persist(projectId, board)
     }
     return board
+  }
+
+  /**
+   * Every scope bucket across every project that gets its own thread bucket: a
+   * pinned scope or a managed worktree root. Read on the database worker so the
+   * main thread never pays for the scan, and read-only (no board healing), so a
+   * caller that only needs the ids never persists or reassigns anything. A
+   * board that cannot be parsed is skipped rather than failing the whole read.
+   */
+  async scopedBucketIds(): Promise<Set<string>> {
+    const result = await this.db.queryViaWorker('SELECT data FROM scope_boards', [], 0)
+    const rows: Record<string, unknown>[] = result.ok
+      ? result.rows
+      : this.db.all('SELECT data FROM scope_boards')
+    const ids = new Set<string>()
+    for (const row of rows) {
+      const data = row['data']
+      if (typeof data !== 'string') continue
+      try {
+        for (const id of scopedBucketIdsFromBoard(this.parsePersisted(data))) ids.add(id)
+      } catch {
+        // A malformed board is reported on its own read; it must not hide the
+        // other projects' pinned scopes here.
+      }
+    }
+    return ids
+  }
+
+  /**
+   * Reassign every thread whose scope is no longer on the board to the Default
+   * scope.
+   *
+   * Scope deletion settles a scope's threads before it drops the record, but a
+   * create that was already in flight can land after that sweep. Such a row has
+   * no root to resolve and no scope list to appear in, so the board read is
+   * where it heals. The move touches the row the same way an explicit scope
+   * move does (`ThreadManager.updateThread`): activity and scope ordering land
+   * on the destination, so a healed thread is neither invisible nor the
+   * immediate eviction candidate on arrival.
+   */
+  private reassignStrandedThreads(projectId: string, board: ScopeBoard): void {
+    const known = board.buckets.map((bucket) => bucket.id)
+    const placeholders = known.map(() => '?').join(', ')
+    const stranded = this.db.all<{ id: string }>(
+      `SELECT id FROM threads
+        WHERE project_id = ? AND scope_bucket_id IS NOT NULL
+          AND scope_bucket_id NOT IN (${placeholders})`,
+      projectId,
+      ...known
+    )
+    if (stranded.length === 0) return
+    const now = Date.now()
+    this.db.run(
+      `UPDATE threads
+          SET scope_bucket_id = ?, scope_sort_order = NULL, last_activity = ?, updated_at = ?
+        WHERE project_id = ? AND scope_bucket_id IS NOT NULL
+          AND scope_bucket_id NOT IN (${placeholders})`,
+      DEFAULT_SCOPE_BUCKET_ID,
+      now,
+      now,
+      projectId,
+      ...known
+    )
+    Logger.dev('Reassigned threads whose scope no longer exists to the Default scope', {
+      projectId,
+      count: stranded.length
+    })
   }
 
   private parsePersisted(data: string): ScopeBoard {

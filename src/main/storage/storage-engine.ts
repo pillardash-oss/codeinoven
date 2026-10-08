@@ -23,7 +23,12 @@ import {
   MAX_BACKGROUND_WAKE_LEAD_MS,
   MIN_BACKGROUND_WAKE_LEAD_MS,
   MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
-  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  MIN_CIO_CLEANUP_RETENTION_DAYS,
+  MAX_CIO_CLEANUP_RETENTION_DAYS,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  normalizeCioCleanupExcludedCategories
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
@@ -60,6 +65,7 @@ import {
   sanitizeCustomSearchEngines
 } from '../../lib/browser-search-engines'
 import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
+import { MAX_MODEL_PROFILES, isUsableModelProfile } from '../../lib/model-profiles'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
@@ -76,6 +82,7 @@ const DEFAULT_CONFIG: AppConfig = {
   fontWeight: 200,
   zoomLevel: 1,
   onboardingCompleted: false,
+  shareAnonymousUsage: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
@@ -86,6 +93,7 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  modelProfiles: [],
   workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
@@ -116,6 +124,8 @@ const DEFAULT_CONFIG: AppConfig = {
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
+  cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -210,6 +220,7 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      shareAnonymousUsage: config?.shareAnonymousUsage === true,
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
@@ -223,6 +234,12 @@ export class StorageEngine {
           .filter(isUsableDesignAssignment)
           .slice(0, MAX_DESIGN_ASSIGNMENTS)
       },
+      // Same tolerance as assignments: a profile missing a harness, a provider, or
+      // a model could only be applied to somewhere the user never chose, so it is
+      // dropped on read rather than offered as a broken row.
+      modelProfiles: (Array.isArray(config?.modelProfiles) ? config.modelProfiles : [])
+        .filter(isUsableModelProfile)
+        .slice(0, MAX_MODEL_PROFILES),
       // A provider id a future version wrote is passed through as-is so the
       // choice is not silently erased; only a missing field falls back.
       mediaGeneration: {
@@ -283,6 +300,20 @@ export class StorageEngine {
         MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
         MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
         DEFAULT_CONFIG.maxBackgroundWakeHoldMs
+      ),
+      // Read tolerantly: a hand-edited value outside the bounds falls back to the
+      // shipped retention instead of sweeping with a cutoff nobody chose.
+      cioCleanupRetentionDays: clampNumber(
+        config?.cioCleanupRetentionDays,
+        MIN_CIO_CLEANUP_RETENTION_DAYS,
+        MAX_CIO_CLEANUP_RETENTION_DAYS,
+        DEFAULT_CONFIG.cioCleanupRetentionDays
+      ),
+      // A config written before the folder list existed keeps the shipped
+      // exclusions; an id a future version wrote is dropped rather than
+      // rejecting the whole file.
+      cioCleanupExcludedCategories: normalizeCioCleanupExcludedCategories(
+        config?.cioCleanupExcludedCategories
       ),
       sound: {
         ...DEFAULT_CONFIG.sound,

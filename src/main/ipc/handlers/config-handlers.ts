@@ -1,3 +1,4 @@
+import { usageAnalytics } from '../../system/usage-analytics'
 import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
@@ -343,6 +344,9 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     const previous = await storage.getConfig()
     const config = { ...previous, ...patch }
     await storage.saveConfig(config)
+    if (patch.shareAnonymousUsage !== undefined) {
+      void usageAnalytics.setConsent(config.shareAnonymousUsage === true)
+    }
     // The preview server resolves the header when the policy is applied, so this
     // keeps a settings change effective for the very next prototype request.
     options.prototypePreviewService?.setCdnPolicy(prototypeCdnPolicyFromConfig(config))
@@ -356,6 +360,15 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
+    // The retention and folder settings change what the next sweep removes, so
+    // the settings page is told the state moved instead of showing the previous
+    // cutoff.
+    if (
+      patch.cioCleanupRetentionDays !== undefined ||
+      patch.cioCleanupExcludedCategories !== undefined
+    ) {
+      void options.cioCleanup?.refresh()
+    }
     // Background mode is applied live: the login item, the menu bar icon, and the
     // wake policy all follow the saved value without a restart.
     options.powerWakeService?.setBackgroundPolicy({

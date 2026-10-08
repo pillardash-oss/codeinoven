@@ -6,6 +6,7 @@ import type {
   ProviderAccountAuthEntry
 } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { escapeRegExp, isGeneratedAccountLabelFor } from '../../lib/account-label'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -115,9 +116,11 @@ export class HarnessAccountRegistry {
         const providerName = discovered.label || discovered.providerId
         const existingLabelWasGenerated =
           existing !== undefined &&
-          [existing.providerName, existing.providerId, harnessId].some((base) =>
-            generatedLabelFor(existing.label, base)
-          )
+          isGeneratedAccountLabelFor(existing.label, [
+            existing.providerName,
+            existing.providerId,
+            harnessId
+          ])
         let label =
           existing?.label && existing.label !== 'Default' && !existingLabelWasGenerated
             ? existing.label
@@ -128,6 +131,8 @@ export class HarnessAccountRegistry {
           label = `${providerName}-${sequence}`
         }
         labels.add(label.toLocaleLowerCase('en-US'))
+        // Container-based harnesses keep the user's default in this registry;
+        // refreshing their shared-home credential must preserve that choice.
         legacy.push({
           id,
           harnessId,
@@ -136,7 +141,10 @@ export class HarnessAccountRegistry {
           label,
           containerKind: 'legacy-default',
           ...(sourceId ? { sourceId } : {}),
-          ...(sourceId && harnessActiveSourceIds.has(sourceId) ? { isDefault: true } : {}),
+          ...((sourceId && harnessActiveSourceIds.has(sourceId)) ||
+          (!harnessSupportsMultipleAccounts(harnessId) && existing?.isDefault)
+            ? { isDefault: true }
+            : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })
@@ -154,6 +162,7 @@ export class HarnessAccountRegistry {
   async resolve(harnessId: string, accountId?: string): Promise<HarnessAccount> {
     const accounts = await this.list(harnessId)
     if (accounts.length === 1) return accounts[0]
+    if (!accountId && accounts.length > 0) return defaultAccountFor(accounts)
     const resolvedId = accountId || legacyHarnessAccountId(harnessId)
     const account = accounts.find((candidate) => candidate.id === resolvedId)
     if (account) return account
@@ -373,6 +382,12 @@ export class HarnessAccountRegistry {
         return { CLAUDE_CONFIG_DIR: root }
       case 'muse':
         return { XDG_CONFIG_HOME: `${root}/config`, XDG_DATA_HOME: `${root}/data` }
+      case 'antigravity':
+        // agy keeps its OAuth token under `~/.gemini/antigravity-cli/` and
+        // honors HOME (or USERPROFILE on Windows) when locating it. Pointing
+        // both at the managed container isolates one Google account per
+        // CodeInOven account without touching the user's default login.
+        return { HOME: root, USERPROFILE: root }
       default:
         return {}
     }
@@ -463,17 +478,8 @@ export class HarnessAccountRegistry {
   }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-}
-
 /** Preferred default for a set of same-provider accounts: an explicitly marked
  *  account, else the earliest created (accounts arrive createdAt-sorted). */
 function defaultAccountFor(accounts: HarnessAccount[]): HarnessAccount {
   return accounts.find((account) => account.isDefault) ?? accounts[0]
-}
-
-function generatedLabelFor(label: string, base: string): boolean {
-  if (!base.trim()) return false
-  return new RegExp(`^${escapeRegExp(base)}-\\d+$`, 'iu').test(label)
 }

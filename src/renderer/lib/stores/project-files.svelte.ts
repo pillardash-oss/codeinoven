@@ -1,3 +1,4 @@
+import { ovenRootKey, ovenRootThread } from '$lib/oven-root-target'
 import type {
   DirectoryPreviewSession,
   ProjectFileDropResult,
@@ -7,7 +8,7 @@ import type {
 } from '$shared/types'
 import { usesThreadWorkspaceMount } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, invokeAtOvenRoot } from '$lib/ipc.svelte'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -46,7 +47,7 @@ class ProjectFilesWorkspace {
 
   private explorer = new ProjectFilesExplorer({
     stateFor: (projectId) => this.ensureState(projectId),
-    existingState: (projectId) => this.projects[projectId],
+    existingState: (projectId) => this.projects[this.cacheKey(projectId)],
     scopeFor: (projectId) => this.scopeFor(projectId),
     threadArg: (projectId) => this.threadArg(projectId),
     mountKeyFor: (projectId) => this.mountKeyFor(projectId),
@@ -66,14 +67,20 @@ class ProjectFilesWorkspace {
    *  This value is sent to the main process, so it must stay a real scope
    *  bucket id. A mounted conversation workspace is threaded separately via
    *  `threadArg`; only cache keys below use the mount-aware key. */
+  private cacheKey(projectId: string): string {
+    return ovenRootKey(projectId) ?? projectId
+  }
+
   private scopeFor(projectId: string): string {
-    return workspaceState.activeScopeBucketIdFor(projectId)
+    return ovenRootKey(projectId) ?? workspaceState.activeScopeBucketIdFor(projectId)
   }
 
   /** Internal cache/invalidation key that also distinguishes which conversation
    *  workspace mount (if any) the cached listings belong to. Never sent over
    *  IPC, so the `thread:` prefix is safe here. */
   private mountKeyFor(projectId: string): string {
+    const ovenKey = ovenRootKey(projectId)
+    if (ovenKey) return ovenKey
     const threadId = this.projects[projectId]?.mountThreadId ?? null
     if (threadId && usesThreadWorkspaceMount(projectId)) return `thread:${threadId}`
     return this.scopeFor(projectId)
@@ -89,20 +96,26 @@ class ProjectFilesWorkspace {
 
   /** Optional trailing thread-mount argument for `projectFiles:*` invokes. */
   private threadArg(projectId: string): string | undefined {
+    const ovenThread = ovenRootThread(projectId)
+    if (ovenThread) return ovenThread.id
     return this.projects[projectId]?.mountThreadId ?? undefined
   }
 
   ensureState(projectId: string): ProjectFilesState {
-    const existing = this.projects[projectId]
+    const key = this.cacheKey(projectId)
+    const existing = this.projects[key]
     if (existing) return existing
     const state = createProjectFilesState(projectId)
-    this.projects[projectId] = state
+    const ovenThread = ovenRootThread(projectId)
+    state.ovenThreadId = ovenThread?.id
+    state.ovenId = ovenThread?.settings?.ovenId
+    this.projects[key] = state
     this.explorer.markPendingRestore(projectId)
     return state
   }
 
   getState(projectId: string): ProjectFilesState {
-    const state = this.projects[projectId]
+    const state = this.projects[this.cacheKey(projectId)]
     if (!state) throw new Error(`Project files were not prepared: ${projectId}`)
     return state
   }
@@ -113,7 +126,7 @@ class ProjectFilesWorkspace {
    *  prepared or the file has no editable session. */
   isDirty(projectId: string, path: string | null): boolean {
     if (!path) return false
-    const session = this.projects[projectId]?.sessions[path]
+    const session = this.projects[this.cacheKey(projectId)]?.sessions[path]
     return session ? session.draft !== session.source.content : false
   }
 
@@ -917,7 +930,7 @@ class ProjectFilesWorkspace {
       const state = this.projects[projectId]
       for (const session of Object.values(state.sessions)) {
         if (session.draft !== session.source.content) {
-          files.push({ projectId, path: session.source.path })
+          files.push({ projectId: state.projectId ?? projectId, path: session.source.path })
         }
       }
     }
@@ -928,22 +941,36 @@ class ProjectFilesWorkspace {
    *  failed (the caller should keep the app open). */
   async saveAllUnsaved(): Promise<boolean> {
     let saved = true
-    for (const projectId of Object.keys(this.projects)) {
-      const state = this.projects[projectId]
-      for (const path of Object.keys(state.sessions)) {
-        const session = state.sessions[path]
+    for (const [key, state] of Object.entries(this.projects)) {
+      const projectId = state.projectId ?? key
+      for (const [path, session] of Object.entries(state.sessions)) {
         if (session.draft === session.source.content || session.saving) continue
         const submittedDraft = session.draft
         try {
-          const source = await invoke(
-            'projectFiles:save',
-            projectId,
-            path,
-            submittedDraft,
-            session.source.revision,
-            this.scopeFor(projectId),
-            this.threadArg(projectId)
-          )
+          const ovenThreadId = state.ovenThreadId
+          const ovenId = state.ovenId
+          // The local branch calls the bridge directly, not `invoke`: a save
+          // belongs to the checkout the editor was opened on, and re-routing it
+          // by whichever thread is selected now would write the wrong file.
+          const source =
+            ovenThreadId && ovenId
+              ? await invokeAtOvenRoot(
+                  'projectFiles:save',
+                  { threadId: ovenThreadId, ovenId },
+                  projectId,
+                  path,
+                  submittedDraft,
+                  session.source.revision
+                )
+              : await window.api.invoke(
+                  'projectFiles:save',
+                  projectId,
+                  path,
+                  submittedDraft,
+                  session.source.revision,
+                  workspaceState.activeScopeBucketIdFor(projectId),
+                  state.mountThreadId ?? undefined
+                )
           session.source = source
           if (session.draft === submittedDraft) session.draft = source.content
         } catch {

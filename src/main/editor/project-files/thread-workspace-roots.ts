@@ -14,6 +14,7 @@ import type { Database } from '../../database/database'
 import { ThreadRepo } from '../../database/repositories/thread-repo'
 import {
   assistantThreadWorkspaceDirectory,
+  browserThreadWorkspaceDirectory,
   chatThreadWorkspaceDirectory
 } from '../../../lib/project-artifacts'
 import { ensureDir } from '../../../lib/utils'
@@ -32,7 +33,18 @@ export function createThreadWorkspaceRoots(
   const threads = new ThreadRepo(database)
   return {
     chatWorkspace: createChatWorkspaceRoots(storage),
+    browser: createBrowserWorkspaceRoots(storage),
     assistant: createAssistantRoots(storage, threads)
+  }
+}
+
+function createBrowserWorkspaceRoots(storage: StorageEngine): ProjectFilesChatWorkspaceRootLookup {
+  return {
+    resolve: async (threadId: string) => {
+      const root = storage.resolve(browserThreadWorkspaceDirectory(threadId))
+      await ensureDir(root)
+      return root
+    }
   }
 }
 

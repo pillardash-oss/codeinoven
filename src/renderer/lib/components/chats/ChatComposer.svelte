@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade } from 'svelte/transition'
@@ -6,13 +7,14 @@
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
-  import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { posixBasename } from '$shared/paths'
   import { showToastWarning } from '$lib/stores/app-errors.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { invoke } from '$lib/ipc.svelte'
+  import { hasModelRuntimeSettings } from '$shared/model-runtime-settings'
+  import { applyModelProfile } from '$shared/model-profiles'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { visionModels } from '$lib/stores/vision-models.svelte'
@@ -27,7 +29,6 @@
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
   import ChatComposerImageGate from './ChatComposerImageGate.svelte'
   import ExpertCard from './ExpertCard.svelte'
-  import ChatComposerInferencePicker from './ChatComposerInferencePicker.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
@@ -40,7 +41,6 @@
   import { trackMenuCloseFocus } from './chat-composer-menu-focus.svelte'
   import {
     withFileSystemMode,
-    withInferenceMode,
     withModelSelection,
     withPermissionLevel,
     withThinkingLevel
@@ -70,6 +70,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
@@ -88,7 +89,6 @@
     ThreadSettings,
     ThinkingLevel,
     ThinkingPreset,
-    InferenceMode,
     PermissionLevel,
     ProviderCatalog,
     PromptAttachment,
@@ -100,6 +100,7 @@
     AssignmentTask,
     AgentModelSelection,
     AttachmentStorageScope,
+    ModelProfile,
     UsageEfficiencyKpis,
     Thread,
     EngineeringLifecycleSelectionInput,
@@ -360,6 +361,37 @@
       : baseSettings
   )
 
+  /** The remote Oven this composer targets, or null on this computer. */
+  let targetOvenId = $derived(resolved.ovenId ?? null)
+
+  /**
+   * Harnesses the target Oven does not have installed.
+   *
+   * Main keeps a persisted copy of every Oven's harness inventory, refreshed on
+   * each probe, so a harness the user installed on the Oven themselves is in
+   * this set only after it is actually absent. Null while unknown or local, and
+   * the picker then behaves exactly as it does for a local thread.
+   */
+  let unavailableHarnessIds = $derived.by((): ReadonlySet<string> | null => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return null
+    return ovens.unavailableHarnesses(ovenId)
+  })
+
+  let unavailableHarnessReason = $derived.by((): string | null => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return null
+    const identity = ovens.identity(ovenId)
+    return identity ? `Not installed on ${identity.name}` : 'Not installed on this Oven'
+  })
+
+  $effect(() => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return
+    void ovens.ensure()
+    void ovens.ensureInventory(ovenId)
+  })
+
   // svelte-ignore state_referenced_locally
   let value = $state(restoredDraft(initialValue, initialProjectReferences, initialTaskReferences))
   // The composer is remounted by the parent when a restore is required, so we
@@ -593,6 +625,8 @@
   let accountPickerVisible = $state(false)
   /** The scope shoe instance, so the `/scope` slash action can open its picker. */
   let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
+  /** The shared model picker, so the `/profile` action can open its profiles panel. */
+  let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
    *  the `/scope` slash action the same way the shoe's badge chevron does. */
   let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
@@ -730,6 +764,24 @@
     accountMenuOpen = false
   }
 
+  function showModelSettingsMenu(): void {
+    if (!modelSettingsVisible) return
+    closeAllMenus()
+    inferenceMenuOpen = true
+  }
+
+  /**
+   * Open the model picker on its profiles panel, for the `/profile` action.
+   *
+   * The picker owns that surface, so the ask is one call: it opens its popover and
+   * hands the panel to the arrow keys once the panel has mounted.
+   */
+  function showProfilesMenu(): void {
+    if (readOnlyMode) return
+    closeAllMenus()
+    modelPicker?.openProfiles()
+  }
+
   function showThinkingMenu(): void {
     if (!supportsThinking) return
     thinkingMenuOpen = true
@@ -753,14 +805,50 @@
     scopeShoeComponent?.openScopeMenu()
   }
 
-  function showInferenceMenu(): void {
-    if (!supportsFast) return
-    inferenceMenuOpen = true
-    plusMenuOpen = false
-    modelMenuOpen = false
-    thinkingMenuOpen = false
-    accountMenuOpen = false
-  }
+  trackEscapeMenu(
+    () => plusMenuOpen,
+    () => {
+      plusMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => modelMenuOpen,
+    () => {
+      modelMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => inferenceMenuOpen,
+    () => {
+      inferenceMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => permissionMenuOpen,
+    () => {
+      permissionMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => thinkingMenuOpen,
+    () => {
+      thinkingMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => accountMenuOpen,
+    () => {
+      accountMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => startAfterPickerOpen,
+    () => {
+      startAfterPickerOpen = false
+    }
+  )
+  trackEscapeMenu(() => selectionPopoverOpen, closeSelectionPopover)
+  trackEscapeMenu(() => startAfterPopoverOpen, closeStartAfterPopover)
 
   // Focus restoration on close for every menu/overlay that steals focus from
   // the editor: each returns the caret to its last published position rather
@@ -770,11 +858,6 @@
   trackMenuCloseFocus(() => accountMenuOpen, focusComposerAtSavedCaret)
   trackMenuCloseFocus(() => permissionMenuOpen, focusComposerAtSavedCaret)
   trackMenuCloseFocus(() => inferenceMenuOpen, focusComposerAtSavedCaret)
-
-  function toggleInferenceMenu(): void {
-    if (inferenceMenuOpen) closeAllMenus()
-    else showInferenceMenu()
-  }
 
   /**
    * Resolve against every catalog snapshot available to the renderer. The
@@ -977,22 +1060,28 @@
   /** Thinking controls only appear when the model explicitly declares presets. */
   let supportsThinking = $derived(thinkingPresets.length > 0)
 
-  /** Native fast harnesses stay visible even while their model catalog is cold or incomplete. */
-  let fastVariant = $derived(
-    supportsFastInference(resolved.harnessId, resolved.providerId, selectedModel?.fastSupported)
-      ? { multiplier: fastMultiplierFor(resolved.modelId) }
-      : null
+  let modelSettingsVisible = $derived(
+    hasModelRuntimeSettings(
+      resolvedProviders
+        .find(
+          (provider) =>
+            provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
+        )
+        ?.models.find((model) => model.id === resolved.modelId),
+      resolved.harnessId,
+      resolved.providerId
+    )
   )
 
-  let supportsFast = $derived(fastVariant !== null)
-
-  let inferenceMode = $derived(resolved.inferenceMode ?? 'normal')
   const slash = createComposerSlashActions({
+    getModelSettingsVisible: () => modelSettingsVisible,
+    getProfilesPickerVisible: () => !readOnlyMode,
     getShowChatModes: () => showChatModes,
     getFileSystemMode: () => resolved.fileSystemMode,
     getSupportsThinking: () => supportsThinking,
     getAccountPickerVisible: () => accountPickerVisible,
     getScopePickerVisible: () => scopePickerAvailable,
+    getOvenPickerVisible: () => !!scopeShoe?.onOpenOven,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -1116,6 +1205,16 @@
       return
     }
 
+    if (action.id === 'selector:model-setting') {
+      showModelSettingsMenu()
+      return
+    }
+
+    if (action.id === 'selector:profiles') {
+      showProfilesMenu()
+      return
+    }
+
     if (action.id === 'selector:thinking') {
       // Thinking level lives in the shared model picker's dropdown   open it directly.
       showThinkingMenu()
@@ -1125,6 +1224,11 @@
     if (action.id === 'selector:account') {
       // The account picker lives in the shared model picker's dropdown   open it directly.
       showAccountMenu()
+      return
+    }
+
+    if (action.id === 'selector:oven') {
+      scopeShoe?.onOpenOven?.()
       return
     }
 
@@ -1392,17 +1496,31 @@
     )
   }
 
+  /**
+   * Run a saved profile, closing the picker it was picked from.
+   *
+   * The composer is the one caller that hands the picker an applier, because it
+   * holds settings a profile writes that the picker cannot see: a chat only unlocks
+   * Full Access once File System is on, so a profile carrying `full_access` must not
+   * be able to grant it any other way.
+   */
+  function applyProfile(profile: ModelProfile): void {
+    closeAllMenus()
+    onModelUsed?.(modelKey(profile.harnessId, profile.providerId, profile.modelId))
+    const applied = applyModelProfile(resolved, profile, resolvedProviders)
+    applySettings(
+      hidePermissionSelector && resolved.fileSystemMode !== true
+        ? { ...applied, permissionLevel: 'auto_review' }
+        : applied
+    )
+  }
+
   function selectThinking(preset: ThinkingPreset): void {
     const level = preset.id as ThinkingLevel
     // The picker may re-emit the level it already applied during a model
     // change   skip the redundant commit.
     if (resolved.thinkingLevel === level) return
     applySettings(withThinkingLevel(resolved, level))
-  }
-
-  function selectInference(mode: InferenceMode): void {
-    inferenceMenuOpen = false
-    applySettings(withInferenceMode(resolved, mode))
   }
 
   function runUsageCredits(): void {
@@ -1857,60 +1975,64 @@
       />
     {/if}
 
-    <ChatComposerPermissionPicker
-      {readOnlyMode}
-      {hidePermissionSelector}
-      fileSystemMode={resolved.fileSystemMode}
-      permissionLevel={resolved.permissionLevel}
-      {working}
-      menuOpen={permissionMenuOpen}
-      onToggle={() => {
-        permissionMenuOpen = !permissionMenuOpen
-        plusMenuOpen = false
-        modelMenuOpen = false
-        thinkingMenuOpen = false
-      }}
-      onClose={closeAllMenus}
-      onSelect={selectPermission}
-    />
-
-    <!-- Shared model selector   model + thinking level in one control -->
-    <ModelPicker
-      {providers}
-      {projectId}
-      {harnessId}
-      providerId={resolved.providerId}
-      modelId={resolved.modelId}
-      accountId={resolved.accountId}
-      {favoriteModels}
-      {recentModels}
-      {onRemoveRecent}
-      bind:open={modelMenuOpen}
-      bind:thinkingMenuOpen
-      bind:accountMenuOpen
-      onAccountPickerVisibleChange={(visible) => {
-        accountPickerVisible = visible
-      }}
-      onSelect={selectModel}
-      onSelectAccount={onAccountSelected}
-      {onToggleFavorite}
-      {onReorderFavorite}
-      fast={inferenceMode === 'fast'}
-      thinkingLevel={resolved.thinkingLevel}
-      {thinkingPresets}
-      onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-    />
-
-    {#if fastVariant}
-      <ChatComposerInferencePicker
-        {inferenceMode}
-        fastMultiplier={fastVariant.multiplier}
-        menuOpen={inferenceMenuOpen}
-        onToggle={toggleInferenceMenu}
+    <div
+      class={`flex min-w-0 shrink items-center ${
+        readOnlyMode || !hidePermissionSelector || resolved.fileSystemMode === true ? 'gap-3' : ''
+      }`}
+    >
+      <ChatComposerPermissionPicker
+        {readOnlyMode}
+        {hidePermissionSelector}
+        fileSystemMode={resolved.fileSystemMode}
+        permissionLevel={resolved.permissionLevel}
+        {working}
+        menuOpen={permissionMenuOpen}
+        onToggle={() => {
+          permissionMenuOpen = !permissionMenuOpen
+          plusMenuOpen = false
+          modelMenuOpen = false
+          thinkingMenuOpen = false
+        }}
         onClose={closeAllMenus}
-        onSelect={selectInference}
+        onSelect={selectPermission}
       />
-    {/if}
+
+      <!-- Shared model selector   model + thinking level in one control, and the
+           saved profiles every other picker offers too. -->
+      <ModelPicker
+        bind:this={modelPicker}
+        {providers}
+        {projectId}
+        {harnessId}
+        {unavailableHarnessIds}
+        {unavailableHarnessReason}
+        providerId={resolved.providerId}
+        modelId={resolved.modelId}
+        accountId={resolved.accountId}
+        {favoriteModels}
+        {recentModels}
+        {onRemoveRecent}
+        bind:open={modelMenuOpen}
+        bind:thinkingMenuOpen
+        bind:accountMenuOpen
+        onAccountPickerVisibleChange={(visible) => {
+          accountPickerVisible = visible
+        }}
+        onSelect={selectModel}
+        onSelectAccount={onAccountSelected}
+        {onToggleFavorite}
+        {onReorderFavorite}
+        runtimeSettings={resolved}
+        bind:runtimeMenuOpen={inferenceMenuOpen}
+        onSelectRuntime={(runtime) => applySettings({ ...resolved, ...runtime })}
+        thinkingLevel={resolved.thinkingLevel}
+        {thinkingPresets}
+        onSelectThinking={(level) => selectThinking({ id: level, label: level })}
+        permissionLevel={resolved.permissionLevel}
+        onApplyProfile={applyProfile}
+        showProfiles={!readOnlyMode}
+      />
+    </div>
 
     <!-- API usage credits   native harness command to bill this session's
          turns against pay-as-you-go API credits instead of a subscription. -->
@@ -2026,6 +2148,7 @@
         onOpenScopeView={scopeShoe.onOpenScopeView}
         onScopeMenuClosed={focusComposerAtSavedCaret}
         report={scopeShoe.report}
+        oven={scopeShoe.oven}
       />
     </div>
   </div>

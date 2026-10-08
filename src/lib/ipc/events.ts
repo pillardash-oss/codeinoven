@@ -1,3 +1,4 @@
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
@@ -22,7 +23,8 @@ import type {
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserPopupWindow,
-  BrowserSwitcherKey
+  BrowserSwitcherKey,
+  BrowserShortcutChord
 } from './browser'
 import type {
   AgentNotificationPayload,
@@ -42,6 +44,9 @@ import type {
 } from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
+  'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
+  'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
+  'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
@@ -97,6 +102,10 @@ export const IPC_EVENT_CONTRACT = {
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   /** The durable record of unattended runs changed (a run started or settled). */
   'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /** User-skipped scheduled slots changed, so next-run labels can refresh. */
+  'assistant:skippedRoutineRunsChanged': [] as unknown as [
+    runs: import('../types').SkippedRoutineRun[]
+  ],
   /**
    * The set of gates the app resolved without the user changed: one settled, or
    * the user dismissed one or all. Drives the amber attention rail item and its
@@ -109,11 +118,14 @@ export const IPC_EVENT_CONTRACT = {
    *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
-  /** Transient in-app toast (error/info, optional navigation action). */
+  /** Transient in-app toast (error/info, optional navigation action). An error
+   *  toast keeps `details` behind its Copy action and is also filed in the App
+   *  Errors panel. */
   'app:toast': [] as unknown as [
     payload: {
       message: string
       type: 'error' | 'info'
+      details?: string
       projectId?: string
       threadId?: string
       action?: { label: string; projectId: string; threadId: string }
@@ -223,6 +235,8 @@ export const IPC_EVENT_CONTRACT = {
    * opening a tab, or showing and stepping its find bar. Main decides the key,
    * the renderer decides what the tab strip or the find bar does with it.
    */
+  /** View shortcut forwarded from a native page to the shell's keymap handlers. */
+  'browser:navigationKey': [] as unknown as [chord: BrowserShortcutChord],
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
   /**
    * What Chromium's find reported for a tab's page. The page is a native view, so
@@ -262,7 +276,7 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:popup:permission': [] as unknown as [
     request: BrowserPermissionRequest,
-    context: { queueSize: number; projectLabel: string | null }
+    context: { queueSize: number; projectLabel: string | null; systemAccessDenied: boolean }
   ],
   /**
    * The toast stack the native overlay should draw, delivered to the overlay
@@ -356,5 +370,22 @@ export const IPC_EVENT_CONTRACT = {
         }
       | { loginId: string; kind: 'complete'; providerId: string }
       | { loginId: string; kind: 'failed'; error: string }
+  ],
+  /**
+   * One live stage of a manual CIO Cleanup run. Only a run the user started
+   * reports here: the daily sweep is silent, so a background pass can never
+   * open a dockable panel the user did not ask for.
+   */
+  'cioCleanup:progress': [] as unknown as [
+    progress: import('../types/cio-cleanup').CioCleanupProgress
+  ],
+  /**
+   * CIO Cleanup state moved (a run started or finished, the retention setting
+   * changed, or the user excluded or included a path). Surfaces re-read their
+   * own view of the state rather than inferring it from a progress event, so a
+   * scheduled run that shows no panel still updates the settings page.
+   */
+  'cioCleanup:stateChanged': [] as unknown as [
+    state: import('../types/cio-cleanup').CioCleanupState
   ]
 }

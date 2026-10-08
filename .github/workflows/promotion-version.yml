@@ -33,9 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.10
+        uses: ./.github/actions/setup
 
       - name: Validate nightly promotion version (semver-correct)
         env:
@@ -47,4 +45,4 @@ jobs:
           # dev must be one patch ahead of nightly base, or equal for subsequent nightlies.
           BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$base_version" \
             CURRENT_VERSION="$current_version" bun scripts/validate-release-promotion.ts
-          echo "package.json $current_version is ready for nightly promotion (base $base_version)" 
+          echo "package.json $current_version is ready for nightly promotion (base $base_version)"

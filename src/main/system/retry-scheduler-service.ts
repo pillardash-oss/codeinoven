@@ -3,14 +3,16 @@ import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 
-/** One thread awaiting provider recovery after a usage/rate-limit reset. */
+/** One thread awaiting provider reset or device connection recovery. */
 export interface PendingRetryRecord {
   sessionId: string
   projectId: string
   threadId: string
   harnessId: string
-  /** Epoch ms when the provider window resets; absent when only manual retry is available. */
+  /** Epoch ms for admission after the reset buffer; absent for manual-only retries. */
   retryAt?: number
+  /** Provider reset before the admission buffer. */
+  resetAt?: number
   /** Provider-reported retry attempt when the reset was surfaced. */
   attempt?: number
   /** Provider-neutral failure kind   drives how the restored card renders. */
@@ -34,6 +36,10 @@ const ISSUE_KINDS = new Set<AgentProviderIssueKind>([
 
 /** How often the ticker checks whether any pending reset window has passed. */
 const RETRY_TICK_MS = 15_000
+/** Bound expensive session/context preparation when many windows reset together. */
+const MAX_CONCURRENT_RESUMES = 2
+/** Transport/admission failures must retain automatic recovery without a hot loop. */
+const RESUME_FAILURE_COOLDOWN_MS = 60_000
 
 /**
  * Maximum persisted card message accepted when restoring records. A genuine
@@ -49,17 +55,20 @@ const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
 const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
- * RetrySchedulerService   remembers every thread whose turn ended in a
- * quota/rate-limit reset, then automatically resumes the thread once a known
- * reset time passes while the app is open. Records without a reset time remain
+ * RetrySchedulerService retains provider-reset and connection failures. Device
+ * connection recovery always resumes once online; usage resets honor the
+ * autoRetryAfterReset preference. Records without a retry deadline remain
  * persisted for restart recovery but are never fired automatically. Listeners
  * are notified on every pending-set change so dependents (e.g. the power-wake
  * service) can re-evaluate.
  */
 export class RetrySchedulerService {
   private readonly pending = new Map<string, PendingRetryRecord>()
+  private readonly resuming = new Map<string, PendingRetryRecord>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private timerStopped = false
   private enabled = false
+  private isOnline: (() => boolean) | null = null
   private continueThread: ((record: PendingRetryRecord) => Promise<void>) | null = null
   /** Fired whenever the pending set changes (track/clear/fire/restore). */
   private changeListener: (() => void) | null = null
@@ -72,6 +81,7 @@ export class RetrySchedulerService {
 
   /** Load the persisted preference and pending retries, then arm the ticker. */
   async start(): Promise<void> {
+    this.timerStopped = false
     const config = await this.storage.getConfig()
     this.enabled = config.autoRetryAfterReset === true
     await this.loadPending()
@@ -93,11 +103,12 @@ export class RetrySchedulerService {
   }
 
   /** The chat engine supplies the resume callback once registered. */
-  attachContinue(callback: (record: PendingRetryRecord) => Promise<void>): Promise<void> {
+  async attachContinue(callback: (record: PendingRetryRecord) => Promise<void>): Promise<void> {
     this.continueThread = callback
     // A record can come due while the engine is still booting; the veto must
     // exist before the first fire, so the latch query ships with the callback.
-    return this.refreshStoppedVeto()
+    await this.refreshStoppedVeto()
+    this.tick()
   }
 
   /**
@@ -107,6 +118,15 @@ export class RetrySchedulerService {
    */
   attachStoppedThreadTest(test: (projectId: string, threadId: string) => Promise<boolean>): void {
     this.isStopped = test
+  }
+
+  /** Main-process connectivity is authoritative; renderer events only wake the queue. */
+  attachNetworkTest(test: () => boolean): void {
+    this.isOnline = test
+  }
+
+  connectionRestored(): void {
+    this.tick()
   }
 
   /** Drop every pending record whose thread is currently user-stopped. */
@@ -186,12 +206,12 @@ export class RetrySchedulerService {
     }
     this.pending.set(record.sessionId, record)
     void this.persist()
-    Logger.info('Retry wait retained after usage reset', {
+    Logger.info('Retry wait retained', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId,
       retryAt: record.retryAt === undefined ? null : new Date(record.retryAt).toISOString(),
-      automatic: this.enabled && record.retryAt !== undefined
+      automatic: (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
     })
     this.refreshTimer()
     // The reset may already have passed   fire without waiting.
@@ -217,6 +237,11 @@ export class RetrySchedulerService {
     return this.pending.get(sessionId)
   }
 
+  /** Admission ends when the harness starts, rather than when its turn finishes. */
+  resumed(sessionId: string): void {
+    if (this.resuming.delete(sessionId)) this.tick()
+  }
+
   /** Number of pending reset retries (tests/logging). */
   get size(): number {
     return this.pending.size
@@ -228,6 +253,7 @@ export class RetrySchedulerService {
   }
 
   stop(): void {
+    this.timerStopped = true
     if (this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
@@ -296,6 +322,9 @@ export class RetrySchedulerService {
       threadId,
       harnessId,
       ...(retryAt === undefined ? {} : { retryAt }),
+      ...(typeof record.resetAt === 'number' && Number.isFinite(record.resetAt)
+        ? { resetAt: record.resetAt }
+        : {}),
       issueKind: issueKind as AgentProviderIssueKind,
       issueMessage,
       ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
@@ -320,7 +349,10 @@ export class RetrySchedulerService {
 
   private refreshTimer(): void {
     const shouldRun =
-      this.enabled && [...this.pending.values()].some((record) => record.retryAt !== undefined)
+      !this.timerStopped &&
+      [...this.pending.values()].some(
+        (record) => (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
+      )
     if (shouldRun && this.timer === null) {
       this.timer = setInterval(() => this.tick(), RETRY_TICK_MS)
     } else if (!shouldRun && this.timer !== null) {
@@ -330,12 +362,12 @@ export class RetrySchedulerService {
   }
 
   private tick(): void {
-    if (!this.enabled) return
+    if (this.timerStopped) return
     void this.tickAsync()
   }
 
   private async tickAsync(): Promise<void> {
-    if (!this.enabled) return
+    if (this.timerStopped || !this.continueThread) return
     // The ledger of pending resets is shared by every instance using this config
     // root, and each instance holds its own in-memory copy of it. Only the
     // longest-running instance fires a continuation, so a second window can
@@ -345,45 +377,54 @@ export class RetrySchedulerService {
     const now = Date.now()
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {
-      if (record.retryAt !== undefined && record.retryAt <= now) due.push(record)
+      if (
+        (this.enabled || record.issueKind === 'network') &&
+        (record.issueKind !== 'network' || this.isOnline?.() === true) &&
+        record.retryAt !== undefined &&
+        record.retryAt <= now &&
+        !this.resuming.has(record.sessionId)
+      )
+        due.push(record)
     }
     if (due.length === 0) return
-    // A deliberate user stop vetoes the fire. The check is async, so due
-    // records are first parked out of `pending` and either re-added (run
-    // still allowed) or discarded (stopped).
+    // Recheck ownership after each asynchronous veto probe: another tick,
+    // a manual retry, or Stop may have changed the pending record meanwhile.
     const vetoed: PendingRetryRecord[] = []
+    const deferred = new Set<PendingRetryRecord>()
     if (this.isStopped) {
       for (const record of due) {
         try {
           if (await this.isStopped(record.projectId, record.threadId)) vetoed.push(record)
         } catch {
-          // Probe failed: keep the record rather than silently dropping work.
+          // Fail closed for this tick; retain the record for the next probe.
+          deferred.add(record)
         }
       }
     }
-    const runnable = due.filter((record) => !vetoed.includes(record))
-    if (runnable.length === 0) {
-      if (vetoed.length > 0) {
-        for (const record of vetoed) {
-          if (this.pending.get(record.sessionId) === record) {
-            this.pending.delete(record.sessionId)
-            Logger.info('Auto-retry vetoed: the user stopped this thread', {
-              projectId: record.projectId,
-              threadId: record.threadId,
-              sessionId: record.sessionId
-            })
-          }
-        }
-        void this.persist()
-        if (this.pending.size === 0) this.refreshTimer()
-        this.notifyChange()
-      }
-      return
-    }
-    for (const record of runnable) {
-      // Fire each record exactly once; a re-reported error re-tracks it.
+    if (this.timerStopped || !this.continueThread || !instanceRegistry.isIncumbentInstance()) return
+    const runnable = due.filter(
+      (record) =>
+        !vetoed.includes(record) &&
+        !deferred.has(record) &&
+        (this.enabled || record.issueKind === 'network') &&
+        (record.issueKind !== 'network' || this.isOnline?.() === true)
+    )
+    for (const record of vetoed) {
       if (this.pending.get(record.sessionId) === record) {
         this.pending.delete(record.sessionId)
+        Logger.info('Auto-retry vetoed: the user stopped this thread', {
+          projectId: record.projectId,
+          threadId: record.threadId,
+          sessionId: record.sessionId
+        })
+      }
+    }
+    for (const record of runnable) {
+      if (this.resuming.size >= MAX_CONCURRENT_RESUMES) break
+      if (this.pending.get(record.sessionId) === record && !this.resuming.has(record.sessionId)) {
+        // Keep the durable wait until admission succeeds. Reserve it before
+        // calling the engine so overlapping ticks cannot dispatch it twice.
+        this.resuming.set(record.sessionId, record)
         void this.fire(record)
       }
     }
@@ -395,21 +436,62 @@ export class RetrySchedulerService {
   private async fire(record: PendingRetryRecord): Promise<void> {
     const callback = this.continueThread
     if (!callback) {
+      this.resuming.delete(record.sessionId)
       Logger.info('Auto-resume skipped   chat engine not attached', {
         sessionId: record.sessionId
       })
       return
     }
-    Logger.info('Auto-resuming thread after usage reset', {
+    Logger.info('Auto-resuming retained thread', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId
     })
     try {
       await callback(record)
+      if (this.pending.get(record.sessionId) === record) this.pending.delete(record.sessionId)
     } catch (error) {
-      // Leave the thread in its error state; the user can still Retry manually.
       Logger.error('Auto-resume attempt failed', error)
+      // The send pipeline can clear the original wait before its transport
+      // fails. Restore it unless the engine already tracked a newer failure
+      // or the user deliberately stopped this thread.
+      const pending = this.pending.get(record.sessionId)
+      if (this.continueThread === callback && (!pending || pending === record)) {
+        try {
+          const stopped = await this.isStopped?.(record.projectId, record.threadId)
+          if (stopped && this.pending.get(record.sessionId) === record) {
+            this.pending.delete(record.sessionId)
+          }
+          if (
+            this.continueThread === callback &&
+            !stopped &&
+            (!this.pending.has(record.sessionId) || this.pending.get(record.sessionId) === record)
+          ) {
+            this.pending.set(record.sessionId, {
+              ...record,
+              retryAt: Date.now() + RESUME_FAILURE_COOLDOWN_MS
+            })
+          }
+        } catch (probeError) {
+          Logger.error('Auto-resume stop check failed; retaining pending recovery', probeError)
+          if (this.continueThread === callback && !this.pending.has(record.sessionId)) {
+            this.pending.set(record.sessionId, {
+              ...record,
+              retryAt: Date.now() + RESUME_FAILURE_COOLDOWN_MS
+            })
+          }
+        }
+      }
+    } finally {
+      if (this.resuming.get(record.sessionId) === record) this.resuming.delete(record.sessionId)
+      // Shutdown clears the in-memory ledger but keeps its saved waits.
+      // A late admission must not persist that cleared shutdown snapshot.
+      if (this.continueThread === callback) {
+        void this.persist()
+        this.refreshTimer()
+        this.notifyChange()
+        this.tick()
+      }
     }
   }
 

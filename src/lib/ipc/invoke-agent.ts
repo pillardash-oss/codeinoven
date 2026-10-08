@@ -35,6 +35,9 @@ import type {
   ScopedHarnessCommand,
   SpecActionIntent,
   SpecGenerationRequest,
+  StickyNote,
+  StickyNoteAppearance,
+  StickyNoteSummary,
   Thread,
   ThreadNote,
   ThreadSettings,
@@ -81,10 +84,6 @@ export const invokeAgentContract = {
   >,
   'agent:answerSecret': {} as Contract<
     [projectId: string, threadId: string, requestId: string, secrets: AgentSecretSubmission[]],
-    void
-  >,
-  'agent:answerSecretAlternative': {} as Contract<
-    [projectId: string, threadId: string, requestId: string, alternative: string],
     void
   >,
   'agent:dismissQuestion': {} as Contract<
@@ -470,5 +469,12 @@ export const invokeAgentContract = {
   'note:save': {} as Contract<[projectId: string, threadId: string, body: string], ThreadNote>,
   'note:delete': {} as Contract<[projectId: string, threadId: string], void>,
   /** Thread ids that currently have a note (renderer presence sync). */
-  'note:list': {} as Contract<[], string[]>
+  'note:list': {} as Contract<[], string[]>,
+  /** List sticky note tab metadata without loading every body into memory. */
+  'sticky-note:list': {} as Contract<[], StickyNoteSummary[]>,
+  'sticky-note:get': {} as Contract<[id: string], StickyNote | null>,
+  'sticky-note:create': {} as Contract<[appearance: StickyNoteAppearance], StickyNote>,
+  'sticky-note:update': {} as Contract<[id: string, appearance: StickyNoteAppearance], void>,
+  'sticky-note:save': {} as Contract<[id: string, body: string], void>,
+  'sticky-note:delete': {} as Contract<[id: string], void>
 }

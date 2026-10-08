@@ -5,6 +5,7 @@ import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/nati
 import type { UtilityActivation, UtilityDefinitionInput } from '../../lib/types'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
+import { Logger } from '../system/logger'
 import { loadSkillMarketDetail } from './skill-market'
 import {
   SkillInstallRecordStore,
@@ -13,6 +14,7 @@ import {
 } from './skill-install-records'
 import { fetchUpstreamSkillVersion } from './skill-upstream'
 import { runSkillsCli } from './skills-cli'
+import type { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { UtilityRegistryService } from './utility-registry-service'
 
 /**
@@ -70,6 +72,13 @@ export interface MarketSkillInstallContext {
   resolveProjectPath: (projectId: string) => Promise<string>
   /** GitHub token for rate limits and private sources, when the user is signed in. */
   githubToken?: () => Promise<string | null>
+  /**
+   * Installs a CodeInOven-managed skill on disk. A managed copy is a registry
+   * entry rather than a folder, so a project-scoped one has to be placed in the
+   * project explicitly; without this the entry still works, it just has nothing
+   * to show for itself in the project.
+   */
+  footprint?: UtilityScopeFootprintService
 }
 
 /**
@@ -165,6 +174,13 @@ async function installManagedSkill(
   // Reinstalling the same skill updates its entry and clears any extra copies,
   // so the market cannot leave two entries competing for one name.
   const outcomes = await registry.installMany(definitions, { consolidate: true })
+  // A project-scoped managed copy is installed in that project's own `.cio`
+  // folder too, so the install exists outside the registry. Best effort: the
+  // entry is already saved, and failing the install over a read-only checkout
+  // would report a skill the user can use as not installed.
+  await context.footprint
+    ?.reconcile(await registry.list())
+    .catch((error: unknown) => Logger.dev('Managed skill install folder was not written:', error))
   await recordInstall(
     context,
     request,

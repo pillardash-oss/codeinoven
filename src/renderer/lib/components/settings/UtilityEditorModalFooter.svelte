@@ -31,6 +31,7 @@
       harnessId: string,
       accountId?: string
     ) => void
+    onSelectAgentRuntime: (runtime: import('$shared/types').ModelRuntimeSettings) => void
     onSelectAgentThinking: (level: ThinkingLevel) => void
   }
 
@@ -52,7 +53,8 @@
     onImportPlugin,
     onRequestDelete,
     onSelectAgentModel,
-    onSelectAgentThinking
+    onSelectAgentThinking,
+    onSelectAgentRuntime
   }: Props = $props()
 
   const showBack = $derived(!isNative && !hasDraftId && setupPreset !== null)
@@ -90,6 +92,8 @@
             providerId={agentSettings.providerId}
             modelId={agentSettings.modelId}
             accountId={agentSettings.accountId}
+            runtimeSettings={agentSettings}
+            onSelectRuntime={onSelectAgentRuntime}
             thinkingLevel={agentSettings.thinkingLevel}
             variant="action"
             side="top"

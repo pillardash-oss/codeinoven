@@ -8,6 +8,7 @@ import type {
 } from '../../lib/types'
 import type { CuaOperationEvent } from './utility-orchestration-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
+import { cuaSnapshotLeased } from './cua-snapshot-lease'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -452,7 +453,10 @@ export class ComputerUsePipService {
 
   private async ensureClient(): Promise<McpClient> {
     const level = this.targetPermissionLevel
-    if (this.client && this.clientPermissionLevel === level) return this.client
+    // A connection the driver retired (a frame that ran out of budget) can never
+    // answer again, so the preview reconnects instead of photographing a dead
+    // client for the rest of the run.
+    if (this.client?.usable && this.clientPermissionLevel === level) return this.client
     const generation = this.runGeneration
     if (this.client) {
       // A client's tier is fixed by the environment it was spawned with, so a
@@ -547,6 +551,11 @@ export class ComputerUsePipService {
       let refusedDetail: string | null = null
       let refusedTransport = false
       for (const window of candidates) {
+        // A gateway is about to act on this window from a snapshot it took
+        // itself, and this frame would take that snapshot's place. One frame of
+        // preview is worth less than the action, so the window waits for the
+        // next tick; nothing about this frame's failure accounting changes.
+        if (cuaSnapshotLeased(pid, window.window_id)) return
         let result: unknown
         try {
           result = await client.callTool('get_window_state', {

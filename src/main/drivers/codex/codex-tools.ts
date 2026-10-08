@@ -1,4 +1,4 @@
-import type { PermissionLevel, ThreadSettings } from '../../../lib/types'
+import type { AgentQuestion, PermissionLevel, ThreadSettings } from '../../../lib/types'
 import type { CodexServerRequest } from './codex-protocol'
 import { recordValue, stringValue } from './codex-values'
 
@@ -18,6 +18,7 @@ interface CodexQuestionOptionSchema {
   properties: {
     label: { type: 'string'; minLength: number }
     description: { type: 'string'; minLength: number }
+    instruction: { type: 'string'; minLength: number }
   }
   required: ['label', 'description']
 }
@@ -86,7 +87,8 @@ export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
                 additionalProperties: false,
                 properties: {
                   label: { type: 'string', minLength: 1 },
-                  description: { type: 'string', minLength: 1 }
+                  description: { type: 'string', minLength: 1 },
+                  instruction: { type: 'string', minLength: 1 }
                 },
                 required: ['label', 'description']
               }
@@ -123,7 +125,7 @@ export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
   }
 }
 export const CODEX_QUESTION_INSTRUCTION =
-  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
+  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card."
 
 export function utilityKey(value: string): string {
   return (
@@ -188,6 +190,26 @@ export function isCodexDynamicQuestionItem(item: Record<string, unknown>): boole
     stringValue(item['type']) === 'function_call' &&
     (stringValue(item['tool']) ?? stringValue(item['name'])) === CODEX_QUESTION_TOOL_NAME
   )
+}
+
+/** The authoritative decision text for one structured question, shared by
+ *  every Codex delivery path (request result and turn input). */
+export function codexQuestionDecisionText(
+  questions: AgentQuestion[],
+  answers?: string[][]
+): string {
+  if (!answers) {
+    return 'The user dismissed the structured question. Continue the original task without an answer.'
+  }
+  const decisions = questions.map((question, index) => ({
+    question: question.prompt,
+    answers: answers[index] ?? []
+  }))
+  return [
+    '[Authoritative agent question answer]',
+    'The user submitted these answers. Continue the original task using them.',
+    JSON.stringify(decisions)
+  ].join('\n')
 }
 
 export function codexQuestionIds(params: Record<string, unknown>): string[] {

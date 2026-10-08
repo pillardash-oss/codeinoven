@@ -3,8 +3,16 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
+  import type {
+    CioCleanupMount,
+    ProjectFileEntry,
+    ProjectFileInfo,
+    ProjectFileTransferMode
+  } from '$shared/types'
+  import { cioScratchRelativePath } from '$shared/cio-cleanup'
   import { invoke } from '$lib/ipc.svelte'
+  import { ovenRootThread } from '$lib/oven-root-target'
+  import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText } from '$lib/copy-text'
@@ -13,6 +21,7 @@
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -37,7 +46,8 @@
     TREE_ROW_HEIGHT,
     TREE_VERTICAL_PADDING,
     visibleEntries,
-    type InlineEdit
+    type InlineEdit,
+    type TreeRow
   } from './project-file-explorer-tree'
 
   interface Props {
@@ -95,6 +105,10 @@
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
+  /** True while this tree reads a checkout that lives on an Oven. */
+  let ovenTree = $derived(Boolean(ovenRootThread(projectId)))
+  /** Why the Oven could not list this checkout, for the surface overlay. */
+  let ovenError = $derived(ovenTree ? (projectState.directoryErrors[''] ?? null) : null)
   /** Backed by the per-project files store so sidebar tab remounts keep it. */
   let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
@@ -147,6 +161,30 @@
   let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
   const conflictPathSet = $derived(new Set(conflictPaths))
+
+  /** The scratch mount this tree browses: the project, its active scope bucket,
+   *  and the conversation whose own workspace is mounted (when set). CIO
+   *  Cleanup exclusions are keyed by exactly this triple. */
+  let cioCleanupMount = $derived<CioCleanupMount>({
+    projectId,
+    scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
+    ...(projectState.mountThreadId ? { threadId: projectState.mountThreadId } : {})
+  })
+
+  /** Whether a row is protected from CIO Cleanup. An exclusion on any ancestor
+   *  inside `.cio` covers the row, so a child of an excluded folder reads as
+   *  excluded too. */
+  function isRowCioCleanupExcluded(row: TreeRow): boolean {
+    if (row.kind !== 'entry') return false
+    const relativePath = cioScratchRelativePath(row.entry.path)
+    if (!relativePath) return false
+    return cioCleanupStore.exclusionFor(cioCleanupMount, relativePath) !== null
+  }
+
+  /** Exclude a `.cio` entry from the cleanup sweep, or include it again. */
+  function toggleCioCleanupExclusion(entry: ProjectFileEntry): void {
+    void cioCleanupStore.toggleExclusion({ ...cioCleanupMount, path: entry.path })
+  }
 
   let searchResultDirectories = $derived(collectSearchResultDirectories(searchResultPaths))
 
@@ -1153,94 +1191,113 @@
     onReveal={() => undefined}
     onOpenInBrowser={() => void openEntryInBrowser(null)}
     onOpenInTerminal={() => openEntryInTerminal(null)}
+    cioCleanupExcluded={false}
+    onToggleCioCleanupExclusion={() => undefined}
   >
-    <div
-      {@attach attachTreeScroll}
-      class="min-h-0 flex-1 overflow-auto py-1"
-      role="tree"
-      tabindex="0"
-      onclick={handleTreeContainerClick}
-      onkeydown={handleTreeKeydown}
-      aria-label="Project files tree"
+    <OvenSurfaceOverlay
+      active={ovenTree}
+      loading={Boolean(projectState.loadingDirectories[''])}
+      showingCached={projectState.listingFromCache}
+      error={ovenError}
+      title="Files could not be read from the Oven"
+      loadingLabel="Reading files from the Oven…"
+      onRetry={() => void projectFilesWorkspace.loadDirectory(projectId, '', true)}
     >
-      {#if projectState.directoryErrors['']}
-        <div class="px-3 py-3">
-          <p class="text-[0.6875rem] leading-relaxed text-danger">
-            {projectState.directoryErrors['']}
-          </p>
-          <button
-            type="button"
-            class="mt-2 text-[0.6875rem] font-medium text-foreground hover:underline"
-            onclick={() => void projectFilesWorkspace.loadDirectory(projectId, '', true)}
-          >
-            Try again
-          </button>
-        </div>
-      {:else if (projectState.entriesByDirectory[''] ?? []).length === 0 && !inlineEdit}
-        <p class="px-3 py-3 text-[0.6875rem] text-dimmed">This project directory is empty.</p>
-      {:else if topLevelVisibleEntries.length === 0 && !inlineEdit}
-        <p class="px-3 py-3 text-[0.6875rem] text-dimmed">
-          {conflictsOnly
-            ? 'No conflicted files match this filter.'
-            : lastTurnOnly
-              ? 'No changed files match this filter.'
-              : 'No files match this filter.'}
-        </p>
-      {:else}
-        <div class="relative w-full" style:height={`${virtualTree.total}px`}>
-          {#each virtualTree.rows as virtualRow (virtualRow.row.key)}
-            <div
-              class="absolute inset-x-0 top-0 h-7"
-              style:transform={`translateY(${virtualRow.offset}px)`}
+      <div
+        {@attach attachTreeScroll}
+        class="min-h-0 flex-1 overflow-auto py-1"
+        role="tree"
+        tabindex="0"
+        onclick={handleTreeContainerClick}
+        onkeydown={handleTreeKeydown}
+        aria-label="Project files tree"
+      >
+        {#if projectState.directoryErrors[''] && !ovenTree}
+          <div class="px-3 py-3">
+            <p class="text-[0.6875rem] leading-relaxed text-danger">
+              {projectState.directoryErrors['']}
+            </p>
+            <button
+              type="button"
+              class="mt-2 text-[0.6875rem] font-medium text-foreground hover:underline"
+              onclick={() => void projectFilesWorkspace.loadDirectory(projectId, '', true)}
             >
-              <ProjectFileExplorerTreeRow
-                row={virtualRow.row}
-                {inlineEdit}
-                {operationPending}
-                {projectState}
-                {dropFolder}
-                {dropIndicator}
-                canPaste={canPaste()}
-                {isRowActive}
-                onCommitInline={() => void commitInlineEdit()}
-                onInlineKeydown={handleInlineKeydown}
-                onRetryLoad={(path) =>
-                  void projectFilesWorkspace.loadDirectory(projectId, path, true)}
-                onCreateFile={(directory) => void startCreate(directory)}
-                onCreateFolder={(entry) =>
-                  void startCreateFolder(
-                    entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)
-                  )}
-                onCopy={(entry) =>
-                  void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'copy')}
-                onCopyPath={(entry) =>
-                  void copyPaths(selectionPathsFor(entry, projectState.selectedPaths))}
-                onCut={(entry) =>
-                  void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'move')}
-                onPaste={(entry) => void pasteInto(pasteDirectory(entry))}
-                onRename={(entry) => void startRename(entry)}
-                onDelete={(entry) => {
-                  const paths = selectionPathsFor(entry, projectState.selectedPaths)
-                  deleteTarget = {
-                    paths,
-                    label: paths.length === 1 ? entry.name : `${paths.length} items`
-                  }
-                }}
-                onInfo={(entry) => void showInfo(entry)}
-                onReveal={(entry) => void revealInFileManager(entry)}
-                onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
-                onOpenInTerminal={openEntryInTerminal}
-                onRowClick={handleRowClick}
-                onRowDoubleClick={handleRowDoubleClick}
-                onRowContextMenu={handleRowContextMenu}
-                onRowPointerDown={handleFilePointerDown}
-                onRowDragStart={handleFileDragStart}
-              />
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
+              Try again
+            </button>
+          </div>
+        {:else if (projectState.entriesByDirectory[''] ?? []).length === 0 && !inlineEdit}
+          {#if ovenError}
+            <!-- The Oven surface states the reason; an empty tree would be a lie. -->
+          {:else}
+            <p class="px-3 py-3 text-[0.6875rem] text-dimmed">This project directory is empty.</p>
+          {/if}
+        {:else if topLevelVisibleEntries.length === 0 && !inlineEdit}
+          <p class="px-3 py-3 text-[0.6875rem] text-dimmed">
+            {conflictsOnly
+              ? 'No conflicted files match this filter.'
+              : lastTurnOnly
+                ? 'No changed files match this filter.'
+                : 'No files match this filter.'}
+          </p>
+        {:else}
+          <div class="relative w-full" style:height={`${virtualTree.total}px`}>
+            {#each virtualTree.rows as virtualRow (virtualRow.row.key)}
+              <div
+                class="absolute inset-x-0 top-0 h-7"
+                style:transform={`translateY(${virtualRow.offset}px)`}
+              >
+                <ProjectFileExplorerTreeRow
+                  row={virtualRow.row}
+                  {inlineEdit}
+                  {operationPending}
+                  {projectState}
+                  {dropFolder}
+                  {dropIndicator}
+                  canPaste={canPaste()}
+                  {isRowActive}
+                  onCommitInline={() => void commitInlineEdit()}
+                  onInlineKeydown={handleInlineKeydown}
+                  onRetryLoad={(path) =>
+                    void projectFilesWorkspace.loadDirectory(projectId, path, true)}
+                  onCreateFile={(directory) => void startCreate(directory)}
+                  onCreateFolder={(entry) =>
+                    void startCreateFolder(
+                      entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)
+                    )}
+                  onCopy={(entry) =>
+                    void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'copy')}
+                  onCopyPath={(entry) =>
+                    void copyPaths(selectionPathsFor(entry, projectState.selectedPaths))}
+                  onCut={(entry) =>
+                    void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'move')}
+                  onPaste={(entry) => void pasteInto(pasteDirectory(entry))}
+                  onRename={(entry) => void startRename(entry)}
+                  onDelete={(entry) => {
+                    const paths = selectionPathsFor(entry, projectState.selectedPaths)
+                    deleteTarget = {
+                      paths,
+                      label: paths.length === 1 ? entry.name : `${paths.length} items`
+                    }
+                  }}
+                  onInfo={(entry) => void showInfo(entry)}
+                  onReveal={(entry) => void revealInFileManager(entry)}
+                  canReveal={!ovenTree}
+                  onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
+                  onOpenInTerminal={openEntryInTerminal}
+                  cioCleanupExcluded={isRowCioCleanupExcluded(virtualRow.row)}
+                  onToggleCioCleanupExclusion={toggleCioCleanupExclusion}
+                  onRowClick={handleRowClick}
+                  onRowDoubleClick={handleRowDoubleClick}
+                  onRowContextMenu={handleRowContextMenu}
+                  onRowPointerDown={handleFilePointerDown}
+                  onRowDragStart={handleFileDragStart}
+                />
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </OvenSurfaceOverlay>
   </ProjectFileContextMenu>
 </aside>
 

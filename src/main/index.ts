@@ -6,6 +6,7 @@ import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
@@ -138,7 +139,7 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
-// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+Q) is the menu bar's
+// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
 // Quit item without reaching for the menu bar, so it bypasses background mode
 // entirely.
 ipcMain.handle('app:quitDirect', () => quitAppDirectly())
@@ -445,10 +446,11 @@ function createWindow(): BrowserWindow {
     // Background mode parks instead of quitting: the window and its renderer are
     // destroyed, the backend keeps running in the menu bar. Everything else
     // closes the app. Either way the renderer still owns the unsaved-file gate,
-    // so the same confirmation round-trip runs   marked as a park when it is one.
+    // so the same confirmation round-trip runs   marked as a park when it is one,
+    // and never a park while an update install is driving the quit.
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
-    const park = state.backgroundLifecycle?.shouldPark() ?? false
+    const park = !state.quitForUpdate && (state.backgroundLifecycle?.shouldPark() ?? false)
     requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 
@@ -476,7 +478,11 @@ function createWindow(): BrowserWindow {
       // defaults already applied
     })
 
+  window.webContents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseDown') usageAnalytics.activity()
+  })
   window.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown') usageAnalytics.activity()
     // A key pressed while a browser toolbar holds focus arrives here, not on the
     // native page view. Claim the browser's own chords first, so a page-scoped
     // key acts on the page instead of on the app around it (Cmd/Ctrl+R would
@@ -708,6 +714,8 @@ void app
       // serializing behind the heavier startup work.
       warmTrafficLightDetection()
     ])
+    // Analytics never delays window creation and never runs in a probe.
+    usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
     startupTelemetry.mark('storage:ready')
     startupTelemetry.mark('database:ready')
     await windowStateService.load()
@@ -851,8 +859,9 @@ void app
 app.on('window-all-closed', () => {
   // Background mode keeps the backend alive in the menu bar; a real quit is the
   // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
-  // else quits as before.
-  if (state.backgroundLifecycle?.shouldPark()) return
+  // else quits as before. An update install is a real quit too: parking on it
+  // would leave the downloaded update unapplied.
+  if (state.backgroundLifecycle?.shouldPark() && !state.quitForUpdate) return
   // Closing the last window (traffic-light close button) fully quits the app.
   // Cmd+Q follows the same path through before-quit → shutdown pipeline →
   // will-quit.
@@ -862,9 +871,17 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (state.quitCleanupStarted) return
 
+  // An update install is a real quit, and background mode must not park on it.
+  // The flag is read once and cleared here so a restart the user declines leaves
+  // the app parkable again on the next close.
+  const quitForUpdate = state.quitForUpdate
+  state.quitForUpdate = false
+
   // Cmd+Q parks in background mode instead of quitting. Only the menu bar's
   // Quit item (or OS logout) sets `quitConfirmed` and reaches the real shutdown.
-  if (!state.quitConfirmed && state.backgroundLifecycle?.shouldPark()) {
+  // An update install is the exception: it must restart the app to apply, so it
+  // never parks.
+  if (!state.quitConfirmed && !quitForUpdate && state.backgroundLifecycle?.shouldPark()) {
     event.preventDefault()
     const window = state.mainWindow
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
@@ -889,6 +906,7 @@ app.on('before-quit', (event) => {
     return
   }
   state.quitCleanupStarted = true
+  usageAnalytics.stop()
 
   // Notify every window that the application is shutting down so the
   // renderer can unsubscribe from IPC events and release resources.

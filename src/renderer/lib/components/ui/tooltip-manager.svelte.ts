@@ -185,12 +185,16 @@ export function attachTitleTooltipDelegation(): () => void {
   window.addEventListener('pointermove', onPointerMove, true)
   window.addEventListener('pointerout', onPointerOut, true)
   window.addEventListener('blur', onWindowBlur)
+  window.addEventListener('pointerdown', onWindowBlur, true)
+  window.addEventListener('keydown', onWindowBlur, true)
 
   return () => {
     window.removeEventListener('pointerover', onPointerOver, true)
     window.removeEventListener('pointermove', onPointerMove, true)
     window.removeEventListener('pointerout', onPointerOut, true)
     window.removeEventListener('blur', onWindowBlur)
+    window.removeEventListener('pointerdown', onWindowBlur, true)
+    window.removeEventListener('keydown', onWindowBlur, true)
     if (activeTitleElement) {
       restoreNativeTitle(activeTitleElement)
       activeTitleElement = null

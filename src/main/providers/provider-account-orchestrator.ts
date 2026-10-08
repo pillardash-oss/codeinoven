@@ -6,6 +6,7 @@ import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import { isOpenCodeV2Version } from '../../lib/opencode-version'
+import { atomicWrite } from '../../lib/utils'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import {
   cachedOpenCodeInstallation,
@@ -69,6 +70,8 @@ interface AuthDefinition {
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
   logoutArgs?(providerId?: string): string[]
+  /** Confirm that a CLI logout actually removed the account rather than returning a no-op. */
+  verifyLogout?(environment: NodeJS.ProcessEnv): Promise<void>
   /**
    * CLI arguments that make one stored credential the active one, for harnesses
    * whose own store holds several accounts per integration (OpenCode V2's
@@ -389,6 +392,49 @@ async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus>
     state: accounts.length > 0 ? 'authenticated' : 'unauthenticated',
     accounts
   }
+}
+
+/** Remove only the selected Cline provider, preserving every other account and setting. */
+async function removeClineCredential(providerId: string): Promise<void> {
+  const relativePath = '.cline/data/settings/providers.json'
+  const filePath = join(CLINE_SETTINGS_DIR, 'providers.json')
+  const wslRaw = await readHarnessHomeFile('cline', relativePath)
+  if (wslRaw === null) {
+    throw new Error('Cline credentials could not be read. Disconnect was not performed.')
+  }
+  let raw: string
+  try {
+    raw = wslRaw ?? (await readFile(filePath, 'utf8'))
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return
+    throw error
+  }
+  let stored: unknown
+  try {
+    stored = JSON.parse(raw)
+  } catch {
+    throw new Error('Cline credentials have an invalid format. Disconnect was not performed.')
+  }
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) {
+    throw new Error('Cline credentials have an invalid format. Disconnect was not performed.')
+  }
+  const record = stored as Record<string, unknown>
+  const providers = record['providers']
+  if (typeof providers !== 'object' || providers === null || Array.isArray(providers)) {
+    throw new Error('Cline providers have an invalid format. Disconnect was not performed.')
+  }
+  if (!Object.hasOwn(providers, providerId)) return
+  let content = applyEdits(raw, modify(raw, ['providers', providerId], undefined, {}))
+  if (record['lastUsedProvider'] === providerId) {
+    content = applyEdits(content, modify(content, ['lastUsedProvider'], undefined, {}))
+  }
+  if (wslRaw !== undefined) {
+    if (!(await writeHarnessHomeFile('cline', relativePath, content))) {
+      throw new Error('Cline credential runtime changed. Retry disconnect.')
+    }
+    return
+  }
+  await atomicWrite(filePath, content)
 }
 
 /**
@@ -882,7 +928,8 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     name: 'Cline',
     command: 'cline',
     readStatus: readClineStatus,
-    loginArgs: (options) => ['auth', ...(options.providerId ? [options.providerId] : [])]
+    loginArgs: (options) => ['auth', ...(options.providerId ? [options.providerId] : [])],
+    removeStoredCredential: removeClineCredential
   },
   {
     id: 'codex',
@@ -890,7 +937,8 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     command: 'codex',
     statusArgs: ['login', 'status'],
     parseStatus: parseCodexStatus,
-    loginArgs: (options) => ['login', ...(options.mode === 'device' ? ['--device-auth'] : [])]
+    loginArgs: (options) => ['login', ...(options.mode === 'device' ? ['--device-auth'] : [])],
+    logoutArgs: () => ['logout']
   },
   {
     id: 'pi',
@@ -910,6 +958,17 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     command: 'agy',
     readStatus: readAntigravityStatus,
     loginArgs: () => [],
+    logoutArgs: () => ['--print', '/logout'],
+    verifyLogout: async (environment) => {
+      const status = await readAntigravityStatus(undefined, environment)
+      if (status.state !== 'unauthenticated') {
+        throw new Error(
+          status.state === 'authenticated'
+            ? 'Antigravity is still authenticated after logout. Environment API keys cannot be disconnected by logout.'
+            : 'Antigravity logout could not be verified. Refresh the account status and retry.'
+        )
+      }
+    },
     pickerLogin: true
   },
   {
@@ -1196,6 +1255,7 @@ export class ProviderAccountOrchestrator {
           : `Logout failed (${definition.command} exited with code ${result.exitCode}): ${detail || 'no error output'}`
       )
     }
+    await definition.verifyLogout?.(environment)
   }
 
   /**

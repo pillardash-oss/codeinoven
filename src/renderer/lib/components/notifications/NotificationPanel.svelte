@@ -23,6 +23,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
+    assistantSubjectName,
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
@@ -34,7 +35,13 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, type BackgroundRun } from '$shared/types'
+  import {
+    ASSISTANT_SPACE_ID,
+    INBOX_PROJECT_ID,
+    type BackgroundRun,
+    type MissedRun,
+    type Thread
+  } from '$shared/types'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -148,32 +155,49 @@
   // Missed runs are surfaced per routine: one group per owning routine, plus a
   // single group for routine-less tasks. Both the groups and the panel's tab
   // chrome exist only once at least one run has actually been missed.
+  const routineNameById = $derived(
+    new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
+  )
   let missedGroups = $derived(
-    groupMissedRunsByRoutine(
-      assistantRoutines.missedRuns,
-      new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
-    )
+    groupMissedRunsByRoutine(assistantRoutines.missedRuns, routineNameById)
   )
 
   // Unattended runs get their own routine grouping: one group per owning
   // routine, plus a single group for routine-less tasks, mirroring missed runs.
   const backgroundGroups = $derived(
-    groupBackgroundRunsByRoutine(
-      assistantRoutines.recentBackgroundRuns,
-      new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
-    )
+    groupBackgroundRunsByRoutine(assistantRoutines.recentBackgroundRuns, routineNameById)
   )
 
   /**
-   * A run's own row names the task it ran, resolved from the thread list. A task
-   * whose thread was deleted still has ledger evidence, so it falls back to the
-   * neutral label rather than disappearing.
+   * The task a run row reports for, resolved from the loaded thread list. A
+   * routine's Getting started host is not a job, and a deleted task has no row
+   * at all, so both resolve through the routine name instead (see
+   * `assistantSubjectName`).
+   */
+  function runTask(threadId: string): Thread | undefined {
+    return scopeState.allScopeThreads.find((thread) => thread.id === threadId)
+  }
+
+  function routineNameFor(routineId: string | undefined): string | null {
+    return routineId ? (routineNameById.get(routineId) ?? null) : null
+  }
+
+  function missedRunTitle(run: MissedRun): string {
+    return assistantSubjectName(
+      runTask(run.threadId),
+      routineNameFor(run.routineId),
+      'Assistant task'
+    )
+  }
+
+  /**
+   * A run's own row names the task it ran, never the routine's "Getting started"
+   * authoring host, resolved from the thread list. A task whose thread was
+   * deleted still has ledger evidence, so it falls back to the routine name and
+   * then the neutral label rather than disappearing.
    */
   function backgroundRunTitle(run: BackgroundRun): string {
-    return (
-      scopeState.allScopeThreads.find((thread) => thread.id === run.taskId)?.title ??
-      'Assistant run'
-    )
+    return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
   }
 
   async function navigateToNotification(n: InAppNotification): Promise<void> {
@@ -232,6 +256,15 @@
       await assistantRoutines.dismissMissedRun(id)
     } catch {
       // Surfaced as a missed run returning on the next refresh; nothing to do here.
+    }
+  }
+
+  /** Acknowledge one unattended run so it leaves the "While you were away" list. */
+  async function dismissBackgroundRun(id: string): Promise<void> {
+    try {
+      await assistantRoutines.dismissBackgroundRun(id)
+    } catch {
+      // Main pushes the fresh ledger list; a failure simply leaves the row.
     }
   }
 
@@ -637,7 +670,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                       <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                        >{run.title}</span
+                        >{missedRunTitle(run)}</span
                       >
                       <span class="shrink-0 text-[0.625rem] text-dimmed"
                         >{formatTime(run.dueAt)}</span
@@ -695,48 +728,66 @@
                 <div class="space-y-px" aria-label={`${group.label} unattended runs`}>
                   {#each group.runs as run (run.runThreadId)}
                     {@const active = busyId === run.runThreadId}
-                    <button
-                      type="button"
-                      class="flex w-full cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 text-left transition-colors hover:bg-elevated {active
-                        ? 'opacity-60 pointer-events-none'
+                    <div
+                      class="group flex items-stretch border-l-2 bg-surface transition-colors hover:bg-elevated {active
+                        ? 'pointer-events-none opacity-60'
                         : ''}"
-                      style="border-color: {STATUS_TONE_COLORS[backgroundRunTone(run.outcome)]}"
-                      title="Open this run"
-                      aria-label="Open unattended run for {backgroundRunTitle(run)}"
-                      onclick={() => void openMissedRun(run.runThreadId)}
+                      style="border-left-color: {STATUS_TONE_COLORS[
+                        backgroundRunTone(run.outcome)
+                      ]}"
                     >
-                      <div class="flex w-2 shrink-0 pt-1">
-                        <StatusBadge
-                          tone={backgroundRunTone(run.outcome)}
-                          title={backgroundRunOutcomeLabel(run.outcome)}
-                        />
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                          <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                            >{backgroundRunTitle(run)}</span
-                          >
-                          <span class="shrink-0 text-[0.625rem] text-dimmed"
-                            >{formatTime(run.settledAt ?? run.startedAt)}</span
-                          >
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
+                        title="Open this run"
+                        aria-label="Open unattended run for {backgroundRunTitle(run)}"
+                        onclick={() => void openMissedRun(run.runThreadId)}
+                      >
+                        <div class="flex w-2 shrink-0 pt-1">
+                          <StatusBadge
+                            tone={backgroundRunTone(run.outcome)}
+                            title={backgroundRunOutcomeLabel(run.outcome)}
+                          />
                         </div>
-                        <p class="mt-0.5 text-[0.625rem] text-muted">
-                          {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(
-                            run.reason
-                          )}
-                        </p>
-                        {#if run.outcome === 'failed' && run.errorSummary}
-                          <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">
-                            {run.errorSummary}
+                        <div class="min-w-0 flex-1">
+                          <div class="flex items-center gap-2">
+                            <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                              >{backgroundRunTitle(run)}</span
+                            >
+                            <span class="shrink-0 text-[0.625rem] text-dimmed"
+                              >{formatTime(run.settledAt ?? run.startedAt)}</span
+                            >
+                          </div>
+                          <p class="mt-0.5 text-[0.625rem] text-muted">
+                            {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(
+                              run.reason
+                            )}
                           </p>
-                        {/if}
-                        {#if run.autoAnswered > 0}
-                          <p class="mt-0.5 text-[0.625rem] text-dimmed">
-                            {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered automatically
-                          </p>
-                        {/if}
+                          {#if run.outcome === 'failed' && run.errorSummary}
+                            <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">
+                              {run.errorSummary}
+                            </p>
+                          {/if}
+                          {#if run.autoAnswered > 0}
+                            <p class="mt-0.5 text-[0.625rem] text-dimmed">
+                              {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered
+                              automatically
+                            </p>
+                          {/if}
+                        </div>
+                      </button>
+                      <div class="flex shrink-0 items-start px-1.5 pt-2">
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                          aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
+                          title="Dismiss"
+                          onclick={() => void dismissBackgroundRun(run.runThreadId)}
+                        >
+                          <X size={11} />
+                        </button>
                       </div>
-                    </button>
+                    </div>
                   {/each}
                 </div>
               </div>

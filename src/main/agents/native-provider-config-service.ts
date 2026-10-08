@@ -282,7 +282,7 @@ export class NativeProviderConfigService {
       apiKey: removeApiKey ? 'none' : (apiKey ?? existing['apiKey'] ?? 'none'),
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
-      models: provider.models.map(serializePiModel)
+      models: mergePiModels(existing['models'], provider.models)
     }
     if (!provider.enabled) {
       // Park first, delete second: a failure in between leaves the provider
@@ -630,6 +630,54 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {}),
     ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
+}
+
+/**
+ * Keys CodeInOven owns on a pi model entry, mirroring what `serializePiModel`
+ * emits. Everything else on the entry belongs to the user.
+ */
+const PI_MODEL_OWNED_KEYS = [
+  'id',
+  'name',
+  'reasoning',
+  'contextWindow',
+  'maxTokens',
+  'cioDefaultThinkingLevel'
+] as const
+
+/**
+ * Serialize the models CodeInOven manages, each layered over whatever the entry
+ * already said about that same id.
+ *
+ * The provider-level fields do this already (`...existing` in `upsertPiProvider`),
+ * and a model entry deserves the same treatment: pi's `models.json` keeps growing
+ * per-model settings CodeInOven has no field for, pi 1.0.2 added
+ * `samplingParamsByThinkingLevel` among them, and a user who sets one by hand
+ * should not lose it the next time they rename the provider in the editor.
+ *
+ * Keyed off the ids being written rather than the ids on file, so a model the
+ * user removed in the editor still disappears instead of lingering. And a key
+ * CodeInOven owns but no longer sets is deleted, otherwise clearing a context
+ * window in the editor would leave the old value behind forever.
+ */
+function mergePiModels(
+  existingModels: unknown,
+  providerModels: BaseUrlProviderModel[]
+): Array<Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const entry of Array.isArray(existingModels) ? existingModels : []) {
+    const parsed = record(entry)
+    const id = parsed?.['id']
+    if (parsed && typeof id === 'string') byId.set(id, parsed)
+  }
+  return providerModels.map((model) => {
+    const serialized = serializePiModel(model)
+    const merged: Record<string, unknown> = { ...byId.get(model.id), ...serialized }
+    for (const key of PI_MODEL_OWNED_KEYS) {
+      if (!(key in serialized)) delete merged[key]
+    }
+    return merged
+  })
 }
 
 async function updateJsonc(

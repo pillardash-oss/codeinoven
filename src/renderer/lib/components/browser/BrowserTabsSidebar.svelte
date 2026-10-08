@@ -5,6 +5,8 @@
     ArrowLeft,
     ArrowRight,
     Check,
+    ChevronDown,
+    ChevronRight,
     Globe,
     Loader2,
     Lock,
@@ -43,6 +45,7 @@
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import BrowserTabModal from './BrowserTabModal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
   import { browserSiteHost, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
 
@@ -74,6 +77,18 @@
   let editorGroupId = $state<string | null | undefined>(undefined)
   /** The tab whose editor is open, or null while it is closed. */
   let editorTabId = $state<string | null>(null)
+  /** Tabs chosen with Cmd/Ctrl-click or Shift-click for a group operation. */
+  let selectedTabIds = $state<string[]>([])
+  /** The fixed endpoint used by the next Shift-click range. */
+  let selectionAnchorId = $state<string | null>(null)
+  let pendingBulkBox = $state<{
+    tabIds: string[]
+    boxId: string | null
+    boxName: string
+  } | null>(null)
+  const visibleSelectedTabIds = $derived(
+    selectedTabIds.filter((id) => globalBrowser.tabById(id) !== null)
+  )
 
   const activeTab = $derived(globalBrowser.activeTab)
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
@@ -92,7 +107,7 @@
   const address = $derived(activeTab?.url ?? '')
   /** Whether the page on screen is already saved, which is what the star beside
    *  the address reads and toggles. */
-  const bookmarked = $derived(browserBookmarks.isBookmarked(address))
+  const bookmarked = $derived(browserBookmarks.isBookmarked(address, activeTab?.boxId ?? null))
 
   /**
    * The extension the page on screen is, when it is a Chrome Web Store page.
@@ -178,7 +193,76 @@
     return globalBrowser.tabsInGroup(groupId).filter(matches)
   }
 
-  function newTab(groupId: string | null = null): void {
+  function handleTabClick(tabId: string, event: MouseEvent): void {
+    const additive = event.metaKey || event.ctrlKey
+    if (event.shiftKey) {
+      const tabs = globalBrowser.tabs
+      const anchorIndex = tabs.findIndex((tab) => tab.id === selectionAnchorId)
+      const targetIndex = tabs.findIndex((tab) => tab.id === tabId)
+      if (targetIndex < 0) return
+      const start = anchorIndex < 0 ? targetIndex : Math.min(anchorIndex, targetIndex)
+      const end = anchorIndex < 0 ? targetIndex : Math.max(anchorIndex, targetIndex)
+      const rangeIds = tabs.slice(start, end + 1).map((tab) => tab.id)
+      selectedTabIds = additive ? [...new Set([...visibleSelectedTabIds, ...rangeIds])] : rangeIds
+      if (selectionAnchorId === null) selectionAnchorId = tabId
+      return
+    }
+    if (additive) {
+      selectedTabIds = visibleSelectedTabIds.includes(tabId)
+        ? visibleSelectedTabIds.filter((id) => id !== tabId)
+        : [...visibleSelectedTabIds, tabId]
+      selectionAnchorId = tabId
+      return
+    }
+    selectedTabIds = []
+    selectionAnchorId = tabId
+    globalBrowser.switchTo(tabId)
+  }
+
+  function handleTabContextMenu(tabId: string): string[] {
+    if (visibleSelectedTabIds.includes(tabId)) return [...visibleSelectedTabIds]
+    selectedTabIds = [tabId]
+    selectionAnchorId = tabId
+    return [tabId]
+  }
+
+  function moveTabsToGroup(tabIds: string[], groupId: string): void {
+    globalBrowser.moveTabsToGroup(tabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+  }
+
+  function createGroupForTabs(tabIds: string[]): void {
+    const groupId = globalBrowser.createGroup('New group')
+    if (!globalBrowser.groupById(groupId)) return
+    globalBrowser.moveTabsToGroup(tabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+    editorGroupId = groupId
+  }
+
+  function reopenTabsInBox(tabIds: string[], boxId: string | null): void {
+    for (const tabId of tabIds) globalBrowser.reopenInBox(tabId, boxId)
+    selectedTabIds = []
+    selectionAnchorId = null
+  }
+
+  function requestReopenTabsInBox(tabIds: string[], boxId: string | null): void {
+    const tabsToReopen = tabIds.filter((tabId) => {
+      const tab = globalBrowser.tabById(tabId)
+      return tab !== null && tab.boxId !== boxId
+    })
+    if (tabsToReopen.length === 0) return
+    pendingBulkBox = {
+      tabIds: tabsToReopen,
+      boxId,
+      boxName: boxId
+        ? (globalBrowser.boxById(boxId)?.name ?? 'the selected box')
+        : 'the default box'
+    }
+  }
+
+  function newTab(groupId?: string | null): void {
     onOpenAddress()
     globalBrowser.createTab('', groupId)
   }
@@ -186,6 +270,9 @@
   /** Narrow the strip to one group's tabs and take the caret, so a group's own
    *  search affordance lands the user in the field rather than on the button. */
   function scopeSearch(groupId: string | null): void {
+    if (groupId && globalBrowser.groupById(groupId)?.collapsed) {
+      globalBrowser.toggleGroupCollapsed(groupId)
+    }
     globalBrowser.openTabSearch(groupId)
   }
 
@@ -195,7 +282,7 @@
   function toggleBookmark(): void {
     const tab = activeTab
     if (!tab || tab.url === '') return
-    browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon)
+    browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon, tab.boxId)
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */
@@ -239,16 +326,41 @@
   /** The group a dragged tab is hovering, so its header can highlight as a drop
    *  target. Dragging a tab onto a header files it under that group. */
   let groupDropTargetId = $state<string | null>(null)
+  let draggingGroupId = $state<string | null>(null)
+  let groupDropPosition = $state<'before' | 'after'>('before')
+
+  function startGroupDrag(event: DragEvent, groupId: string): void {
+    if (!event.dataTransfer) return
+    draggingGroupId = groupId
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('application/x-cio-browser-group', groupId)
+  }
+
+  function endGroupDrag(): void {
+    draggingGroupId = null
+    groupDropTargetId = null
+  }
 
   function onGroupDragOver(event: DragEvent, groupId: string): void {
-    if (!globalBrowser.draggingTabId) return
+    if (!globalBrowser.draggingTabId && !draggingGroupId) return
     event.preventDefault()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
     groupDropTargetId = groupId
+    const element = event.currentTarget
+    if (element instanceof HTMLElement) {
+      const bounds = element.getBoundingClientRect()
+      groupDropPosition = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+    }
   }
 
   function onGroupDrop(event: DragEvent, groupId: string): void {
     groupDropTargetId = null
+    if (draggingGroupId) {
+      event.preventDefault()
+      globalBrowser.reorderGroup(draggingGroupId, groupId, groupDropPosition)
+      endGroupDrag()
+      return
+    }
     const dragged = globalBrowser.draggingTabId ?? event.dataTransfer?.getData('text/plain') ?? ''
     if (!dragged) return
     event.preventDefault()
@@ -515,7 +627,7 @@
           <input
             {@attach attachSearchInput}
             type="text"
-            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
             placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
             aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
             value={query}
@@ -544,36 +656,16 @@
   {/if}
 {/snippet}
 
-<CollapsibleSidebar
-  title="Browser"
-  hideHeader
-  onboardingAnchor={false}
-  label="Browser tabs"
-  region="browser-sidebar"
-  overlayPhase={stripPhase}
-  {chrome}
->
-  {#if totalTabs === 0}
-    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
-      <Globe size={22} class="text-dimmed" />
-      <p class="text-xs leading-relaxed text-dimmed">
-        No tabs are open. Pages here run in their own profile, separate from the browsers your
-        agents use.
-      </p>
-      <BrowserNewTabMenu>
-        {#snippet trigger()}
-          <button
-            type="button"
-            class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-            title="Open a new browser tab"
-            onclick={() => newTab()}
-          >
-            New tab
-          </button>
-        {/snippet}
-      </BrowserNewTabMenu>
-    </div>
-  {:else}
+{#if totalTabs > 0}
+  <CollapsibleSidebar
+    title="Browser"
+    hideHeader
+    onboardingAnchor={false}
+    label="Browser tabs"
+    region="browser-sidebar"
+    overlayPhase={stripPhase}
+    {chrome}
+  >
     {#if searchGroupId === null && pinned.length > 0}
       <div class="mb-1">
         <p
@@ -586,6 +678,12 @@
           {#each pinned as tab (tab.id)}
             <BrowserTabRow
               {tab}
+              selected={visibleSelectedTabIds.includes(tab.id)}
+              onTabClick={handleTabClick}
+              onTabContextMenu={handleTabContextMenu}
+              onMoveTabsToGroup={moveTabsToGroup}
+              onCreateGroupForTabs={createGroupForTabs}
+              onReopenTabsInBox={requestReopenTabsInBox}
               onEditTab={(id) => (editorTabId = id)}
               onOpenGroupEditor={(id) => (editorGroupId = id)}
             />
@@ -603,12 +701,16 @@
         ? browserGroupIconUrl(group, globalBrowser.groupIconUrl(group.id))
         : null}
       {#if searchGroupId === null || searchGroupId === group.id}
-        {#if searchGroupId !== null || group.pinned || tabsFor(group.id).length > 0}
+        {#if searchGroupId !== null || query.trim() === '' || group.pinned || tabsFor(group.id).length > 0}
           <div class="mb-1">
             <div
-              class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
+              class="group/header flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
               group.id
-                ? 'ring-1 ring-info'
+                ? draggingGroupId
+                  ? groupDropPosition === 'before'
+                    ? 'border-t-2 border-info'
+                    : 'border-b-2 border-info'
+                  : 'ring-1 ring-info'
                 : ''}"
               style="background-color: {accent}1a"
               role="group"
@@ -620,12 +722,19 @@
               <button
                 type="button"
                 class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
-                title={group.description
-                  ? `${group.name}: ${group.description}`
-                  : `Search only inside ${group.name}`}
-                aria-label={`Filter the tab strip to ${group.name}`}
-                onclick={() => scopeSearch(group.id)}
+                title={`${group.collapsed ? 'Expand' : 'Fold'} ${group.name}`}
+                aria-label={`${group.collapsed ? 'Expand' : 'Fold'} ${group.name}`}
+                aria-expanded={!group.collapsed}
+                draggable="true"
+                ondragstart={(event: DragEvent) => startGroupDrag(event, group.id)}
+                ondragend={endGroupDrag}
+                onclick={() => globalBrowser.toggleGroupCollapsed(group.id)}
               >
+                {#if group.collapsed}
+                  <ChevronRight size={12} class="shrink-0 text-muted" />
+                {:else}
+                  <ChevronDown size={12} class="shrink-0 text-muted" />
+                {/if}
                 {#if iconUrl}
                   <img
                     src={iconUrl}
@@ -647,66 +756,80 @@
                   {tabsFor(group.id).length}
                 </span>
               </button>
-              <BrowserNewTabMenu groupId={group.id} anchorTabId={activeTab?.id ?? null}>
-                {#snippet trigger()}
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                    aria-label={`New tab in ${group.name}`}
-                    title={`New tab in ${group.name}`}
-                    onclick={() => newTab(group.id)}
-                  >
-                    <Plus size={13} />
-                  </button>
-                {/snippet}
-              </BrowserNewTabMenu>
-              <button
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                aria-label={`Search in ${group.name}`}
-                title={`Search in ${group.name}`}
-                onclick={() => scopeSearch(group.id)}
+              <div
+                class="flex items-center gap-1 opacity-0 pointer-events-none group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto"
               >
-                <Search size={12} />
-              </button>
-              <button
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground {group.pinned
-                  ? 'text-accent'
-                  : 'text-muted'}"
-                aria-label={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
-                aria-pressed={group.pinned}
-                title={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
-                onclick={() => globalBrowser.toggleGroupPin(group.id)}
-              >
-                {#if group.pinned}
-                  <Pin size={12} />
-                {:else}
-                  <PinOff size={12} />
+                <BrowserNewTabMenu groupId={group.id} anchorTabId={activeTab?.id ?? null}>
+                  {#snippet trigger()}
+                    <button
+                      type="button"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                      aria-label={`New tab in ${group.name}`}
+                      title={`New tab in ${group.name}`}
+                      onclick={() => newTab(group.id)}
+                    >
+                      <Plus size={13} />
+                    </button>
+                  {/snippet}
+                </BrowserNewTabMenu>
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  aria-label={`Search in ${group.name}`}
+                  title={`Search in ${group.name}`}
+                  onclick={() => scopeSearch(group.id)}
+                >
+                  <Search size={12} />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground {group.pinned
+                    ? 'text-accent'
+                    : 'text-muted'}"
+                  aria-label={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
+                  aria-pressed={group.pinned}
+                  title={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
+                  onclick={() => globalBrowser.toggleGroupPin(group.id)}
+                >
+                  {#if group.pinned}
+                    <Pin size={12} />
+                  {:else}
+                    <PinOff size={12} />
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  aria-label={`Edit ${group.name}`}
+                  title={`Edit ${group.name}`}
+                  onclick={() => (editorGroupId = group.id)}
+                >
+                  <Settings2 size={12} />
+                </button>
+              </div>
+            </div>
+            {#if !group.collapsed}
+              <div class="mt-0.5 ml-2 border-l pl-1.5">
+                {#each tabsFor(group.id) as tab (tab.id)}
+                  <BrowserTabRow
+                    {tab}
+                    selected={visibleSelectedTabIds.includes(tab.id)}
+                    onTabClick={handleTabClick}
+                    onTabContextMenu={handleTabContextMenu}
+                    onMoveTabsToGroup={moveTabsToGroup}
+                    onCreateGroupForTabs={createGroupForTabs}
+                    onReopenTabsInBox={requestReopenTabsInBox}
+                    onEditTab={(id) => (editorTabId = id)}
+                    onOpenGroupEditor={(id) => (editorGroupId = id)}
+                  />
+                {/each}
+                {#if tabsFor(group.id).length === 0}
+                  <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
+                    {query.trim() === '' ? 'No tabs yet' : 'No tabs match'}
+                  </p>
                 {/if}
-              </button>
-              <button
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                aria-label={`Edit ${group.name}`}
-                title={`Edit ${group.name}`}
-                onclick={() => (editorGroupId = group.id)}
-              >
-                <Settings2 size={12} />
-              </button>
-            </div>
-            <div class="mt-0.5 ml-2 border-l pl-1.5">
-              {#each tabsFor(group.id) as tab (tab.id)}
-                <BrowserTabRow
-                  {tab}
-                  onEditTab={(id) => (editorTabId = id)}
-                  onOpenGroupEditor={(id) => (editorGroupId = id)}
-                />
-              {/each}
-              {#if tabsFor(group.id).length === 0}
-                <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No tabs match</p>
-              {/if}
-            </div>
+              </div>
+            {/if}
           </div>
         {/if}
       {/if}
@@ -721,6 +844,12 @@
       {#each tabsFor(null) as tab (tab.id)}
         <BrowserTabRow
           {tab}
+          selected={visibleSelectedTabIds.includes(tab.id)}
+          onTabClick={handleTabClick}
+          onTabContextMenu={handleTabContextMenu}
+          onMoveTabsToGroup={moveTabsToGroup}
+          onCreateGroupForTabs={createGroupForTabs}
+          onReopenTabsInBox={requestReopenTabsInBox}
           onEditTab={(id) => (editorTabId = id)}
           onOpenGroupEditor={(id) => (editorGroupId = id)}
         />
@@ -729,8 +858,8 @@
         <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>
       {/if}
     {/if}
-  {/if}
-</CollapsibleSidebar>
+  </CollapsibleSidebar>
+{/if}
 
 {#if editorGroupId !== undefined}
   <BrowserGroupModal groupId={editorGroupId} onClose={() => (editorGroupId = undefined)} />
@@ -738,4 +867,23 @@
 
 {#if editorTabId !== null}
   <BrowserTabModal tabId={editorTabId} onClose={() => (editorTabId = null)} />
+{/if}
+
+{#if pendingBulkBox}
+  <ConfirmDialog
+    open
+    variant="primary"
+    title="Reopen selected tabs in another box?"
+    confirmLabel="Reopen tabs"
+    onCancel={() => (pendingBulkBox = null)}
+    onConfirm={() => {
+      if (pendingBulkBox) reopenTabsInBox(pendingBulkBox.tabIds, pendingBulkBox.boxId)
+      pendingBulkBox = null
+    }}
+  >
+    <p>
+      {visibleSelectedTabIds.length} tabs will close and reopen in {pendingBulkBox.boxName}. Each
+      box has separate cookies and sign-ins, and page history will not carry over.
+    </p>
+  </ConfirmDialog>
 {/if}

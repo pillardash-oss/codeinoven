@@ -248,6 +248,9 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   harness_id      TEXT,
   account_id      TEXT,
   account_label   TEXT,
+  oven_id         TEXT,
+  oven_label      TEXT,
+  oven_appearance_json TEXT,
   thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
@@ -769,6 +772,20 @@ CREATE TABLE IF NOT EXISTS provider_sync_cursors (
 CREATE TABLE IF NOT EXISTS maintenance_meta (
   key   TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
+);
+
+-- ─── CIO Cleanup exclusions ────────────────────────────────────────────────
+-- One row per path the user protected from the daily stale-scratch sweep,
+-- keyed by the workspace mount it belongs to. scope_bucket_id and thread_id
+-- mirror the triple the file tree uses to resolve a mount root, so a sweep can
+-- match an exclusion without storing any absolute path.
+CREATE TABLE IF NOT EXISTS cio_cleanup_exclusions (
+  project_id      TEXT NOT NULL,
+  scope_bucket_id TEXT NOT NULL,
+  thread_id       TEXT NOT NULL DEFAULT '',
+  path            TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (project_id, scope_bucket_id, thread_id, path)
 );`
 
 export const USAGE_EVENTS_COLUMNS_SQL = `
@@ -945,6 +962,23 @@ CREATE TABLE IF NOT EXISTS browser_tab_notes (
   updated_at INTEGER NOT NULL
 );`
 
+/** User-created notes available across every app view. */
+export const STICKY_NOTES_SQL = `
+-- ─── Sticky notes (user-only scratch space) ─────────────────────────────
+CREATE TABLE IF NOT EXISTS sticky_notes (
+  id          TEXT PRIMARY KEY NOT NULL,
+  title       TEXT NOT NULL,
+  icon_type   TEXT,
+  custom_svg  TEXT,
+  image_path  TEXT,
+  color       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
+
 /**
  * Assistant routines: the top-level grouping for assistant tasks. A routine
  * owns the agent-authored how-to, a default schedule, and its connection picks;
@@ -968,6 +1002,7 @@ CREATE TABLE IF NOT EXISTS routines (
   delivery            TEXT,
   priority            TEXT,
   agents              TEXT,
+  execution           TEXT,
   paused              INTEGER NOT NULL DEFAULT 0,
   pinned              INTEGER NOT NULL DEFAULT 0,
   pinned_at           INTEGER,
@@ -1044,6 +1079,7 @@ export const DATABASE_SCHEMA_SQL = [
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
   BROWSER_TAB_NOTES_SQL,
+  STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
   THREAD_EXPERTS_SQL,
   ROUTINES_SQL

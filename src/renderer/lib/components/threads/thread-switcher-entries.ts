@@ -28,6 +28,17 @@ export type ThreadSwitcherEntry =
 /** How many entries the switcher shows, matching the thread list it grew from. */
 export const THREAD_SWITCHER_ENTRY_LIMIT = 10
 
+/**
+ * How many browser tabs the switcher shows at most.
+ *
+ * The list is one recency order, so an older tab still yields to a newer thread.
+ * This cap handles the other direction: a strip with many tabs visited over a
+ * session would otherwise fill most of the ten slots with pages, burying the
+ * threads the gesture is for. Three keeps a couple of recent pages in reach
+ * without letting them flood the list.
+ */
+export const MAX_BROWSER_SWITCHER_ENTRIES = 3
+
 /** The stable identity of an entry, used to mark the highlighted one. It is the
  *  same key form the recent list stores, so a browser entry and the active tab
  *  id compare equal. */
@@ -72,10 +83,13 @@ const MIN_SWITCHER_ENTRIES = 2
  * Every kind competes on the same terms: the walk takes whatever the order names
  * next, thread or browser tab, until the limit is reached. Nothing is reserved or
  * force-added, so the list is exactly the surfaces the user has used, newest
- * first. When the order names fewer surfaces than the list can hold, the tail is
- * filled with the most recently active threads. That keeps the switcher useful on
- * a cold start, and it is the only padding the builder does: padding with browser
- * tabs is what used to fill the list with pages the user had never opened.
+ * first, with one guard: at most three browser tabs are listed. The guard stops
+ * a tab-heavy session from filling the list with pages while still letting a
+ * newer tab outrank an older thread. When the order names fewer surfaces than
+ * the list can hold, the tail is filled with the most recently active threads.
+ * That keeps the switcher useful on a cold start, and it is the only padding the
+ * builder does: padding with browser tabs is what used to fill the list with
+ * pages the user had never opened.
  */
 export function buildThreadSwitcherEntries(
   source: ThreadSwitcherEntrySource
@@ -104,6 +118,7 @@ export function buildThreadSwitcherEntries(
     if (isBrowserTabVisitKey(visit)) {
       const tab = tabsById.get(browserTabIdFromVisitKey(visit))
       if (!tab || usedTabs.has(tab.id)) continue
+      if (usedTabs.size >= MAX_BROWSER_SWITCHER_ENTRIES) continue
       entries.push({ kind: 'browser', tab })
       usedTabs.add(tab.id)
       continue

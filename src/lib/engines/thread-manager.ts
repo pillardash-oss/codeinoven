@@ -1,3 +1,4 @@
+import { isThreadBusyStatus } from '../thread-status-policy'
 import { rm } from 'fs/promises'
 import { generateId } from '../utils'
 import { threadOwnedDirectories } from '../thread-storage-paths'
@@ -41,7 +42,7 @@ import {
   bucketForThread,
   buildThreadCapacity,
   countThreadsInBucket,
-  firstEvictableInBucket,
+  evictableInBucket,
   isProtectedFromAutomaticCleanup,
   scopedBucketIdsFromBoard,
   type ThreadCapacity,
@@ -58,6 +59,32 @@ export type { ThreadCapacity, ThreadListOptions } from './thread-manager-capacit
 
 /** Sidebar quota for the inbox (Chats) project: show all of its recent threads. */
 const INBOX_PROJECT_ID = 'inbox'
+
+/**
+ * How many eviction candidates one create may try before it gives up for that
+ * create. Eviction walks the bucket oldest-first and already tolerates a thread
+ * it cannot delete, so this bound only keeps a systemic failure (a database that
+ * is refusing writes, a driver that is gone) from turning thread creation into a
+ * long loop over every thread the bucket holds.
+ */
+const EVICTION_CANDIDATES_PER_CREATE = 5
+
+/**
+ * What a create's background capacity eviction did.
+ *
+ * Deletion is best-effort by design: the new thread is already persisted when
+ * this runs, and a failure is reported, never thrown. `failedIds` names every
+ * candidate whose deletion failed, so an undeletable thread stays visible even
+ * when a later candidate made room.
+ */
+export interface ThreadEvictionOutcome {
+  /** Candidate ids whose deletion failed, oldest first. */
+  failedIds: string[]
+  /** Id of the thread that was deleted, when one was. */
+  evictedId?: string
+  /** The most recent deletion failure, for the audit log. */
+  error?: unknown
+}
 
 /**
  * Raised when `createThread` is asked to exceed a project's thread limit while
@@ -270,11 +297,11 @@ export class ThreadManager {
    * - The `finalize` half validates the project, enforces capacity, performs
    *   the lazy eviction, and persists the row through the database worker.
    *   Eviction failure never breaks the new thread; it is surfaced through
-   *   `onEvictionError` so the caller can audit it while the create proceeds.
+   *   `onEviction` so the caller can audit it while the create proceeds.
    */
   prepareCreateThread(
     input: CreateThreadInput,
-    options: { onEvictionError?: (error: unknown) => void } = {}
+    options: { onEviction?: (outcome: ThreadEvictionOutcome) => void } = {}
   ): { thread: Thread; finalize: () => Promise<void> } {
     const creatingOrchestrationChild =
       input.assignmentRole === 'worker' ||
@@ -343,11 +370,12 @@ export class ThreadManager {
       const newThreadBucket = bucketForThread({ scopeBucketId: input.scopeBucketId }, scopedBuckets)
       const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
       const bucketCount = countThreadsInBucket(active, scopedBuckets, newThreadBucket)
-      let toEvictId: string | undefined
+      let evictionCandidateIds: string[] = []
       if (!creatingOrchestrationChild && bucketCount >= project.threadLimit) {
-        const toEvict = firstEvictableInBucket(active, scopedBuckets, newThreadBucket)
-        toEvictId = toEvict?.id
-        if (!toEvictId) {
+        evictionCandidateIds = evictableInBucket(active, scopedBuckets, newThreadBucket)
+          .slice(0, EVICTION_CANDIDATES_PER_CREATE)
+          .map((candidate) => candidate.id)
+        if (evictionCandidateIds.length === 0) {
           throw new AllThreadsProtectedError(input.projectId, project.threadLimit, bucketCount)
         }
       }
@@ -357,16 +385,43 @@ export class ThreadManager {
       // must never roll back the creation it is making room for.
       await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
       await this.threadRepo.upsertViaWorker(thread)
-      if (toEvictId) {
-        try {
-          await this.deleteThread(input.projectId, toEvictId)
-        } catch (error) {
-          options.onEvictionError?.(error)
-        }
+      if (evictionCandidateIds.length > 0) {
+        // The outcome is evaluated before the optional call. An absent callback
+        // skips only the report, never the eviction itself.
+        const outcome = await this.evictOldestDeletable(input.projectId, evictionCandidateIds)
+        options.onEviction?.(outcome)
       }
     }
 
     return { thread, finalize }
+  }
+
+  /**
+   * Delete the oldest candidate that can actually be deleted.
+   *
+   * Capacity is an invariant of the app (docs/APP-BIBLE.md, "Bounded resources"),
+   * so a thread whose deletion fails must not be able to hold the project above
+   * its bound forever: eviction keeps the bucket's order and moves on to the
+   * next candidate, while every failure is returned to the caller so the
+   * undeletable thread is auditable instead of silent. The caller bounds the
+   * list, so one sweep is always short and thread creation never waits on it.
+   */
+  private async evictOldestDeletable(
+    projectId: string,
+    candidateIds: readonly string[]
+  ): Promise<ThreadEvictionOutcome> {
+    const failedIds: string[] = []
+    let error: unknown
+    for (const candidateId of candidateIds) {
+      try {
+        await this.deleteThread(projectId, candidateId)
+        return { failedIds, evictedId: candidateId, ...(error === undefined ? {} : { error }) }
+      } catch (failure) {
+        failedIds.push(candidateId)
+        error = failure
+      }
+    }
+    return { failedIds, ...(error === undefined ? {} : { error }) }
   }
 
   /**
@@ -612,6 +667,7 @@ export class ThreadManager {
         | 'providerId'
         | 'workingDirectory'
         | 'authoredWorkKind'
+        | 'implementationBrainstorm'
         | 'scopeBucketId'
         | 'lastActivity'
         | 'read'
@@ -1159,6 +1215,11 @@ export class ThreadManager {
     settings: ThreadSettings
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+    const ovenChanged =
+      (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local') ||
+      existing.settings?.ovenPath !== settings.ovenPath
+    if (ovenChanged && isThreadBusyStatus(existing.status))
+      throw new Error('Stop or finish the active turn before changing Ovens.')
 
     // The independent audit owns the thread's workflow: engineering modes are
     // locked out for the thread's lifetime once it is enabled.
@@ -1419,6 +1480,16 @@ export class ThreadManager {
   /** List threads across all projects, sorted pinned-first then by last activity. */
   async listAllThreads(options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listAllViaWorker(options)
+  }
+
+  /**
+   * Threads the Threads view must carry whatever the bounded recency window
+   * pulls: pinned rows, non-done rows, and every row of a pinned-like scope,
+   * across all projects.
+   */
+  async listAlwaysVisibleThreads(): Promise<Thread[]> {
+    const scopedBucketIds = await this.scopeManager.scopedBucketIds()
+    return this.threadRepo.listAlwaysVisibleViaWorker(scopedBucketIds)
   }
 
   /** Bounded first-paint list without optional harness-usage decoration. */

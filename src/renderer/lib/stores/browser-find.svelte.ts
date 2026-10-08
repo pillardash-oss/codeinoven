@@ -85,21 +85,21 @@ class BrowserFindState {
       state.focusTrigger += 1
       return
     }
-    this.search(tabId, state, { findNext: true, forward: direction === 'next' })
+    this.search(tabId, state, { findNext: false, forward: direction === 'next' })
   }
 
   /** Take a settled query and search the page for it. */
   setQuery(tabId: string, query: string): void {
     const state = this.ensure(tabId)
     state.query = query
-    this.search(tabId, state, { findNext: false, forward: true })
+    this.search(tabId, state, { findNext: true, forward: true })
   }
 
   /** Search the same query again, case-sensitively or not. */
   setMatchCase(tabId: string, matchCase: boolean): void {
     const state = this.ensure(tabId)
     state.matchCase = matchCase
-    this.search(tabId, state, { findNext: false, forward: true })
+    this.search(tabId, state, { findNext: true, forward: true })
   }
 
   /**
@@ -153,7 +153,7 @@ class BrowserFindState {
     // A fresh search has no answer yet, so the count from the query before it is
     // dropped rather than shown against text it does not belong to. A step keeps
     // the count it has: the page is moving within the same set of matches.
-    if (!options.findNext) {
+    if (options.findNext) {
       state.matches = 0
       state.activeMatchOrdinal = 0
     }

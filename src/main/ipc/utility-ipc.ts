@@ -4,15 +4,18 @@ import { sendToRenderer } from './renderer-delivery'
 import type {
   UtilityBundleInstallRequest,
   UtilityCredentialInput,
+  UtilityDefinition,
   UtilityDefinitionInput,
   UtilityDefinitionPatch,
   UtilityResolutionContext,
+  UtilityScope,
   UtilitySearchOptions
 } from '../../lib/types'
 import { validateEntityId } from './ipc-validation'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
+import type { UtilityScopeFootprintService } from '../utilities/utility-scope-footprint'
 import { CuaBridgeService } from '../utilities/cua-bridge-service'
 import { Logger } from '../system/logger'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
@@ -25,7 +28,9 @@ export function registerUtilityIpc(
   cuaBridge = new CuaBridgeService(storage),
   pip?: ComputerUsePipService,
   /** Applied to turns that are already running, after a successful write. */
-  onRegistryChanged?: (utilityId: string) => Promise<void>
+  onRegistryChanged?: (utilityId: string) => Promise<void>,
+  /** Keeps a project- or thread-scoped utility installed on disk in step. */
+  footprint?: UtilityScopeFootprintService
 ): void {
   /**
    * A write has to reach the turns that are already running, or a capability the
@@ -38,6 +43,33 @@ export function registerUtilityIpc(
       await onRegistryChanged?.(utilityId)
     } catch (error) {
       Logger.dev('Utility registry change could not be applied to running turns:', error)
+    }
+  }
+
+  /**
+   * Mirror a registry write to the install folders on disk. The registry is the
+   * source of truth, so an install the disk refuses (a read-only checkout) is
+   * reported in the log rather than failing the save the user just made.
+   */
+  async function syncFootprints(pruneScopes: readonly UtilityScope[] = []): Promise<void> {
+    if (!footprint) return
+    try {
+      await footprint.reconcile(await registry.list(), { pruneScopes })
+    } catch (error) {
+      Logger.dev('Utility install folders could not be kept in step:', error)
+    }
+  }
+
+  /**
+   * Refresh one utility's install without walking the whole registry. Used where
+   * the write cannot have changed the scope, so nothing can be left to prune.
+   */
+  async function refreshFootprint(utility: UtilityDefinition): Promise<void> {
+    if (!footprint) return
+    try {
+      await footprint.install(utility)
+    } catch (error) {
+      Logger.dev('Utility install folder could not be kept in step:', error)
     }
   }
 
@@ -73,7 +105,11 @@ export function registerUtilityIpc(
   ipcMain.handle('utilities:get', (_, id: unknown) =>
     registry.get(validateEntityId(id, 'Utility ID', 256))
   )
-  ipcMain.handle('utilities:create', (_, input: UtilityDefinitionInput) => registry.create(input))
+  ipcMain.handle('utilities:create', async (_, input: UtilityDefinitionInput) => {
+    const created = await registry.create(input)
+    await syncFootprints()
+    return created
+  })
   ipcMain.handle('utilities:installBundle', async (_, request: UtilityBundleInstallRequest) => {
     const bundle = validateBundleInstallRequest(request)
     const savedSecretRefs: string[] = []
@@ -96,7 +132,9 @@ export function registerUtilityIpc(
         }
         definitions.push({ ...entry.definition, credentials })
       }
-      return await registry.createMany(definitions)
+      const installed = await registry.createMany(definitions)
+      await syncFootprints()
+      return installed
     } catch (error) {
       for (const secretRef of savedSecretRefs.reverse()) {
         try {
@@ -110,7 +148,9 @@ export function registerUtilityIpc(
   })
   ipcMain.handle('utilities:update', async (_, id: unknown, patch: UtilityDefinitionPatch) => {
     const safeId = validateEntityId(id, 'Utility ID', 256)
+    const previous = await registry.get(safeId)
     const updated = await registry.update(safeId, patch)
+    await syncFootprints(previous ? [previous.scope] : [])
     await afterRegistryChange(safeId)
     return updated
   })
@@ -122,8 +162,10 @@ export function registerUtilityIpc(
       await vault.remove(credential.secretRef)
     }
     const deleted = await registry.delete(safeId)
-    if (deleted) await afterRegistryChange(safeId)
-    return deleted
+    if (!deleted) return false
+    await syncFootprints([utility.scope])
+    await afterRegistryChange(safeId)
+    return true
   })
   ipcMain.handle(
     'utilities:setCredential',
@@ -152,7 +194,9 @@ export function registerUtilityIpc(
         required: input.required,
         ...(environmentVariable ? { environmentVariable } : {})
       })
-      return registry.update(safeUtilityId, { credentials })
+      const updated = await registry.update(safeUtilityId, { credentials })
+      await refreshFootprint(updated)
+      return updated
     }
   )
   ipcMain.handle(
@@ -165,9 +209,11 @@ export function registerUtilityIpc(
       const credential = utility.credentials.find((entry) => entry.id === safeCredentialId)
       if (!credential) return utility
       await vault.remove(credential.secretRef)
-      return registry.update(safeUtilityId, {
+      const updated = await registry.update(safeUtilityId, {
         credentials: utility.credentials.filter((entry) => entry.id !== safeCredentialId)
       })
+      await refreshFootprint(updated)
+      return updated
     }
   )
   ipcMain.handle('utilities:resolve', (_, context: UtilityResolutionContext) =>

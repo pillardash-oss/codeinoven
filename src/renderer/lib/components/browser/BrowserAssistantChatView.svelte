@@ -61,9 +61,6 @@
   // address rather than of a document. The tab carries one itself whenever the app
   // has seen it; this is the same question asked of the shared cache for the
   // address, which is what covers a tab the app has no icon for yet.
-  $effect(() => {
-    if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
-  })
 
   /** What a reader wants from a page they did not write, in the order they want
    *  it: what it says, then plainly, then what it means. */
@@ -76,6 +73,9 @@
 
 {#snippet pageEmptyStateHeading()}
   <h1
+    {@attach () => {
+      if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
+    }}
     class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[1.375rem] font-semibold tracking-tight text-foreground"
   >
     <span>What can I help you with on</span>

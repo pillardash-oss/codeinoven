@@ -85,6 +85,31 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
 const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
 
 /**
+ * The box every context has without making one: the profile's own jar, the one
+ * the global browser's unboxed pages live in.
+ *
+ * A literal rather than a minted id, and named here rather than in either
+ * process, because both resolve it by name: the interface reads it as "the box
+ * the browser's own pages belong to", and the main process turns it into the
+ * global context's own partition instead of a jar of its own (see
+ * `browserPartitionFor`). It is also the id a stored extension record keeps
+ * pointing at across releases.
+ */
+export const DEFAULT_BOX_ID = 'box:default'
+
+/**
+ * Whether a stored value is a legal box id.
+ *
+ * A box id becomes part of a session partition, so a value that cannot be
+ * trusted has to be dropped rather than repaired: a repaired id would silently
+ * point at a different jar. The renderer mints these, so this is an id check,
+ * never a name the user typed.
+ */
+export function isBrowserBoxId(value: unknown): value is string {
+  return typeof value === 'string' && BOX_ID_PATTERN.test(value)
+}
+
+/**
  * The appearance vocabulary a browser tab, group, box and bookmark share, copied
  * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
  * sanitized custom SVG, and a picked image file. One shape means one editor and
@@ -108,6 +133,7 @@ export interface PersistedBrowserGroup extends BrowserAppearance {
   name: string
   description: string
   pinned: boolean
+  collapsed?: boolean
 }
 
 /**
@@ -313,6 +339,7 @@ function parseGroups(value: unknown): PersistedBrowserGroup[] {
       name: name === '' ? 'Group' : name,
       description: boundedString(entry['description'], MAX_BROWSER_GROUP_DESCRIPTION_LENGTH),
       pinned: entry['pinned'] === true,
+      collapsed: entry['collapsed'] === true,
       ...parseAppearance(entry)
     })
   }

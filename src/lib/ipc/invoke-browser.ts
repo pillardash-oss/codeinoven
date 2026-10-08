@@ -1,4 +1,10 @@
 import type {
+  BrowserNewTabMenuInput,
+  BrowserNewTabMenuChoice
+} from '../browser/browser-new-tab-menu'
+import type { DarkReaderTabAction, DarkReaderTabState } from '../browser/browser-darkreader-control'
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
+import type {
   BrowserCompositionPlayback,
   BrowserDownload,
   BrowserExtension,
@@ -22,8 +28,25 @@ import type {
 } from './browser'
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
+import type {
+  BrowserTabContextMenuChoice,
+  BrowserTabContextMenuInput
+} from '../browser/browser-tab-context-menu'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
+import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '../browser/browser-box-menu'
+import type {
+  BrowserTabSelectionMenuChoice,
+  BrowserTabSelectionMenuInput
+} from '../browser/browser-tab-selection-menu'
+import type {
+  BrowserAgentTabMenuChoice,
+  BrowserAgentTabMenuInput
+} from '../browser/browser-agent-tab-menu'
+import type {
+  BrowserExtensionMenuChoice,
+  BrowserExtensionMenuInput
+} from '../browser/browser-extension-menu'
 import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
@@ -35,6 +58,16 @@ import type {
 } from '../browser-overlay'
 
 export const invokeBrowserContract = {
+  'browser:newTabMenu': {} as Contract<
+    [input: BrowserNewTabMenuInput, x: number, y: number],
+    BrowserNewTabMenuChoice | null
+  >,
+  'browser:setDockOverlay': {} as Contract<
+    [id: string, request: NativeDockRequest | null],
+    boolean
+  >,
+  'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
+  'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's
@@ -70,7 +103,10 @@ export const invokeBrowserContract = {
       /**
        * The box this tab belongs to, or null for the context's own jar. Optional
        * and trailing so every existing caller keeps meaning what it meant: an
-       * absent box is today's single durable profile, not a new behaviour.
+       * absent box is today's single durable profile, not a new behaviour. The
+       * profile's own box names itself here like any other box and resolves to the
+       * profile's jar, so null and that id are two different jars rather than two
+       * spellings of one.
        */
       boxId?: string | null
     ],
@@ -118,7 +154,10 @@ export const invokeBrowserContract = {
    */
   'browser:closeExtensionSidePanel': {} as Contract<[extensionId: string], void>,
   /** The extension side panels the rail is hosting for one project. */
-  'browser:getExtensionSidePanels': {} as Contract<[projectId: string], BrowserExtensionSidePanel[]>,
+  'browser:getExtensionSidePanels': {} as Contract<
+    [projectId: string],
+    BrowserExtensionSidePanel[]
+  >,
   /**
    * Place a popup window's page over the frame the rail measured for it. The
    * popup is a native view like a tab's page is, so the rail's rectangle is
@@ -133,6 +172,8 @@ export const invokeBrowserContract = {
   'browser:hidePopupWindow': {} as Contract<[popupId: string], void>,
   /** Give a popup window's page the keyboard, after the user picks it in the rail. */
   'browser:focusPopupWindow': {} as Contract<[popupId: string], void>,
+  /** Hide an extension action popup while keeping its page alive for reuse. */
+  'browser:dismissPopupWindow': {} as Contract<[popupId: string], void>,
   /**
    * Close a popup window on the user's behalf: its page stops and it leaves the
    * rail. A page that closes itself needs nothing here, it is reported closed.
@@ -248,6 +289,8 @@ export const invokeBrowserContract = {
   /** Route a mouse history button to the focused browser page when one owns focus. */
   'browser:mouseHistoryNavigation': {} as Contract<[direction: 'back' | 'forward'], boolean>,
   'browser:reload': {} as Contract<[tabId: string], void>,
+  /** Current page state, including a peek that loaded before its surface mounted. */
+  'browser:pageState': {} as Contract<[tabId: string], BrowserPageState | null>,
   /**
    * Run one playback action on a composition tab and answer with the state it
    * left behind, so the panel shows what happened rather than what it asked for.
@@ -372,13 +415,30 @@ export const invokeBrowserContract = {
     BrowserExtension
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  'browser:darkReaderTabState': {} as Contract<[tabId: string], DarkReaderTabState>,
+  'browser:darkReaderTabScope': {} as Contract<
+    [tabId: string, action: DarkReaderTabAction],
+    DarkReaderTabState
+  >,
+  'browser:extensionReorder': {} as Contract<[orderedIds: string[]], void>,
+  /** Check again and apply the newest validated Web Store package for one extension. */
+  'browser:extensionUpdateFromWebStore': {} as Contract<[extensionId: string], BrowserExtension>,
   /** Enable or disable one extension, choose the jars it runs in, or pin it into
    *  the browser view's header. `boxes` is the whole replacement list, never a
    *  delta, and it is always explicit: a jar left out of it never loads the
    *  extension. A pin is refused past `MAX_PINNED_EXTENSIONS`, and for an
    *  extension with no popup to open. */
   'browser:extensionUpdate': {} as Contract<
-    [extensionId: string, patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }],
+    [
+      extensionId: string,
+      patch: {
+        enabled?: boolean
+        boxes?: string[]
+        pinned?: boolean
+        blockedHosts?: string[]
+        allowedHosts?: string[]
+      }
+    ],
     BrowserExtension
   >,
   /** Ask the user for an unpacked extension folder. Null when they cancel. */
@@ -414,6 +474,44 @@ export const invokeBrowserContract = {
    *  point (window-content coordinates in density-independent pixels). Each
    *  entry carries its live actions (pause/resume/cancel/open/reveal). */
   'browser:downloadsMenu': {} as Contract<[projectId: string, x: number, y: number], void>,
+  /**
+   * Open the thread browser's native box menu, anchored at the given point
+   * (window-content coordinates in density-independent pixels).
+   *
+   * The profile's boxes are the renderer's, so they travel with the call; main
+   * only turns them into OS menu items and names the one that was picked. The
+   * reply is null when the menu was dismissed, and a chosen `null` box is the
+   * conversation scope's own jar.
+   */
+  'browser:boxMenu': {} as Contract<
+    [input: BrowserBoxMenuInput, x: number, y: number],
+    BrowserBoxMenuChoice | null
+  >,
+  /** Open the native context menu for a multi-tab selection. */
+  'browser:tabSelectionMenu': {} as Contract<
+    [input: BrowserTabSelectionMenuInput, x: number, y: number],
+    BrowserTabSelectionMenuChoice | null
+  >,
+  /** Open the native menu for one regular browser tab. */
+  'browser:tabContextMenu': {} as Contract<
+    [input: BrowserTabContextMenuInput, x: number, y: number],
+    BrowserTabContextMenuChoice | null
+  >,
+  /** Open the native menu for the global browser's agent conversation tab. */
+  'browser:agentTabMenu': {} as Contract<
+    [input: BrowserAgentTabMenuInput, x: number, y: number],
+    BrowserAgentTabMenuChoice | null
+  >,
+  /** Open the native context menu for one browser extension. */
+  'browser:extensionMenu': {} as Contract<
+    [input: BrowserExtensionMenuInput, x: number, y: number],
+    BrowserExtensionMenuChoice | null
+  >,
+  /** Open one extension's options/setup page in a new global browser tab. */
+  'browser:openExtensionPage': {} as Contract<
+    [extensionId: string, boxId: string | null],
+    string | null
+  >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void
@@ -423,6 +521,11 @@ export const invokeBrowserContract = {
    *  This pull model cannot race document load state, which the previous
    *  push-based first-delivery repeatedly did (blank first prompt). */
   'browser:popupReady': {} as Contract<[], BrowserPermissionPromptContext | null>,
+  'browser:expandPeek': {} as Contract<[tabId: string], void>,
+  /** A PNG data URL of a peek's page, taken while the tab is still on screen so
+   *  the surface can animate the page away rather than blanking it. Null when the
+   *  page could not be pictured. */
+  'browser:peekSnapshot': {} as Contract<[tabId: string], string | null>,
   'browser:destroy': {} as Contract<[tabId: string, reason: BrowserTabDestroyReason], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,

@@ -1,3 +1,4 @@
+import { Clock } from '@lucide/svelte'
 import { isThreadAwaitingUser, isThreadWorking, type Thread } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -36,7 +37,24 @@ export function isThreadLiveWorking(thread: Thread): boolean {
  * live-settled run state, and it is `isThreadLiveWorking` that decides it, so a
  * thread parked on the user shows its attention dot instead of a spinner.
  */
-export function statusBadgeForThread(thread: Thread, isWorking: boolean): ActionStatusBadge {
+export function statusBadgeForThread(
+  thread: Thread,
+  isWorking: boolean,
+  queued = false
+): ActionStatusBadge {
+  if (queued && !['failed', 'awaiting_approval', 'spec'].includes(thread.status)) {
+    return {
+      label: isWorking
+        ? 'Working · Queued'
+        : thread.status === 'working-paused'
+          ? 'Waiting to retry · Queued'
+          : 'Queued',
+      tone: 'working',
+      variant: 'icon',
+      icon: Clock
+    }
+  }
+
   if (isWorking) {
     return {
       label: thread.status === 'planning' ? 'Working · Planning' : 'Working',

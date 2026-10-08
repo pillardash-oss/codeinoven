@@ -1,6 +1,8 @@
 import { app, BrowserWindow, Notification, shell } from 'electron'
 import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
+import { requireString } from '../ipc/handlers/shared'
+import { NotificationInboxStore } from './notification-inbox-store'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -9,10 +11,13 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
+import { RoutineRepo } from '../database/repositories/routine-repo'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
+  isAssistantRunThread,
+  isAssistantSetupThread,
   isOrchestrationChildThread,
   type Thread,
   type ThreadStatus
@@ -25,6 +30,7 @@ import {
   type AgentNotificationPayload,
   type NotificationSoundKind,
   type NotificationSource,
+  type PersistedAgentNotification,
   type SystemNotificationPermissionStatus,
   type SystemNotificationTestResult,
   type ThreadClickedPayload
@@ -115,6 +121,8 @@ export class NotificationService {
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
   private readonly assignmentRepo: AssignmentRepo
+  private readonly routineRepo: RoutineRepo
+  private readonly inbox: NotificationInboxStore
   private readonly onThreadClicked: ThreadClickedHandler
   private readonly lastObservedStatus = new Map<string, ThreadStatus>()
   private readonly activeNotifications = new Map<string, Notification>()
@@ -136,12 +144,21 @@ export class NotificationService {
   private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
   private permissionVerifyInFlight = false
   private lastPermissionVerifyAt = 0
+  /**
+   * The one durable-inbox read for this service's lifetime. Both `start` and the
+   * `notification:listInbox` handler await it, and both may run in either order
+   * (the renderer can boot before the deferred start does), so it is memoized
+   * rather than issued twice against the same file.
+   */
+  private inboxLoad: Promise<void> | undefined
 
   constructor(storage: StorageEngine, db: Database, onThreadClicked: ThreadClickedHandler) {
     this.storage = storage
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
     this.assignmentRepo = new AssignmentRepo(db)
+    this.routineRepo = new RoutineRepo(db)
+    this.inbox = new NotificationInboxStore(storage)
     this.onThreadClicked = onThreadClicked
 
     // Register IPC handlers eagerly: the renderer's settings panel can query
@@ -150,12 +167,61 @@ export class NotificationService {
     ipcMain.handle('notification:test', () => this.sendTestNotification())
     ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
     ipcMain.handle('notification:openSettings', () => this.openSettings())
+    // The inbox channels sit beside the permission ones because they are the
+    // same subject from the renderer's side: what the notification surfaces
+    // still owe it. They are registered here, not under a handler registrar,
+    // because the store is owned by this service rather than by the database.
+    ipcMain.handle('notification:listInbox', async () => {
+      // A window can be created before the restore lands (the renderer may boot
+      // faster than the deferred start), so await it rather than answering from
+      // an empty store and leaving the panel blank for the rest of the session.
+      await this.inboxReady()
+      return { notifications: this.inbox.list(), dismissed: this.inbox.dismissedIds() }
+    })
+    // Every mutating channel awaits the restore first. `load` clears what it
+    // holds before reading the file, so a dismissal that landed ahead of it
+    // would be wiped and the entry handed straight back to the next window.
+    ipcMain.handle('notification:dismissInbox', async (_, id: unknown) => {
+      const notificationId = requireString(id, 'Notification ID').slice(0, 300)
+      await this.inboxReady()
+      this.inbox.dismiss(notificationId)
+    })
+    ipcMain.handle(
+      'notification:dismissInboxForThread',
+      async (_, projectId: unknown, threadId: unknown) => {
+        const project = requireString(projectId, 'Project ID').slice(0, 200)
+        const thread = requireString(threadId, 'Thread ID').slice(0, 200)
+        await this.inboxReady()
+        this.inbox.dismissForThread(project, thread)
+      }
+    )
+    ipcMain.handle('notification:clearInbox', async (_, family: unknown) => {
+      if (
+        family !== undefined &&
+        family !== null &&
+        family !== 'project' &&
+        family !== 'chat' &&
+        family !== 'assistant'
+      ) {
+        throw new TypeError('Notification family is invalid')
+      }
+      await this.inboxReady()
+      if (family === undefined || family === null) this.inbox.clear()
+      else this.inbox.clear(family)
+    })
+  }
+
+  /** Resolves once the durable inbox has been read, at most once per service. */
+  private inboxReady(): Promise<void> {
+    this.inboxLoad ??= this.inbox.load()
+    return this.inboxLoad
   }
 
   start(): void {
     if (this.started) return
     this.started = true
     setCurrentNotificationService(this)
+    void this.inboxReady()
     void this.hydrateBadge()
     void this.hydratePermissionStatus()
   }
@@ -168,9 +234,17 @@ export class NotificationService {
     this.activeNotifications.clear()
     this.badgeThreads.clear()
     this.updateBadge()
+    // Drain the durable inbox before the process goes away: a dismissal the user
+    // just made must not come back on the next launch, and the write chain is
+    // asynchronous, so this is the last point at which it can be awaited.
+    void this.inbox.flush()
     ipcMain.removeHandler('notification:test')
     ipcMain.removeHandler('notification:getPermissionStatus')
     ipcMain.removeHandler('notification:openSettings')
+    ipcMain.removeHandler('notification:listInbox')
+    ipcMain.removeHandler('notification:dismissInbox')
+    ipcMain.removeHandler('notification:dismissInboxForThread')
+    ipcMain.removeHandler('notification:clearInbox')
   }
 
   /**
@@ -423,6 +497,13 @@ export class NotificationService {
       this.updateBadge()
     }
 
+    // The durable inbox drops the thread's entries here too, and unconditionally.
+    // This hook is how a thread reports that it was read or deleted, which is
+    // the same acknowledgement the panel itself reconciles on; a store that kept
+    // the entry would hand it back to the next window that asked, undoing the
+    // dismissal the user just made by reading the thread.
+    void this.inboxReady().then(() => this.inbox.dismissForThread(projectId, threadId))
+
     if (!this.appFocused()) return
     for (const [key, notification] of this.activeNotifications) {
       if (key === threadKey || key.startsWith(`${threadKey}:temp:`)) {
@@ -525,8 +606,14 @@ export class NotificationService {
     // A browser tab's assistant conversation is answered beside the page it is
     // about, so a settled turn there is never something the user has to be told
     // about while they are looking elsewhere. That was already true of the side
-    // chat it replaced, and it stays true of the thread it is now.
-    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return
+    // chat it replaced, and it stays true of the thread it is now. A thread
+    // parked on the user is the exception and always notifies: it can only be
+    // waiting because they moved on, and the conversation they left behind has
+    // no other surface to ask them from, so staying silent made an agent
+    // question indistinguishable from an idle tab.
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID && thread.status !== 'awaiting_approval') {
+      return
+    }
     // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
     // notifies, and only when the whole process is over or human intervention
     // is needed. Worker/auditor threads never notify, and the coordinator's
@@ -558,7 +645,7 @@ export class NotificationService {
 
     if (this.lastObservedStatus.get(threadKey) !== thread.status) return
 
-    const payload = this.notificationPayload(
+    const payload = await this.notificationPayload(
       thread,
       projectName || APP_NAME,
       projectColor,
@@ -573,9 +660,14 @@ export class NotificationService {
   }
 
   /**
-   * One shared delivery path for every notification kind: broadcast the
-   * payload to all renderers, then show the OS notification when the app is
-   * not focused.
+   * One shared delivery path for every notification kind: record it durably,
+   * broadcast the payload to all renderers, then show the OS notification when
+   * the app is not focused.
+   *
+   * The durable write comes first and is deliberately not awaited: it is the
+   * record of what the panel owes the user across a restart, and it must not be
+   * able to stall the toast and the OS card that are the surfaces the user is
+   * looking at right now.
    */
   private async deliverNotification(
     payload: AgentNotificationPayload,
@@ -587,6 +679,9 @@ export class NotificationService {
       logLabel: string
     }
   ): Promise<void> {
+    void this.inboxReady().then(() =>
+      this.inbox.add({ ...payload, timestamp: Date.now() } satisfies PersistedAgentNotification)
+    )
     const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
@@ -884,24 +979,61 @@ export class NotificationService {
     return 'project'
   }
 
-  private notificationPayload(
+  /**
+   * Resolve the user-facing assistant task or routine title without holding the
+   * main thread on synchronous SQLite reads.
+   *
+   * A run names the task it runs; a task names itself; a routine's Getting
+   * started host is an authoring thread, not a job, so it names its routine
+   * instead of its fixed title. A completed authoring turn returns an empty
+   * string   it is not a finished run   but a failure or a parked card there
+   * still names its routine, because "Assistant hit an error" says nothing about
+   * what actually failed.
+   */
+  private async assistantSubjectName(thread: Thread, kind: AgentNotificationKind): Promise<string> {
+    if (isAssistantSetupThread(thread) && kind === 'completed') return ''
+    try {
+      if (isAssistantRunThread(thread) && thread.assistantTaskId) {
+        const task = await this.threadRepo.getViaWorker(thread.assistantTaskId)
+        if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
+      }
+      if (thread.routineId) {
+        const routineName = (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim()
+        if (routineName) return routineName
+      }
+      return isAssistantSetupThread(thread) ? '' : thread.title.trim()
+    } catch (error) {
+      Logger.dev('Notification assistant task name resolution failed:', error)
+      return isAssistantSetupThread(thread) && kind === 'completed' ? '' : thread.title.trim()
+    }
+  }
+
+  private async notificationPayload(
     thread: Thread,
     projectName: string,
     projectColor: string | undefined,
     source: NotificationSource
-  ): AgentNotificationPayload {
+  ): Promise<AgentNotificationPayload> {
     const kind: AgentNotificationKind =
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const isAssistant = source === 'assistant'
     const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
+    // Name every assistant notice after the task or routine the user
+    // recognizes, so a failure reads "Slack digest hit an error" instead of the
+    // generic "Assistant hit an error" that made the panel's assistants tab
+    // impossible to scan. A non-assistant notice keeps its project/chat name.
+    const assistantName = isAssistant ? await this.assistantSubjectName(thread, kind) : ''
+    const subjectName = assistantName || displayName
     const title =
       kind === 'completed'
-        ? `${displayName} Done`
+        ? assistantName
+          ? assistantName
+          : `${displayName} Done`
         : kind === 'attention'
-          ? `${displayName} needs attention`
+          ? `${subjectName} needs attention`
           : kind === 'spec'
-            ? `${displayName} spec is ready`
-            : `${displayName} hit an error`
+            ? `${subjectName} spec is ready`
+            : `${subjectName} hit an error`
     // Error notifications carry the real failure: the engine records the
     // diagnostic text on the thread when it marks it `failed`, so the panel can
     // show what went wrong instead of a generic label. Only the first line is
@@ -919,9 +1051,11 @@ export class NotificationService {
     // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? isAssistant
-          ? `${thread.title} finished.`
-          : `${thread.title} finished in ${projectName}.`
+        ? assistantName
+          ? `${assistantName} finished.`
+          : isAssistant
+            ? `${thread.title} finished.`
+            : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant
             ? `${thread.title} is waiting for your input.`
@@ -932,7 +1066,7 @@ export class NotificationService {
               : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
             : (errorBody ??
               (isAssistant
-                ? `${thread.title} stopped with an error.`
+                ? `${assistantName || thread.title} stopped with an error.`
                 : `${thread.title} stopped with an error in ${projectName}.`))
 
     return {

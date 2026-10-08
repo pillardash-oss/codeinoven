@@ -1,15 +1,19 @@
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND
 } from '$shared/types'
 import type {
   AppConfig,
+  CioCleanupCategoryId,
   GitPullPreference,
   InAppNotificationSoundSettings,
-  MediaGenerationConfig
+  MediaGenerationConfig,
+  ModelProfile
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
+import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import {
@@ -41,6 +45,27 @@ let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
+/**
+ * Where a design or video session writes, mirrored because the file tree reads it
+ * to tell the user's authored work apart from scratch (CIO Cleanup never removes
+ * the former), and the tree is too deep to receive the config as a prop.
+ */
+let workRoots = $state<WorkRoots>({ ...DEFAULT_WORK_ROOTS })
+/**
+ * The `.cio` folders CIO Cleanup must keep, mirrored because the file tree's
+ * context menu reads it to say whether a row is protected, and the tree is too
+ * deep to receive the config as a prop.
+ */
+let cioCleanupExcludedCategories = $state<CioCleanupCategoryId[]>([
+  ...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+])
+/**
+ * Saved model profiles, mirrored so the composer can read them without the config
+ * being threaded down to it. Held as a plain array of plain records: the config is
+ * synced on every `config:changed`, so this is a fresh array each time rather than
+ * a mutation of the previous one, which is what lets the picker rows re-key.
+ */
+let modelProfiles = $state<ModelProfile[]>([])
 
 /** Push the persisted appearance preferences onto the document. The CSS itself
  *  is applied by `lib/app-typography.ts`, which the app's child documents use as
@@ -101,6 +126,18 @@ export const appConfigState = {
   get mediaGeneration(): MediaGenerationConfig {
     return mediaGeneration
   },
+  /** The project-relative roots authored work is written into. */
+  get workRoots(): WorkRoots {
+    return workRoots
+  },
+  /** The `.cio` folders the sweep leaves alone, by category. */
+  get cioCleanupExcludedCategories(): CioCleanupCategoryId[] {
+    return cioCleanupExcludedCategories
+  },
+  /** Named presets the user applies from the model picker. */
+  get modelProfiles(): ModelProfile[] {
+    return modelProfiles
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
@@ -130,6 +167,11 @@ export const appConfigState = {
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
+    workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
+    cioCleanupExcludedCategories = [
+      ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
+    ]
+    modelProfiles = config.modelProfiles ?? []
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
     keymapState.setOverrides(config.keybindings)

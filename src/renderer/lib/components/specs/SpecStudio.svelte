@@ -225,6 +225,10 @@
     onAuditModelChange({ ...auditSettings, thinkingLevel: level })
   }
 
+  function chooseAuditRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    onAuditModelChange({ ...auditSettings, ...runtime })
+  }
+
   let selectedSection = $state<SpecSectionId>('problem')
   let sectionsOpen = $state(false)
   // The effect below reconciles later prop versions; these are intentional local edit buffers.
@@ -810,7 +814,9 @@
           variant="action"
           onSelect={chooseAuditModel}
           thinkingLevel={auditSettings.thinkingLevel}
+          runtimeSettings={auditSettings}
           onSelectThinking={chooseAuditThinking}
+          onSelectRuntime={chooseAuditRuntime}
           {onToggleFavorite}
           {onReorderFavorite}
         />

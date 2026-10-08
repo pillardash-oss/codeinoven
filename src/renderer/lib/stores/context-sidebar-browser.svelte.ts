@@ -7,10 +7,21 @@ import { reportError } from './app-errors.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
+import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
+import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
+
+/** One thread-browser tab closed this session, kept for a reopen of its own
+ *  conversation. `scopeId` is the conversation it belonged to, so a reopen only
+ *  reaches the browser that is on screen. */
+interface ClosedSidebarBrowserTab {
+  tab: BrowserContextTab
+  index: number
+  scopeId: string
+}
 
 /**
  * How long a change to the sidebar's tab list waits before it is written.
@@ -68,6 +79,15 @@ export class SidebarBrowserTabs {
   tabs: BrowserContextTab[] = $state([])
   activeTabId: string | null = $state(null)
   visible = $state(false)
+  /**
+   * Thread-browser tabs closed this session, most recently closed last.
+   *
+   * A thread browser is scoped to a conversation, so each entry remembers the
+   * scope it belonged to and a reopen only brings back a tab of the
+   * conversation on screen. Memory-only: quitting the app clears it, exactly as
+   * a browser's own reopen history is cleared.
+   */
+  private closedTabs: ClosedSidebarBrowserTab[] = $state([])
 
   /**
    * Whether {@link start} has restored the stored tabs and wired the runtime.
@@ -88,6 +108,20 @@ export class SidebarBrowserTabs {
    *  screen, so this is the one place a tab strip can read it from. Runtime state
    *  is deliberately never persisted: it describes a live page, not the tab. */
   private readonly runtime = new SvelteMap<string, BrowserTabRuntime>()
+
+  /**
+   * The box a scope's next tabs are created in, keyed by conversation scope.
+   *
+   * Absent (or null) means the scope's own jar, which is where every scope
+   * starts. A named box is the profile's one jar for that box rather than the
+   * scope's own, so a tab created in it shares the box's cookies and logins with
+   * every other context that picks it. The choice lives for the sidebar session
+   * only and is deliberately not persisted: a scope reverts to its own box once
+   * its last tab is closed, so reopening the thread browser starts from the scope
+   * again. Tabs already on screen keep the box they were created in, because a jar
+   * cannot be migrated.
+   */
+  private readonly scopeBoxChoices = new SvelteMap<string, string | null>()
 
   /** Fills in the icon of a tab the app has no page for, from the tab's own
    *  address (see {@link ensureFavicon}). */
@@ -235,7 +269,8 @@ export class SidebarBrowserTabs {
     projectId: string,
     threadId: string,
     requestedTabId?: string,
-    reveal = false
+    reveal = false,
+    requestedBoxId?: string | null
   ): string {
     const id = requestedTabId ?? `browser:${crypto.randomUUID()}`
     const existing = this.tabs.find((tab) => tab.id === id && tab.projectId === projectId)
@@ -258,15 +293,109 @@ export class SidebarBrowserTabs {
         // The main-process browser boundary reports malformed custom URLs.
       }
     }
-    this.tabs = [
-      ...this.tabs,
-      { id, kind: 'browser', title, projectId, threadId, url, favicon: null }
-    ]
+    const tab: BrowserContextTab = {
+      id,
+      kind: 'browser',
+      title,
+      projectId,
+      threadId,
+      url,
+      favicon: null,
+      // The box the scope is currently creating tabs in, or the scope's own jar
+      // when the user has not picked one this session.
+      boxId:
+        requestedBoxId !== undefined
+          ? requestedBoxId
+          : this.boxForScope(this.host.threadScopeId(projectId, threadId))
+    }
+    // A tab a page asked for (a link, an image, a popup) belongs beside the page
+    // that asked, exactly as a browser places it: next to the tab in use, not at
+    // the end of the strip. A request for a scope that is not on screen is
+    // appended instead, because there is no page in use to sit beside and it
+    // must not reorder the strip the user is looking at.
+    const anchorId =
+      reveal && this.isShownConversation(projectId, threadId) ? this.activeTabId : null
+    const anchorIndex = anchorId
+      ? this.tabs.findIndex((candidate) => candidate.id === anchorId)
+      : -1
+    if (anchorIndex >= 0) {
+      const ordered = [...this.tabs]
+      ordered.splice(anchorIndex + 1, 0, tab)
+      this.tabs = ordered
+    } else {
+      this.tabs = [...this.tabs, tab]
+    }
     this.persist()
     if (reveal && this.isShownConversation(projectId, threadId)) {
       this.focus(id)
     }
     return id
+  }
+
+  /**
+   * The box a scope's next tab runs in: the box the user picked for it this
+   * session, or null for the scope's own jar. A named box is the profile's jar
+   * for that box, shared with every other context that picks it.
+   */
+  private boxForScope(scopeId: string): string | null {
+    return this.scopeBoxChoices.get(scopeId) ?? null
+  }
+
+  /**
+   * Reopen a tab in another box.
+   *
+   * A jar cannot move between boxes, so the tab cannot either: this is a close
+   * plus an open. The chosen box becomes the scope's own for new tabs, the tab on
+   * screen is replaced in place by an equivalent tab in the new box, and every
+   * other open tab keeps the box it was created in. The target is the profile's
+   * one jar for that box, so the reopened page comes back with whatever the box
+   * already holds, a sign-in another context made included. Returns the new tab
+   * id, or null when the tab is gone or already in the box.
+   */
+  reopenInBox(tabId: string, boxId: string | null): string | null {
+    const index = this.tabs.findIndex((tab) => tab.id === tabId)
+    if (index < 0) return null
+    const tab = this.tabs[index]
+    if (tab.boxId === boxId) return null
+    this.scopeBoxChoices.set(this.host.threadScopeId(tab.projectId, tab.threadId), boxId)
+    const replacement: BrowserContextTab = {
+      id: `browser:${crypto.randomUUID()}`,
+      kind: 'browser',
+      title: tab.title,
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      url: tab.url,
+      favicon: tab.favicon,
+      boxId
+    }
+    const tabs = [...this.tabs]
+    tabs.splice(index, 1, replacement)
+    this.tabs = tabs
+    this.forgetRuntime([tabId])
+    if (this.activeTabId === tabId) this.activeTabId = replacement.id
+    this.persist()
+    // The old page lives in the old jar, so it is destroyed rather than shown
+    // again: a show for the removed id would be refused as a different box.
+    void invoke('browser:destroy', tabId, 'closed').catch(() => {})
+    return replacement.id
+  }
+
+  /**
+   * Drop the picked box of every scope that no longer has a tab.
+   *
+   * The choice is deliberately session-scoped and reverts to the scope's own box
+   * once its last tab is closed, which is what "closing the thread browser"
+   * means: with no tab of the scope left, the next tab starts from the scope
+   * again.
+   */
+  private pruneScopeBoxChoices(): void {
+    if (this.scopeBoxChoices.size === 0) return
+    for (const scopeId of [...this.scopeBoxChoices.keys()]) {
+      const live = this.tabs.some(
+        (tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scopeId
+      )
+      if (!live) this.scopeBoxChoices.delete(scopeId)
+    }
   }
 
   /**
@@ -395,10 +524,15 @@ export class SidebarBrowserTabs {
   }
 
   removeForProject(projectId: string): string[] {
+    // A closed tab of a project that is gone can never be reopened, so its
+    // session entry goes with the project. This runs before the early return: a
+    // project with no live tab left may still have a closed one remembered.
+    this.closedTabs = this.closedTabs.filter((entry) => entry.tab.projectId !== projectId)
     const removedIds = this.tabs.filter((tab) => tab.projectId === projectId).map((tab) => tab.id)
     if (removedIds.length === 0) return []
     this.tabs = this.tabs.filter((tab) => tab.projectId !== projectId)
     this.forgetRuntime(removedIds)
+    this.pruneScopeBoxChoices()
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = null
     }
@@ -408,12 +542,16 @@ export class SidebarBrowserTabs {
   }
 
   removeForThread(projectId: string, threadId: string): string[] {
+    this.closedTabs = this.closedTabs.filter(
+      (entry) => entry.tab.projectId !== projectId || entry.tab.threadId !== threadId
+    )
     const removedIds = this.tabs
       .filter((tab) => tab.projectId === projectId && tab.threadId === threadId)
       .map((tab) => tab.id)
     if (removedIds.length === 0) return []
     this.tabs = this.tabs.filter((tab) => tab.projectId !== projectId || tab.threadId !== threadId)
     this.forgetRuntime(removedIds)
+    this.pruneScopeBoxChoices()
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
@@ -422,18 +560,74 @@ export class SidebarBrowserTabs {
     return removedIds
   }
 
-  /** Close one browser tab and fall back to the last remaining tab of the
-   *  active container (a project's threads or the open chat). */
-  close(id: string): void {
+  /** Close one browser tab and fall back to its previous neighbour in the
+   *  active container (a project's threads or the open chat). A close the user
+   *  asked for is remembered so it can be reopened; a close that replaces the
+   *  tab (a reopen in another box) opts out, because nothing left the strip. */
+  close(id: string, options: { recordForReopen?: boolean } = {}): void {
     const browserIndex = this.tabs.findIndex((tab) => tab.id === id)
     if (browserIndex < 0) return
+    const closing = this.tabs[browserIndex]
+    const activeIndex = this.activeTabs.findIndex((tab) => tab.id === id)
+    if (options.recordForReopen !== false) this.rememberClosedTab(closing, browserIndex)
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
+    this.pruneScopeBoxChoices()
     if (this.activeTabId === id) {
-      this.activeTabId = this.activeTabs.at(-1)?.id ?? null
+      this.activeTabId = this.activeTabs[Math.max(0, activeIndex - 1)]?.id ?? null
     }
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
+  }
+
+  /**
+   * Remember a just-closed tab for a reopen.
+   *
+   * The tab and its strip position are cloned, the scope is resolved now (a tab
+   * is always owned by a conversation), and the oldest entry falls off once the
+   * cap is reached.
+   */
+  private rememberClosedTab(tab: BrowserContextTab, index: number): void {
+    const entry: ClosedSidebarBrowserTab = {
+      tab: { ...tab },
+      index,
+      scopeId: this.host.threadScopeId(tab.projectId, tab.threadId)
+    }
+    const next = [...this.closedTabs, entry]
+    this.closedTabs = next.slice(Math.max(0, next.length - MAX_REOPENED_BROWSER_TABS))
+  }
+
+  /**
+   * Reopen the most recently closed tab of the conversation on screen.
+   *
+   * A thread browser is per-conversation, so a reopen only reaches a tab that
+   * belonged to the same conversation: a tab closed in another thread must not
+   * appear in this one. The tab keeps its id, so main hands its stored Back/
+   * Forward history back to the page. Returns the reopened tab id, or null when
+   * this conversation has nothing to reopen.
+   */
+  reopenLastClosedTab(): string | null {
+    const projectId = this.host.activeProjectId()
+    const threadId = this.host.activeThreadId()
+    if (!projectId || !threadId) return null
+    const scopeId = this.host.threadScopeId(projectId, threadId)
+    let entryIndex = -1
+    for (let index = this.closedTabs.length - 1; index >= 0; index -= 1) {
+      if (this.closedTabs[index].scopeId === scopeId) {
+        entryIndex = index
+        break
+      }
+    }
+    if (entryIndex < 0) return null
+    const entry = this.closedTabs[entryIndex]
+    this.closedTabs = this.closedTabs.filter((_, index) => index !== entryIndex)
+    const restored: BrowserContextTab = { ...entry.tab }
+    const ordered = [...this.tabs]
+    ordered.splice(Math.min(entry.index, ordered.length), 0, restored)
+    this.tabs = ordered
+    this.focus(restored.id)
+    this.persist()
+    return restored.id
   }
 
   focus(id: string): void {
@@ -451,6 +645,9 @@ export class SidebarBrowserTabs {
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()
+    // Recency is what a Ctrl+Tab inside the full screen browser walks, so it is
+    // recorded here, at the one place a tab becomes the one in use.
+    threadBrowserTabs.record(id)
     this.persist()
   }
 
@@ -472,6 +669,7 @@ export class SidebarBrowserTabs {
     for (const tabId of tabIds) {
       this.runtime.delete(tabId)
       this.tabFavicons.forget(tabId)
+      threadBrowserTabs.forget(tabId)
     }
   }
 

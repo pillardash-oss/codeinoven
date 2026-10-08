@@ -20,6 +20,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
   isTerminalThread,
@@ -97,6 +98,9 @@ class QueuedMessageDispatcher {
       // that is still working, waiting on the provider, or gone entirely.
       if (!(await threadAgentIsIdle(projectId, threadId))) return
       if (await threadHasPendingGate(projectId, threadId)) return
+      // A scope worktree still building for this thread holds the queue behind
+      // the scope switch; the mounted view flushes it once the run settles.
+      if (scopeJobs.hasPendingScopeJob(projectId, threadId)) return
       const settings = await resolveThreadDeliverySettings(projectId, threadId)
       // Nothing may have changed while we waited — verify before dispatching.
       if (this.#mounted.has(key)) return

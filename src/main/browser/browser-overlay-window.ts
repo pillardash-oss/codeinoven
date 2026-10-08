@@ -1,3 +1,4 @@
+import type { NativeDockRequest } from '../../lib/native-dock'
 import { BrowserWindow, screen } from 'electron'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -57,6 +58,7 @@ export class BrowserOverlayWindow {
   private stack: ToastOverlayRequestStack | null = null
   /** The floating tab strip on display, or null while none is. */
   private strip: BrowserStripOverlayRequest | null = null
+  private docks = new Map<string, NativeDockRequest>()
   /** True while the document has finished loading and may be sent content. */
   private ready = false
   /** Tracked rather than read back, because the toggle is only ever a change. */
@@ -130,9 +132,28 @@ export class BrowserOverlayWindow {
     if (!this.hasContent()) this.dispose()
   }
 
+  /** Dock chips share this window with toasts and the floating browser strip. */
+  applyDock(id: string, request: NativeDockRequest | null): boolean {
+    if (request === null) {
+      this.docks.delete(id)
+      this.settle()
+      // Keep the one tooltip overlay warm between hovers instead of creating
+      // and destroying a renderer for every title. It stays hidden and inert.
+      if (!this.hasContent() && id !== 'app-tooltip') this.dispose()
+      return true
+    }
+    if (!this.docks.has(id) && this.docks.size >= 32) return false
+    const popup = this.ensure()
+    if (!popup) return false
+    this.docks.set(id, request)
+    this.reveal(popup)
+    this.publish(popup)
+    return true
+  }
+
   /** Everything on display, resolved to the document's own pull on first load. */
   currentState(): BrowserOverlaySnapshot {
-    return { stack: this.stack, strip: this.strip }
+    return { stack: this.stack, strip: this.strip, docks: [...this.docks.values()] }
   }
 
   /** Whether the pointer is over drawn content, which decides click-through. */
@@ -165,6 +186,7 @@ export class BrowserOverlayWindow {
     this.popup = null
     this.stack = null
     this.strip = null
+    this.docks.clear()
     this.ready = false
     this.pointerOverContent = false
     this.ignoringMouse = true
@@ -230,7 +252,11 @@ export class BrowserOverlayWindow {
 
   /** Whether anything is on screen in this window to be seen or pressed. */
   private hasContent(): boolean {
-    return (this.stack !== null && this.stack.toasts.length > 0) || this.strip !== null
+    return (
+      (this.stack !== null && this.stack.toasts.length > 0) ||
+      this.strip !== null ||
+      this.docks.size > 0
+    )
   }
 
   /** The regions the overlay would draw right now, for the document's pull. */
@@ -238,6 +264,7 @@ export class BrowserOverlayWindow {
     if (!this.ready) return
     sendToRenderer(popup.webContents, 'browser:overlay:stack', this.stack)
     sendToRenderer(popup.webContents, 'browser:overlay:strip', this.strip)
+    sendToRenderer(popup.webContents, 'browser:overlay:docks', [...this.docks.values()])
   }
 
   private ensure(): BrowserWindow | null {

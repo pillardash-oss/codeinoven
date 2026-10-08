@@ -27,9 +27,10 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
-import { QuestionRequestGoneError } from './driver.interface'
+import { QuestionRequestGoneError, SteerDeliveryFailedError } from './driver.interface'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { runHarnessCommand } from './harness-runtime'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -104,6 +105,20 @@ const MESSAGE_PAGE_SIZE = 200
 /** Hard cap on history pages, so a corrupt cursor cannot spin forever. */
 const MESSAGE_PAGE_LIMIT = 20
 
+/** Fetch wraps socket errors in `TypeError.cause`; inspect only a short chain. */
+function isConnectionRefused(error: unknown): boolean {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current && !seen.has(current); depth += 1) {
+    seen.add(current)
+    if (typeof current !== 'object') return false
+    const record = current as Record<string, unknown>
+    if (record['code'] === 'ECONNREFUSED') return true
+    current = record['cause']
+  }
+  return false
+}
+
 interface ServerHandle {
   projectPath: string
   runtimeId: string | null
@@ -175,6 +190,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   /** Sessions owned by disposable auxiliary work; their events stay private. */
   private auxiliarySessions = new Set<string>()
   private eventCallback: AgentEventCallback | null = null
+  private unavailableProcesses = new WeakSet<ChildProcess>()
   private processObserver: AgentProcessObserver | null = null
 
   /** Assistant message the current step streams into, per session. */
@@ -360,17 +376,18 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       // session, not to the prompt, so each turn re-states the settings it runs
       // under before delivering its input.
       await this.applyTurnSettings(handle, projectPath, opts)
-      const payload = await buildOpenCodeV2PromptPayload(opts.text, opts.attachments)
-      if (opts.systemPrompt) {
-        // V2's prompt body has no `system` field. A synthetic inbox item parked
-        // ahead of the prompt is the only channel for context the user did not
-        // type, and `resume: false` keeps it from starting a loop of its own.
-        await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/synthetic`, {
-          method: 'POST',
-          body: buildOpenCodeV2SyntheticBody(wrapOpenCodeV2SystemContext(opts.systemPrompt)),
-          timeoutMs: ADMISSION_TIMEOUT_MS
-        })
-      }
+      const payload = await buildOpenCodeV2PromptPayload(
+        prependHistoryRecap(opts.text, opts.historyRecap),
+        opts.attachments
+      )
+      // V2's prompt body has no `system` field. A synthetic inbox item parked
+      // ahead of the prompt is the only channel for context the user did not
+      // type, and `resume: false` keeps it from starting a loop of its own.
+      await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/synthetic`, {
+        method: 'POST',
+        body: buildOpenCodeV2SyntheticBody(wrapOpenCodeV2SystemContext(opts.systemPrompt ?? '')),
+        timeoutMs: ADMISSION_TIMEOUT_MS
+      })
       await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/prompt`, {
         method: 'POST',
         body: buildOpenCodeV2PromptBody({
@@ -410,12 +427,12 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
         }
       })
     }
-    if (opts.agent) {
-      await handle.client.json(`${sessionPath}/agent`, {
-        method: 'POST',
-        body: { agent: opts.agent }
-      })
-    }
+    // Agent selection persists on V2 sessions. Restore build for project turns
+    // so a previous utility or read-only turn cannot leave its restrictions active.
+    await handle.client.json(`${sessionPath}/agent`, {
+      method: 'POST',
+      body: { agent: opts.agent ?? 'build' }
+    })
     const permissions = buildOpenCodeV2PermissionRuleset(opts)
     await handle.client.json(sessionPath, { method: 'PATCH', body: { permissions } })
   }
@@ -463,17 +480,29 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       this.resolveIsolatedSession(isolated) ??
       this.turnServers.get(opts.sessionId) ??
       (await this.ensureServer(projectPath))
+    if (this.unavailableProcesses.has(handle.process)) {
+      throw new SteerDeliveryFailedError('OpenCode stopped. Retry the turn to reconnect.')
+    }
     const payload = await buildOpenCodeV2PromptPayload(opts.text, opts.attachments)
-    await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/prompt`, {
-      method: 'POST',
-      body: buildOpenCodeV2PromptBody({
-        text: payload.text,
-        files: payload.files,
-        ...(opts.userMessageId ? { userMessageId: opts.userMessageId } : {}),
-        delivery: 'steer'
-      }),
-      timeoutMs: ADMISSION_TIMEOUT_MS
-    })
+    try {
+      await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/prompt`, {
+        method: 'POST',
+        body: buildOpenCodeV2PromptBody({
+          text: payload.text,
+          files: payload.files,
+          ...(opts.userMessageId ? { userMessageId: opts.userMessageId } : {}),
+          delivery: 'steer'
+        }),
+        timeoutMs: ADMISSION_TIMEOUT_MS
+      })
+    } catch (error) {
+      if (!isConnectionRefused(error)) throw error
+      this.failServer(handle, 'OpenCode stopped accepting connections')
+      throw new SteerDeliveryFailedError(
+        'OpenCode stopped accepting connections. Retry the turn to reconnect.',
+        { cause: error }
+      )
+    }
   }
 
   /**
@@ -521,6 +550,41 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     return this.activeSessions.has(sessionId)
   }
 
+  private failServer(handle: ServerHandle, reason: string): void {
+    if (this.unavailableProcesses.has(handle.process)) return
+    this.unavailableProcesses.add(handle.process)
+    const isShared = this.server?.process === handle.process
+    if (isShared) {
+      this.server = null
+      for (const controller of this.projectSubscriptions.values()) controller.abort()
+      this.projectSubscriptions.clear()
+    }
+    handle.abortController.abort()
+
+    const ownedSessions = [...this.activeSessions.keys()].filter((sessionId) => {
+      if (this.auxiliarySessions.has(sessionId)) return false
+      const sessionHandle = this.sessionServer(sessionId)
+      return sessionHandle?.process === handle.process || (isShared && !sessionHandle)
+    })
+    const issue = openCodeV2Issue(reason, 'The OpenCode V2 server stopped unexpectedly', {
+      retryable: false
+    })
+    for (const sessionId of ownedSessions) {
+      this.activeSessions.delete(sessionId)
+      this.emit({ type: 'session.error', sessionId, error: issue.message, issue })
+      this.emit({ type: 'session.idle', sessionId })
+      if (this.turnServers.get(sessionId)?.process === handle.process) {
+        this.turnServers.delete(sessionId)
+      }
+      if (this.isolatedServers.get(sessionId)?.process === handle.process) {
+        this.isolatedServers.delete(sessionId)
+      }
+    }
+    if (handle.process.exitCode === null && handle.process.signalCode === null) {
+      handle.process.kill()
+    }
+  }
+
   /** The spawned server that owns a session's agent loop, if one is live. */
   private sessionServer(sessionId: string): ServerHandle | null {
     return this.turnServers.get(sessionId) ?? this.isolatedServers.get(sessionId) ?? null
@@ -560,8 +624,17 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     const isolatedHandle = this.resolveIsolatedSession(isolated)
     const turnHandle = isolatedHandle ? undefined : this.turnServers.get(sessionId)
     const handle = isolatedHandle ?? turnHandle ?? (await this.ensureServer(projectPath))
+    const readHistory = async (transport: ServerHandle): Promise<AgentMessage[]> => {
+      // A message collection can be empty even when its session no longer
+      // exists. Check the session itself so ChatEngine.ensureSession can
+      // replace a stale binding and replay the durable mirror before sending.
+      await transport.client.json(`/api/session/${encodeURIComponent(sessionId)}`, {
+        timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS
+      })
+      return this.fetchMessages(transport, sessionId)
+    }
     try {
-      return await this.fetchMessages(handle, sessionId)
+      return await readHistory(handle)
     } catch (error) {
       // Utility cleanup deliberately kills the per-turn server after the
       // canonical mirror finishes, which terminates any other read already in
@@ -571,7 +644,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
         throw error
       }
       const replacement = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
-      return this.fetchMessages(replacement, sessionId)
+      return readHistory(replacement)
     }
   }
 
@@ -1123,7 +1196,10 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   // ─── Server pool ──────────────────────────────────────────────────────────
 
   private async ensureServer(projectPath: string): Promise<ServerHandle> {
-    if (this.server) return this.scopedHandle(this.server, projectPath)
+    if (this.server && !this.unavailableProcesses.has(this.server.process)) {
+      return this.scopedHandle(this.server, projectPath)
+    }
+    if (this.server) this.server = null
     if (this.starting) {
       const handle = await this.starting
       return this.scopedHandle(handle, projectPath)
@@ -1254,7 +1330,13 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     // The terminal's interrupt can reach the whole foreground process group in
     // development, so tie the SSE subscription to the process lifecycle: a
     // reconnect timer must never keep Electron alive after the server is gone.
-    spawned.process.once('exit', () => handle.abortController.abort())
+    spawned.process.once('exit', (code, signal) => {
+      if (handle.abortController.signal.aborted) return
+      this.failServer(
+        handle,
+        `OpenCode V2 server exited unexpectedly (code ${code ?? 'unknown'}, signal ${signal ?? 'none'})`
+      )
+    })
     this.subscribeEvents(handle)
     return handle
   }
@@ -1276,6 +1358,13 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       label: `shared ${projectPath}`
     })
     const handle = this.toHandle(spawned, projectPath, null)
+    spawned.process.once('exit', (code, signal) => {
+      if (handle.abortController.signal.aborted) return
+      this.failServer(
+        handle,
+        `OpenCode V2 server exited unexpectedly (code ${code ?? 'unknown'}, signal ${signal ?? 'none'})`
+      )
+    })
     this.processObserver?.watchProcess(
       undefined,
       spawned.process.pid,
@@ -1449,7 +1538,13 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
             timeoutMs: 0,
             signal
           })
-          if (!response.ok || !response.body) break
+          if (!response.ok || !response.body) {
+            this.failServer(
+              handle,
+              `OpenCode V2 event stream became unavailable (HTTP ${response.status})`
+            )
+            break
+          }
           const reader = response.body.getReader()
           const decoder = new TextDecoder()
           let buffer = ''
@@ -1469,6 +1564,10 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
           }
         } catch (error) {
           if (signal.aborted) break
+          if (isConnectionRefused(error)) {
+            this.failServer(handle, 'OpenCode stopped accepting event stream connections')
+            break
+          }
           Logger.dev('OpenCode V2 SSE connection dropped, reconnecting:', error)
           await new Promise((resolve) => setTimeout(resolve, SSE_RECONNECT_MS))
         }

@@ -149,6 +149,19 @@ export class BackgroundRunLedger {
   }
 
   /**
+   * Remove one recorded run from the ledger, returning whether an entry was
+   * removed. This is the user acknowledging evidence they no longer need: the
+   * "While you were away" surface drops the row, and the removal is durable so
+   * it does not come back on the next launch. A run that is still pending is
+   * removable too: the entry is bookkeeping, never the run itself.
+   */
+  dismiss(runThreadId: string): boolean {
+    const removed = this.runs.delete(runThreadId)
+    if (removed) this.persist()
+    return removed
+  }
+
+  /**
    * Drop entries until the ledger is back under its cap, evicting settled
    * entries before pending ones and the oldest of each group first. No-op when
    * the ledger is already within the cap.

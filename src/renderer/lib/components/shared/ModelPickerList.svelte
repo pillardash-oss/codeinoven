@@ -1,11 +1,11 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { on } from 'svelte/events'
   import { SvelteSet } from 'svelte/reactivity'
   import {
     Check,
     ChevronRight,
     GripVertical,
-    ListFilter,
     Plug,
     RefreshCw,
     Search,
@@ -17,7 +17,8 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
-  import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
+  import ModelPickerRail from './ModelPickerRail.svelte'
+  import ModelPickerProfiles from './ModelPickerProfiles.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import {
     buildPickerLayout,
@@ -30,20 +31,37 @@
     modelHaystack,
     passesVisionFilter,
     pickerIndexForSelectedModel,
-    pickerModelKeysOf,
     PICKER_ROW_HEIGHT,
     resolveModel,
     searchWords,
     visiblePickerItems,
     type ModelEntry,
-    type PickerListItem
+    type ModelPickerProfilesGroup,
+    type PickerListItem,
+    type PickerRailView
   } from './model-picker-helpers'
 
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
+    /**
+     * Profiles the side panel lists, built by the model picker from its own props.
+     *
+     * The list only draws the panel; it does not own the profiles, so a picker that
+     * cannot apply one passes `null` and the panel falls back to the harness filter
+     * it already owns.
+     */
+    profiles?: ModelPickerProfilesGroup | null
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
+    /**
+     * Harnesses the current execution target does not have installed (a remote
+     * Oven without them). Their chips and model rows are disabled, because a
+     * model can only run where its harness exists.
+     */
+    unavailableHarnessIds?: ReadonlySet<string> | null
+    /** Why those harnesses are unavailable, shown as the chip's and row's title. */
+    unavailableHarnessReason?: string | null
     favoriteModels: string[]
     recentModels: string[]
     visionOnly: boolean
@@ -70,7 +88,10 @@
   let {
     displayProviders,
     cachedProviders,
+    profiles = null,
     harnessFilter = null,
+    unavailableHarnessIds = null,
+    unavailableHarnessReason = null,
     favoriteModels,
     recentModels,
     visionOnly,
@@ -95,12 +116,18 @@
   const listId = `model-list-${pickerId}`
 
   let search = $state('')
+  let lastFocusedModelKey: string | undefined
+  let pickerRoot: HTMLDivElement | undefined
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
   const collapsedGroups = new SvelteSet<string>()
-  const selectedHarnesses = new SvelteSet<string>()
-  let showAllHarnesses = $state(true)
-  let harnessFilterOpen = $state(false)
+  /**
+   * The rail's selected section. `all` is the picker as it reads today,
+   * `favorites` narrows to favorited models, `profiles` swaps the list for the
+   * saved profiles surface, and `harness` narrows to one harness's models (the
+   * replacement for the old harness filter chips).
+   */
+  let railView = $state<PickerRailView>({ kind: 'all' })
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
@@ -181,7 +208,6 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
-              passesHarnessFilter(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -195,7 +221,7 @@
     const words = searchWords(search)
     return displayProviders
       .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-      .filter((provider) => passesHarnessFilter(provider.harnessId))
+      .filter((provider) => passesRailHarness(provider.harnessId))
       .map((provider) => ({
         ...provider,
         models:
@@ -227,39 +253,89 @@
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
     )
-      .map(([id, name]) => ({ id, name }))
+      .map(([id, name]) => ({
+        id,
+        name,
+        ...(isUnavailableHarness(id)
+          ? {
+              unavailable: true,
+              ...(unavailableHarnessReason ? { reason: unavailableHarnessReason } : {})
+            }
+          : {})
+      }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
-  const effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
-  const harnessFilterActive = $derived(effectiveHarnessCount > 0)
-  const harnessFilterLabel = $derived(
-    harnessFilterActive
-      ? effectiveHarnessCount === 1
-        ? '1 harness'
-        : `${effectiveHarnessCount} harnesses`
-      : 'All harnesses'
-  )
+  /** True while the user has favorited models, which decides the star rail item. */
+  const hasFavorites = $derived(favoriteModels.length > 0)
+  /** True while this picker can apply profiles, which decides the profiles rail item. */
+  const showProfilesRail = $derived(profiles !== null)
+  /** Harness icons are worth a rail section only when there is a choice to make. */
+  const showHarnessesRail = $derived(harnessOptions.length > 1)
+  // Match the rail's buttons, gaps, padding, and separator; the model list
+  // fills this height instead of forcing the dropdown to its maximum.
+  const railHeight = $derived.by(() => {
+    const fixed = 1 + Number(hasFavorites) + Number(showProfilesRail)
+    const harnesses = showHarnessesRail ? Math.min(harnessOptions.length, 7) : 0
+    const outerGaps = harnesses ? fixed + 1 : fixed - 1
+    const harnessGaps = Math.max(0, harnesses - 1)
+    const rem =
+      (fixed + harnesses) * 2 + (outerGaps + harnessGaps) * 0.125 + 1 + (harnesses ? 0.5 : 0)
+    return `calc(${rem}rem + ${harnesses ? 1 : 0}px)`
+  })
+  /**
+   * The rail section actually driving the list. A view whose content vanished
+   * (last favorite removed, profiles hidden, harness gone from the catalog)
+   * falls back to `all` rather than stranding the list on an empty section.
+   */
+  const effectiveView = $derived.by<PickerRailView>(() => {
+    const current: PickerRailView = railView
+    if (current.kind === 'favorites' && !hasFavorites) return { kind: 'all' }
+    if (current.kind === 'profiles' && !showProfilesRail) return { kind: 'all' }
+    if (
+      current.kind === 'harness' &&
+      !harnessOptions.some((option) => option.id === current.harnessId)
+    ) {
+      return { kind: 'all' }
+    }
+    return current
+  })
+  const isProfilesView = $derived(effectiveView.kind === 'profiles')
   const pickerLayout = $derived(
     buildPickerLayout({
-      favoriteModelsList,
-      recentModelsList,
-      unavailableFavoriteModels,
-      filteredProviders,
+      favoriteModelsList:
+        effectiveView.kind === 'favorites'
+          ? favoriteModelsList
+          : effectiveView.kind === 'all'
+            ? favoriteModelsList
+            : [],
+      recentModelsList: effectiveView.kind === 'all' ? recentModelsList : [],
+      unavailableFavoriteModels:
+        effectiveView.kind === 'favorites' || effectiveView.kind === 'all'
+          ? unavailableFavoriteModels
+          : [],
+      filteredProviders:
+        effectiveView.kind === 'all' || effectiveView.kind === 'harness' ? filteredProviders : [],
       collapsedGroups,
       search,
       canReorderFavorites: Boolean(onReorderFavorite)
     })
   )
-  /** Flat, ordered keys of every model row, for keyboard navigation. */
-  const pickerModelKeys = $derived(pickerModelKeysOf(pickerLayout.items))
+  /** Flat, ordered keys of every selectable model row, for keyboard navigation. */
+  const pickerModelKeys = $derived(
+    pickerLayout.items
+      .filter((item): item is Extract<PickerListItem, { kind: 'model' }> => item.kind === 'model')
+      .filter((item) => !isUnavailableHarness(item.entry.provider.harnessId))
+      .map((item) => item.key)
+  )
   const pickerVisibleItems = $derived(
     visiblePickerItems(pickerLayout, pickerListScrollTop, pickerViewport)
   )
 
-  function passesHarnessFilter(candidateHarnessId: string): boolean {
-    if (showAllHarnesses) return true
-    if (selectedHarnesses.size === 0) return true
-    return selectedHarnesses.has(candidateHarnessId)
+  /** The rail's harness section narrows the list to one harness; every other
+   *  section shows every harness the caller allows. */
+  function passesRailHarness(candidateHarnessId: string): boolean {
+    if (effectiveView.kind !== 'harness') return true
+    return candidateHarnessId === effectiveView.harnessId
   }
 
   /** Restrict to the caller-supplied harness. Unset/null is a no-op. */
@@ -267,22 +343,20 @@
     return !harnessFilter || candidateHarnessId === harnessFilter
   }
 
-  function isHarnessSelected(candidateHarnessId: string): boolean {
-    return !showAllHarnesses && selectedHarnesses.has(candidateHarnessId)
+  /** True when the current target cannot run this harness's models. */
+  function isUnavailableHarness(candidateHarnessId: string): boolean {
+    return unavailableHarnessIds?.has(candidateHarnessId) === true
   }
 
-  function toggleHarness(nextHarnessId: string): void {
-    if (showAllHarnesses) showAllHarnesses = false
-    if (selectedHarnesses.has(nextHarnessId)) {
-      if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
-      return
-    }
-    selectedHarnesses.add(nextHarnessId)
+  function unavailableHarnessTitle(candidateHarnessId: string): string {
+    return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
   }
 
-  function clearHarnessFilter(): void {
-    selectedHarnesses.clear()
-    showAllHarnesses = true
+  /** Select a rail section without stealing focus from its button. */
+  function selectRailView(next: PickerRailView): void {
+    railView = next
+    lastFocusedModelKey = undefined
+    scrollPickerListTo(0)
   }
 
   /**
@@ -357,10 +431,18 @@
     }
   }
 
+  /** Open the profiles rail section, for a caller that asked for profiles directly. */
+  export function openProfilesPanel(): void {
+    if (!profiles) return
+    railView = { kind: 'profiles' }
+    scrollPickerListTo(0)
+  }
+
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
-    harnessFilterOpen = false
+    lastFocusedModelKey = undefined
+    railView = { kind: 'all' }
     pickerListScrollTop = 0
     keyboardNavActive = false
   }
@@ -368,6 +450,75 @@
   /** Focus the search box once the popover has rendered. */
   export function focusPickerSearch(): void {
     searchInput?.focus()
+  }
+
+  /** Focus the selected row after virtualized entries have rendered. */
+  export async function focusPickerEntries(): Promise<void> {
+    if (isProfilesView) {
+      const active = pickerRoot?.querySelector<HTMLElement>(
+        '[data-picker-entry][aria-pressed="true"]'
+      )
+      const first = pickerRoot?.querySelector<HTMLElement>('ul [data-picker-entry]:not(:disabled)')
+      const fallback = pickerRoot?.querySelector<HTMLElement>('[data-picker-entry]:not(:disabled)')
+      ;(active ?? first ?? fallback)?.focus()
+      return
+    }
+    const selectedKey = lastFocusedModelKey ?? (search ? undefined : pickerKeyForSelectedModel())
+    const targetKey =
+      selectedKey && pickerModelKeys.includes(selectedKey) ? selectedKey : pickerModelKeys[0]
+    if (targetKey) {
+      const index = pickerLayout.items.findIndex((item) => item.key === targetKey)
+      if (index >= 0) scrollPickerListTo(pickerLayout.offsets[index] - 60)
+      await tick()
+      keyboardNavActive = true
+      modelList?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)?.focus()
+    } else {
+      searchInput?.focus()
+    }
+  }
+
+  function onPickerKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing) return
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target.closest('input, textarea, [contenteditable="true"]')) return
+    const inRail = Boolean(target.closest('nav'))
+    if (keymapState.matches('palette-model-rail', event) && !inRail) {
+      event.preventDefault()
+      pickerRoot?.querySelector<HTMLElement>('nav button[aria-current="true"]')?.focus()
+      return
+    }
+    if (keymapState.matches('palette-model-entries', event) && inRail) {
+      event.preventDefault()
+      void focusPickerEntries()
+      return
+    }
+    if (keymapState.matches('palette-model-nav', event)) {
+      event.preventDefault()
+      const entries = Array.from(
+        pickerRoot?.querySelectorAll<HTMLButtonElement>(
+          inRail ? 'nav button:not(:disabled)' : '[data-picker-entry]:not(:disabled)'
+        ) ?? []
+      )
+      const index = entries.indexOf(target as HTMLButtonElement)
+      const next =
+        entries[
+          Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+        ]
+      if (next) {
+        next.focus()
+        next.scrollIntoView({ block: 'nearest' })
+        if (inRail) next.click()
+      }
+      return
+    }
+    if (isTypeableKey(event)) {
+      event.preventDefault()
+      if (isProfilesView) railView = { kind: 'all' }
+      search += event.key
+      scrollPickerListTo(0)
+      void tick().then(() => focusSearchInput())
+    }
   }
 
   /** Scroll the selected model into view, if it is listed. */
@@ -421,200 +572,192 @@
   }
 </script>
 
-<div class="flex items-center gap-2 border-b px-2.5 py-2">
-  <Search size={12} class="shrink-0 text-dimmed" />
-  <input
-    id={searchId}
-    {@attach attachSearchInput}
-    bind:value={search}
-    oninput={() => scrollPickerListTo(0)}
-    type="text"
-    class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-    placeholder="Search models..."
-    aria-label="Search models"
-    onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        keyboardNavActive = true
-        // Anchor the first arrow-key press on the active model so nav
-        // starts from what's selected, not the top of the list   but
-        // once the user has typed a search, "top of the results" is
-        // the more useful anchor.
-        const targetKey = search ? undefined : pickerKeyForSelectedModel()
-        if (targetKey) {
-          const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
-          if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
-          void tick().then(() => {
-            modelList
-              ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
-              ?.focus()
-          })
-          return
-        }
-        scrollPickerListTo(0)
-        void tick().then(() => {
-          const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-          if (firstBtn instanceof HTMLElement) firstBtn.focus()
-        })
-        return
-      }
-      if (keymapState.matches('palette-close', event)) {
-        event.stopPropagation()
-        onClose()
-      }
-    }}
-  />
-  {#if search}
-    <button
-      type="button"
-      class="shrink-0 text-dimmed transition-colors hover:text-foreground"
-      title="Clear model search"
-      aria-label="Clear model search"
-      onclick={() => (search = '')}
-    >
-      <X size={11} />
-    </button>
-  {/if}
-  {#if canRefresh}
-    <button
-      type="button"
-      class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
-      title="Refresh model list"
-      aria-label="Refresh model list"
-      disabled={refreshing}
-      onclick={onRefresh}
-    >
-      <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
-    </button>
-  {/if}
-</div>
-
-{#if harnessOptions.length > 1}
-  <div class="border-b px-2.5 py-1.5">
-    <div class="flex items-center gap-1.5">
-      <button
-        type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-expanded={harnessFilterOpen}
-        aria-haspopup="true"
-        title={harnessFilterOpen ? 'Hide harness filter options' : 'Filter models by harness'}
-        onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
-      >
-        <ListFilter size={11} class="shrink-0 text-dimmed" />
-        <span class="truncate">{harnessFilterLabel}</span>
-        {#if harnessFilterActive}
-          <span class="ml-auto shrink-0 text-[0.5625rem] text-primary">Filtered</span>
-        {/if}
-      </button>
-      {#if harnessFilterActive}
-        <button
-          type="button"
-          class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
-          title="Clear harness filter"
-          aria-label="Clear harness filter"
-          onclick={clearHarnessFilter}
-        >
-          <X size={11} />
-        </button>
-      {/if}
-    </div>
-    {#if harnessFilterOpen}
-      <div class="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Filter models by harness">
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive}
-          onclick={clearHarnessFilter}
-        >
-          <ListFilter size={11} class="shrink-0" />
-          All
-        </button>
-        {#each harnessOptions as option (option.id)}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {isHarnessSelected(
-              option.id
-            )
-              ? 'border-primary bg-primary text-on-primary'
-              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={isHarnessSelected(option.id)}
-            onclick={() => toggleHarness(option.id)}
-          >
-            <ModelPickerHarnessIcon harnessId={option.id} />
-            <span class="truncate">{option.name}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
-{/if}
-
 <div
-  id={listId}
+  role="group"
+  aria-label="Model picker"
   {@attach (node) => {
-    modelList = node
-    const cleanup = measurePickerList(node)
+    pickerRoot = node
+    const cleanup = on(node, 'keydown', onPickerKeydown)
     return () => {
       cleanup()
-      if (modelList === node) modelList = undefined
+      if (pickerRoot === node) pickerRoot = undefined
     }
   }}
-  class="max-h-60 overflow-y-auto p-1"
+  class="flex min-h-0 items-stretch"
+  style:height={railHeight}
 >
-  {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-    <div class="px-2 py-2">
-      <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
-      <button
-        type="button"
-        class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
-        onclick={onOpenConnectFlow}
-      >
-        <Plug size={12} />
-        Connect your AI account
-      </button>
-    </div>
-  {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
-    <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
-      {search
-        ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
-        : visionOnly
-          ? 'No vision-capable models found'
-          : 'No models in the selected harnesses'}
-    </p>
-  {:else}
-    <div style:height={`${pickerLayout.total}px`} style:position="relative">
-      {#each pickerVisibleItems.items as item (item.key)}
-        <div
-          style:position="absolute"
-          style:left="0"
-          style:right="0"
-          style:top={`${item.offset}px`}
-          style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
-          class="overflow-hidden"
-        >
-          {@render renderPickerItem(item)}
+  <ModelPickerRail
+    view={effectiveView}
+    showFavorites={hasFavorites}
+    showProfiles={showProfilesRail}
+    {harnessOptions}
+    showHarnesses={showHarnessesRail}
+    onSelect={selectRailView}
+  />
+
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    {#if isProfilesView}
+      {#if profiles}
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ModelPickerProfiles {...profiles} />
         </div>
-      {/each}
-    </div>
-  {/if}
-</div>
-{#if multiSelect}
-  <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
-    <span class="text-[0.625rem] text-dimmed">
-      {selectedModelKeys.length} selected · choose one or more
-    </span>
-    <button
-      type="button"
-      class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Finish selecting models"
-      onclick={onClose}
-    >
-      Done
-    </button>
+      {/if}
+    {:else}
+      <div class="flex shrink-0 items-center gap-2 border-b px-2.5 py-2">
+        <Search size={12} class="shrink-0 text-dimmed" />
+        <input
+          id={searchId}
+          {@attach attachSearchInput}
+          bind:value={search}
+          oninput={() => scrollPickerListTo(0)}
+          type="text"
+          class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+          placeholder={effectiveView.kind === 'favorites'
+            ? 'Search favorites...'
+            : effectiveView.kind === 'harness'
+              ? `Search ${harnessName(effectiveView.harnessId)} models...`
+              : 'Search models...'}
+          aria-label={effectiveView.kind === 'favorites'
+            ? 'Search favorite models'
+            : effectiveView.kind === 'harness'
+              ? `Search ${harnessName(effectiveView.harnessId)} models`
+              : 'Search models'}
+          onkeydown={(event: KeyboardEvent) => {
+            if (keymapState.matches('palette-model-nav', event)) {
+              event.preventDefault()
+              keyboardNavActive = true
+              // Anchor the first arrow-key press on the active model so nav
+              // starts from what's selected, not the top of the list   but
+              // once the user has typed a search, "top of the results" is
+              // the more useful anchor.
+              const targetKey = search ? undefined : pickerKeyForSelectedModel()
+              if (targetKey) {
+                const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+                if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
+                void tick().then(() => {
+                  modelList
+                    ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+                    ?.focus()
+                })
+                return
+              }
+              scrollPickerListTo(0)
+              void tick().then(() => {
+                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+              })
+              return
+            }
+            if (keymapState.matches('palette-close', event)) {
+              event.stopPropagation()
+              onClose()
+            }
+          }}
+        />
+        {#if search}
+          <button
+            type="button"
+            class="shrink-0 text-dimmed transition-colors hover:text-foreground"
+            title="Clear model search"
+            aria-label="Clear model search"
+            onclick={() => (search = '')}
+          >
+            <X size={11} />
+          </button>
+        {/if}
+        {#if canRefresh}
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
+            title="Refresh model list"
+            aria-label="Refresh model list"
+            disabled={refreshing}
+            onclick={onRefresh}
+          >
+            <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
+          </button>
+        {/if}
+      </div>
+
+      <div
+        id={listId}
+        {@attach (node) => {
+          modelList = node
+          const cleanup = measurePickerList(node)
+          return () => {
+            cleanup()
+            if (modelList === node) modelList = undefined
+          }
+        }}
+        class="min-h-0 flex-1 overflow-y-auto p-1"
+        role="group"
+        aria-label="Model entries"
+      >
+        {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
+          <div class="px-2 py-2">
+            <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
+            <button
+              type="button"
+              class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+              onclick={onOpenConnectFlow}
+            >
+              <Plug size={12} />
+              Connect your AI account
+            </button>
+          </div>
+        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+          <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
+            {#if effectiveView.kind === 'favorites'}
+              {search ? `No favorite models match “${search}”` : 'No favorite models yet'}
+            {:else if effectiveView.kind === 'harness'}
+              {search
+                ? `No ${harnessName(effectiveView.harnessId)} models match “${search}”`
+                : visionOnly
+                  ? `No vision-capable ${harnessName(effectiveView.harnessId)} models found`
+                  : `No ${harnessName(effectiveView.harnessId)} models found`}
+            {:else}
+              {search
+                ? `No models match “${search}”`
+                : visionOnly
+                  ? 'No vision-capable models found'
+                  : 'No models found'}
+            {/if}
+          </p>
+        {:else}
+          <div style:height={`${pickerLayout.total}px`} style:position="relative">
+            {#each pickerVisibleItems.items as item (item.key)}
+              <div
+                style:position="absolute"
+                style:left="0"
+                style:right="0"
+                style:top={`${item.offset}px`}
+                style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
+                class="overflow-hidden"
+              >
+                {@render renderPickerItem(item)}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      {#if multiSelect}
+        <div class="flex shrink-0 items-center justify-between gap-2 border-t px-2.5 py-1.5">
+          <span class="text-[0.625rem] text-dimmed">
+            {selectedModelKeys.length} selected · choose one or more
+          </span>
+          <button
+            type="button"
+            class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            title="Finish selecting models"
+            onclick={onClose}
+          >
+            Done
+          </button>
+        </div>
+      {/if}
+    {/if}
   </div>
-{/if}
+</div>
 
 {#snippet groupHeader(
   Icon: typeof Star,
@@ -682,7 +825,7 @@
       {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
     </p>
   {:else if item.kind === 'unavailable-model'}
-    <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+    <div class="flex h-full items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs">{item.favorite.modelId}</span>
         {#if item.favorite.providerId}
@@ -710,7 +853,7 @@
     {#if item.favoriteKey !== undefined}
       {@const key = item.favoriteKey}
       <div
-        class="relative"
+        class="relative h-full"
         role="listitem"
         class:opacity-50={draggingFavoriteKey === key}
         draggable={item.draggable}
@@ -751,14 +894,21 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
+  {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   <button
-    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
-    title={`Use ${entry.model.name}`}
+    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    title={unavailable
+      ? unavailableHarnessTitle(entry.provider.harnessId)
+      : `Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => onChoose(entry)}
+    onfocus={() => (lastFocusedModelKey = rowKey)}
+    disabled={unavailable}
+    onclick={() => {
+      if (!unavailable) onChoose(entry)
+    }}
     onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (keymapState.matches('palette-model-nav', event)) {
         event.preventDefault()
         const currentIndex = pickerModelKeys.indexOf(rowKey)
         if (currentIndex === -1) return
@@ -787,14 +937,7 @@
       }
       if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
-        onChoose(entry)
-        return
-      }
-      // Editing intent: left/right moves the caret and characters/backspace edit
-      // the query. Return focus to the search box so typing continues naturally.
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        event.preventDefault()
-        focusSearchInput(event.key === 'ArrowLeft' ? -1 : 0)
+        if (!unavailable) onChoose(entry)
         return
       }
       if (event.key === 'Backspace') {

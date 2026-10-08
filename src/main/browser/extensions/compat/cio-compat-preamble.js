@@ -146,7 +146,169 @@
    * callback, and the two are used interchangeably in the wild, so a place that
    * answers only one way hangs the other silently.
    */
-  const answering = (value) => (...args) => answerWith(args[args.length - 1], value)
+  const answering =
+    (value) =>
+    (...args) =>
+      answerWith(args[args.length - 1], value)
+
+  // Electron loads these copies with allowFileAccess:false. Dark Reader awaits
+  // this callback while building its settings page; a missing method leaves its
+  // UI request unanswered forever.
+  ensureNamespace('extension', { isAllowedFileSchemeAccess: answering(false) }, [])
+
+  // Dark Reader's site toggle covers every tab with that hostname. Keep the
+  // app's temporary tab scope at the message boundary instead, so the extension
+  // still owns theme creation, updates and cleanup in every document.
+  const darkReader = chromeApi.runtime.id === 'eimadpbcbfnmbkopoojfekhnkhdbieeh'
+  const darkReaderFrames = new Map()
+  const darkReaderListeners = new Set()
+  let darkReaderPolicy = { onlyTabId: null, disabledTabIds: [] }
+  const darkReaderAllowsTab = (id) =>
+    (darkReaderPolicy.onlyTabId === null || darkReaderPolicy.onlyTabId === id) &&
+    !darkReaderPolicy.disabledTabIds.includes(id)
+  const darkReaderThemeTypes = new Set([
+    'bg-cs-add-dynamic-theme',
+    'bg-cs-add-css-filter',
+    'bg-cs-add-static-theme',
+    'bg-cs-add-svg-filter',
+    'bg-cs-clean-up'
+  ])
+  const darkReaderDelivery = (id, message) =>
+    darkReaderAllowsTab(id) ? message : { type: 'bg-cs-clean-up', scriptId: message.scriptId }
+  if (darkReader) {
+    const messages = chromeApi.runtime.onMessage
+    const addListener = messages.addListener.bind(messages)
+    const removeListener = messages.removeListener.bind(messages)
+    messages.addListener = (listener) => {
+      darkReaderListeners.add(listener)
+      addListener(listener)
+    }
+    messages.removeListener = (listener) => {
+      darkReaderListeners.delete(listener)
+      removeListener(listener)
+    }
+    const wrappedTabs = new WeakSet()
+    for (const root of roots) {
+      const tabs = root.tabs
+      if (!tabs || typeof tabs.sendMessage !== 'function' || wrappedTabs.has(tabs)) continue
+      wrappedTabs.add(tabs)
+      const sendMessage = tabs.sendMessage.bind(tabs)
+      tabs.sendMessage = (id, message, ...args) => {
+        if (message && darkReaderThemeTypes.has(message.type)) {
+          const options = args[0] && typeof args[0] === 'object' ? args[0] : {}
+          const key = id + ':' + (options.documentId || options.frameId || 0)
+          darkReaderFrames.delete(key)
+          darkReaderFrames.set(key, { id, message, options, sendMessage })
+          // Bound retained theme payloads even on pages with many frames.
+          if (darkReaderFrames.size > 512)
+            darkReaderFrames.delete(darkReaderFrames.keys().next().value)
+          message = darkReaderDelivery(id, message)
+        }
+        return sendMessage(id, message, ...args)
+      }
+    }
+  }
+  const applyDarkReaderPolicy = (command) => {
+    if (!darkReader) return
+    darkReaderPolicy = {
+      onlyTabId: typeof command.onlyTabId === 'number' ? command.onlyTabId : null,
+      disabledTabIds: Array.isArray(command.disabledTabIds) ? command.disabledTabIds : []
+    }
+    for (const frame of darkReaderFrames.values()) {
+      Promise.resolve(
+        frame.sendMessage(frame.id, darkReaderDelivery(frame.id, frame.message), frame.options)
+      ).catch(() => {})
+    }
+    if (command.enable === true || command.refresh === true) {
+      // Use Dark Reader's own UI protocol to switch it on. The caller is the
+      // app-owned bridge, and the scope is installed before themes are emitted.
+      const sender = {
+        id: chromeApi.runtime.id,
+        url: chromeApi.runtime.getURL('ui/popup/index.html')
+      }
+      for (const listener of darkReaderListeners) {
+        try {
+          listener(
+            {
+              type: 'ui-bg-change-settings',
+              data: command.enable === true ? { enabled: true } : {}
+            },
+            sender,
+            noop
+          )
+        } catch (error) {
+          state.errors.push('dark-reader-enable: ' + String(error))
+        }
+      }
+    }
+  }
+  const setDarkReaderPower = async (command) => {
+    if (!darkReader) return
+    if (command.enabled === false) {
+      // Clean every document we delivered a theme to, including frames that the
+      // extension's own startup state has not finished recording yet.
+      const frames = [...darkReaderFrames.values()]
+      for (let offset = 0; offset < frames.length; offset += 16) {
+        await Promise.allSettled(
+          frames
+            .slice(offset, offset + 16)
+            .map((frame) =>
+              frame.sendMessage(
+                frame.id,
+                { type: 'bg-cs-clean-up', scriptId: frame.message.scriptId },
+                frame.options
+              )
+            )
+        )
+      }
+      return
+    }
+    // Reloading an extension does not re-inject its manifest scripts into pages
+    // already open. Run the declared scripts, in order and in their declared
+    // worlds, through the extension's own scripting API without reloading sites.
+    const manifest = chromeApi.runtime.getManifest()
+    const scripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : []
+    const matches = (url, pattern) => {
+      if (pattern === '<all_urls>') return /^https?:/u.test(url)
+      if (typeof pattern !== 'string') return false
+      const match = /^(\*|https?):\/\/(\*|\*\.[^/]+|[^/]+)(\/.*)$/u.exec(pattern)
+      if (!match) return false
+      const parsed = new URL(url)
+      if (match[1] !== '*' && parsed.protocol !== match[1] + ':') return false
+      const host = match[2]
+      if (
+        host !== '*' &&
+        !(host.startsWith('*.')
+          ? parsed.hostname === host.slice(2) || parsed.hostname.endsWith(host.slice(1))
+          : parsed.hostname === host)
+      )
+        return false
+      const path = match[3].replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+      return new RegExp('^' + path + '$').test(parsed.pathname + parsed.search)
+    }
+    for (const tab of Object.values(tabActivity.tabs)) {
+      if (!tab || !/^https?:/u.test(tab.url || '')) continue
+      for (const script of scripts) {
+        if (!Array.isArray(script.js) || script.js.length === 0) continue
+        if (
+          !script.matches?.some((pattern) => matches(tab.url, pattern)) ||
+          script.exclude_matches?.some((pattern) => matches(tab.url, pattern))
+        )
+          continue
+        try {
+          await chromeApi.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: script.all_frames === true },
+            files: script.js,
+            world: script.world || 'ISOLATED'
+          })
+        } catch (error) {
+          state.errors.push('dark-reader-inject: ' + String(error))
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    applyDarkReaderPolicy({ ...darkReaderPolicy, enable: true })
+  }
 
   // ── Namespaces Electron does not compile in at all ───────────────────────────
   ensureNamespace('webNavigation', { getFrame: noop, getAllFrames: noop }, [
@@ -246,15 +408,20 @@
     { remove: noop, removeCache: noop, removeCookies: noop, settings: answering({}) },
     []
   )
-  ensureNamespace('sessions', { getRecentlyClosed: answering([]), restore: noop }, [
-    'onChanged'
-  ])
+  ensureNamespace('sessions', { getRecentlyClosed: answering([]), restore: noop }, ['onChanged'])
   ensureNamespace('topSites', { get: answering([]) }, ['onUpdated'])
   ensureNamespace('search', { query: noop, get: answering([]) }, [])
   ensureNamespace(
     'fontSettings',
     {
-      getFontList: answering({}),
+      getFontList: answering([
+        { fontId: 'serif', displayName: 'serif' },
+        { fontId: 'sans-serif', displayName: 'sans-serif' },
+        { fontId: 'monospace', displayName: 'monospace' },
+        { fontId: 'cursive', displayName: 'cursive' },
+        { fontId: 'fantasy', displayName: 'fantasy' },
+        { fontId: 'system-ui', displayName: 'system-ui' }
+      ]),
       getDefaultFontSize: answering(16),
       setDefaultFontSize: noop,
       getFont: noop,
@@ -929,6 +1096,8 @@
   }
   state.generation = makeGeneration()
   const actionState = { global: {}, tabs: {} }
+  const actionPopupRequests = []
+  let actionPopupRequestSeq = 0
   const contextMenuItems = new Map()
   const contextMenuClicked = makeRealEvent()
   let menuSeq = 0
@@ -964,6 +1133,7 @@
           options: sidePanelOptionRecords,
           requests: sidePanelRequests
         },
+        actionPopups: actionPopupRequests,
         bridgeCommands: state.bridgeCommands || 0,
         commandLog: state.commandLog || [],
         eventDispatch: state.eventDispatch || {},
@@ -1164,6 +1334,16 @@
       state.errors.push('action-wrap-' + key + ': ' + String(error))
     }
   }
+  const routeActionPopupRequest = async () => {
+    try {
+      // The worker may not know a tab yet: a request from a worker that has just
+      // started is one this app must still answer. See
+      // `routeRequestWhenTabKnown`.
+      await routeRequestWhenTabKnown('action')
+    } catch (error) {
+      state.errors.push('action-open-popup: ' + String(error))
+    }
+  }
   const wrapActionApi = (api) => {
     if (!api || typeof api !== 'object') return
     wrapActionMember(api, 'setBadgeText', (details) => ({
@@ -1178,6 +1358,15 @@
     wrapActionMember(api, 'setIcon', (details) => ({
       iconUrl: details && details.imageData ? null : resolveIconPath(details && details.path)
     }))
+    try {
+      Object.defineProperty(api, 'openPopup', {
+        value: routeActionPopupRequest,
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('action-open-popup-wrap: ' + String(error))
+    }
   }
   /**
    * A toolbar namespace built from nothing, for the extension that gets neither
@@ -1259,6 +1448,63 @@
 
   // ── the bridge itself ───────────────────────────────────────────────────────
   const BRIDGE_PORT_NAME = '__cio:bridge'
+  let bridgePort = null
+  let frameRequestSeq = 0
+  const frameRequests = new Map()
+  const sendFrameRequest = (request) => {
+    if (!bridgePort) return
+    try {
+      bridgePort.postMessage({ kind: 'frames-query', id: request.id, tabId: request.tabId })
+    } catch {
+      bridgePort = null
+    }
+  }
+  const queryFrames = (tabId) =>
+    new Promise((resolve) => {
+      if (!Number.isInteger(tabId) || tabId < 0 || frameRequests.size >= 64) {
+        resolve(null)
+        return
+      }
+      const id = ++frameRequestSeq
+      const timer = setTimeout(() => {
+        frameRequests.delete(id)
+        resolve(null)
+      }, 5000)
+      const request = { id, tabId, resolve, timer }
+      frameRequests.set(id, request)
+      sendFrameRequest(request)
+    })
+  // Electron exposes no native frame lookup. A no-op here leaves extensions'
+  // callback-based autofill and frame-policy lookups waiting indefinitely.
+  for (const root of roots) {
+    const api = root && root.webNavigation
+    if (!api) continue
+    const getAllFrames = (details, callback) => {
+      const request = details && typeof details === 'object' ? details : {}
+      return queryFrames(request.tabId).then((frames) => answerWith(callback, frames))
+    }
+    const getFrame = (details, callback) => {
+      const request = details && typeof details === 'object' ? details : {}
+      return queryFrames(request.tabId).then((frames) => {
+        const found = frames && frames.find((frame) => frame.frameId === request.frameId)
+        return answerWith(callback, found || undefined)
+      })
+    }
+    try {
+      Object.defineProperty(api, 'getAllFrames', {
+        value: getAllFrames,
+        configurable: true,
+        writable: true
+      })
+      Object.defineProperty(api, 'getFrame', {
+        value: getFrame,
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('webNavigation-frames: ' + String(error))
+    }
+  }
   /**
    * The tab the app says is on screen, as the runtime's own tab ids.
    *
@@ -1268,7 +1514,239 @@
    * What it announces is the truth, and it announces it twice over: an activation
    * names the tab, and every tab it describes carries the flag as it knows it.
    */
-  const tabActivity = { activeTabId: null }
+  const tabActivity = {
+    activeTabId: null,
+    tabs: Object.create(null),
+    replayComplete: false,
+    replayWaiters: [],
+    replayGate: null
+  }
+  const markTabReplayComplete = () => {
+    if (tabActivity.replayComplete) return
+    tabActivity.replayComplete = true
+    for (const resolve of tabActivity.replayWaiters.splice(0)) resolve()
+  }
+  const waitForTabReplay = () => {
+    if (tabActivity.replayComplete) return Promise.resolve()
+    if (!tabActivity.replayGate) {
+      tabActivity.replayGate = new Promise((resolve) => {
+        tabActivity.replayWaiters.push(resolve)
+        setTimeout(markTabReplayComplete, 1500)
+      })
+    }
+    return tabActivity.replayGate
+  }
+  const HOSTED_POPUP_WINDOW_ID = 2147483646
+  const HOSTED_POPUP_TAB_ID = 2147483645
+  const hostedPopout = { url: null, focused: false }
+
+  const isExtensionPopoutUrl = (url) => {
+    if (
+      typeof url !== 'string' ||
+      !chromeApi.runtime ||
+      typeof chromeApi.runtime.getURL !== 'function'
+    ) {
+      return false
+    }
+    try {
+      const root = new URL(chromeApi.runtime.getURL(''))
+      const candidate = new URL(url)
+      return (
+        candidate.protocol === root.protocol &&
+        candidate.host === root.host &&
+        candidate.searchParams.get('uilocation') === 'popout'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  const routePopupWindowRequest = (kind, url) => {
+    const tabId = tabActivity.activeTabId
+    if (typeof tabId !== 'number' || !Number.isFinite(tabId) || tabId < 0) return false
+    const request = { seq: ++actionPopupRequestSeq, tabId, kind }
+    if (typeof url === 'string') request.url = url
+    actionPopupRequests.push(request)
+    if (actionPopupRequests.length > 16) {
+      actionPopupRequests.splice(0, actionPopupRequests.length - 16)
+    }
+    scheduleMailbox()
+    return true
+  }
+
+  /**
+   * Route a request the worker makes about the window it is acting for, waiting
+   * out a worker that does not know a tab yet.
+   *
+   * A worker that has just been started has been handed no tab events, and a
+   * password manager's passkey save is issued by exactly such a worker: the click
+   * that begins the ceremony is what wakes it. Routing straight away finds no tab,
+   * and every caller then falls through to a runtime that implements no window at
+   * all, so the request is dropped with nothing to show for it and the page waits
+   * on a promise that never settles. That is indistinguishable, from the user's
+   * side, from a browser with no passkey support. The tab replay the app always
+   * sends on a worker's first snapshot is what is waited for, and the wait is
+   * bounded, so a worker that never learns a tab is still answered rather than
+   * held forever.
+   */
+  const routeRequestWhenTabKnown = async (kind, url) => {
+    if (routePopupWindowRequest(kind, url)) return true
+    await waitForTabReplay()
+    return routePopupWindowRequest(kind, url)
+  }
+
+  const hostedWindow = (id, focused) => ({
+    id,
+    focused,
+    type: id === HOSTED_POPUP_WINDOW_ID ? 'popup' : 'normal',
+    state: 'normal',
+    left: 0,
+    top: 0,
+    width: 1280,
+    height: 800,
+    alwaysOnTop: false,
+    tabs:
+      id === HOSTED_POPUP_WINDOW_ID && hostedPopout.url
+        ? [
+            {
+              id: HOSTED_POPUP_TAB_ID,
+              index: 0,
+              windowId: HOSTED_POPUP_WINDOW_ID,
+              active: false,
+              highlighted: false,
+              pinned: false,
+              incognito: false,
+              discarded: false,
+              status: 'complete',
+              url: hostedPopout.url,
+              title: ''
+            }
+          ]
+        : []
+  })
+
+  const wrapWindowsApi = (api) => {
+    if (!api || typeof api !== 'object') return
+    const originals = {
+      create: typeof api.create === 'function' ? api.create : noop,
+      remove: typeof api.remove === 'function' ? api.remove : noop,
+      update: typeof api.update === 'function' ? api.update : noop,
+      get: typeof api.get === 'function' ? api.get : noop,
+      getCurrent: typeof api.getCurrent === 'function' ? api.getCurrent : noop,
+      getLastFocused: typeof api.getLastFocused === 'function' ? api.getLastFocused : noop
+    }
+    const install = (name, wrapped) => {
+      try {
+        Object.defineProperty(api, name, { value: wrapped, configurable: true, writable: true })
+      } catch (error) {
+        state.errors.push('windows-' + name + '-wrap: ' + String(error))
+      }
+    }
+    const originalCreate = originals.create
+    if (!originalCreate.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
+        const url = typeof data.url === 'string' ? data.url : ''
+        if (!isExtensionPopoutUrl(url)) return originalCreate.apply(this, args)
+        const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+        return routeRequestWhenTabKnown('open-window', url).then(
+          (routed) => {
+            if (!routed) return originalCreate.apply(this, args)
+            hostedPopout.url = url
+            hostedPopout.focused = true
+            return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+          },
+          (error) => {
+            // This file must never throw, so a wait that failed is a window the
+            // runtime is asked for instead of a promise the caller cannot settle.
+            state.errors.push('windows-create-route: ' + String(error))
+            return originalCreate.apply(this, args)
+          }
+        )
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('create', wrapped)
+    }
+    const originalRemove = originals.remove
+    if (!originalRemove.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
+          hostedPopout.focused = false
+          if (routePopupWindowRequest('hide-window', hostedPopout.url)) {
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            return answerWith(callback, undefined)
+          }
+        }
+        return originalRemove.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('remove', wrapped)
+    }
+    const originalUpdate = originals.update
+    if (!originalUpdate.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const update = args[1] && typeof args[1] === 'object' ? args[1] : {}
+        // Browser tabs belong to the app's window 0. Bitwarden awaits this
+        // callback in its passkey request's finally block before returning the
+        // assertion to the site. Electron has no windows.update implementation,
+        // so falling through to its placeholder leaves the response pending.
+        if ((args[0] === 0 || args[0] === -2) && typeof update.focused === 'boolean') {
+          if (update.focused) routePopupWindowRequest('focus-browser')
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          return answerWith(callback, hostedWindow(0, update.focused))
+        }
+        if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
+          if (routePopupWindowRequest('focus-window', hostedPopout.url)) {
+            hostedPopout.focused = true
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+          }
+        }
+        return originalUpdate.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('update', wrapped)
+    }
+    const originalGet = originals.get
+    if (!originalGet.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const id = args[0]
+        if (id === HOSTED_POPUP_WINDOW_ID || id === 0 || id === -1 || id === -2) {
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          const result =
+            id === HOSTED_POPUP_WINDOW_ID
+              ? hostedWindow(id, hostedPopout.focused)
+              : hostedWindow(0, true)
+          return answerWith(callback, result)
+        }
+        return originalGet.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('get', wrapped)
+    }
+    for (const name of ['getCurrent', 'getLastFocused']) {
+      const original = originals[name]
+      if (original.__cioHostedPopoutWrapped) continue
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+        return answerWith(callback, hostedWindow(0, true))
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install(name, wrapped)
+    }
+  }
+
+  for (const root of roots) wrapWindowsApi(root && root.windows)
+
   const handleBridgeCommand = (command) => {
     if (!command || typeof command !== 'object') return
     state.bridgeCommands = (state.bridgeCommands || 0) + 1
@@ -1296,21 +1774,91 @@
       dispatcher.__cioEmit(args)
       entry.errors += state.errors.length - errorsBefore
     }
-    if (command.kind === 'tab') {
+    if (command.kind === 'dark-reader-power') {
+      void setDarkReaderPower(command).then(
+        () => bridgePort?.postMessage({ kind: 'command-complete', requestId: command.requestId }),
+        (error) =>
+          bridgePort?.postMessage({
+            kind: 'command-complete',
+            requestId: command.requestId,
+            error: String(error)
+          })
+      )
+    } else if (command.kind === 'dark-reader-tab-policy') {
+      applyDarkReaderPolicy(command)
+    } else if (command.kind === 'tab') {
       const args = Array.isArray(command.args) ? command.args : []
       if (command.name === 'onActivated') {
         if (args[0] && typeof args[0].tabId === 'number') tabActivity.activeTabId = args[0].tabId
       } else if (command.name === 'onCreated' || command.name === 'onHighlighted') {
-        if (args[0] && typeof args[0] === 'object' && args[0].active === true && typeof args[0].id === 'number') {
+        if (
+          args[0] &&
+          typeof args[0] === 'object' &&
+          args[0].active === true &&
+          typeof args[0].id === 'number'
+        ) {
           tabActivity.activeTabId = args[0].id
         }
       } else if (command.name === 'onUpdated') {
         const info = args[2]
-        if (info && typeof info === 'object' && info.active === true && typeof info.id === 'number') {
+        if (
+          info &&
+          typeof info === 'object' &&
+          info.active === true &&
+          typeof info.id === 'number'
+        ) {
           tabActivity.activeTabId = info.id
         }
       } else if (command.name === 'onRemoved') {
         if (args[0] === tabActivity.activeTabId) tabActivity.activeTabId = null
+      }
+      if (command.name === 'onCreated') {
+        const tab = args[0]
+        if (tab && typeof tab === 'object' && typeof tab.id === 'number' && tab.id >= 0) {
+          tabActivity.tabs[String(tab.id)] = Object.assign(
+            {
+              discarded: false,
+              highlighted: tab.active === true,
+              windowType: 'normal',
+              autoDiscardable: false,
+              mutedInfo: { muted: false }
+            },
+            tab
+          )
+        }
+      } else if (command.name === 'onUpdated') {
+        const tab = args[2]
+        if (tab && typeof tab === 'object' && typeof tab.id === 'number' && tab.id >= 0) {
+          const key = String(tab.id)
+          tabActivity.tabs[key] = Object.assign(
+            {
+              discarded: false,
+              highlighted: tab.active === true,
+              windowType: 'normal',
+              autoDiscardable: false,
+              mutedInfo: { muted: false }
+            },
+            tabActivity.tabs[key] || {},
+            tab
+          )
+        }
+      } else if (command.name === 'onRemoved' && typeof args[0] === 'number') {
+        delete tabActivity.tabs[String(args[0])]
+      }
+      if (
+        command.name === 'onRemoved' ||
+        (command.name === 'onUpdated' && args[1] && args[1].status === 'loading')
+      ) {
+        for (const [key, frame] of darkReaderFrames) {
+          if (frame.id === args[0]) darkReaderFrames.delete(key)
+        }
+      }
+      if (typeof tabActivity.activeTabId === 'number') {
+        for (const key of Object.keys(tabActivity.tabs)) {
+          const active = Number(key) === tabActivity.activeTabId
+          tabActivity.tabs[key].active = active
+          tabActivity.tabs[key].highlighted = active
+        }
       }
       const dispatcher = tabEvents[command.name]
       if (dispatcher) {
@@ -1321,6 +1869,8 @@
           delete actionState.tabs[String(command.args[0])]
         }
       }
+    } else if (command.kind === 'tab-replay-complete') {
+      markTabReplayComplete()
     } else if (command.kind === 'web-navigation') {
       // The details object is built on the app's side in `chrome.webNavigation`'s
       // own shape, so a listener written against the real API runs unmodified.
@@ -1350,7 +1900,21 @@
     } else if (command.kind === 'startup') {
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])
+    } else if (command.kind === 'installed') {
+      const rawDetails = command.details
+      const details =
+        rawDetails && typeof rawDetails === 'object' && !Array.isArray(rawDetails) ? rawDetails : {}
+      const installed = {
+        reason: details.reason === 'update' ? 'update' : 'install',
+        ...(typeof details.previousVersion === 'string'
+          ? { previousVersion: details.previousVersion }
+          : {})
+      }
+      emitRecorded('onInstalled', runtimeEvents.onInstalled, [installed])
     } else if (command.kind === 'menu-click') {
+      if (command.tab && typeof command.tab.id === 'number' && command.tab.id >= 0) {
+        tabActivity.activeTabId = command.tab.id
+      }
       contextMenuClicked.__cioEmit([command.info || {}, command.tab || null])
     }
     scheduleMailbox()
@@ -1367,8 +1931,22 @@
       runtime.onConnect.addListener((port) => {
         try {
           if (!port || port.name !== BRIDGE_PORT_NAME) return
+          bridgePort = port
+          for (const request of frameRequests.values()) sendFrameRequest(request)
+          port.onDisconnect.addListener(() => {
+            if (bridgePort === port) bridgePort = null
+          })
           port.onMessage.addListener((command) => {
             try {
+              if (command && command.kind === 'frames-result') {
+                const request = frameRequests.get(command.id)
+                if (request) {
+                  frameRequests.delete(command.id)
+                  clearTimeout(request.timer)
+                  request.resolve(Array.isArray(command.frames) ? command.frames : null)
+                }
+                return
+              }
               handleBridgeCommand(command)
             } catch (error) {
               state.errors.push('bridge: ' + String(error))
@@ -1638,32 +2216,194 @@
     state.errors.push('contexts: ' + String(error))
   }
 
-  // ── the tab that is on screen, for a query that asks ────────────────────────
+  // ── the app's browser tabs, as chrome.tabs.query answers them ───────────────
   //
-  // `chrome.tabs.query` is answered from the runtime's own focus state, and the
-  // app's browser view is in no window the runtime tracks: a query for the active
-  // tab comes back empty while a tab is plainly on screen, and every tab the
-  // runtime describes reads as inactive. The app says which tab is on screen (see
-  // tabActivity), so the answer is corrected from that.
-  //
-  // Only the activity half is repaired. A query that filters on the address, the
-  // title, the status or anything else is answered by the runtime and passed on as
-  // it is, because correcting a filter this shim cannot evaluate would mean
-  // inventing tabs the caller never asked for.
+  // The app's pages are WebContentsViews, not tabs in a Chromium window. Electron's
+  // partial tabs API therefore cannot be the whole answer: extensions which query
+  // all tabs (Dark Reader does this when first installed) would otherwise never
+  // inject into a page that was already open. The bridge replays and forwards the
+  // app's tab events, and those snapshots are merged with any tabs Electron knows.
   try {
     if (state.tabsActivityRepair !== 'installed') {
-      /** Every tab as the app's own answer, with the flag the runtime cannot see. */
+      const hostedPopoutTab = () =>
+        hostedPopout.url
+          ? {
+              id: HOSTED_POPUP_TAB_ID,
+              index: 0,
+              windowId: HOSTED_POPUP_WINDOW_ID,
+              active: hostedPopout.focused,
+              highlighted: hostedPopout.focused,
+              pinned: false,
+              incognito: false,
+              discarded: false,
+              autoDiscardable: false,
+              status: 'complete',
+              url: hostedPopout.url,
+              title: ''
+            }
+          : null
+      const matchesUrlFilter = (url, filter) => {
+        if (!filter) return true
+        const patterns = Array.isArray(filter) ? filter : [filter]
+        return patterns.some((pattern) => {
+          if (typeof pattern !== 'string') return false
+          try {
+            const source = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^]*')
+            return new RegExp('^' + source + '$').test(url)
+          } catch {
+            return false
+          }
+        })
+      }
+      const hostedPopoutMatchesQuery = (tab, query) => {
+        if (!tab) return false
+        if (query && query.windowType && query.windowType !== 'popup') return false
+        if (
+          query &&
+          typeof query.windowId === 'number' &&
+          query.windowId !== HOSTED_POPUP_WINDOW_ID
+        ) {
+          return false
+        }
+        if (query && typeof query.active === 'boolean' && query.active !== tab.active) return false
+        if (query && typeof query.status === 'string' && query.status !== tab.status) return false
+        if (query && query.url && !matchesUrlFilter(tab.url, query.url)) return false
+        if (query && query.title && tab.title !== query.title) return false
+        return true
+      }
+      const matchesQuery = (tab, query) => {
+        if (!tab || typeof tab !== 'object') return false
+        if (typeof query.active === 'boolean' && tab.active !== query.active) return false
+        if (typeof query.audible === 'boolean' && (tab.audible === true) !== query.audible) {
+          return false
+        }
+        if (
+          typeof query.autoDiscardable === 'boolean' &&
+          (tab.autoDiscardable === true) !== query.autoDiscardable
+        ) {
+          return false
+        }
+        if (typeof query.discarded === 'boolean' && (tab.discarded === true) !== query.discarded) {
+          return false
+        }
+        if (
+          typeof query.highlighted === 'boolean' &&
+          (tab.highlighted === true) !== query.highlighted
+        ) {
+          return false
+        }
+        if (typeof query.index === 'number' && tab.index !== query.index) return false
+        if (typeof query.muted === 'boolean') {
+          const muted = tab.mutedInfo && tab.mutedInfo.muted === true
+          if (muted !== query.muted) return false
+        }
+        if (typeof query.pinned === 'boolean' && (tab.pinned === true) !== query.pinned) {
+          return false
+        }
+        if (typeof query.status === 'string' && tab.status !== query.status) return false
+        if (query.title && !matchesUrlFilter(tab.title || '', query.title)) return false
+        if (query.url && !matchesUrlFilter(tab.url || '', query.url)) return false
+        if (typeof query.windowId === 'number' && tab.windowId !== query.windowId) return false
+        if (query.windowType && tab.windowType !== query.windowType) return false
+        if (
+          (query.currentWindow === true || query.lastFocusedWindow === true) &&
+          tab.windowId !== 0 &&
+          tab.windowId !== HOSTED_POPUP_WINDOW_ID
+        ) {
+          return false
+        }
+        return true
+      }
       const withActivity = (tabs) => {
-        const list = []
+        const byId = new Map()
         for (const tab of Array.isArray(tabs) ? tabs : []) {
-          if (!tab || typeof tab !== 'object' || Array.isArray(tab)) {
-            list.push(tab)
+          if (
+            !tab ||
+            typeof tab !== 'object' ||
+            Array.isArray(tab) ||
+            typeof tab.id !== 'number' ||
+            !Number.isFinite(tab.id)
+          ) {
             continue
           }
-          list.push(Object.assign({}, tab, { active: tab.id === tabActivity.activeTabId }))
+          const active = tab.id === tabActivity.activeTabId
+          byId.set(tab.id, Object.assign({}, tab, { active }))
         }
-        return list
+        for (const id of Object.keys(tabActivity.tabs)) {
+          const tab = tabActivity.tabs[id]
+          if (!tab || typeof tab !== 'object' || typeof tab.id !== 'number') continue
+          byId.set(tab.id, Object.assign({}, byId.get(tab.id) || {}, tab))
+        }
+        return [...byId.values()]
       }
+      const readNativeTabs = (nativeQuery, query) =>
+        new Promise((resolve) => {
+          let settled = false
+          let timeout = null
+          const finish = (tabs) => {
+            if (settled) return
+            settled = true
+            if (timeout !== null) clearTimeout(timeout)
+            resolve(Array.isArray(tabs) ? tabs : [])
+          }
+          timeout = setTimeout(() => finish([]), 1500)
+          try {
+            const returned = nativeQuery(query, finish)
+            if (returned && typeof returned.then === 'function') {
+              returned.then(finish, (error) => {
+                state.errors.push('tabs-query: ' + String(error))
+                finish([])
+              })
+            }
+          } catch (error) {
+            state.errors.push('tabs-query: ' + String(error))
+            try {
+              const returned = nativeQuery(query)
+              if (returned && typeof returned.then === 'function') {
+                returned.then(finish, () => finish([]))
+              } else {
+                finish([])
+              }
+            } catch (fallbackError) {
+              state.errors.push('tabs-query: ' + String(fallbackError))
+              finish([])
+            }
+          }
+        })
+      const readNativeTab = (nativeGet, id) =>
+        new Promise((resolve) => {
+          let settled = false
+          let timeout = null
+          const finish = (tab) => {
+            if (settled) return
+            settled = true
+            if (timeout !== null) clearTimeout(timeout)
+            resolve(tab && typeof tab === 'object' ? tab : null)
+          }
+          timeout = setTimeout(() => finish(null), 1500)
+          try {
+            const returned = nativeGet(id, finish)
+            if (returned && typeof returned.then === 'function') {
+              returned.then(finish, (error) => {
+                state.errors.push('tabs-active: ' + String(error))
+                finish(null)
+              })
+            }
+          } catch (error) {
+            state.errors.push('tabs-active: ' + String(error))
+            try {
+              const returned = nativeGet(id)
+              if (returned && typeof returned.then === 'function') {
+                returned.then(finish, () => finish(null))
+              } else {
+                finish(null)
+              }
+            } catch (fallbackError) {
+              state.errors.push('tabs-active: ' + String(fallbackError))
+              finish(null)
+            }
+          }
+        })
       let repairedOn = 0
       for (const root of roots) {
         const tabsApi = root && root.tabs
@@ -1673,33 +2413,35 @@
         const nativeGet = typeof tabsApi.get === 'function' ? tabsApi.get.bind(tabsApi) : null
         try {
           const answerQuery = (list, query, callback) => {
-            if (!query || query.active !== true) return answerWith(callback, list)
-            const active = list.filter((tab) => tab && tab.active === true)
+            const hostedTab = hostedPopoutTab()
+            const combined = list.filter((tab) => matchesQuery(tab, query))
+            if (hostedPopoutMatchesQuery(hostedTab, query) && matchesQuery(hostedTab, query)) {
+              combined.push(hostedTab)
+            }
+            if (!query || query.active !== true) return answerWith(callback, combined)
+            const active = combined.filter((tab) => tab && tab.active === true)
             if (active.length > 0 || tabActivity.activeTabId === null || !nativeGet) {
               return answerWith(callback, active)
             }
-            // The runtime answered without the tab the app names, so the tab is
-            // asked for by that id: this is the case an extension sees as "there is
-            // no current tab" while the user is reading one.
-            return Promise.resolve(nativeGet(tabActivity.activeTabId))
-              .then((tab) => answerWith(callback, withActivity([tab]).filter((entry) => entry && entry.active === true)))
-              .catch((error) => {
-                state.errors.push('tabs-active: ' + String(error))
-                return answerWith(callback, active)
-              })
+            return readNativeTab(nativeGet, tabActivity.activeTabId).then((tab) =>
+              answerWith(
+                callback,
+                tab ? withActivity([tab]).filter((entry) => matchesQuery(entry, query)) : active
+              )
+            )
           }
           const queryRepaired = (...args) => {
-            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
             const callArgs = callback ? args.slice(0, -1) : args
             const query = callArgs[0] && typeof callArgs[0] === 'object' ? callArgs[0] : {}
-            let pending
-            try {
-              pending = nativeQuery(...callArgs)
-            } catch (error) {
-              state.errors.push('tabs-query: ' + String(error))
-              pending = Promise.resolve([])
-            }
-            return Promise.resolve(pending).then((tabs) => answerQuery(withActivity(tabs), query, callback))
+            return waitForTabReplay()
+              .then(() => readNativeTabs(nativeQuery, query))
+              .then((tabs) => answerQuery(withActivity(tabs), query, callback))
+              .catch((error) => {
+                state.errors.push('tabs-query: ' + String(error))
+                return answerWith(callback, [])
+              })
           }
           Object.defineProperty(tabsApi, 'query', {
             value: queryRepaired,
@@ -1709,7 +2451,11 @@
           if (nativeGet) {
             const getRepaired = (id, callback) => {
               const answered = typeof callback === 'function' ? callback : null
-              return Promise.resolve(nativeGet(id)).then((tab) => answerWith(answered, withActivity([tab])[0]))
+              const tab = tabActivity.tabs[String(id)]
+              const result = tab ? Promise.resolve(tab) : readNativeTab(nativeGet, id)
+              return result.then((found) =>
+                answerWith(answered, found ? withActivity([found])[0] : undefined)
+              )
             }
             Object.defineProperty(tabsApi, 'get', {
               value: getRepaired,

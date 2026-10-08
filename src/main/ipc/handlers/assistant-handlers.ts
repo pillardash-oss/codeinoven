@@ -1,8 +1,10 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
 import { ROUTINE_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../../lib/routine-agents'
+import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 import {
   ROUTINE_DELIVERY_CHANNEL_IDS,
   ROUTINE_IMPACT_IDS,
@@ -11,6 +13,7 @@ import {
 import { routineFirstHowToSave } from '../../../lib/types'
 import {
   broadcastAutoAnswersChanged,
+  broadcastBackgroundRunsChanged,
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
@@ -23,6 +26,7 @@ import type {
   RoutineConnection,
   RoutineDelivery,
   RoutineDeliveryChannel,
+  RoutineExecution,
   RoutineImpact,
   RoutinePriority,
   RoutineSchedule,
@@ -117,6 +121,7 @@ function sanitizeModelSelection(value: unknown): RoutineAgents['fallbacks'][numb
     return null
   }
   return {
+    ...validateModelRuntimeSettings(record),
     harnessId: record.harnessId.slice(0, 64),
     providerId: record.providerId.slice(0, 128),
     modelId: record.modelId.slice(0, 200),
@@ -194,6 +199,22 @@ function sanitizePriority(value: unknown): RoutinePriority | null {
   }
 }
 
+/**
+ * Validate an untrusted execution target into a RoutineExecution, or null to
+ * clear it (run on this computer). A target must name an Oven; the path stays
+ * optional so the Oven's default checkout can be used.
+ */
+function sanitizeExecution(value: unknown): RoutineExecution | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') throw new TypeError('Routine execution must be an object or null')
+  const record = value as Record<string, unknown>
+  const ovenId = typeof record.ovenId === 'string' ? record.ovenId.trim() : ''
+  if (!ovenId) throw new TypeError('Routine execution must name an Oven')
+  const ovenPath = typeof record.ovenPath === 'string' ? record.ovenPath.trim() : ''
+  if (ovenId === LOCAL_OVEN_ID) return null
+  return { ovenId: ovenId.slice(0, 200), ...(ovenPath ? { ovenPath } : {}) }
+}
+
 function validateCreateInput(value: unknown): CreateRoutineInput {
   if (typeof value !== 'object' || value === null) throw new TypeError('Invalid routine input')
   const record = value as Record<string, unknown>
@@ -210,6 +231,9 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
       ? { connections: sanitizeConnections(record.connections) }
       : {}),
     ...(record.agents !== undefined ? { agents: sanitizeAgents(record.agents) ?? undefined } : {}),
+    ...(record.execution !== undefined
+      ? { execution: sanitizeExecution(record.execution) ?? undefined }
+      : {}),
     ...(record.delivery !== undefined
       ? { delivery: sanitizeDelivery(record.delivery) ?? undefined }
       : {}),
@@ -268,6 +292,7 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
   }
   if (record.delivery !== undefined) patch.delivery = sanitizeDelivery(record.delivery)
   if (record.priority !== undefined) patch.priority = sanitizePriority(record.priority)
+  if (record.execution !== undefined) patch.execution = sanitizeExecution(record.execution)
   if (typeof record.paused === 'boolean') patch.paused = record.paused
   return patch
 }
@@ -399,10 +424,39 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
 
+  ipcMain.handle('assistant:listSkippedRoutineRuns', () =>
+    requireScheduler().listSkippedRoutineRuns()
+  )
+
+  ipcMain.handle('assistant:hasRoutineRunsToday', (_, routineId: unknown) =>
+    requireScheduler().hasRoutineRunsToday(validateEntityId(routineId, 'Routine ID'))
+  )
+
+  ipcMain.handle('assistant:skipNextRoutineRun', async (_, routineId: unknown) => {
+    const scheduler = requireScheduler()
+    await scheduler.skipNextRoutineRun(validateEntityId(routineId, 'Routine ID'))
+    return scheduler.listSkippedRoutineRuns()
+  })
+
+  ipcMain.handle('assistant:skipRoutineRunsToday', async (_, routineId: unknown) => {
+    const scheduler = requireScheduler()
+    await scheduler.skipRoutineRunsToday(validateEntityId(routineId, 'Routine ID'))
+    return scheduler.listSkippedRoutineRuns()
+  })
+
   // The durable record of unattended runs. Read from the ledger, not the thread
   // table, so a run whose thread was evicted or deleted still reports what
   // happened on the "While you were away" surfaces.
   ipcMain.handle('assistant:listBackgroundRuns', () => requireScheduler().listBackgroundRuns())
+
+  // Acknowledge one unattended run so it leaves the "While you were away"
+  // surface for good. The ledger owns the durable removal; the fresh list is
+  // pushed so every open panel and routine history updates together.
+  ipcMain.handle('assistant:dismissBackgroundRun', (_, id: unknown) => {
+    const scheduler = requireScheduler()
+    scheduler.dismissBackgroundRun(requireString(id, 'Background run ID').slice(0, 300))
+    broadcastBackgroundRunsChanged(scheduler.listBackgroundRuns())
+  })
 
   ipcMain.handle('assistant:listAutoAnswers', () => ctx.autoAnswerStore?.list() ?? [])
 

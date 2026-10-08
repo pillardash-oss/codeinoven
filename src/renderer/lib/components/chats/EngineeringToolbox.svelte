@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick } from 'svelte'
   import { Toolbox } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
@@ -9,7 +10,7 @@
 
   interface Props {
     lifecycleState: EngineeringLifecycleState | null
-    /** Whether any Engineering lifecycle stage is active for the thread  
+    /** Whether any Engineering lifecycle stage is active for the thread
      *  either staged (intent-only) or persisted via an inherited selection. */
     active?: boolean
     disabled?: boolean
@@ -117,6 +118,8 @@
     onclose?.()
   }
 
+  trackEscapeMenu(() => open, closeViaKeyboard)
+
   function moveHighlight(direction: 1 | -1): void {
     navIndex = (navIndex + direction + rowCount) % rowCount
     void focusRow(navIndex)
@@ -198,7 +201,8 @@
         >
           <span class="min-w-0 flex-1 pr-3">
             <span class="block text-xs font-medium text-foreground">{row.label}</span>
-            <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">{row.description}</span>
+            <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">{row.description}</span
+            >
           </span>
         </Switch>
       {/each}

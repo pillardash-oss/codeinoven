@@ -1,0 +1,106 @@
+<script lang="ts">
+  import { invoke } from '$lib/ipc.svelte'
+  import { APP_NAME, FEEDBACK_URL, GITHUB_URL, SUPPORT_EMAIL } from '$shared/brand'
+  import type { AppConfig, AppConfigPatch } from '$shared/types'
+  import { onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
+  import Switch from '../ui/Switch.svelte'
+
+  interface Props {
+    config: AppConfig
+    settingsReady: boolean
+    updateConfig: (patch: AppConfigPatch) => Promise<void>
+  }
+  let { config, settingsReady, updateConfig }: Props = $props()
+  let saving = $state(false)
+  let issueUrl = $state(`${GITHUB_URL}/issues/new/choose`)
+  const actions = $derived([
+    {
+      label: 'Report an issue',
+      url: issueUrl,
+      title: 'Report an issue on GitHub'
+    },
+    {
+      label: 'Send feedback',
+      url: FEEDBACK_URL,
+      title: `Send feedback to ${SUPPORT_EMAIL} in your email app`
+    },
+    {
+      label: 'Contribute',
+      url: `${GITHUB_URL}/blob/main/CONTRIBUTING.md`,
+      title: 'Open the repository to contribute a pull request'
+    }
+  ])
+
+  onMount(() => {
+    void invoke('community:getIssueUrl')
+      .then((url) => {
+        issueUrl = url
+      })
+      .catch(() => {
+        // The issue chooser remains available if metadata could not be loaded.
+      })
+  })
+
+  async function open(url: string): Promise<void> {
+    try {
+      await invoke('shell:openExternal', url)
+    } catch {
+      toast.error('Could not open the link')
+    }
+  }
+
+  async function setConsent(shareAnonymousUsage: boolean): Promise<void> {
+    saving = true
+    try {
+      await updateConfig({ shareAnonymousUsage })
+    } finally {
+      saving = false
+    }
+  }
+</script>
+
+<div class="mt-4 rounded-xl border bg-surface p-4">
+  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Community</h3>
+  <p class="text-xs leading-relaxed text-dimmed">
+    Help improve {APP_NAME}. Report a bug, email your feedback, or contribute on GitHub.
+  </p>
+  <div class="mt-3 flex flex-wrap gap-2">
+    {#each actions as action (action.label)}
+      <button
+        type="button"
+        class="flex h-9 items-center rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+        title={action.title}
+        data-external-url={action.url}
+        onclick={() => void open(action.url)}
+      >
+        {action.label}
+      </button>
+    {/each}
+  </div>
+</div>
+
+<div class="mt-4 rounded-xl border bg-surface p-4">
+  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Privacy</h3>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <p class="text-sm font-medium">Share anonymous usage statistics</p>
+      <p
+        id="usage-statistics-description"
+        class="mt-1 max-w-xl text-xs leading-relaxed text-dimmed"
+      >
+        Send daily activity, app version, operating system, and CPU architecture to PostHog using a
+        random installation ID. No prompts, code, project paths, or conversation history. Disabled
+        by default. You can turn it off at any time.
+      </p>
+    </div>
+    <Switch
+      checked={config.shareAnonymousUsage === true}
+      disabled={!settingsReady || saving}
+      title="Share anonymous usage statistics"
+      aria-label="Share anonymous usage statistics"
+      aria-describedby="usage-statistics-description"
+      onchange={(enabled) => void setConsent(enabled)}
+    />
+  </div>
+</div>

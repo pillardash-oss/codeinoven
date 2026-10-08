@@ -2,7 +2,8 @@
   import type { AgentMessage, AgentPart } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
-  import { formatTime, textParts, workingParts } from './subagent-session-view-helpers'
+  import MessageTimestamp from '../shared/MessageTimestamp.svelte'
+  import { textParts, workingParts } from './subagent-session-view-helpers'
 
   interface Props {
     message: AgentMessage
@@ -25,7 +26,7 @@
       {/each}
     </div>
     <p class="mt-1 text-right text-[0.5625rem] text-dimmed">
-      {formatTime(message.createdAt)}
+      <MessageTimestamp at={message.createdAt} />
     </p>
   </div>
 {:else}
@@ -57,7 +58,7 @@
       </div>
     {/if}
     {#if message.completedAt}
-      <p class="text-[0.5625rem] text-dimmed">{formatTime(message.completedAt)}</p>
+      <p class="text-[0.5625rem] text-dimmed"><MessageTimestamp at={message.completedAt} /></p>
     {/if}
   </div>
 {/if}

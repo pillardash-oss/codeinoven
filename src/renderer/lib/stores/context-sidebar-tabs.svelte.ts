@@ -1,3 +1,4 @@
+import { feature } from '$lib/feature-registry'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import { agentRuns } from './agent-runs.svelte'
@@ -92,6 +93,14 @@ export class SidebarTabContexts {
       if (tab?.kind === 'temporary-chat') return tab
     }
     return null
+  }
+
+  /** Temporary (side) chat tabs hanging off one thread, in open order. A
+   *  thread row reads this to mark that a side chat exists for its thread. */
+  temporaryChatsFor(projectId: string, threadId: string): TemporaryChatContextTab[] {
+    const tabs = this.contexts[contextKey(projectId, threadId)]?.tabs
+    if (!tabs) return []
+    return tabs.filter((tab): tab is TemporaryChatContextTab => tab.kind === 'temporary-chat')
   }
 
   ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
@@ -467,6 +476,13 @@ export class SidebarTabContexts {
     })
   }
 
+  openOven(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `oven:${projectId}:${threadId}`
+    if (context.tabs.some((tab) => tab.id === id)) this.focusInContext(context, id)
+    else this.open(context, { id, kind: 'oven', title: 'Oven', projectId, threadId })
+  }
+
   openSources(projectId: string, threadId: string): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `sources:${projectId}:${threadId}`
@@ -545,7 +561,7 @@ export class SidebarTabContexts {
     this.open(context, {
       id,
       kind: 'thread-note',
-      title: 'Notes',
+      title: feature('thread-note').name,
       projectId,
       threadId,
       threadTitle,
@@ -601,7 +617,7 @@ export class SidebarTabContexts {
       {
         id,
         kind: 'thread-note',
-        title: 'Notes',
+        title: feature('thread-note').name,
         projectId,
         threadId,
         threadTitle,

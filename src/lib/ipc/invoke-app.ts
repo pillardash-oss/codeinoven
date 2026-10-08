@@ -12,8 +12,17 @@ import type {
 import type { RendererLogEntry } from './logging'
 import type { Contract } from './contract-helpers'
 
+/** One file the user explicitly chooses to save from the renderer. */
+export interface SaveFileInput {
+  suggestedName: string
+  contents: string
+  filters?: { name: string; extensions: string[] }[]
+}
+
 export const invokeAppContract = {
+  'network:restored': {} as Contract<[], void>,
   'config:get': {} as Contract<[], AppConfig>,
+  'community:getIssueUrl': {} as Contract<[], string>,
   'config:update': {} as Contract<[patch: AppConfigPatch], AppConfig>,
   'config:syncAgentRole': {} as Contract<
     [role: AgentRole, selection: AgentModelSelection],
@@ -25,8 +34,14 @@ export const invokeAppContract = {
   'clipboard:writeText': {} as Contract<[text: string], void>,
   'clipboard:readText': {} as Contract<[], string>,
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,
+  'dialog:saveFile': {} as Contract<[input: SaveFileInput], string | null>,
   'dialog:pickFiles': {} as Contract<[scope?: AttachmentStorageScope], string[]>,
   'dialog:pickImage': {} as Contract<[], string | null>,
+  /** Store a picked appearance image (a browser tab, group, box, bookmark or
+   *  sticky note icon) as an app-owned copy and answer with that copy's path and
+   *  its data URL. A picked path is authorized for one process only, so it is
+   *  never what an appearance record keeps. */
+  'appearance:storeImage': {} as Contract<[sourcePath: string], { path: string; dataUrl: string }>,
   'diagnostics:export': {} as Contract<[], string | null>,
   'file:read': {} as Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>,
   'file:readAsDataUrl': {} as Contract<[filePath: string], string | null>,

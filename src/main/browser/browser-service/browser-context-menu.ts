@@ -15,6 +15,7 @@
 
 import type { ContextMenuParams, MenuItemConstructorOptions } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
+import type { BrowserContextMenuBoxEntry } from '../../../lib/browser/browser-box-menu'
 
 /** Longest selected phrase echoed in the "Search ... for" item. */
 const MAX_LABEL_TEXT_LENGTH = 32
@@ -43,6 +44,10 @@ export interface BrowserContextMenuActions {
 
   /** Open a link in a new tab. Only called for a navigable http(s) address. */
   openLinkInNewTab(url: string): void
+  /** Open a link in a new tab in the selected named box. */
+  openLinkInBox(url: string, boxId: string): void
+  /** Open an ephemeral peek at a navigable link under the cursor. */
+  openPeekWindow?(url: string): void
   /** Save a link's target through the download manager. */
   saveLinkAs(url: string): void
 
@@ -76,6 +81,7 @@ export interface BrowserContextMenuContext {
   canGoForward: boolean
   /** Display name of the active search engine, for the search item's label. */
   searchEngineName: string
+  boxes: BrowserContextMenuBoxEntry[]
 }
 
 /** Only an http(s) address can be opened, saved or viewed as a page. */
@@ -168,6 +174,7 @@ function buildSpellingItems(
 /** The actions for a link, headed by opening it. */
 function buildLinkItems(
   params: ContextMenuParams,
+  context: BrowserContextMenuContext,
   actions: BrowserContextMenuActions
 ): MenuItemConstructorOptions[] {
   const url = params.linkURL
@@ -175,6 +182,17 @@ function buildLinkItems(
   const items: MenuItemConstructorOptions[] = []
   if (navigable) {
     items.push({ label: 'Open Link in New Tab', click: () => actions.openLinkInNewTab(url) })
+    if (context.boxes.length > 0) {
+      items.push({
+        label: 'Open Link in Box',
+        submenu: context.boxes.map((box) => ({
+          label: box.name,
+          click: () => actions.openLinkInBox(url, box.id)
+        }))
+      })
+    }
+    if (actions.openPeekWindow)
+      items.push({ label: 'Take a Peek', click: () => actions.openPeekWindow?.(url) })
   }
   if (params.linkText.trim()) {
     items.push({ label: 'Copy Link Text', click: () => actions.copyText(params.linkText) })
@@ -255,7 +273,7 @@ export function buildBrowserContextMenuItems(
 
   if (params.misspelledWord) push(buildSpellingItems(params, actions))
   if (params.isEditable) push(buildEditingItems(params, actions))
-  if (params.linkURL) push(buildLinkItems(params, actions))
+  if (params.linkURL) push(buildLinkItems(params, context, actions))
   if (params.mediaType === 'image' && params.srcURL) push(buildImageItems(params, actions))
   if ((params.mediaType === 'video' || params.mediaType === 'audio') && params.srcURL) {
     push(buildMediaItems(params, actions))

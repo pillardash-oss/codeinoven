@@ -25,11 +25,14 @@ const MAX_TEXT_BYTES = 384_000
 // tightest known cap so steering between images cannot push a request over.
 const MAX_REQUEST_IMAGES = 24
 const IMAGE_BUDGET_MARKER = '[image removed from the provider request: the request image budget was exceeded; the original image is preserved in the session transcript]'
-// The share of the model window at which the driver checkpoints the session.
-// It covers the WHOLE request, not just the messages: a provider bills the
-// reserved completion against the same window, so a 1M-window model that
-// reserves a 384k completion only accepts ~664k of messages. Pi's own
-// threshold (contextWindow minus a flat 16384) sits far above that and never
+// The share of the USABLE input at which the driver checkpoints the session.
+// Usable input is the model window minus the completion budget the harness
+// reserves against the same window, because a provider bills the reserved
+// completion against it too: a 1M-window model reserving a 384k completion
+// only accepts ~616k of messages. Measuring against the raw window instead
+// makes the reserved completion alone cross the line on a large-reserve model,
+// so the checkpoint fires on almost every turn. Pi's own threshold
+// (contextWindow minus a flat 16384) sits far above the usable budget and never
 // fires in time, which is why the app owns the trigger.
 const COMPACT_WINDOW_SHARE = 0.85
 // Verbatim trace retained when the active task page, or the current transcript
@@ -284,16 +287,19 @@ async function buildEmergencyCheckpoint(
   signal: AbortSignal
 ): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details: Record<string, unknown> } | undefined> {
   if (signal.aborted) return undefined
-  const budget = model && (model.contextWindow ?? 0) > 0 ? Math.min(EMERGENCY_TAIL_TOKENS, retainedTraceTokens(model as { contextWindow: number })) : EMERGENCY_TAIL_TOKENS
+  const budget = model && (model.contextWindow ?? 0) > 0 ? Math.min(EMERGENCY_TAIL_TOKENS, retainedTraceTokens(model)) : EMERGENCY_TAIL_TOKENS
   const tailIndex = emergencyTailIndex(entries, budget)
-  // The user message that started the turn is retained verbatim whenever the
-  // suffix from it also fits the budget. When the turn itself is what grew too
-  // large, it is carried in the checkpoint text instead, so the request is
-  // never lost even though its entries are dropped.
-  const lastUserIndex = entries.findLastIndex(isUser)
+  // The user message that owns the in-flight task is retained verbatim whenever
+  // the suffix from it also fits the budget. The driver's own post-checkpoint
+  // continuation prompt is skipped, so a rebuilt checkpoint keeps the user's
+  // request rather than echoing the driver's "continue" back to the model. When
+  // the turn itself is what grew too large, the request is carried in the
+  // checkpoint text instead, so it is never lost even though its entries are
+  // dropped.
+  const requestIndex = await requestUserIndex(entries)
   const keepIndex = alignKeepIndex(
     entries,
-    lastUserIndex >= 0 && lastUserIndex >= tailIndex ? lastUserIndex : tailIndex
+    requestIndex >= 0 && requestIndex >= tailIndex ? requestIndex : tailIndex
   )
   // Nothing would be dropped: the rebuild would only add text to a transcript
   // that is already small, so let Pi summarize it instead.
@@ -313,7 +319,7 @@ async function buildEmergencyCheckpoint(
   const context = await readCompactionContext()
   const plan = await freshestText(context?.planPath ?? null, context?.plan ?? null)
   const progress = await freshestText(context?.progressPath ?? null, context?.progress ?? null)
-  const lastUser = lastUserIndex >= 0 ? entries[lastUserIndex] : undefined
+  const lastUser = requestIndex >= 0 ? entries[requestIndex] : undefined
   const sections = [
     '# Continuation checkpoint (rebuilt without a summary model)',
     'The transcript had grown past what could be summarized in place, so it was rebuilt from the request that started the turn, the plan and progress this thread is executing, and the most recent steps. Nothing else was carried over; the dropped entries remain in the session file and in the account container should more detail be needed.',
@@ -491,6 +497,53 @@ function isUser(entry: SessionEntry): boolean {
   return entry.type === 'message' && entry.message.role === 'user'
 }
 
+// The driver's own post-checkpoint prompts. They are user entries in the
+// transcript, so a naive newest-first search carries one of these as "the
+// request that started the turn" and drops the user's real request after the
+// first checkpoint. Kept in step with the driver's continuation texts; an
+// unmatched variant only falls back to the previous behavior.
+const CONTINUATION_PROMPT_PREFIXES = [
+  'Continue from the Last working trace in the checkpoint.',
+  'Continue.'
+]
+
+/** Plain text of a user entry, without serialization chrome. */
+function userText(entry: SessionEntry): string {
+  if (entry.type !== 'message' || entry.message.role !== 'user') return ''
+  const content = (entry.message as { content?: unknown }).content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  let text = ''
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue
+    const typed = part as { type?: string; text?: string }
+    if (typed.type === 'text' && typeof typed.text === 'string') text += typed.text + '\n'
+  }
+  return text.trim()
+}
+
+/** True for the driver's own continuation prompt, which is a user entry but
+ *  not something the user asked for. */
+function isContinuationPrompt(entry: SessionEntry): boolean {
+  const text = userText(entry)
+  return CONTINUATION_PROMPT_PREFIXES.some((prefix) => text.startsWith(prefix))
+}
+
+/** Index of the user entry that owns the in-flight task: the first real user
+ *  message of the current page. After a checkpoint the newest user entry is the
+ *  driver's continuation prompt, so the newest-first search would carry that
+ *  instead of the request the user is actually waiting on. */
+async function requestUserIndex(entries: SessionEntry[]): Promise<number> {
+  const pages = await pagesFrom(entries)
+  const currentPage = pages.at(-1)
+  const owner = currentPage?.users.find((entry) => !isContinuationPrompt(entry))
+  if (owner) {
+    const index = entries.indexOf(owner)
+    if (index >= 0) return index
+  }
+  return entries.findLastIndex((entry) => isUser(entry) && !isContinuationPrompt(entry))
+}
+
 /** True for the entry types that carry conversation content into the request. */
 function carriesContext(entry: SessionEntry): boolean {
   return entry.type === 'message' || entry.type === 'custom_message' || entry.type === 'branch_summary'
@@ -508,18 +561,32 @@ function requestTokens(ctx: ExtensionContext, messages?: ContextMessage[]): numb
   return Math.max(reported, estimated)
 }
 
-/** Whether the whole request   the messages plus the completion budget the
- *  harness reserves   has reached the checkpoint share of the model window. */
+/** Input tokens the provider actually accepts for messages: the model window
+ *  minus the completion budget the harness reserves against the same window.
+ *  A trigger measured against the raw window fires as soon as the reserved
+ *  completion alone closes on the line, so a large-reserve model checkpoints
+ *  on nearly every turn. A window of zero stays unusable rather than
+ *  collapsing to a one-token budget. */
+function usableInputTokens(contextWindow: number | undefined, maxTokens: number | undefined): number {
+  const window = contextWindow ?? 0
+  if (window <= 0) return 0
+  return Math.max(1, window - Math.max(0, maxTokens ?? 0))
+}
+
+/** Whether the request (the messages alone, since the completion budget is what
+ *  the usable input already excludes) has reached the checkpoint share of the
+ *  usable input. */
 function requestOverThreshold(ctx: ExtensionContext, messages?: ContextMessage[]): boolean {
   const usage = ctx.getContextUsage()
   const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0
-  if (window <= 0) return false
-  return requestTokens(ctx, messages) + (ctx.model?.maxTokens ?? 0) >= window * COMPACT_WINDOW_SHARE
+  const usable = usableInputTokens(window, ctx.model?.maxTokens)
+  if (usable <= 0) return false
+  return requestTokens(ctx, messages) >= usable * COMPACT_WINDOW_SHARE
 }
 
 /** Tokens kept verbatim when a cut has to move inside the active task page. */
-function retainedTraceTokens(model: { contextWindow: number }): number {
-  return Math.max(MIN_RETAINED_TRACE_TOKENS, Math.floor(model.contextWindow * RETAINED_TRACE_WINDOW_SHARE))
+function retainedTraceTokens(model: { contextWindow?: number; maxTokens?: number }): number {
+  return Math.max(MIN_RETAINED_TRACE_TOKENS, Math.floor(usableInputTokens(model.contextWindow, model.maxTokens) * RETAINED_TRACE_WINDOW_SHARE))
 }
 
 /** First entry index retained verbatim by this checkpoint.
@@ -535,7 +602,7 @@ function retainedTraceTokens(model: { contextWindow: number }): number {
 function compactionCutIndex(
   entries: SessionEntry[],
   pages: Page[],
-  model: { contextWindow: number }
+  model: { contextWindow: number; maxTokens?: number }
 ): number {
   const pageStart = pages.length ? entries.indexOf(pages[pages.length - 1].entries[0]) : -1
   const tokenCut = findCutPoint(entries, 0, entries.length, retainedTraceTokens(model)).firstKeptEntryIndex
@@ -642,7 +709,7 @@ export default function (pi: ExtensionAPI): void {
     if (
       event.reason === 'threshold' &&
       model &&
-      event.preparation.tokensBefore + (model.maxTokens ?? 0) < model.contextWindow * COMPACT_WINDOW_SHARE
+      event.preparation.tokensBefore < usableInputTokens(model.contextWindow, model.maxTokens) * COMPACT_WINDOW_SHARE
     ) {
       return { cancel: true }
     }
@@ -655,10 +722,10 @@ export default function (pi: ExtensionAPI): void {
     // ends with a smaller transcript instead of an unchanged one.
     const rebuildWithoutSummary = async (): Promise<{ cancel?: boolean; compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: Record<string, unknown> } } | undefined> => {
       if (event.signal.aborted) return { cancel: true }
-      const window = model?.contextWindow ?? 0
+      const usable = usableInputTokens(model?.contextWindow, model?.maxTokens)
       // Only a request genuinely past its usable budget needs a rebuild: a
       // small transcript is summarized better, and more cheaply, by Pi itself.
-      if (window > 0 && event.preparation.tokensBefore + (model?.maxTokens ?? 0) < window * COMPACT_WINDOW_SHARE) return undefined
+      if (usable > 0 && event.preparation.tokensBefore < usable * COMPACT_WINDOW_SHARE) return undefined
       const compaction = await buildEmergencyCheckpoint(entries, model, event.preparation.tokensBefore, ctx.sessionManager.getSessionFile(), event.signal)
       if (!compaction) return undefined
       try {

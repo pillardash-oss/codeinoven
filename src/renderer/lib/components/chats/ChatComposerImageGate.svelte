@@ -88,6 +88,10 @@
           visionSelection = { harnessId, providerId, modelId, accountId }
         }}
         thinkingLevel={visionSelection?.thinkingLevel}
+        runtimeSettings={visionSelection ?? undefined}
+        onSelectRuntime={(runtime) => {
+          if (visionSelection) visionSelection = { ...visionSelection, ...runtime }
+        }}
         onSelectThinking={(level: ThinkingLevel) => {
           if (!visionSelection) return
           visionSelection = { ...visionSelection, thinkingLevel: level }

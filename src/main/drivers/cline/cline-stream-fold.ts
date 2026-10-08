@@ -29,6 +29,8 @@ export interface ClineTurnState {
   messageId: string
   createdAt: number
   parts: AgentPart[]
+  /** Text chunks stay small until Cline closes the content block. */
+  textBuffers: Map<string, string[]>
   /** Interaction request ids promoted from the live turn (used to suppress idle). */
   questionRequestIds: Set<string>
   /** Set when the driver deliberately stops the process at a question boundary. */
@@ -68,7 +70,52 @@ function beginClineIteration(
   state.messageId = `cline:${context.sessionId}:${state.turnIndex}:${iteration}`
   state.createdAt = createdAt
   state.parts = []
+  state.textBuffers.clear()
   return { messages: [clineMessage(state)] }
+}
+
+function flushClineTextBuffers(state: ClineTurnState): void {
+  for (const [partId, chunks] of state.textBuffers) {
+    const part = state.parts.find((candidate) => candidate.id === partId)
+    if (part?.type === 'text' || part?.type === 'reasoning') {
+      upsertPart(state, { ...part, text: chunks.join('') })
+    }
+  }
+  state.textBuffers.clear()
+}
+
+function updateClineReasoningSummary(
+  state: ClineTurnState,
+  sessionId: string,
+  messageId: string,
+  partId: string,
+  existing: Extract<AgentPart, { type: 'reasoning' }> | undefined,
+  summary: string | undefined,
+  visibleText?: string
+): SessionAgentEvent[] {
+  if (!existing || !summary || summary === existing.summary) return []
+  const currentSummary = existing.summary ?? ''
+  if (summary.startsWith(currentSummary)) {
+    const delta = summary.slice(currentSummary.length)
+    upsertPart(state, { ...existing, summary })
+    return delta
+      ? [
+          {
+            type: 'message.part.delta',
+            sessionId,
+            messageId,
+            partId,
+            field: 'summary',
+            delta
+          }
+        ]
+      : []
+  }
+
+  const text = visibleText ?? state.textBuffers.get(partId)?.join('') ?? existing.text
+  const part: Extract<AgentPart, { type: 'reasoning' }> = { ...existing, text, summary }
+  upsertPart(state, part)
+  return [{ type: 'message.part.updated', sessionId, part }]
 }
 
 function mapClineContentEvent(
@@ -91,24 +138,106 @@ function mapClineContentEvent(
         part.id === partId && (part.type === 'text' || part.type === 'reasoning')
     )
     const chunk = contentType === 'reasoning_summary' ? '' : (stringValue(event[contentType]) ?? '')
-    const text = complete ? chunk : `${existing?.text ?? ''}${chunk}`
     const summary =
       stringValue(event['summary']) ??
       (contentType === 'reasoning_summary' ? stringValue(event['reasoning_summary']) : undefined)
-    const part: Extract<AgentPart, { type: 'text' | 'reasoning' }> =
-      partType === 'reasoning'
-        ? {
-            type: 'reasoning',
-            id: partId,
-            messageID: messageId,
-            text,
-            ...(summary ? { summary } : {})
-          }
-        : { type: 'text', id: partId, messageID: messageId, text }
-    upsertPart(state, part)
+
+    if (contentType === 'reasoning_summary') {
+      if (!summary) return { events: [] }
+      if (existing?.type === 'reasoning') {
+        return {
+          events: updateClineReasoningSummary(
+            state,
+            context.sessionId,
+            messageId,
+            partId,
+            existing,
+            summary
+          )
+        }
+      }
+      const part: Extract<AgentPart, { type: 'reasoning' }> = {
+        type: 'reasoning',
+        id: partId,
+        messageID: messageId,
+        text: existing?.text ?? '',
+        summary
+      }
+      upsertPart(state, part)
+      return {
+        messages: [clineMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+
+    if (complete) {
+      const bufferedText = state.textBuffers.get(partId)?.join('')
+      state.textBuffers.delete(partId)
+      const text = chunk || bufferedText || existing?.text || ''
+      const resolvedSummary =
+        summary ?? (existing?.type === 'reasoning' ? existing.summary : undefined)
+      const part: Extract<AgentPart, { type: 'text' | 'reasoning' }> =
+        partType === 'reasoning'
+          ? {
+              type: 'reasoning',
+              id: partId,
+              messageID: messageId,
+              text,
+              ...(resolvedSummary ? { summary: resolvedSummary } : {})
+            }
+          : { type: 'text', id: partId, messageID: messageId, text }
+      upsertPart(state, part)
+      return {
+        messages: [clineMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+
+    const chunks = state.textBuffers.get(partId) ?? (existing ? [existing.text] : [])
+    const visibleText = chunks.join('')
+    chunks.push(chunk)
+    state.textBuffers.set(partId, chunks)
+
+    if (!existing) {
+      const part: Extract<AgentPart, { type: 'text' | 'reasoning' }> =
+        partType === 'reasoning'
+          ? {
+              type: 'reasoning',
+              id: partId,
+              messageID: messageId,
+              text: chunk,
+              ...(summary ? { summary } : {})
+            }
+          : { type: 'text', id: partId, messageID: messageId, text: chunk }
+      upsertPart(state, part)
+      return {
+        messages: [clineMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+
+    const summaryEvents = updateClineReasoningSummary(
+      state,
+      context.sessionId,
+      messageId,
+      partId,
+      existing.type === 'reasoning' ? existing : undefined,
+      summary,
+      visibleText
+    )
+    if (!chunk) return { events: summaryEvents }
     return {
-      messages: [clineMessage(state)],
-      events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      events: [
+        ...summaryEvents,
+        {
+          type: 'message.part.delta',
+          sessionId: context.sessionId,
+          messageId,
+          partId,
+          field: 'text',
+          delta: chunk
+        }
+      ]
     }
   }
 
@@ -259,6 +388,7 @@ export function mapCurrentClineRecord(
       return mapClineUsageEvent(event, context, state)
     }
     if (eventType === 'iteration_end') {
+      flushClineTextBuffers(state)
       return {
         messages: [{ ...clineMessage(state), completedAt: timestampValue(entry['ts']) }],
         events: [
@@ -270,6 +400,7 @@ export function mapCurrentClineRecord(
   }
 
   if (type === 'run_result') {
+    flushClineTextBuffers(state)
     const finishReason = stringValue(entry['finishReason'])
     const failed = finishReason === 'error'
     const finalText = stringValue(entry['text']) ?? ''

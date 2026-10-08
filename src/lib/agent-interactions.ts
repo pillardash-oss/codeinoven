@@ -85,7 +85,8 @@ const CODE_MODE_TOOL_NAMES = new Set([
   'codeinterpreter',
   'interpreter',
   'repl',
-  'notebook'
+  'notebook',
+  'execute'
 ])
 
 export function isCodeModeToolName(value: string): boolean {
@@ -184,11 +185,12 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
           if (!label) return null
           const cleanedLabel = cleanOptionLabel(label)
           if (!cleanedLabel) return null
+          const description = firstString(entry['description'], entry['detail'], entry['help'])
+          const instruction = firstString(entry['instruction'], entry['instructions'])
           return {
             label: cleanedLabel,
-            ...(firstString(entry['description'], entry['detail'], entry['help'])
-              ? { description: firstString(entry['description'], entry['detail'], entry['help']) }
-              : {}),
+            ...(description ? { description } : {}),
+            ...(instruction ? { instruction } : {}),
             ...(entry['recommended'] === true || /\(recommended\)/iu.test(cleanedLabel)
               ? { recommended: true }
               : {})

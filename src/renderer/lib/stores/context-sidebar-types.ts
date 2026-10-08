@@ -14,6 +14,14 @@ export interface TerminalContextTab {
   startingDirectory?: string
 }
 
+export interface OvenContextTab {
+  id: string
+  kind: 'oven'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface FilesContextTab {
   id: string
   kind: 'files'
@@ -97,6 +105,23 @@ export interface BrowserContextTab {
    * tab it was saved from.
    */
   favicon: string | null
+  /**
+   * The box this thread-browser tab runs against, or null for the scope's own
+   * jar.
+   *
+   * The scope's own jar is the default every conversation starts from: a
+   * project's threads share the project's jar, and an assistant routine or a
+   * chat browses its own. A named box is the profile's one jar for that box, not
+   * the scope's own, so a tab in it shares its cookies and logins with every other
+   * context that picks the box. That includes the profile's own box, which names
+   * itself here like any other box: a conversation that picks it is browsing the
+   * jar the global browser's everyday pages live in, signed in as the person, so
+   * the id and null are two different jars rather than two spellings of one. A tab
+   * keeps the box it was created in for its whole life, because cookies cannot
+   * migrate between jars, so picking another box reopens the tab in it rather than
+   * moving it.
+   */
+  boxId: string | null
 }
 
 /**
@@ -155,6 +180,13 @@ export interface CloudDeploymentContextTab {
 export interface NotificationContextTab {
   id: string
   kind: 'notifications'
+  title: string
+}
+
+/** Global sticky note panel, available independently of the selected thread. */
+export interface StickyNotesContextTab {
+  id: string
+  kind: 'sticky-notes'
   title: string
 }
 
@@ -245,20 +277,16 @@ export interface BrowserExtensionsContextTab {
 /**
  * One popup window on the browser's right rail.
  *
- * A popup window is a page's own `window.open` with a window in it: a sign-in, a
- * checkout, a share dialog. The app hosts it and displays it in the rail, so the
- * rail carries one tab per popup, exactly as it carries one tab per open file:
- * the tab is the popup, and closing the tab closes the window. The tab carries no
- * data of its own beyond that identity, because the popup itself lives in main and
- * the renderer's mirror of it (see `browser-popup-windows.svelte.ts`).
+ * The app hosts the popup page in the rail and carries one tab per visible popup.
+ * Dismissing an extension action popup hides its tab while retaining the page;
+ * dismissing a page-created popup closes its window. The renderer mirrors popup
+ * state from main (see `browser-popup-windows.svelte.ts`).
  */
 export interface BrowserPopupWindowContextTab {
   /** The popup window's own id, so a tab and a window are the same thing. */
   id: string
   kind: 'popup-window'
   title: string
-  /** The browser tab whose page opened it, for the label when a title is missing. */
-  openerTabId: string
   /** Live page favicon (data URL) from the browser, if the popup reported one. */
   favicon?: string
 }
@@ -357,6 +385,7 @@ export interface TemporaryChatContextTab {
 
 export type ContextSidebarTab =
   | FilesContextTab
+  | OvenContextTab
   | DiffContextTab
   | TerminalContextTab
   | SubagentContextTab
@@ -368,6 +397,7 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | StickyNotesContextTab
   | AttentionContextTab
   | BrowserDownloadsContextTab
   | BrowserHistoryContextTab
@@ -407,6 +437,11 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   id: 'notifications',
   kind: 'notifications',
   title: 'Notifications'
+}
+export const STICKY_NOTES_TAB: StickyNotesContextTab = {
+  id: 'sticky-notes',
+  kind: 'sticky-notes',
+  title: 'Sticky notes'
 }
 export const ATTENTION_TAB_ID = 'attention'
 

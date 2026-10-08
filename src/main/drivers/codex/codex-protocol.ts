@@ -38,6 +38,8 @@ export interface CodexAppServerTurn {
   failureIssue?: AgentProviderIssue
   summaryFallbackAttempted?: boolean
   waitingForRetry?: boolean
+  /** Set synchronously when `turn/completed` arrives, before async telemetry refresh. */
+  completionReceived?: boolean
   finished: boolean
 }
 

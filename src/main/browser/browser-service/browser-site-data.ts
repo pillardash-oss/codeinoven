@@ -4,18 +4,21 @@
  * The service supplies sessions, tabs and the permission/download ledgers.
  */
 
+import { waitBrowserSessionCookies, flushBrowserSessionCookiesFor } from './browser-session-cookies'
 import { Menu, MenuItem, dialog, type BrowserWindow, type Session } from 'electron'
 import type { BrowserSiteDataScope } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
-import { SCOPE_STORAGE_TYPES } from './browser-validation'
+import { SCOPE_STORAGE_TYPES, browserPartitionFor } from './browser-validation'
 import { SITE_MENU_ACTIONS, type BrowserTab, type SiteMenuAction } from './browser-types'
 
 export interface BrowserSiteDataDeps {
   window: BrowserWindow
-  /** The session for one jar: the project's own jar when `boxId` is null. */
+  /** The session for one jar: the context's own jar when `boxId` is null, and
+   *  that box's jar   the profile's, shared with every context that picked the
+   *  same box   when it is not. */
   sessionForJar: (projectId: string, boxId: string | null) => Session
-  /** Every jar one project holds, its own jar first. */
+  /** Every jar a context-wide clear reaches, the context's own jar first. */
   projectJars: (projectId: string) => (string | null)[]
   forEachTab: (visit: (tab: BrowserTab) => void) => void
   /** Dismiss pending permission prompts that belong to a project. */
@@ -102,9 +105,14 @@ export class BrowserSiteDataService {
       })
   }
 
-  /** Everything the project's browser holds goes, in every jar it owns: boxes
-   *  keep their own storage, so clearing "this browser" has to reach each of
-   *  them rather than only the project's own jar. */
+  /** Everything a context's own browser holds goes.
+   *
+   *  The global browser's boxes go with it: that is where boxes are made, and
+   *  clearing the personal browser has always taken them along. A project's clear
+   *  is deliberately narrower, because a box is one jar for the whole profile: a
+   *  project-wide clear must not wipe an identity the personal browser and other
+   *  projects are signed into. Clearing a box is the box's own action (the boxes
+   *  panel, or the padlock on a page running in it). */
   async clearProjectData(projectId: string): Promise<void> {
     this.deps.dismissPermissions(projectId)
     this.deps.cancelProjectDownloads(projectId)
@@ -153,6 +161,7 @@ export class BrowserSiteDataService {
     scopes: readonly BrowserSiteDataScope[]
   ): Promise<void> {
     const browserSession = this.deps.sessionForJar(projectId, boxId)
+    await waitBrowserSessionCookies(browserSession)
     const work: Promise<unknown>[] = []
     if (scopes.length === 0) {
       work.push(browserSession.clearStorageData(), browserSession.clearCache())
@@ -166,6 +175,7 @@ export class BrowserSiteDataService {
     }
     if (work.length === 0) return
     await Promise.all(work)
+    await flushBrowserSessionCookiesFor(browserSession)
     await browserSession.closeAllConnections()
   }
 
@@ -173,13 +183,23 @@ export class BrowserSiteDataService {
    *  when that jar is one box rather than the project's whole browser. */
   private scopedDetail(boxId: string | null, boxName: string, action: SiteMenuAction): string {
     if (boxId === null) return action.detail
-    const jar = boxName === '' ? 'this box' : boxName
-    return `${action.detail} Only ${jar} is cleared; every other box and the project's own browser keep their data.`
+    const jar = boxName === '' ? 'this box' : `the ${boxName} box`
+    return `${action.detail} Only ${jar} is cleared, and a box is one jar for the whole profile, so every thread and the global browser using it lose this too.`
   }
 
+  /**
+   * Reload the tabs a clear just affected, so the cleared state takes effect now
+   *  rather than at the next navigation: a session that keeps answering in memory
+   *  would otherwise look signed in as the account whose cookies were just erased.
+   *
+   *  Selected by jar, not by context: a cleared box jar is one session however
+   *  many contexts have a tab open in it, and every one of those tabs is looking
+   *  at a page whose cookies just went.
+   */
   private reloadProjectTabs(projectId: string, jars: readonly (string | null)[]): void {
+    const cleared = new Set(jars.map((boxId) => browserPartitionFor(projectId, boxId)))
     this.deps.forEachTab((tab) => {
-      if (tab.projectId !== projectId || !jars.includes(tab.boxId)) return
+      if (!cleared.has(browserPartitionFor(tab.projectId, tab.boxId))) return
       if (!tab.initialNavigationStarted) return
       tab.view.webContents.reload()
     })

@@ -788,9 +788,7 @@ export class CheckpointManager {
       path,
       kind: change.kind,
       binary: false,
-      before: window.before,
-      after: window.after,
-      truncated: window.truncated
+      ...window
     }
   }
 
@@ -887,9 +885,7 @@ export class CheckpointManager {
       path,
       kind: beforeFile ? (after ? 'modified' : 'deleted') : 'created',
       binary: false,
-      before: window.before,
-      after: window.after,
-      truncated: window.truncated
+      ...window
     }
   }
 

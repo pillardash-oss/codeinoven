@@ -1,8 +1,10 @@
+import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
 import { app } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { join } from 'path'
 import { getConfigRoot, getScopeRootPath } from '../../lib/utils'
+import { appearanceImagesDirectory } from '../../lib/icon-file'
 import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { Logger } from '../system/logger'
@@ -37,6 +39,7 @@ import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
 import { SecretVault } from '../storage/secret-vault'
+import { registerOvenIpc } from '../ovens/oven-ipc'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { MemoryService } from '../chat/memory-service'
@@ -75,6 +78,7 @@ import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
+import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -208,6 +212,48 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = options.vault ?? new SecretVault(storage)
+  const ovenService = registerOvenIpc(
+    storage,
+    vault,
+    threadManager,
+    (value) => privilegedIpc.resolveScopedPath(value),
+    projectManager,
+    projectFilesService,
+    (id) =>
+      Object.fromEntries(
+        scopeManager.getBoard(id).buckets.map((bucket) => [bucket.id, bucket.name])
+      )
+  )
+  /**
+   * Preview reads for a remote thread.
+   *
+   * The `appfile://` protocol serves remote previews through the same file
+   * service as local ones; this hook is what turns a remote path into bytes,
+   * bound to the thread whose checkout the URL names.
+   */
+  projectFilesService.remoteFileReader = async (projectId, threadId, path) => {
+    const thread = await threadManager.getThread(projectId, threadId)
+    if (!thread?.settings?.ovenId || thread.settings.ovenId === 'local') return null
+    const target = await resolveOvenThreadRoot(ovenService, thread, projectManager)
+    const metadata = await ovenService.workspace(target.ovenId, {
+      operation: 'stat',
+      root: target.root,
+      path
+    })
+    if (metadata.file?.kind !== 'file') throw new Error('The remote preview is not a file.')
+    return {
+      size: metadata.file.size,
+      read: async (offset) => {
+        const chunk = await ovenService.workspace(target.ovenId, {
+          operation: 'read',
+          root: target.root,
+          path,
+          offset
+        })
+        return new Uint8Array(Buffer.from(chunk.data ?? '', 'base64'))
+      }
+    }
+  }
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
@@ -295,6 +341,10 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'assistant-cwd'),
           // The browser workspace: one directory per tab's agent chat.
           join(getConfigRoot(), 'browser-cwd'),
+          // Picked appearance images (browser tabs, groups, boxes, bookmarks and
+          // sticky notes). The entity keeps that path in a record that outlives
+          // the process, so it has to be a path the app owns and can still read.
+          appearanceImagesDirectory(),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
@@ -400,6 +450,7 @@ export function registerIpcHandlers(
     updaterService,
     chatEngine,
     options,
+    utilityFootprint: options.utilityFootprint,
     projectManager,
     threadCreation,
     threadDeletion,
@@ -468,4 +519,5 @@ export function registerIpcHandlers(
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)
+  registerCioCleanupHandlers(ctx)
 }

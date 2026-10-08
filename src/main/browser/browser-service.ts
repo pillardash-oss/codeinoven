@@ -1,11 +1,28 @@
 import {
+  showBrowserNewTabMenu,
+  validateBrowserNewTabMenuInput
+} from './browser-service/browser-new-tab-menu'
+import {
+  restoreBrowserSessionCookies,
+  waitBrowserSessionCookies,
+  flushBrowserSessionCookiesFor
+} from './browser-service/browser-session-cookies'
+import {
+  validateNativeDockAck,
+  validateNativeDockId,
+  validateNativeDockInteraction,
+  validateNativeDockRequest
+} from '../../lib/native-dock'
+import {
   app,
   BrowserWindow,
   clipboard,
   dialog,
+  ipcMain as electronIpcMain,
   Menu,
   screen,
   session,
+  systemPreferences,
   webFrameMain,
   WebContentsView,
   type MenuItemConstructorOptions,
@@ -15,10 +32,11 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
-import type { Project, Thread } from '../../lib/types'
+import type { PermissionLevel, Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import {
   BUILT_IN_BROWSER_SEARCH_ENGINES,
@@ -48,8 +66,12 @@ import type {
 } from '../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
 import { isVideoCaptureUrl } from '../../lib/video/project'
-import { boundedBrowserTabHistory } from '../../lib/browser/browser-tab-history'
+import {
+  boundedBrowserTabHistory,
+  type BrowserTabHistoryRecord
+} from '../../lib/browser/browser-tab-history'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
+import { getGlobalBrowserContextMenuBoxes } from '../ipc/global-browser-ipc'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
@@ -60,6 +82,7 @@ import type {
 } from '../../lib/ipc/browser'
 import {
   BrowserExtensionService,
+  type BrowserExtensionActionPopupOpenRequest,
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
@@ -73,8 +96,20 @@ import {
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
-import { BrowserDownloadManager } from './browser-service/browser-downloads'
+import {
+  BrowserDownloadManager,
+  type BrowserDownloadOwner
+} from './browser-service/browser-downloads'
+import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
+import { showBrowserTabSelectionMenu } from './browser-service/browser-tab-selection-menu'
+import { showBrowserTabContextMenu } from './browser-service/browser-tab-context-menu'
+import { showBrowserAgentTabMenu } from './browser-service/browser-agent-tab-menu'
+import {
+  showBrowserExtensionMenu,
+  validateBrowserExtensionMenuInput
+} from './browser-service/browser-extension-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
+import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
@@ -127,12 +162,25 @@ import {
   RESTORE_SETTLE_TIMEOUT_MS,
   restoreNeedsFallbackLoad
 } from './browser-service/browser-navigation-outcome'
+import {
+  parsePeekProbeAnswer,
+  peekPointInFrame,
+  peekProbePoint,
+  peekProbeScript,
+  PEEK_ORIGIN_PROBE_TIMEOUT_MS,
+  PEEK_SNAPSHOT_MAX_WIDTH,
+  resolvePeekOrigin,
+  type BrowserPeekPoint,
+  type BrowserPeekRect
+} from './browser-service/browser-peek'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
+  listBrowserProfilesForPartition,
   listProjectBrowserProfiles,
   removeBrowserProfiles
 } from './browser-service/browser-profile-store'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
+import { installBrowserHistorySwipe } from './browser-service/browser-history-swipe'
 import {
   AGENT_REVEAL_GRACE_MS,
   DEFAULT_PARKED_VIEWPORT,
@@ -153,26 +201,29 @@ import {
   boundedBoxLabel,
   browserContextKey,
   boxIdFromPartition,
+  browserJarFor,
   browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
-  partitionBelongsToProject,
   popupWindowViewport,
   safeBasename,
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
   validateBrowserStripInteraction,
   validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
   validateBrowserUrl,
+  validateBrowserTabSelectionMenuInput,
+  validateBrowserTabContextMenuInput,
+  validateBrowserAgentTabMenuInput,
   validateDownloadId,
   validateInspectorMarkers,
   validateInspectorReferenceId,
   validateInspectorTheme,
-  validateOptionalBrowserUrl,
   validateOptionalBoxId,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -200,13 +251,21 @@ import { designScreenTabId } from './browser-service/design-screen-tab'
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
   Record<
-    'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes' | 'find' | 'findNext' | 'findPrevious',
+    | 'focusAddress'
+    | 'closeTab'
+    | 'newTab'
+    | 'reopenTab'
+    | 'toggleNotes'
+    | 'find'
+    | 'findNext'
+    | 'findPrevious',
     BrowserPanelShortcutAction
   >
 > = {
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
+  reopenTab: 'reopen-tab',
   toggleNotes: 'toggle-notes',
   find: 'find',
   findNext: 'find-next',
@@ -240,9 +299,13 @@ import {
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
 import {
+  EXTENSION_PAGE_TABS_CHANNEL,
+  EXTENSION_PAGE_TABS_PRELOAD_FILE,
+  extensionPageTabsPreloadSource,
   extensionPageTabsScript,
   type BrowserExtensionPageTab
 } from './extensions/browser-extension-page-tabs'
+import { resolveBrowserExtensionStoreDir } from './extensions/browser-extension-registry'
 import {
   BrowserFindSessions,
   browserFindResultFor,
@@ -281,6 +344,7 @@ interface BrowserExtensionTabInfo {
   id: number
   index: number
   windowId: number
+  windowType: 'normal'
   active: boolean
   pinned: boolean
   incognito: boolean
@@ -373,10 +437,42 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * A browser tab's assistant conversation answers about the page on screen, so its
  * browser capability is attached to that tab. Only the reading operations are
  * allowed there: they observe the page, while everything else in the capability
- * changes it, and a page the user is reading must never be moved, clicked
- * through or resized by an answer to their question.
+ * changes it. File upload is the one reviewed exception: Auto Review uses a
+ * native file chooser or an exact-file confirmation, while Full Access may name
+ * the files directly. Navigation, clicks and resizing remain agent-page only.
  */
-const ATTACHED_PAGE_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
+  'click',
+  'type',
+  'navigate',
+  'reload',
+  'viewport',
+  'upload'
+])
+
+/** Approval request for an agent mutation on the page the user is viewing. */
+export interface BrowserAgentActionApproval {
+  projectId: string
+  threadId: string
+  sessionId?: string
+  operation: string
+  /** Human-readable description shown on the permission card. */
+  action: string
+  origin: string
+  pageUrl: string
+}
+
+/** Outcome of a permission-card approval. An alternative carries the user's correction. */
+export interface BrowserAgentActionDecision {
+  approved: boolean
+  alternative?: string
+}
+
+/** Resolves an attached-page mutation through the permission card. */
+export type BrowserAgentActionApprover = (
+  request: BrowserAgentActionApproval
+) => Promise<BrowserAgentActionDecision | boolean>
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -458,6 +554,8 @@ export class BrowserService {
    * callers are waiting on it; see `BrowserLoadWaits` for why that matters.
    */
   private readonly loadWaits = new BrowserLoadWaits()
+  /** Navigation starts waiting for the extension jar before Chromium sees loadURL. */
+  private readonly pendingNavigationStarts = new Map<string, Promise<void>>()
   /**
    * The tab whose surface holds the keyboard, or null while none does.
    *
@@ -564,6 +662,9 @@ export class BrowserService {
    * quitting. See `browser-tab-history-store.ts`.
    */
   private readonly tabHistory = new BrowserTabHistoryStore()
+  /** Stacks of tabs closed this session, held only until the tab is reopened. */
+  private readonly closedTabHistory = new BrowserClosedTabHistory()
+  private peekTabs = new Map<string, string>()
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -571,6 +672,8 @@ export class BrowserService {
    * is this service's own window handling.
    */
   private readonly popupWindows: BrowserPopupWindows
+  /** One in-flight extension popup creation per project, box, and extension. */
+  private readonly extensionPopupOpenings = new Map<string, Promise<string>>()
   /**
    * The extension side panels the rail hosts, over the frame it measures. A panel
    * is the extension's own document, loaded in the jar the extension runs in,
@@ -603,6 +706,13 @@ export class BrowserService {
    * the feature is per live jar, not per app launch.
    */
   private readonly extensions: BrowserExtensionService
+  /**
+   * Permission-card approver for attached-page mutations, supplied by the app
+   * at boot. When present, Auto Review routes through the thread's permission
+   * card instead of the native dialog, so the request sets `awaiting_approval`,
+   * notifies attention, and stays covered by policy automation.
+   */
+  private agentActionApprover: BrowserAgentActionApprover | null = null
 
   constructor(
     private readonly window: BrowserWindow,
@@ -623,6 +733,7 @@ export class BrowserService {
     this.downloads.setTabResolver((projectId, contentsId) =>
       this.tabIdForContents(projectId, contentsId)
     )
+    this.downloads.setOwnerResolver((contentsId) => this.ownerTabForContents(contentsId))
     this.siteData = new BrowserSiteDataService({
       window,
       sessionForJar: (projectId, boxId) => this.sessionForProject(projectId, boxId),
@@ -639,13 +750,33 @@ export class BrowserService {
       sessionFor: (projectId, boxId) => this.sessionForProject(projectId, boxId),
       liveJars: () => this.liveJars(),
       reportProgress: (progress) => this.publishExtensionProgress(progress),
-      resolveTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId) ?? null,
+      // Resolved by the page itself rather than by the jar's first owner: a box's
+      // session serves every context that picked it, so a tab fact about a page in
+      // it has to name that page's own tab.
+      resolveTabId: (_projectId, contentsId) => this.tabForContents(contentsId)?.id ?? null,
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
-      openSidePanel: (request) => this.openExtensionSidePanel(request),
+      releaseViews: (extensionId, projectId, boxId) => {
+        const partition = browserPartitionFor(projectId, boxId)
+        const matches = (record: {
+          extensionId: string | null
+          projectId: string
+          boxId: string | null
+        }): boolean =>
+          record.extensionId === extensionId &&
+          browserPartitionFor(record.projectId, record.boxId) === partition
+        this.popupWindows.closeWhere(matches, 'its extension was unloaded')
+        this.sidePanels.closeWhere(matches, 'its extension was unloaded')
+      },
+      openSidePanel: (request) => {
+        void this.openExtensionSidePanel(request).catch((error: unknown) => {
+          Logger.error('An extension side panel could not be opened:', error)
+        })
+      },
       closeSidePanel: (extensionId, extensionTabId) =>
-        this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it')
+        this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
+      openPopup: (request) => this.openExtensionPopupFromWorker(request)
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -692,15 +823,12 @@ export class BrowserService {
   }
 
   /**
-   * Read one tab's Back/Forward stack off its live view and remember it.
-   *
-   * Called at the moments the view is about to lose the stack: parking it off
-   * screen, hibernating it, and quitting. Nothing is captured on a navigation,
-   * because the view is where the stack belongs while the tab is alive.
+   * Read one tab's Back/Forward stack off its live view, or null when the view is
+   * gone or has nothing loadable to restore.
    */
-  private captureTabHistory(tabId: string, tab: BrowserTab): void {
+  private readTabHistory(tabId: string, tab: BrowserTab): BrowserTabHistoryRecord | null {
     const contents = tab.view.webContents
-    if (contents.isDestroyed()) return
+    if (contents.isDestroyed()) return null
     const history = contents.navigationHistory
     const bounded = boundedBrowserTabHistory(
       history.getAllEntries().map((entry) => {
@@ -713,16 +841,50 @@ export class BrowserService {
       }),
       history.getActiveIndex()
     )
-    // Nothing loadable means nothing to restore, so the record is not written:
-    // an empty stack is the same as no stack, and one fewer row to keep.
-    if (!bounded) return
-    this.tabHistory.store(tabId, {
+    // Nothing loadable means nothing to restore, so there is no record: an empty
+    // stack is the same as no stack, and one fewer row to keep.
+    if (!bounded) return null
+    return {
       projectId: tab.projectId,
       threadId: tab.threadId,
       entries: bounded.entries,
       index: bounded.index,
       updatedAt: Date.now()
-    })
+    }
+  }
+
+  /**
+   * Read one tab's Back/Forward stack off its live view and remember it durably.
+   *
+   * Called at the moments the view is about to lose the stack: parking it off
+   * screen, hibernating it, and quitting. Nothing is captured on a navigation,
+   * because the view is where the stack belongs while the tab is alive. The tab
+   * is live again, so any copy kept for a reopen is dropped here rather than left
+   * to be restored twice.
+   */
+  private captureTabHistory(tabId: string, tab: BrowserTab): void {
+    if (this.peekTabs.has(tabId)) return
+    const record = this.readTabHistory(tabId, tab)
+    if (!record) return
+    this.closedTabHistory.forget(tabId)
+    this.tabHistory.store(tabId, record)
+  }
+
+  /**
+   * Keep a closing tab's stack for a reopen instead of discarding it.
+   *
+   * A live tab's stack is read off its view before the view closes; a tab that
+   * was already hibernated has no view left, so its durable stack is the one that
+   * goes into the session set. Either way the durable copy is removed by the
+   * caller, because a closed tab's stack lives only until it is reopened or the
+   * session ends.
+   */
+  private stashClosedTabHistory(tabId: string, tab: BrowserTab | undefined): void {
+    const record =
+      tab && !tab.view.webContents.isDestroyed()
+        ? this.readTabHistory(tabId, tab)
+        : this.tabHistory.recordFor(tabId)
+    if (record) this.closedTabHistory.stash(tabId, record)
   }
 
   /**
@@ -734,10 +896,12 @@ export class BrowserService {
    *
    * A record is only ever restored into the tab that wrote it. A tab id is unique,
    * but the project and thread are checked as well, so a thread browser's stack can
-   * never be served to a global tab even if a file is edited to claim it.
+   * never be served to a global tab even if a file is edited to claim it. A tab
+   * that was closed and is being reopened reads its stack from the session set,
+   * which is the one place a closed tab's history is still alive.
    */
   private restoreTabHistory(tabId: string, tab: BrowserTab, fallbackUrl: string): boolean {
-    const record = this.tabHistory.recordFor(tabId)
+    const record = this.tabHistory.recordFor(tabId) ?? this.closedTabHistory.peek(tabId)
     if (!record) return false
     if (record.projectId !== tab.projectId || record.threadId !== tab.threadId) return false
     const contents = tab.view.webContents
@@ -800,17 +964,42 @@ export class BrowserService {
 
   register(): void {
     this.guardAgainstStrandedView()
+    // The page-tabs preload is asked for on every document an extension surface
+    // loads, before that page's own scripts exist, so the channel is synchronous
+    // and deliberately raw: a trusted-IPC registration refuses any sender that is
+    // not the app's own renderer, and an extension page is exactly the sender this
+    // answers. The frame check below is that validation, and only a document the
+    // app hosts for an extension can be told anything about a tab.
+    electronIpcMain.removeAllListeners(EXTENSION_PAGE_TABS_CHANNEL)
+    electronIpcMain.on(EXTENSION_PAGE_TABS_CHANNEL, (event, protocol) => {
+      const frame = event.senderFrame
+      event.returnValue =
+        protocol === 'chrome-extension:' && frame && frame.url.startsWith('chrome-extension://')
+          ? this.extensionPageTabForContents(event.sender.id)
+          : null
+    })
+    // Started here so the file exists long before the first extension popup or
+    // panel is created; every path that can wait for it does.
+    void this.ensureExtensionPageTabsPreload()
     replaceHandler(
       'browser:show',
-      (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
+      async (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const initialUrl = validateOptionalBrowserUrl(rawInitialUrl)
-        const bounds = validateBounds(rawBounds)
-        // Absent on every call that predates boxes, and on every agent-driven
-        // tab, which is what makes "no box whatsoever" the same code path.
         const boxId = validateOptionalBoxId(rawBoxId)
+        const initialUrl =
+          rawInitialUrl === undefined || rawInitialUrl === null || rawInitialUrl === ''
+            ? ''
+            : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
+        const bounds = validateBounds(rawBounds)
+        // The first document must not outrun extensions in its jar. If a page
+        // navigates before Chromium has loaded an extension, its manifest content
+        // scripts never get a receiver in that document, and later calls such as
+        // Bitwarden's tabs.sendMessage fail until the page is reloaded. ensureTab
+        // remains synchronous; this IPC path waits for the same single-flight load
+        // before it creates and navigates a page.
+        await this.extensions.ensureJarLoaded(projectId, boxId)
         const tab = this.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
@@ -873,10 +1062,17 @@ export class BrowserService {
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
+      // A peek is the one tab whose hide is never a hand-off between two surfaces:
+      // it is being destroyed or promoted into a tab of its own, and either way its
+      // page has to be off screen before the flight that carries it away starts,
+      // because a native view is painted over the DOM that flight happens in. The
+      // grace period below would leave the page sitting over that flight for its
+      // length.
+      if (this.peekTabs.has(tabId)) this.parkTab(tabId)
       // Deferred by one tick, so a panel that unmounts because the same tab is
       // moving to another surface (the sidebar handing the tab to the full screen
       // browser) does not park a view that is about to be shown again.
-      this.schedulePark(tabId)
+      else this.schedulePark(tabId)
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -889,8 +1085,11 @@ export class BrowserService {
     replaceHandler('browser:focusPopupWindow', (_event, rawPopupId) => {
       this.popupWindows.focus(validatePopupWindowId(rawPopupId))
     })
+    replaceHandler('browser:dismissPopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.dismiss(validatePopupWindowId(rawPopupId))
+    })
     replaceHandler('browser:closePopupWindow', (_event, rawPopupId) => {
-      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed it')
+      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed its window')
     })
     replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
@@ -946,6 +1145,26 @@ export class BrowserService {
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
       this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
     )
+    replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
+      const id = validateNativeDockId(rawId)
+      const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
+      if (request && request.id !== id) throw new TypeError('Native dock identities differ')
+      return this.overlay.applyDock(id, request)
+    })
+    replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockEvent',
+        validateNativeDockInteraction(rawReport)
+      )
+    })
+    replaceHandler('browser:overlayDockDrawn', (_event, rawAck) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockDrawn',
+        validateNativeDockAck(rawAck)
+      )
+    })
     replaceHandler('browser:overlayReady', () => this.overlay.currentState())
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
@@ -977,8 +1196,8 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const url = validateBrowserUrl(rawUrl)
         const boxId = validateOptionalBoxId(rawBoxId)
+        const url = this.validateTabNavigationUrl(projectId, boxId, rawUrl)
         // Main creates a tab on `browser:show`, so a tab the renderer already knows
         // can still be unknown here: a fresh tab whose page has not been shown yet
         // because an overlay (the address spotlight) covers its frame. Ensuring the
@@ -1005,6 +1224,11 @@ export class BrowserService {
         throw new TypeError('Browser mouse history direction must be back or forward')
       }
       return this.navigateFocusedHistory(rawDirection)
+    })
+    replaceHandler('browser:pageState', (_event, rawTabId) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.liveTab(tabId)
+      return tab ? this.stateFor(tabId, tab) : null
     })
     replaceHandler('browser:reload', (_event, rawTabId) => {
       this.liveTab(validateTabId(rawTabId))?.view.webContents.reload()
@@ -1135,11 +1359,44 @@ export class BrowserService {
       await this.extensions.whenReady()
       await this.extensions.uninstall(validateExtensionId(rawExtensionId))
     })
+    replaceHandler('browser:extensionReorder', async (_event, rawOrderedIds) => {
+      if (!Array.isArray(rawOrderedIds) || !rawOrderedIds.every((id) => typeof id === 'string')) {
+        throw new TypeError('Extension order is invalid')
+      }
+      await this.extensions.reorder(rawOrderedIds.map(validateExtensionId))
+    })
+    replaceHandler('browser:extensionUpdateFromWebStore', async (_event, rawExtensionId) => {
+      await this.extensions.whenReady()
+      return this.extensions.updateFromWebStore(validateExtensionId(rawExtensionId))
+    })
     replaceHandler('browser:extensionUpdate', async (_event, rawExtensionId, rawPatch) => {
       await this.extensions.whenReady()
       return this.extensions.update(
         validateExtensionId(rawExtensionId),
         validateExtensionUpdatePatch(rawPatch)
+      )
+    })
+    replaceHandler('browser:darkReaderTabState', async (_event, rawTabId) => {
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.darkReaderTabState(tab.projectId, tab.boxId, tab.view.webContents.id)
+    })
+    replaceHandler('browser:darkReaderTabScope', async (_event, rawTabId, action) => {
+      if (
+        action !== 'only-tab' &&
+        action !== 'disable-tab' &&
+        action !== 'enable-tab' &&
+        action !== 'reset-tabs'
+      ) {
+        throw new TypeError('Dark Reader tab action is invalid')
+      }
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.setDarkReaderTabScope(
+        tab.projectId,
+        tab.boxId,
+        tab.view.webContents.id,
+        action
       )
     })
     replaceHandler('browser:extensionPickFolder', async () => {
@@ -1183,6 +1440,54 @@ export class BrowserService {
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       setImmediate(() => this.downloads.showMenu(projectId, x, y))
     })
+    replaceHandler('browser:newTabMenu', (_event, rawInput, rawX, rawY) =>
+      showBrowserNewTabMenu(
+        this.window,
+        validateBrowserNewTabMenuInput(rawInput),
+        validateSiteMenuPoint(rawX, 'x coordinate'),
+        validateSiteMenuPoint(rawY, 'y coordinate')
+      )
+    )
+    replaceHandler('browser:boxMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserBoxMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      // Unlike the menus above, this one's answer is the invoke's reply: the
+      // caller reopens the tab in the box it names, so the popup's promise is
+      // what carries the choice back.
+      return showBrowserBoxMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:tabSelectionMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserTabSelectionMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserTabSelectionMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:tabContextMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserTabContextMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserTabContextMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:agentTabMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserAgentTabMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserAgentTabMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:extensionMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserExtensionMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserExtensionMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:openExtensionPage', async (_event, rawExtensionId, rawBoxId) => {
+      const extensionId = validateExtensionId(rawExtensionId)
+      const boxId = validateOptionalBoxId(rawBoxId)
+      await this.extensions.whenReady()
+      await this.extensions.ensureExtensionPagesAvailable(extensionId)
+      return this.extensions.optionsUrlFor(extensionId, GLOBAL_BROWSER_PROJECT_ID, boxId)
+    })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
       const decision = validatePermissionDecision(rawDecision)
@@ -1193,6 +1498,19 @@ export class BrowserService {
       // listener is bound. Invoke replies bypass the push-side load-state
       // guards that repeatedly dropped the first prompt (blank first popup).
       return this.promptWindow.currentContext()
+    })
+    replaceHandler('browser:expandPeek', (_event, rawTabId) => {
+      const tabId = validateTabId(rawTabId)
+      if (!this.peekTabs.has(tabId) || !this.tabs.has(tabId))
+        throw new Error('Peek Window is no longer available')
+      this.peekTabs.delete(tabId)
+    })
+    replaceHandler('browser:peekSnapshot', async (_event, rawTabId) => {
+      // Taken while the peek is still on screen, because the surface animates the
+      // page away with it: without a picture the last thing the user sees of the
+      // page is the frame it was replaced by.
+      const captured = await this.captureThumbnail(validateTabId(rawTabId), PEEK_SNAPSHOT_MAX_WIDTH)
+      return captured?.dataUrl ?? null
     })
     replaceHandler('browser:destroy', (_event, rawTabId, rawReason) => {
       this.destroy(validateTabId(rawTabId), validateTabDestroyReason(rawReason))
@@ -1214,10 +1532,12 @@ export class BrowserService {
       }
       // A hibernated tab of that thread has no live tab for the loop above to
       // find, so its stored stack is swept by owner rather than by tab. This is
-      // the thread browser going away: its history goes with it.
-      this.tabHistory.forgetScopes(
-        (record) => record.projectId === projectId && record.threadId === threadId
-      )
+      // the thread browser going away: its history goes with it, session set and
+      // all.
+      const ownedByThread = (record: BrowserTabHistoryRecord): boolean =>
+        record.projectId === projectId && record.threadId === threadId
+      this.tabHistory.forgetScopes(ownedByThread)
+      this.closedTabHistory.forgetScopes(ownedByThread)
     })
     replaceHandler('browser:destroyProject', (_event, rawProjectId) => {
       this.dropProjectTabs(validateProjectId(rawProjectId))
@@ -1327,6 +1647,11 @@ export class BrowserService {
    */
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.tabMarkRecogniser = recogniser
+  }
+
+  /** Register the permission-card approver for attached-page mutations. */
+  setAgentActionApprover(approver: BrowserAgentActionApprover | null): void {
+    this.agentActionApprover = approver
   }
   /**
    * Set the search engine the context menu's web search uses.
@@ -1449,7 +1774,15 @@ export class BrowserService {
   async executeUtility(
     operation: string,
     input: Record<string, unknown>,
-    context: { projectId: string; threadId: string }
+    context: {
+      projectId: string
+      threadId: string
+      // Only the upload path consults this. Callers that can never upload (the
+      // design and video preview sessions) omit it, and the upload fallback then
+      // treats the missing level as review-required rather than full access.
+      permissionLevel?: PermissionLevel
+      sessionId?: string
+    }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
@@ -1501,13 +1834,34 @@ export class BrowserService {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // The page the user is on is attached for reading only. Driving it (clicking,
-    // typing, navigating, reloading, resizing) would move the page the user is
-    // looking at out from under them, so those operations keep requiring a page
-    // the agent opened itself.
-    if (attached && !ATTACHED_PAGE_OPERATIONS.has(operation)) {
+    // The user's tab is read-only by default. Full Access follows the thread's
+    // permission tier; Auto Review asks the user to approve each page mutation.
+    // File upload has its own exact-file review and never submits a form.
+    if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
+      if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
+        throw new Error(
+          `The page the user is on is attached for reading (${[...ATTACHED_PAGE_READ_OPERATIONS].join(', ')}), so "${operation}" is unavailable.`
+        )
+      }
+      if (
+        context.permissionLevel === 'auto_review' &&
+        operation !== 'upload' &&
+        !(await this.approveAttachedPageOperation(operation, input, tab, {
+          projectId,
+          threadId,
+          sessionId: context.sessionId
+        }))
+      ) {
+        return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
+      }
+    }
+    if (
+      attached &&
+      !ATTACHED_PAGE_READ_OPERATIONS.has(operation) &&
+      !ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)
+    ) {
       throw new Error(
-        `The page the user is on is attached for reading (${[...ATTACHED_PAGE_OPERATIONS].join(', ')}), so "${operation}" needs a page of your own: call "open" first.`
+        `The page the user is on cannot run "${operation}". Open a page of your own first.`
       )
     }
     // An operation is a use: it revives a tab the agent owns that was evicted
@@ -1605,6 +1959,10 @@ export class BrowserService {
       })()`)
       return { ...utilityContext, result }
     }
+    if (operation === 'upload') {
+      const result = await this.uploadFiles(tabId, tab, input, context.permissionLevel)
+      return { ...utilityContext, result }
+    }
     if (operation === 'screenshot') {
       return { ...utilityContext, ...(await this.captureScreenshot(tabId, tab, input)) }
     }
@@ -1612,6 +1970,186 @@ export class BrowserService {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /** Ask before an Auto Review turn mutates the page the user is viewing. */
+  private async approveAttachedPageOperation(
+    operation: string,
+    input: Record<string, unknown>,
+    tab: BrowserTab,
+    context: { projectId: string; threadId: string; sessionId?: string }
+  ): Promise<boolean> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+    const pageUrl = contents.getURL()
+    const pageGeneration = tab.navigationGeneration
+    let action: string
+    if (operation === 'click') {
+      action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
+    } else if (operation === 'type') {
+      action = `Replace the value of this element:\n${this.requiredInputString(input, 'selector')}\n\nWith this text:\n${this.requiredInputString(input, 'text', true)}`
+    } else if (operation === 'navigate') {
+      action = `Navigate the current tab to:\n${validateBrowserUrl(this.requiredInputString(input, 'url'))}`
+    } else if (operation === 'reload') {
+      action = 'Reload the current page.'
+    } else if (operation === 'viewport') {
+      action = `Change the page viewport to:\n${JSON.stringify(input)}`
+    } else {
+      throw new Error(`Auto Review does not support the browser action "${operation}"`)
+    }
+
+    const approver = this.agentActionApprover
+    if (!approver) throw new Error('Browser conversation approval is unavailable')
+    const decision = await approver({
+      ...context,
+      operation,
+      action,
+      origin: safeOrigin(pageUrl),
+      pageUrl
+    })
+    const approved = typeof decision === 'boolean' ? decision : decision.approved
+    if (typeof decision !== 'boolean' && decision.alternative) {
+      throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
+    }
+    if (!approved) return false
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== pageGeneration ||
+      contents.getURL() !== pageUrl
+    ) {
+      throw new Error(
+        'The page changed while the browser action was being approved; retry on the current page'
+      )
+    }
+    return true
+  }
+
+  /**
+   * Fill a page's file input through a narrow main-process action. Auto Review
+   * always asks the user to choose files in a native dialog; Full Access can use
+   * paths directly. The site never receives a file until this operation is
+   * called, and this operation never submits the surrounding form.
+   */
+  private async uploadFiles(
+    tabId: string,
+    tab: BrowserTab,
+    input: Record<string, unknown>,
+    permissionLevel: PermissionLevel | undefined
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+
+    const rawSelector = input['selector']
+    if (
+      rawSelector !== undefined &&
+      (typeof rawSelector !== 'string' || rawSelector.length === 0 || rawSelector.length > 1024)
+    ) {
+      throw new TypeError('selector must be a non-empty CSS selector under 1024 characters')
+    }
+    const selector = typeof rawSelector === 'string' ? rawSelector : 'input[type="file"]'
+    const beforeUrl = contents.getURL()
+    const beforeGeneration = tab.navigationGeneration
+    const inputState: unknown = await contents.executeJavaScript(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+        return { available: false };
+      }
+      return {
+        available: true,
+        multiple: element.multiple,
+        accept: element.accept,
+        disabled: element.disabled
+      };
+    })()`)
+    if (typeof inputState !== 'object' || inputState === null) {
+      throw new Error('The selected browser element is not a file input')
+    }
+    const inputRecord = inputState as Record<string, unknown>
+    if (inputRecord['available'] !== true || inputRecord['disabled'] === true) {
+      throw new Error('The selected browser element is not an enabled file input')
+    }
+    const multiple = inputRecord['multiple'] === true
+    const accept = typeof inputRecord['accept'] === 'string' ? inputRecord['accept'] : ''
+    const requestedPaths = this.uploadPathInputs(input)
+    const suppliedPaths = permissionLevel === 'full_access' ? requestedPaths : []
+    let paths: string[]
+    if (suppliedPaths.length > 0) {
+      paths = await Promise.all(suppliedPaths.map((path) => this.resolveUploadPath(path)))
+      if (!multiple && paths.length > 1) {
+        throw new Error('This file input accepts one file at a time')
+      }
+    } else {
+      const filters = fileChooserFilters(accept)
+      const choice = await dialog.showOpenDialog(this.window, {
+        title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
+        buttonLabel: 'Upload',
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        ...(filters.length > 0 ? { filters } : {})
+      })
+      if (choice.canceled || choice.filePaths.length === 0) {
+        return { uploaded: false, cancelled: true }
+      }
+      paths = await Promise.all(choice.filePaths.map((path) => this.resolveUploadPath(path)))
+    }
+    if (paths.length > 10) throw new Error('A browser upload can include at most 10 files')
+
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== beforeGeneration ||
+      contents.getURL() !== beforeUrl
+    ) {
+      throw new Error(
+        'The page changed while the file upload was being approved; retry on the current page'
+      )
+    }
+
+    const debuggerSession = contents.debugger
+    const attachedHere = !debuggerSession.isAttached()
+    try {
+      if (attachedHere) debuggerSession.attach('1.3')
+      const documentResult: unknown = await debuggerSession.sendCommand('DOM.getDocument', {
+        depth: 1,
+        pierce: true
+      })
+      const documentRecord = asObject(documentResult)
+      const root = asObject(documentRecord?.['root'])
+      const rootNodeId = root?.['nodeId']
+      if (typeof rootNodeId !== 'number') throw new Error('The page document is unavailable')
+      const queryResult: unknown = await debuggerSession.sendCommand('DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector
+      })
+      const nodeId = asObject(queryResult)?.['nodeId']
+      if (typeof nodeId !== 'number' || nodeId === 0) {
+        throw new Error('The file input is no longer present on the page')
+      }
+      await debuggerSession.sendCommand('DOM.setFileInputFiles', { nodeId, files: paths })
+      return { uploaded: true, files: paths.map((path) => basename(path)), submitted: false }
+    } finally {
+      if (attachedHere && debuggerSession.isAttached()) debuggerSession.detach()
+    }
+  }
+
+  private uploadPathInputs(input: Record<string, unknown>): string[] {
+    const value = input['paths']
+    if (value === undefined) return []
+    if (
+      !Array.isArray(value) ||
+      value.length < 1 ||
+      value.length > 10 ||
+      value.some((path) => typeof path !== 'string' || path.length === 0 || path.length > 8192)
+    ) {
+      throw new TypeError('paths must contain between 1 and 10 absolute file paths')
+    }
+    return value as string[]
+  }
+
+  private async resolveUploadPath(path: string): Promise<string> {
+    if (!isAbsolute(path)) throw new TypeError('Every upload path must be absolute')
+    const resolved = await realpath(path)
+    const details = await stat(resolved)
+    if (!details.isFile()) throw new TypeError(`Upload path is not a file: ${basename(path)}`)
+    return resolved
   }
 
   /**
@@ -1860,7 +2398,20 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents) return
-    await this.loadWaits.wait(contents, timeoutMs)
+    const startedAt = Date.now()
+    const pendingStart = this.pendingNavigationStarts.get(tabId)
+    if (pendingStart) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        pendingStart.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, timeoutMs))
+        })
+      ])
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    const remaining = Math.max(0, timeoutMs - (Date.now() - startedAt))
+    await this.loadWaits.wait(contents, remaining)
   }
 
   /**
@@ -2148,6 +2699,17 @@ export class BrowserService {
     this.publishState(tabId)
   }
 
+  /** Deliver view navigation to the existing shell handlers, with renderer focus. */
+  private forwardNavigationShortcut(action: BrowserShortcutAction): boolean {
+    if (!action.startsWith('nav-')) return false
+    const chord = this.shortcutBindings[action]?.[0]
+    if (chord && !this.window.webContents.isDestroyed()) {
+      this.window.webContents.focus()
+      sendToRenderer(this.window.webContents, 'browser:navigationKey', chord)
+    }
+    return true
+  }
+
   /**
    * Run one claimed browser action on a tab.
    *
@@ -2158,6 +2720,7 @@ export class BrowserService {
    * it must never block the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
+    if (this.forwardNavigationShortcut(action)) return
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
     const contents = tab.view.webContents
@@ -2192,6 +2755,7 @@ export class BrowserService {
       case 'focusAddress':
       case 'closeTab':
       case 'newTab':
+      case 'reopenTab':
       case 'toggleNotes':
       case 'find':
       case 'findNext':
@@ -2470,6 +3034,11 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
+      if (this.peekTabs.has(tabId) && input.type === 'keyDown' && input.key === 'Escape') {
+        event.preventDefault()
+        this.requestPanelShortcut(tabId, 'close-tab')
+        return
+      }
       // The switcher is claimed first: it is an app-level gesture that must work
       // from inside a page, and it must never be shadowed by a browser binding.
       if (this.consumeSwitcherKey(input)) {
@@ -2494,6 +3063,7 @@ export class BrowserService {
     // the capture observer can be installed before the page's own scripts ask
     // for the microphone.
     view.webContents.on('dom-ready', () => {
+      installBrowserHistorySwipe(view.webContents)
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
@@ -2789,11 +3359,7 @@ export class BrowserService {
       })
     })
     view.webContents.on('will-navigate', (event, url) => {
-      try {
-        validateBrowserUrl(url)
-      } catch {
-        event.preventDefault()
-      }
+      if (!this.isAllowedTabNavigation(projectId, tab.boxId, url)) event.preventDefault()
     })
     this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
     return tab
@@ -2821,16 +3387,55 @@ export class BrowserService {
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
+    if (
+      details.disposition === 'new-window' &&
+      !details.features &&
+      !details.postBody &&
+      owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+    ) {
+      try {
+        this.openPeekFromWindowRequest(
+          owner,
+          this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+        )
+      } catch (error: unknown) {
+        Logger.error('Browser Peek rejected unsafe URL:', error)
+      }
+      return { action: 'deny' }
+    }
     if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
     }
     try {
-      this.openNewTabFor(owner, validateBrowserUrl(details.url))
+      this.openNewTabFor(
+        owner,
+        this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+      )
     } catch (error: unknown) {
       Logger.error('Browser popup rejected unsafe URL:', error)
     }
     return { action: 'deny' }
+  }
+
+  /** Accept only a popout page belonging to the requesting extension. */
+  private ownedExtensionPageUrl(extensionId: string, rawUrl: string | undefined): string | null {
+    if (!rawUrl) return null
+    try {
+      const url = new URL(rawUrl)
+      if (
+        url.protocol !== 'chrome-extension:' ||
+        url.host !== extensionId ||
+        url.username !== '' ||
+        url.password !== '' ||
+        url.searchParams.get('uilocation') !== 'popout'
+      ) {
+        return null
+      }
+      return url.toString()
+    } catch {
+      return null
+    }
   }
 
   /**
@@ -2874,40 +3479,85 @@ export class BrowserService {
     }
   }
 
+  /** Resolve a worker popup request and route its extension page to the rail. */
+  private openExtensionPopupFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
+    const owner = this.tabForContents(request.extensionTabId)
+    if (!owner) return
+    const tab = owner.tab
+    if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+
+    if (request.kind === 'focus-browser') {
+      if (!this.window.isDestroyed()) {
+        this.window.focus()
+        if (this.activeTabId === owner.id && !tab.view.webContents.isDestroyed()) {
+          tab.view.webContents.focus()
+        }
+      }
+      return
+    }
+
+    if (request.kind === 'hide-window') {
+      const cached = this.popupWindows.extensionPopupForJar(
+        request.extensionId,
+        request.projectId,
+        request.boxId
+      )
+      if (cached) this.popupWindows.dismiss(cached)
+      return
+    }
+
+    const requestedUrl =
+      request.kind === 'open-window' || request.kind === 'focus-window'
+        ? (this.ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
+        : undefined
+    if ((request.kind === 'open-window' || request.kind === 'focus-window') && !requestedUrl) {
+      Logger.dev('An extension popup request used an invalid extension URL:', {
+        extensionId: request.extensionId
+      })
+      return
+    }
+    void this.openExtensionPopup(
+      request.projectId,
+      owner.id,
+      tab.threadId,
+      tab.boxId,
+      request.extensionId,
+      requestedUrl
+    ).catch((error: unknown) => {
+      Logger.dev('An extension action popup could not be opened:', {
+        extensionId: request.extensionId,
+        error
+      })
+    })
+  }
+
   /**
-   * Open an extension's own popup in the rail.
-   *
-   * Electron draws no toolbar and no action popup, so an extension's declared
-   * `action.default_popup` has no host of its own: this is the app supplying one.
-   * The page is bound to the jar the extension runs in, because an extension page
-   * resolves only inside the session that loaded the extension, and it is then a
-   * popup like any other: the rail places it, gives it the keyboard and closes it.
-   *
-   * The tab is taken from the caller's own record rather than assumed to exist:
-   * the renderer makes a tab the moment the user asks for one, and its page is
-   * only shown once there is an address to load, so a tab the user just opened has
-   * no record here yet. Refusing it would leave the popup unopenable on exactly the
-   * blank tab a user reaches for an extension on, which is what this did before.
+   * Open an extension's own popup in the rail. Its page runs in the extension's
+   * jar, remains live when hidden, and is retargeted when the extension is used in
+   * another tab in the same jar.
    */
   private async openExtensionPopup(
     projectId: string,
     tabId: string,
     threadId: string,
     boxId: string | null,
-    extensionId: string
+    extensionId: string,
+    requestedUrl?: string
   ): Promise<string | null> {
     const tab = this.ensureTab(tabId, projectId, threadId, boxId)
     // An extension can ask for its panel to open when its action is clicked, and
     // Chromium opens the panel rather than the action popup when it does. The
     // panel is a surface of the rail, so there is no popup id to answer with.
-    const actionPanel = this.extensions.sidePanelForActionClick(
-      projectId,
-      tab.boxId,
-      extensionId,
-      tab.view.webContents.id
-    )
+    const actionPanel = requestedUrl
+      ? null
+      : this.extensions.sidePanelForActionClick(
+          projectId,
+          tab.boxId,
+          extensionId,
+          tab.view.webContents.id
+        )
     if (actionPanel) {
-      this.openExtensionSidePanel({
+      await this.openExtensionSidePanel({
         projectId,
         boxId: tab.boxId,
         extensionId,
@@ -2918,21 +3568,102 @@ export class BrowserService {
       })
       return null
     }
-    // One popup per extension per tab: asking again is the user coming back to the
-    // popup they already have, not asking for a second copy of it.
-    const existing = this.popupWindows.extensionPopupFor(extensionId, tabId)
-    if (existing) return existing
+    // One live popup page per extension jar: moving to another tab retargets this
+    // view instead of creating another extension document and worker connection.
+    const cached = this.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
+    const activateCached = async (popupId: string): Promise<boolean> => {
+      if (
+        !this.popupWindows.retargetExtensionPopup(
+          popupId,
+          { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+          requestedUrl ??
+            this.extensions.popupUrlFor(extensionId, projectId, tab.boxId) ??
+            undefined
+        )
+      )
+        return false
+      if (requestedUrl) {
+        try {
+          if (!(await this.popupWindows.navigateExtensionPopup(popupId, requestedUrl))) return false
+        } catch (error: unknown) {
+          Logger.dev('A retained extension page could not navigate to its requested popup:', {
+            extensionId,
+            error
+          })
+          return true
+        }
+      }
+      this.reportExtensionPageTabs(tabId)
+      return true
+    }
+    if (cached && (await activateCached(cached))) {
+      return cached
+    }
+    const popupKey = JSON.stringify([projectId, tab.boxId, extensionId])
+    let opening = this.extensionPopupOpenings.get(popupKey)
+    while (opening) {
+      try {
+        await opening
+      } catch {
+        // A later action can retry after a failed load; the failed page cleans
+        // itself up before the next creation starts.
+      }
+      opening = this.extensionPopupOpenings.get(popupKey)
+    }
+    const openedWhileWaiting = this.popupWindows.extensionPopupForJar(
+      extensionId,
+      projectId,
+      tab.boxId
+    )
+    if (openedWhileWaiting && (await activateCached(openedWhileWaiting))) {
+      return openedWhileWaiting
+    }
+    const creation = this.createExtensionPopup(
+      projectId,
+      tabId,
+      tab.threadId,
+      tab.boxId,
+      extensionId,
+      requestedUrl
+    )
+    this.extensionPopupOpenings.set(popupKey, creation)
+    try {
+      return await creation
+    } finally {
+      if (this.extensionPopupOpenings.get(popupKey) === creation) {
+        this.extensionPopupOpenings.delete(popupKey)
+      }
+    }
+  }
+
+  /** Create the one cached action popup page after jar-level access is ready. */
+  private async createExtensionPopup(
+    projectId: string,
+    tabId: string,
+    threadId: string,
+    boxId: string | null,
+    extensionId: string,
+    requestedUrl?: string
+  ): Promise<string> {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
-    const url = this.extensions.popupUrlFor(extensionId, tab.boxId)
+    await this.extensions.ensureExtensionPagesAvailable(extensionId)
+    const url = requestedUrl ?? this.extensions.popupUrlFor(extensionId, projectId, boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a
     // jar is loaded on demand and does not wait for a popup.
-    await this.extensions.ensureJarLoaded(projectId, tab.boxId)
+    await this.extensions.ensureJarLoaded(projectId, boxId)
+    // The wrappers that answer this page's `chrome.tabs.query` must be in the
+    // document before the extension's own bundle reads them: a popup decides which
+    // site it is on as it starts, so a push that arrives after `did-finish-load`
+    // lands once the decision was already made from focus. See
+    // `browser-extension-page-tabs.ts`.
+    const preload = await this.ensureExtensionPageTabsPreload()
     const view = new WebContentsView({
       webPreferences: {
-        session: this.sessionForProject(projectId, tab.boxId),
+        session: this.sessionForProject(projectId, boxId),
+        preload: preload ?? undefined,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -2941,7 +3672,7 @@ export class BrowserService {
       }
     })
     const popupId = this.popupWindows.hostExtension({
-      owner: { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+      owner: { tabId, projectId, threadId, boxId },
       extensionId,
       url,
       view,
@@ -2949,7 +3680,12 @@ export class BrowserService {
     })
     // The wrappers that answer this page's `chrome.tabs.query` live in its
     // document, so every document it arrives with is told which tab it acts on.
-    view.webContents.on('did-finish-load', () => this.reportExtensionPageTabs(tabId))
+    // The preload above already answered the first document; this is what keeps the
+    // answer current as the page navigates and as the tab behind it changes.
+    view.webContents.on('did-finish-load', () => {
+      const currentTabId = this.popupWindows.tabIdForContents(view.webContents.id)
+      if (currentTabId) this.reportExtensionPageTabs(currentTabId)
+    })
     try {
       await view.webContents.loadURL(url)
     } catch (error: unknown) {
@@ -3109,7 +3845,9 @@ export class BrowserService {
    * document is loaded in the jar the extension runs in, which is the only session
    * its own files resolve in.
    */
-  private openExtensionSidePanel(request: BrowserExtensionSidePanelOpenRequest): void {
+  private async openExtensionSidePanel(
+    request: BrowserExtensionSidePanelOpenRequest
+  ): Promise<void> {
     const appTabId =
       request.extensionTabId === null
         ? this.activeTabIdInProject(request.projectId)
@@ -3131,6 +3869,13 @@ export class BrowserService {
       boxId: request.boxId,
       appTabId,
       extensionTabId: request.extensionTabId ?? tab.view.webContents.id,
+      // Awaited, not read as a field: the panel's document is the extension's own,
+      // so it decides which site it is on as its bundle starts, exactly like an
+      // action popup. Reading the field would hand the first panel of a session a
+      // null preload and leave it with the late push, which is the defect the
+      // preload exists to remove. Null only when the write itself failed, and the
+      // panel then still opens on the push rather than not opening at all.
+      preload: await this.ensureExtensionPageTabsPreload(),
       path: request.path,
       url: request.url
     })
@@ -3188,7 +3933,10 @@ export class BrowserService {
     contents.on('will-navigate', (event, url) => {
       if (!this.isAllowedPopupNavigation(record, url)) event.preventDefault()
     })
-    this.installWindowOpenPolicy(record.view, popupPageOwner(record))
+    contents.setWindowOpenHandler((details) =>
+      this.windowOpenResponse(popupPageOwner(record), details)
+    )
+    this.installDevToolsOpenPolicy(contents, () => popupPageOwner(record))
   }
 
   /**
@@ -3214,20 +3962,36 @@ export class BrowserService {
   /** Install the landing policy for the windows a page opens. */
   private installWindowOpenPolicy(view: WebContentsView, owner: BrowserPageOwner): void {
     view.webContents.setWindowOpenHandler((details) => this.windowOpenResponse(owner, details))
+    this.installDevToolsOpenPolicy(view.webContents, () => owner)
+  }
+
+  /** DevTools link commands use their own event, independent of window.open. */
+  private installDevToolsOpenPolicy(contents: WebContents, owner: () => BrowserPageOwner): void {
+    contents.on('devtools-open-url', (_event, url) => {
+      if (contents.isDestroyed() || this.window.isDestroyed()) return
+      const source = owner()
+      if (!this.tabs.has(source.tabId)) return
+      try {
+        this.openNewTabFor(source, validateBrowserUrl(url))
+      } catch (error: unknown) {
+        Logger.error('Browser DevTools rejected a link:', error)
+      }
+    })
   }
 
   /**
    * Run one browser chord pressed inside a popup window.
    *
-   * Closing a popup closes the popup and not the browser: to the user a popup is
-   * its own window, so Cmd/Ctrl+W must end it. The chords that belong to the app's
-   * own chrome (the address bar, a new tab, the note) are forwarded to the
+   * Cmd/Ctrl+W dismisses the popup surface. A page-created window ends; an
+   * extension action popup is parked for reuse. The chords that belong to the
+   * app's own chrome (the address bar, a new tab, the note) are forwarded to the
    * renderer under the owning tab, which is the tab the app would act on.
    */
   private runPopupWindowShortcut(
     record: BrowserPopupWindowRecord,
     action: BrowserShortcutAction
   ): void {
+    if (this.forwardNavigationShortcut(action)) return
     const contents = record.view.webContents
     if (contents.isDestroyed()) return
     switch (action) {
@@ -3290,13 +4054,40 @@ export class BrowserService {
    * something on screen.
    */
   private tabIdForContents(projectId: string, contentsId: number): string | undefined {
-    for (const [tabId, tab] of this.tabs) {
-      if (tab.projectId === projectId && tab.view.webContents.id === contentsId) return tabId
+    const owner = this.tabForContents(contentsId)
+    return owner && owner.tab.projectId === projectId ? owner.id : undefined
+  }
+
+  /**
+   * The tab a page belongs to, whichever project owns it.
+   *
+   * A box's jar is shared, so the context that configured a session is not
+   * necessarily the context a page in it belongs to: anything that has to name the
+   * tab behind a page (a permission prompt, a download row) resolves it here and
+   * reads the tab's own project.
+   */
+  private tabForContents(contentsId: number): { id: string; tab: BrowserTab } | null {
+    for (const [id, tab] of this.tabs) {
+      if (tab.view.webContents.id === contentsId) return { id, tab }
     }
     const ownerTabId = this.popupWindows.tabIdForContents(contentsId)
-    if (!ownerTabId) return undefined
-    const owner = this.tabs.get(ownerTabId)
-    return owner && owner.projectId === projectId ? ownerTabId : undefined
+    if (!ownerTabId) return null
+    const tab = this.tabs.get(ownerTabId)
+    return tab ? { id: ownerTabId, tab } : null
+  }
+
+  /**
+   * The tab behind a page, as the download manager reads it: which project owns
+   *  the tab, and which box its jar belongs to.
+   *
+   * A boxed tab runs in a jar the profile owns, but the page is still a
+   * conversation's tab, so a download reported against it belongs to the project
+   * the user was browsing rather than to whichever context opened the jar first,
+   * and a resume has to be issued through that same jar.
+   */
+  private ownerTabForContents(contentsId: number): BrowserDownloadOwner | null {
+    const owner = this.tabForContents(contentsId)
+    return owner ? { projectId: owner.tab.projectId, boxId: owner.tab.boxId } : null
   }
 
   private requireTab(tabId: string): BrowserTab {
@@ -3356,7 +4147,7 @@ export class BrowserService {
     // Unload first, then reload: an extension holds open files and a running
     // service worker inside the storage being erased, and reloading the jar's tabs
     // then runs it again against the clean store.
-    await this.extensions.onJarEmptied(projectId, boxId)
+    await this.extensions.onJarEmptied(projectId, boxId, true)
     await this.clearJarStorage(partition)
     await this.extensions.ensureJarLoaded(projectId, boxId)
   }
@@ -3378,11 +4169,7 @@ export class BrowserService {
     await this.extensions.forgetBox(projectId, boxId)
     await this.clearJarStorage(partition)
     this.configuredSessions.delete(partition)
-    await removeBrowserProfiles(
-      (await listProjectBrowserProfiles(projectId)).filter(
-        (profile) => profile.partition === partition
-      )
-    )
+    await removeBrowserProfiles(await listBrowserProfilesForPartition(partition))
   }
 
   /**
@@ -3435,14 +4222,16 @@ export class BrowserService {
       if (tab.projectId === projectId) this.destroy(tabId, 'closed')
     }
     this.tabHistory.forgetScopes((record) => record.projectId === projectId)
+    this.closedTabHistory.forgetScopes((record) => record.projectId === projectId)
     this.downloads.forgetProject(projectId)
   }
 
-  /** Every jar of one project that this window currently holds a session for. */
+  /** Every jar of one project that this window currently holds a session for.
+   *  Only the project's own jar: a box's jar is the profile's, shared by every
+   *  context that picked that box, so a project's removal never touches one. */
   private projectPartitions(projectId: string): string[] {
-    return [...this.configuredSessions].filter((partition) =>
-      partitionBelongsToProject(partition, projectId)
-    )
+    const own = browserPartitionFor(projectId)
+    return [...this.configuredSessions].filter((partition) => partition === own)
   }
 
   /**
@@ -3454,6 +4243,7 @@ export class BrowserService {
   private async settleJar(partition: string): Promise<void> {
     try {
       const browserSession = session.fromPartition(partition)
+      await waitBrowserSessionCookies(browserSession)
       await browserSession.closeAllConnections()
       await browserSession.clearStorageData()
       await browserSession.clearCache()
@@ -3465,7 +4255,9 @@ export class BrowserService {
   /** Erase one jar's storage, cache and remembered permission decisions. */
   private async clearJarStorage(partition: string): Promise<void> {
     const browserSession = session.fromPartition(partition)
+    await waitBrowserSessionCookies(browserSession)
     await browserSession.clearStorageData()
+    await flushBrowserSessionCookiesFor(browserSession)
     await browserSession.clearCache()
     await browserSession.closeAllConnections()
     await this.permissionMemory.forget(partition, this.permissionLedgers())
@@ -3482,40 +4274,59 @@ export class BrowserService {
   /**
    * Every jar that currently has a live page, so the extension service can aim a
    * load at the jars that exist rather than at every jar the user ever made.
+   *
+   *  Listed by jar, not by tab owner: a box's session is one jar however many
+   *  contexts have a tab in it, so the global browser and a project browsing the
+   *  same box contribute one entry. The profile's default box is that same rule
+   *  taken to its end: a tab in it is a tab in the global browser's own jar, so it
+   *  is reported as the global browser rather than as the context that opened it.
    */
   private liveJars(): { projectId: string; boxId: string | null }[] {
     const jars: { projectId: string; boxId: string | null }[] = []
+    const partitions = new Set<string>()
     for (const tab of this.tabs.values()) {
       if (tab.view.webContents.isDestroyed()) continue
-      if (jars.some((jar) => jar.projectId === tab.projectId && jar.boxId === tab.boxId)) continue
-      jars.push({ projectId: tab.projectId, boxId: tab.boxId })
+      const jar = browserJarFor(tab.projectId, tab.boxId)
+      const partition = browserPartitionFor(jar.projectId, jar.boxId)
+      if (partitions.has(partition)) continue
+      partitions.add(partition)
+      jars.push(jar)
+    }
+    for (const owner of [...this.popupWindows.liveJars(), ...this.sidePanels.liveJars()]) {
+      const jar = browserJarFor(owner.projectId, owner.boxId)
+      const partition = browserPartitionFor(jar.projectId, jar.boxId)
+      if (partitions.has(partition)) continue
+      partitions.add(partition)
+      jars.push(jar)
     }
     return jars
   }
 
-  /** Whether one jar still has a page alive. A hibernated tab has none, which is
-   *  what makes hibernation the point at which an extension can be released. */
-  private jarHasLiveTab(projectId: string, boxId: string | null): boolean {
-    for (const tab of this.tabs.values()) {
-      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
-      if (!tab.view.webContents.isDestroyed()) return true
-    }
-    return false
+  /** Retained extension documents keep their jar alive after site tabs close. */
+  private jarHasLivePage(projectId: string, boxId: string | null): boolean {
+    // Asked about the jar rather than about its owner: a box's jar is shared, so
+    // the global browser reading a page in it is enough to keep its extensions
+    // loaded even as a project's tab in the same box closes.
+    const partition = browserPartitionFor(projectId, boxId)
+    return this.liveJars().some(
+      (jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition
+    )
   }
 
-  /**
-   * Every jar one context holds a session for, the context's own jar first.
+  /** Every jar one context holds a session for, the context's own jar first.
    *
-   * The own jar is always listed even before a session exists for it, because a
-   * context-wide clear has always meant "this browser" and must keep meaning it;
-   * the boxes are added from the sessions that exist, so clearing never creates a
-   * partition directory for a box nobody used.
-   */
+   *  The own jar is always listed even before a session exists for it, because a
+   *  context-wide clear has always meant "this browser" and must keep meaning it.
+   *  The global browser's boxes are listed too: that is where boxes are made and
+   *  where they are managed, so clearing the personal browser still takes its own
+   *  boxes with it. A project's clear lists only its own jar, because a box is
+   *  shared by every context that picked it and one project must not wipe an
+   *  identity the personal browser and other projects are signed into. */
   private projectJars(projectId: string): (string | null)[] {
     const jars: (string | null)[] = [null]
+    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return jars
     for (const partition of this.configuredSessions) {
-      if (!partitionBelongsToProject(partition, projectId)) continue
-      const boxId = boxIdFromPartition(partition, projectId)
+      const boxId = boxIdFromPartition(partition)
       if (!boxId || jars.includes(boxId)) continue
       jars.push(boxId)
     }
@@ -3584,18 +4395,34 @@ export class BrowserService {
   }
 
   /**
-   * One extension page, told the tab it is acting on.
+   * The tab one extension page acts on, for the preload that asks before the
+   * page's own scripts exist.
    *
-   * The tab is reported with the page's own `WebContents` id and address, which is
-   * what makes an autofill flow correct rather than merely quiet: the extension
-   * messages that id, and the message lands in the page's content script.
+   * Only a `WebContents` this app hosts for an extension can be answered at all:
+   * the two registries below are the app's own record of which tab each extension
+   * surface belongs to, so a document the app is not hosting gets nothing rather
+   * than a guess.
    */
-  private pushExtensionPageTab(tabId: string, contents: WebContents): void {
+  private extensionPageTabForContents(contentsId: number): BrowserExtensionPageTab | null {
+    const tabId =
+      this.popupWindows.tabIdForContents(contentsId) ?? this.sidePanels.tabIdForContents(contentsId)
+    if (!tabId) return null
+    return this.extensionPageTabSnapshot(tabId)
+  }
+
+  /**
+   * The page behind an extension surface, as the extension should see it.
+   *
+   * One builder, because two callers need the same answer at different moments:
+   * the preload asks for it before the popup's first script runs, and a push sends
+   * it again whenever the page it describes changes or moves.
+   */
+  private extensionPageTabSnapshot(tabId: string): BrowserExtensionPageTab | null {
     const tab = this.tabs.get(tabId)
-    if (!tab) return
+    if (!tab) return null
     const page: WebContents | undefined = tab.view.webContents
-    if (!page || page.isDestroyed() || contents.isDestroyed()) return
-    const snapshot: BrowserExtensionPageTab = {
+    if (!page || page.isDestroyed()) return null
+    return {
       id: page.id,
       url: page.getURL(),
       title: page.getTitle(),
@@ -3604,6 +4431,19 @@ export class BrowserService {
       audible: page.isCurrentlyAudible(),
       muted: page.isAudioMuted()
     }
+  }
+
+  /**
+   * One extension page, told the tab it is acting on.
+   *
+   * The tab is reported with the page's own `WebContents` id and address, which is
+   * what makes an autofill flow correct rather than merely quiet: the extension
+   * messages that id, and the message lands in the page's content script.
+   */
+  private pushExtensionPageTab(tabId: string, contents: WebContents): void {
+    if (contents.isDestroyed()) return
+    const snapshot = this.extensionPageTabSnapshot(tabId)
+    if (!snapshot) return
     void contents
       .executeJavaScript(extensionPageTabsScript(snapshot), true)
       .catch((error: unknown) => {
@@ -3612,6 +4452,46 @@ export class BrowserService {
           error: error instanceof Error ? error.message : String(error)
         })
       })
+  }
+
+  // ─── The preload that lands in time ────────────────────────────────────────
+
+  /** Where the page-tabs preload was written, or null before it has been, or if
+   *  it could not be written at all. */
+  private extensionPageTabsPreload: string | null = null
+
+  /** The one write, shared by every caller that needs the preload. */
+  private extensionPageTabsPreloadWrite: Promise<string | null> | null = null
+
+  /**
+   * Write the preload an extension page is created with, once per run.
+   *
+   * It has to exist on disk before the first extension surface is created, because
+   * `webPreferences.preload` is a path and a view cannot be built without one, so
+   * the write is started when the service registers and every caller that can wait
+   * does. The content is generated from the same wrapper source main pushes, so the
+   * preload and the push can never describe the page differently.
+   */
+  private ensureExtensionPageTabsPreload(): Promise<string | null> {
+    this.extensionPageTabsPreloadWrite ??= this.writeExtensionPageTabsPreload()
+    return this.extensionPageTabsPreloadWrite
+  }
+
+  private async writeExtensionPageTabsPreload(): Promise<string | null> {
+    const file = join(
+      getConfigRoot(),
+      resolveBrowserExtensionStoreDir(),
+      EXTENSION_PAGE_TABS_PRELOAD_FILE
+    )
+    try {
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, extensionPageTabsPreloadSource(), 'utf8')
+      this.extensionPageTabsPreload = file
+      return file
+    } catch (error: unknown) {
+      Logger.error('The extension page-tabs preload could not be written:', error)
+      return null
+    }
   }
 
   /**
@@ -3674,6 +4554,10 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents || contents.isDestroyed()) return
+    this.popupWindows.followActiveTab(
+      { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+      (extensionId) => this.extensions.popupUrlFor(extensionId, tab.projectId, tab.boxId)
+    )
     this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onActivated', [
       { tabId: contents.id, windowId: 0 }
     ])
@@ -3698,9 +4582,13 @@ export class BrowserService {
    * cannot resolve would be a lie the extension then acts on.
    */
   private extensionTabReplay(projectId: string, boxId: string | null): BrowserExtensionTabReplay[] {
+    // By jar, not by owner: a box's session is one jar however many contexts have
+    // a tab in it, and an extension loaded there must be told about every page it
+    // can see, including ones a conversation opened rather than the global browser.
+    const partition = browserPartitionFor(projectId, boxId)
     const live: { tabId: string; tab: BrowserTab; contents: WebContents }[] = []
     for (const [tabId, tab] of this.tabs) {
-      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
       const contents: WebContents | undefined = tab.view.webContents
       if (!contents || contents.isDestroyed()) continue
       live.push({ tabId, tab, contents })
@@ -3738,6 +4626,7 @@ export class BrowserService {
         id: -1,
         index: 0,
         windowId: 0,
+        windowType: 'normal',
         active,
         pinned: false,
         incognito: false,
@@ -3750,6 +4639,7 @@ export class BrowserService {
       id: contents.id,
       index: 0,
       windowId: 0,
+      windowType: 'normal',
       active,
       pinned: false,
       incognito: false,
@@ -3804,7 +4694,7 @@ export class BrowserService {
       id: contents.id,
       url: contents.getURL(),
       title: contents.getTitle(),
-      active: false,
+      active: this.activeTabId === page.owner.tabId,
       windowId: 0,
       index: 0
     })
@@ -3861,10 +4751,15 @@ export class BrowserService {
   private sessionForProject(projectId: string, boxId: string | null = null): Session {
     const partition = browserPartitionFor(projectId, boxId)
     const browserSession = session.fromPartition(partition)
+    // Every browser context keeps its own login state across app restarts,
+    // including thread browsers that use their project's private cookie jar.
+    void restoreBrowserSessionCookies(browserSession)
     // Downloads are tracked for the session, not for the window: the window can be
     // parked and rebuilt while a download keeps running, so the manager that owns
-    // them registers here once and keeps them across that rebuild.
-    this.downloads.watchSession(projectId, browserSession)
+    // them registers here once and keeps them across that rebuild. The partition
+    // is what the registration is keyed by, because a box's session is shared by
+    // every context that picked that box.
+    this.downloads.watchSession(projectId, browserSession, partition)
     if (this.configuredSessions.has(partition)) return browserSession
     // Reuse the ledgers the durable memory loaded: a fresh set here would throw
     // away every decision the user already made, so a site the user allowed in
@@ -3890,9 +4785,12 @@ export class BrowserService {
       )
       // A popup window's page asks for its own permissions   a camera prompt in a
       // popup is the same decision as one in a tab. The owner tab is what the
-      // prompt is labelled with and what a grant is remembered against.
-      const tabId = this.tabIdForContents(projectId, contents.id)
-      if (!tabId || !origin || this.window.webContents.isDestroyed()) {
+      // prompt is labelled with and what a grant is remembered against. It is
+      // found by its page rather than by this session's context: a box's jar is
+      // configured by whichever context reached it first and then serves every
+      // other one, so the tab's own project is what names the request.
+      const owner = this.tabForContents(contents.id)
+      if (!owner || !origin || this.window.webContents.isDestroyed()) {
         callback(false)
         return
       }
@@ -3903,8 +4801,8 @@ export class BrowserService {
         : []
       const request: BrowserPermissionRequest = {
         id,
-        tabId,
-        projectId,
+        tabId: owner.id,
+        projectId: owner.tab.projectId,
         origin,
         permission,
         mediaTypes
@@ -3932,7 +4830,13 @@ export class BrowserService {
         () => this.resolvePermission(id, permissionResolutions.dismiss),
         PERMISSION_TIMEOUT_MS
       )
-      this.pendingPermissions.set(id, { request, callback, timer, partition })
+      this.pendingPermissions.set(id, {
+        request,
+        callback,
+        timer,
+        partition,
+        systemAccessDenied: false
+      })
       // Nothing in this instance's ledgers covers the request, but the durable
       // memory is shared with every other running instance: re-read it before
       // asking, and answer from it when the decision is already there. The
@@ -3985,7 +4889,8 @@ export class BrowserService {
       {
         request: remaining.request,
         queueSize: this.pendingPermissions.size,
-        projectLabel: tab ? this.permissionLabel(tab) : null
+        projectLabel: tab ? this.permissionLabel(tab) : null,
+        systemAccessDenied: remaining.systemAccessDenied
       },
       this.promptAnchor()
     )
@@ -4015,17 +4920,18 @@ export class BrowserService {
     }
   }
 
-  /** Forget every remembered permission grant or denial for a context, in every
-   *  jar that context has open: boxes keep their own answers, so "forget this
-   *  site's permissions" has to reach each of them rather than only the default. */
+  /** Forget every remembered permission grant or denial for one context: its own
+   *  jar, plus any partition the caller is about to remove.
+   *
+   *  A box's ledger is deliberately not reached from here. A box is one jar for the
+   *  whole profile, so clearing one project's decisions must not forget the answers
+   *  the personal browser and other projects rely on; a box's own clear action
+   *  forgets its ledger when it empties that jar. */
   private clearProjectPermissionMemory(
     projectId: string,
     extraPartitions: readonly string[] = []
   ): void {
     const partitions = new Set<string>([browserPartitionFor(projectId), ...extraPartitions])
-    for (const partition of this.configuredSessions) {
-      if (partitionBelongsToProject(partition, projectId)) partitions.add(partition)
-    }
     // The store owns the clear so a permission read already in flight cannot
     // merge the forgotten keys back after the user asked for them to be gone.
     void Promise.all(
@@ -4042,22 +4948,25 @@ export class BrowserService {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pendingPermissions.delete(requestId)
-    if (resolution.rememberGrant || resolution.rememberDeny) {
+    if (resolution.rememberDeny) {
       const grants = this.permissionGrants.get(pending.partition)
       const denies = this.permissionDenies.get(pending.partition)
       for (const key of permissionGrantKeys(pending.request)) {
-        if (resolution.rememberDeny) {
-          grants?.delete(key)
-          denies?.add(key)
-        } else if (resolution.rememberGrant) {
-          denies?.delete(key)
-          grants?.add(key)
-        }
+        grants?.delete(key)
+        denies?.add(key)
       }
       this.persistPermissionMemory()
     }
-    pending.callback(resolution.granted)
-    // Show the next queued request, or drop the prompt when the queue is empty.
+    if (resolution.granted) {
+      void this.grantBrowserPermission(pending, resolution.rememberGrant)
+    } else {
+      pending.callback(false)
+    }
+    this.showNextPermissionPrompt()
+  }
+
+  /** Show the next queued request, or drop the prompt when the queue is empty. */
+  private showNextPermissionPrompt(): void {
     const next = this.pendingPermissions.values().next()
     if (next.done) {
       this.promptWindow.hide()
@@ -4068,7 +4977,60 @@ export class BrowserService {
       {
         request: next.value.request,
         queueSize: this.pendingPermissions.size,
-        projectLabel: nextTab ? this.permissionLabel(nextTab) : null
+        projectLabel: nextTab ? this.permissionLabel(nextTab) : null,
+        systemAccessDenied: next.value.systemAccessDenied
+      },
+      this.promptAnchor()
+    )
+  }
+
+  /** Ask macOS for capture access only after the user allows the site. The
+   * browser's callback stays pending while the OS prompt is open, which lets
+   * Chromium resume `getUserMedia` only after both decisions have succeeded. */
+  private async grantBrowserPermission(
+    pending: PendingBrowserPermission,
+    rememberGrant: boolean
+  ): Promise<void> {
+    const mediaTypes = pending.request.permission === 'media' ? pending.request.mediaTypes : []
+    if (process.platform === 'darwin') {
+      try {
+        for (const mediaType of new Set(mediaTypes)) {
+          const accessType =
+            mediaType === 'audio' ? 'microphone' : mediaType === 'video' ? 'camera' : null
+          if (accessType && !(await systemPreferences.askForMediaAccess(accessType))) {
+            pending.systemAccessDenied = true
+            pending.callback(false)
+            this.promptSystemAccessDenied(pending)
+            return
+          }
+        }
+      } catch (error: unknown) {
+        Logger.error('macOS browser media access request failed:', error)
+        pending.callback(false)
+        return
+      }
+    }
+    if (rememberGrant) {
+      const grants = this.permissionGrants.get(pending.partition)
+      const denies = this.permissionDenies.get(pending.partition)
+      for (const key of permissionGrantKeys(pending.request)) {
+        denies?.delete(key)
+        grants?.add(key)
+      }
+      this.persistPermissionMemory()
+    }
+    pending.callback(true)
+  }
+
+  /** Keep the denied request visible until the user dismisses it or retries. */
+  private promptSystemAccessDenied(pending: PendingBrowserPermission): void {
+    const tab = this.tabs.get(pending.request.tabId)
+    this.promptWindow.show(
+      {
+        request: pending.request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: tab ? this.permissionLabel(tab) : null,
+        systemAccessDenied: true
       },
       this.promptAnchor()
     )
@@ -4181,9 +5143,22 @@ export class BrowserService {
     // round trip does not send the user back to the first frame, and the ordering
     // cannot depend on which IPC the renderer happens to handle first.
     if (tab.composition && !tab.view.webContents.isDestroyed()) {
-      void this.rememberPlayhead(tabId, tab).then(
+      const navigationStart = this.rememberPlayhead(tabId, tab).then(
         () => this.navigateTo(tabId, url),
         () => this.navigateTo(tabId, url)
+      )
+      this.pendingNavigationStarts.set(tabId, navigationStart)
+      void navigationStart.then(
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        },
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        }
       )
       return
     }
@@ -4191,13 +5166,83 @@ export class BrowserService {
   }
 
   /** Start one navigation, reporting a failure rather than rejecting. */
-  private navigateTo(tabId: string, url: string): void {
+  private navigateTo(tabId: string, url: string): Promise<void> {
     const tab = this.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
-    void tab.view.webContents.loadURL(url).catch((error: unknown) => {
-      Logger.dev('Browser navigation did not complete:', { tabId, url, error })
-      this.publishState(tabId)
-    })
+    if (!tab || tab.view.webContents.isDestroyed()) return Promise.resolve()
+    const contents = tab.view.webContents
+    const navigationStart = this.extensions
+      .ensureJarLoaded(tab.projectId, tab.boxId)
+      .catch((error: unknown) => {
+        // An extension load failure must not prevent the page itself from opening.
+        Logger.dev('Browser extensions could not be prepared before navigation:', {
+          tabId,
+          error
+        })
+      })
+      .then(() => waitBrowserSessionCookies(contents.session))
+      .then(() => {
+        if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
+        return contents.loadURL(url).catch((error: unknown) => {
+          Logger.dev('Browser navigation did not complete:', { tabId, url, error })
+          const reason = error instanceof Error && error.message ? error.message : String(error)
+          this.setTabLoadError(tabId, {
+            kind: 'network',
+            code: 0,
+            description: reason || 'The page could not be opened'
+          })
+          this.publishState(tabId)
+        })
+      })
+      .finally(() => {
+        if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+          this.pendingNavigationStarts.delete(tabId)
+        }
+      })
+    this.pendingNavigationStarts.set(tabId, navigationStart)
+    return navigationStart
+  }
+
+  /**
+   * Whether a tab may navigate to an address. HTTP and HTTPS always may. A
+   * `chrome-extension://` address may only when it names an enabled extension
+   * that runs in that tab's own jar, so one box can never open another jar's
+   * extension files.
+   */
+  private isAllowedTabNavigation(projectId: string, boxId: string | null, url: string): boolean {
+    try {
+      validateBrowserUrl(url)
+      return true
+    } catch {
+      // Not http(s). Only an installed extension page in this jar passes.
+    }
+    try {
+      return this.extensions.isExtensionPageAllowed(url, projectId, boxId)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Validate an address a tab is about to load. Accepts http(s) plus an
+   * extension page allowed in that jar. Throws when neither passes, so callers
+   * keep the same refusal shape as before.
+   */
+  private validateTabNavigationUrl(
+    projectId: string,
+    boxId: string | null,
+    value: unknown
+  ): string {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new TypeError('Browser URL must be a string of at most 8192 characters')
+    }
+    const candidate = value
+    try {
+      return validateBrowserUrl(candidate)
+    } catch {
+      // Fall through to the extension-page check below.
+    }
+    if (this.extensions.isExtensionPageAllowed(candidate, projectId, boxId)) return candidate
+    throw new TypeError('Browser URL must use http or https')
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page
@@ -4207,13 +5252,38 @@ export class BrowserService {
     if (this.window.isDestroyed()) return
     const tab = this.requireTab(tabId)
     const page = menuPageFor(tabId, tab)
+    const frame = this.frameForTab(tabId)
     const menu = Menu.buildFromTemplate(
       buildBrowserPageMenuItems(
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page)
+        this.contextMenuActions(page, frame, this.pagePointOf(x, y, frame))
       )
     )
     menu.popup({ window: this.window, x, y })
+  }
+
+  /**
+   * A page-menu point, translated from the window's space into the page's own.
+   *
+   * The channel behind the page menu is shared: the host's fallback for a click
+   * the native view did not take passes the click itself, and the reload button
+   * passes its own position under it. Only a point that lands inside the page
+   * says anything about where on the page the user is, so one that does not is
+   * reported as no point at all.
+   */
+  private pagePointOf(
+    x: number,
+    y: number,
+    frame: BrowserViewBounds | null
+  ): BrowserPeekPoint | null {
+    if (frame === null) return null
+    return peekPointInFrame({ x: Math.round(x - frame.x), y: Math.round(y - frame.y) }, frame)
+  }
+
+  /** The rectangle a tab's page is on screen at, or null while it is parked or
+   *  displayed off the app window. */
+  private frameForTab(tabId: string): BrowserViewBounds | null {
+    return this.activeTabId === tabId ? this.activeTabBounds : null
   }
 
   /**
@@ -4227,7 +5297,7 @@ export class BrowserService {
   private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
-    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    const frame = this.frameForTab(tabId)
     this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
   }
 
@@ -4260,7 +5330,7 @@ export class BrowserService {
       buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page),
+        this.contextMenuActions(page, frame, { x: params.x, y: params.y }),
         this.extensionMenuItems(page, params)
       )
     )
@@ -4275,7 +5345,8 @@ export class BrowserService {
     return {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
-      searchEngineName: this.contextMenuSearchEngine.name
+      searchEngineName: this.contextMenuSearchEngine.name,
+      boxes: getGlobalBrowserContextMenuBoxes()
     }
   }
 
@@ -4290,7 +5361,18 @@ export class BrowserService {
    * same actions over both: what differs is only which page they act on and which
    * tab a page they open belongs to.
    */
-  private contextMenuActions(page: BrowserMenuPage): BrowserContextMenuActions {
+  /**
+   * The menu's actions for one page.
+   *
+   * `frame` and `point` are where the click that opened the menu landed, which
+   * only the page's own right-click and the host's fallback can supply: they are
+   * what a Peek opened from this menu grows out of.
+   */
+  private contextMenuActions(
+    page: BrowserMenuPage,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): BrowserContextMenuActions {
     const contents = page.contents
     const owner = page.owner
     const live = (): WebContents | null =>
@@ -4330,6 +5412,31 @@ export class BrowserService {
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
       openLinkInNewTab: openInNewTab,
+      openLinkInBox: (url, rawBoxId) => {
+        const boxId = validateOptionalBoxId(rawBoxId)
+        if (!boxId || !getGlobalBrowserContextMenuBoxes().some((box) => box.id === boxId)) return
+        try {
+          this.openNewTabFor({ ...owner, boxId }, validateBrowserUrl(url))
+        } catch (error: unknown) {
+          Logger.error('Browser context menu refused a link in a box:', error)
+        }
+      },
+      ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? {
+            openPeekWindow: (url: string): void => {
+              const current = live()
+              if (!current) return
+              let target: string
+              try {
+                target = validateBrowserUrl(url)
+              } catch (error: unknown) {
+                Logger.error('Browser Peek refused a link:', error)
+                return
+              }
+              this.openPeekFrom(owner, current, target, frame, point)
+            }
+          }
+        : {}),
       saveLinkAs: saveAs,
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
@@ -4356,8 +5463,20 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(owner: BrowserPageOwner, url: string): void {
+  private openNewTabFor(
+    owner: BrowserPageOwner,
+    url: string,
+    peek = false,
+    origin: BrowserViewBounds | null = null
+  ): void {
+    const sourceTabId = this.peekTabs.get(owner.tabId) ?? owner.tabId
+    if (peek) {
+      for (const [peekId, sourceId] of this.peekTabs) {
+        if (sourceId === sourceTabId) this.destroy(peekId, 'closed')
+      }
+    }
     const tabId = `browser:${crypto.randomUUID()}`
+    if (peek) this.peekTabs.set(tabId, sourceTabId)
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
     const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
@@ -4368,9 +5487,116 @@ export class BrowserService {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,
+      sourceTabId,
+      peek,
       reveal: true,
-      boxId: owner.boxId
+      boxId: owner.boxId,
+      origin
     })
+  }
+
+  /**
+   * Open an ephemeral peek page, growing out of the link it was asked for.
+   *
+   * The probe is what makes the opening flight start on the link rather than at a
+   * corner of the window, and it is bounded: the page is asked once, within
+   * `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created afterwards with whatever
+   * answer came back. In practice that is a few milliseconds, because the question
+   * is a containment test in a frame that is already running; the budget is what a
+   * page that is busy, mid-navigation or without a document can cost, and it is
+   * spent before the surface exists rather than while it is on screen.
+   */
+  private openPeekFrom(
+    owner: BrowserPageOwner,
+    contents: WebContents,
+    url: string,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): void {
+    void this.peekOriginFor(contents, frame, point).then((origin) => {
+      try {
+        this.openNewTabFor(owner, url, true, origin)
+      } catch (error: unknown) {
+        Logger.error('Browser Peek refused a link:', error)
+      }
+    })
+  }
+
+  /**
+   * Open a peek for a page that asked for a window of its own.
+   *
+   * Chromium reports no point for this gesture, but the pointer is the click: a
+   * shift-click on a link is exactly this request, and the pointer is still on
+   * the link when it arrives.
+   */
+  private openPeekFromWindowRequest(owner: BrowserPageOwner, url: string): void {
+    const frame = this.frameForTab(owner.tabId)
+    const source = this.tabs.get(owner.tabId)
+    if (!frame || !source || source.view.webContents.isDestroyed()) {
+      this.openNewTabFor(owner, url, true)
+      return
+    }
+    const point = peekPointInFrame(this.pointerViewPoint(frame), frame)
+    this.openPeekFrom(owner, source.view.webContents, url, frame, point)
+  }
+
+  /** Where the pointer is, in a page view's own pixels. */
+  private pointerViewPoint(frame: BrowserViewBounds): BrowserPeekPoint {
+    const cursor = screen.getCursorScreenPoint()
+    const content = this.window.getContentBounds()
+    return {
+      x: Math.round(cursor.x - content.x - frame.x),
+      y: Math.round(cursor.y - content.y - frame.y)
+    }
+  }
+
+  /**
+   * The rectangle a peek's flight starts from: the link under `point`, or null
+   * when there is no point to speak of, because the page is not on screen, the
+   * click never landed on it, or the page answered nothing in time.
+   *
+   * `point` arrives in the page view's own pixels, which is what Electron reports
+   * for a right-click and what the pointer is read as, and the answer has to be in
+   * the window's, because that is where the renderer's panel and ghost are laid
+   * out. The frame is what converts one into the other.
+   */
+  private async peekOriginFor(
+    contents: WebContents,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): Promise<BrowserViewBounds | null> {
+    if (frame === null || point === null) return null
+    const link = await this.probeLinkRect(contents, point)
+    return resolvePeekOrigin({
+      link,
+      point: { x: frame.x + point.x, y: frame.y + point.y },
+      frame,
+      zoomFactor: contents.isDestroyed() ? 1 : contents.getZoomFactor()
+    })
+  }
+
+  /** Ask the page which link is under a point, bounded. */
+  private async probeLinkRect(
+    contents: WebContents,
+    point: BrowserPeekPoint
+  ): Promise<BrowserPeekRect | null> {
+    if (contents.isDestroyed()) return null
+    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const answer = await Promise.race([
+        contents.executeJavaScript(script) as Promise<unknown>,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), PEEK_ORIGIN_PROBE_TIMEOUT_MS)
+        })
+      ])
+      return parsePeekProbeAnswer(answer)
+    } catch {
+      // A page mid-navigation answers with an error rather than a rectangle.
+      return null
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
@@ -4513,6 +5739,7 @@ export class BrowserService {
       // the tab up in a list the other surface's tabs are not in.
       projectId: tab.projectId,
       threadId: tab.threadId,
+      boxId: tab.boxId,
       url: contents.getURL(),
       title: contents.getTitle(),
       favicon: tab.favicon,
@@ -4967,15 +6194,23 @@ export class BrowserService {
     // about to be gone: the view would be handed to the stage window only to be
     // destroyed.
     this.dropPendingPark(tabId)
+    if (reason === 'closed') {
+      for (const [peekId, sourceId] of this.peekTabs) {
+        if (sourceId === tabId) this.destroy(peekId, 'closed')
+      }
+    }
     const tab = this.tabs.get(tabId)
     // The stack dies with the view, so a tab that is only being hibernated hands
-    // its stack over before it goes. A tab that is being closed drops it instead:
-    // history belongs to the tab it was made in, and a closed tab has none. Both
+    // its stack over before it goes. A tab that is being closed hands it to the
+    // session's reopen set instead: the stack outlives the tab just long enough
+    // for Cmd/Ctrl+Shift+T to bring it back, and a restart empties that set. Both
     // halves run before the early return, because a destroy for a tab this process
     // no longer holds still has a record to settle.
     if (reason === 'hibernated') {
       if (tab) this.captureTabHistory(tabId, tab)
     } else {
+      if (!this.peekTabs.has(tabId)) this.stashClosedTabHistory(tabId, tab)
+      else this.peekTabs.delete(tabId)
       this.tabHistory.forget(tabId)
     }
     if (!tab) return
@@ -5018,10 +6253,9 @@ export class BrowserService {
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
-    // The jar's extensions are released the moment nothing is left showing them:
-    // an extension held loaded for a box with no page is a renderer held for
-    // nothing, which is exactly what containing an extension per box is for.
-    if (!this.jarHasLiveTab(tab.projectId, tab.boxId)) {
+    // A cached popup is still a live extension document. Unloading its extension
+    // would invalidate that document even though it remains available for reuse.
+    if (!this.jarHasLivePage(tab.projectId, tab.boxId)) {
       void this.extensions.onJarEmptied(tab.projectId, tab.boxId)
     }
     for (const [contextKey, agentTabId] of this.agentTabIds) {
@@ -5081,6 +6315,32 @@ export class BrowserService {
     }
     return value
   }
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return 'the current page'
+  }
+}
+
+function fileChooserFilters(accept: string): Array<{ name: string; extensions: string[] }> {
+  const extensions = [
+    ...new Set(
+      accept
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.startsWith('.') && !item.includes('*'))
+        .map((item) => item.slice(1).toLowerCase())
+        .filter((item) => /^[a-z0-9.+_-]+$/u.test(item))
+    )
+  ]
+  return extensions.length > 0 ? [{ name: 'Accepted file types', extensions }] : []
 }
 
 /**

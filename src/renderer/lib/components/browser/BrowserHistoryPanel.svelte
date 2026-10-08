@@ -4,14 +4,12 @@
   import { Clock, Search, Star, X } from '@lucide/svelte'
   import { browserHistoryMatches, browserLibraryHost } from '$shared/browser/browser-library'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
-  import {
-    BROWSER_HISTORY_GLOBAL_SCOPE,
-    browserHistory
-  } from '$lib/stores/browser-history.svelte'
+  import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import BrowserLibraryRow from './BrowserLibraryRow.svelte'
+  import { DEFAULT_BOX_ID } from '$shared/browser/global-browser-tabs'
   import { relativeTime } from '$lib/format/relative-time'
 
   /**
@@ -22,10 +20,10 @@
    * screen   the page moves under the user, exactly as clicking a bookmark does,
    * which is what makes a history row a navigation rather than a file.
    *
-   * It lists one browser's visits, named by `scopeKey`. The global browser's rail is
-   * the only surface with a history panel today, so that is the default, and a
-   * thread's browser keeps only what it browsed: a visit belongs to the browser that
-   * made it.
+   * It lists visits from the active profile scope, named by `scopeKey`. The global
+   * browser's rail is the only surface with a history panel today, so its selected
+   * box determines the list; thread address bars resolve to that same list when
+   * they use the box.
    *
    * The list is bounded on screen, not in the store: the history itself holds up to
    * the configured cap, and a panel that drew a thousand rows would cost more than
@@ -46,14 +44,26 @@
   /** The entry the user asked to forget, held while the confirmation is up. */
   let forgettingUrl = $state<string | null>(null)
 
-  /** Whether this browser's list is the one that survives a restart, which is what
-   *  the empty state promises and only the global browser can keep. */
-  const durable = $derived(scopeKey === BROWSER_HISTORY_GLOBAL_SCOPE)
+  /** Whether this browser's list survives a restart, which is what the empty-state
+   *  message promises. */
+  const durable = $derived(browserHistory.isDurableScope(scopeKey))
   const entries = $derived(browserHistory.entriesFor(scopeKey))
 
   /** Which addresses are already saved, as one set: a row asking the bookmark list
    *  per render would be a linear scan per row over a list this panel does not own. */
-  const bookmarkedUrls = $derived(new SvelteSet(browserBookmarks.bookmarks.map((b) => b.url)))
+  const bookmarkBoxId = $derived(
+    scopeKey === BROWSER_HISTORY_GLOBAL_SCOPE ? null : (globalBrowser.activeTab?.boxId ?? null)
+  )
+  const bookmarkedUrls = $derived(
+    new SvelteSet(
+      browserBookmarks.bookmarks
+        .filter(
+          (bookmark) =>
+            (bookmark.boxId ?? null) === (bookmarkBoxId === DEFAULT_BOX_ID ? null : bookmarkBoxId)
+        )
+        .map((bookmark) => bookmark.url)
+    )
+  )
 
   const matching = $derived(entries.filter((entry) => browserHistoryMatches(entry, query)))
   const visible = $derived(matching.slice(0, VISIBLE_LIMIT))
@@ -130,10 +140,12 @@
                   'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-overlay',
                   bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
                 ]}
-                aria-label={bookmarked ? `Remove ${entry.title} from bookmarks` : `Bookmark ${entry.title}`}
+                aria-label={bookmarked
+                  ? `Remove ${entry.title} from bookmarks`
+                  : `Bookmark ${entry.title}`}
                 aria-pressed={bookmarked}
                 title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
-                onclick={() => browserBookmarks.toggle(entry.url, entry.title)}
+                onclick={() => browserBookmarks.toggle(entry.url, entry.title, null, bookmarkBoxId)}
               >
                 <Star size={12} class={bookmarked ? 'fill-current' : ''} />
               </button>

@@ -6,10 +6,8 @@
  * for a site survives quitting and reopening the app instead of being asked
  * again.
  *
- * More than one app instance can share one config root (the installed app and a
- * development instance), so the file is treated as shared state: reads merge
- * into the live ledgers, and a write merges over the file instead of replacing
- * it, so neither instance erases the other's decisions.
+ * Each launch keeps its own file (packaged prod vs unpackaged dev), so one
+ * launch never merges over or erases the other's decisions.
  *
  * Electron calls the session's permission *request* handler for every web API
  * call, even when the synchronous check handler already answered (verified on
@@ -30,6 +28,7 @@
  */
 
 import { BROWSER_PARTITION_PREFIX } from './browser-validation'
+import { isUnpackagedElectronLaunch } from '../../../lib/utils'
 
 /** Minimal persistence surface this store needs (a `StorageEngine` satisfies
  *  it structurally); paths are relative to the app config root. */
@@ -46,6 +45,18 @@ export interface PermissionMemoryLedgers {
 }
 
 export const PERMISSION_MEMORY_FILE = 'browser/permission-memory.json'
+
+/**
+ * Where this launch reads and writes remembered permission decisions. Dev
+ * uses a `-dev` variant so its grants never leak into prod. Prod keeps the
+ * established file.
+ */
+export function resolvePermissionMemoryFile(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return PERMISSION_MEMORY_FILE.replace(/\.json$/, '-dev.json')
+  }
+  return PERMISSION_MEMORY_FILE
+}
 
 const MEMORY_VERSION = 1
 /** Bounds for the persisted file: partitions are trimmed to the most recent
@@ -206,7 +217,7 @@ export class BrowserPermissionMemory {
     // read straight back into the live ledgers: every queued write (the clear
     // included) lands before this read starts.
     await this.writeChain
-    const persisted = await this.persistence.read<PersistedPermissionMemory>(PERMISSION_MEMORY_FILE)
+    const persisted = await this.persistence.read<PersistedPermissionMemory>(resolvePermissionMemoryFile())
     // A clear that landed while this read was in flight is newer than the file
     // it read, so the read is dropped rather than undoing the clear.
     if (generation !== this.generation) return
@@ -225,7 +236,7 @@ export class BrowserPermissionMemory {
         // A failed read (missing file, unreadable, corrupt) only costs the other
         // instances' decisions; this instance's decisions are always written.
         const persisted = await this.persistence
-          .read<PersistedPermissionMemory>(PERMISSION_MEMORY_FILE)
+          .read<PersistedPermissionMemory>(resolvePermissionMemoryFile())
           .catch(() => null)
         const merged = readPersistedPartitions(persisted)
         for (const [partition, memory] of snapshot) {
@@ -241,7 +252,7 @@ export class BrowserPermissionMemory {
           merged.set(partition, current)
         }
         for (const partition of dropped) merged.delete(partition)
-        await this.persistence.write(PERMISSION_MEMORY_FILE, {
+        await this.persistence.write(resolvePermissionMemoryFile(), {
           version: MEMORY_VERSION,
           partitions: this.toPayload(merged)
         })

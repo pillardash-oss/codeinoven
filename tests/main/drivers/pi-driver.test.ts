@@ -1,6 +1,5 @@
-import { mkdtemp, rm } from 'fs/promises'
+import { mkdir, mkdtemp, rm } from 'fs/promises'
 import type { ChildProcess } from 'child_process'
-import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
@@ -14,7 +13,14 @@ import type {
   CliLineParseContext,
   PersistentCliSession
 } from '../../../src/main/drivers/persistent-cli-driver'
-import type { SessionAgentEvent } from '../../../src/lib/types'
+import type {
+  AgentEvent,
+  NativeMcpServerFailure,
+  NativeUtilityInvocation,
+  SessionAgentEvent,
+  UtilityDefinitionFor
+} from '../../../src/lib/types'
+import { PI_MCP_FAILURE_STATUS_KEY } from '../../../src/main/drivers/pi-mcp-servers-extension'
 
 const rpcMock = vi.hoisted(() => {
   const clients: Array<{
@@ -185,11 +191,19 @@ afterEach(async () => {
 })
 
 async function storage(): Promise<StorageEngine> {
-  const root = await mkdtemp(join(tmpdir(), 'codeinoven-pi-driver-'))
+  const scratch = join(process.cwd(), '.cio', 'tmp')
+  await mkdir(scratch, { recursive: true })
+  const root = await mkdtemp(join(scratch, 'pi-driver-'))
   roots.push(root)
   const value = new StorageEngine(root)
   await value.initialize()
   return value
+}
+
+function projectPath(): string {
+  const root = roots[0]
+  if (!root) throw new Error('Pi driver fixture must initialize storage first')
+  return root
 }
 
 const settings = {
@@ -221,8 +235,8 @@ function sessionContext(
 describe('PiDriver', () => {
   it('spawns one RPC client per session and drives a prompt turn', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
 
     expect(rpcMock.clients.length).toBeGreaterThan(0)
     const client = rpcMock.clients[0]
@@ -242,17 +256,17 @@ describe('PiDriver', () => {
     // hit by this second call since no turn-end event was emitted) must
     // stay a no-op for unchanged settings too.
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.clients[0]
     expect(client.setModel).toHaveBeenCalledTimes(1)
     expect(client.setThinkingLevel).toHaveBeenCalledTimes(1)
 
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'again', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'again', attachments: [] })
     expect(client.setModel).toHaveBeenCalledTimes(1)
     expect(client.setThinkingLevel).toHaveBeenCalledTimes(1)
 
-    await driver.sendPrompt('/project', {
+    await driver.sendPrompt(projectPath(), {
       sessionId,
       settings: { ...settings, thinkingLevel: 'high' },
       text: 'raise thinking',
@@ -262,7 +276,7 @@ describe('PiDriver', () => {
     expect(client.setThinkingLevel).toHaveBeenCalledTimes(2)
     expect(client.setThinkingLevel).toHaveBeenLastCalledWith('high')
 
-    await driver.sendPrompt('/project', {
+    await driver.sendPrompt(projectPath(), {
       sessionId,
       settings: { ...settings, modelId: 'qwen/qwen3.5-32b', thinkingLevel: 'high' },
       text: 'switch model',
@@ -276,8 +290,8 @@ describe('PiDriver', () => {
   it('publishes the system prompt through the core-tools handoff file instead of the turn text', async () => {
     const storageEngine = await storage()
     const driver = new PiDriver(storageEngine)
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', {
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), {
       sessionId,
       settings,
       text: 'inspect',
@@ -288,7 +302,7 @@ describe('PiDriver', () => {
     const client = rpcMock.clients[0]
     expect(client).toBeDefined()
     const [promptText] = client.prompt.mock.calls[0] as [string, undefined]
-    // The system prompt must not be duplicated into the user turn's text  
+    // The system prompt must not be duplicated into the user turn's text
     // it is delivered as a real system-role field via the core-tools
     // extension's before_agent_start hook, which reads the handoff file
     // below. Re-sending it in every turn's text made models mistake the
@@ -324,6 +338,9 @@ describe('PiDriver', () => {
     const issue = result?.events?.find((event) => event.type === 'session.status')?.status
     expect(issue && issue.state === 'error' ? issue.issue?.message : undefined).toBe(
       'rate limit exceeded'
+    )
+    expect(mapPiRecord({ type: 'agent_settled', aborted: true }, context, state)?.events).toEqual(
+      []
     )
   })
 
@@ -378,8 +395,8 @@ describe('PiDriver', () => {
     const driver = new PiDriver(await storage())
     const events: SessionAgentEvent[] = []
     driver.onEvent((event) => events.push(event as SessionAgentEvent))
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     const oversizedError =
       'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
@@ -404,8 +421,8 @@ describe('PiDriver', () => {
   it('arms oversized-recovery stripping during recovery and disarms on success', async () => {
     const engine = await storage()
     const driver = new PiDriver(engine)
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     const oversizedError =
       'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
@@ -444,8 +461,8 @@ describe('PiDriver', () => {
   it('embeds the oversized-recovery flag path in the composed extension module', async () => {
     const source = await storage()
     const driver = new PiDriver(source)
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const moduleSource = String(
       await source.readRaw(join('runtime', 'cio-core-tools', sessionId, 'cio-core-tools.ts'))
     )
@@ -457,8 +474,8 @@ describe('PiDriver', () => {
     const driver = new PiDriver(await storage())
     const events: SessionAgentEvent[] = []
     driver.onEvent((event) => events.push(event as SessionAgentEvent))
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     const oversizedError =
       'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
@@ -500,15 +517,15 @@ describe('PiDriver', () => {
 
   it('falls back to the bundled catalog when model discovery is empty', async () => {
     const driver = new PiDriver(await storage())
-    const catalogs = await driver.listProviders('/project')
+    const catalogs = await driver.listProviders(projectPath())
     expect(catalogs.length).toBeGreaterThan(0)
     expect(catalogs[0]?.harnessId).toBe('pi')
   })
 
   it('discovers slash commands and skills from a disposable session', async () => {
     const driver = new PiDriver(await storage())
-    await driver.createSession('/project', 'Pi')
-    const commands = await driver.listCommands('/project')
+    await driver.createSession(projectPath(), 'Pi')
+    const commands = await driver.listCommands(projectPath())
     expect(commands).toEqual([
       { name: 'session-name', description: 'Set session name' },
       { name: 'skill:docs', description: 'Docs skill', source: 'skill' }
@@ -517,10 +534,10 @@ describe('PiDriver', () => {
 
   it('emits a working session status from the status extension record', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
     const events: Array<{ type: string; status?: { state: string } }> = []
     driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     expect(client).toBeDefined()
     client.emitStatus({
@@ -536,10 +553,10 @@ describe('PiDriver', () => {
 
   it('emits an idle session status from the status extension record', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
     const events: Array<{ type: string; status?: { state: string } }> = []
     driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     expect(client).toBeDefined()
     client.emitStatus({
@@ -555,10 +572,10 @@ describe('PiDriver', () => {
 
   it('ignores status records from foreign extension keys', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
     const events: Array<{ type: string; status?: { state: string } }> = []
     driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     expect(client).toBeDefined()
     client.emitStatus({
@@ -580,7 +597,7 @@ describe('PiDriver', () => {
 
   it('finalizes a running turn when agent_settled arrives after streaming', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
     const events: string[] = []
     const ready = new Promise<void>((resolve) => {
       driver.onEvent((event) => {
@@ -588,7 +605,7 @@ describe('PiDriver', () => {
         if (event.type === 'session.idle') resolve()
       })
     })
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     expect(client).toBeDefined()
     client.emit({
@@ -768,10 +785,10 @@ describe('PiDriver', () => {
 
   it('maps and answers the canonical Pi question envelope', async () => {
     const driver = new PiDriver(await storage())
-    const sessionId = await driver.createSession('/project', 'Pi')
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
     const events: unknown[] = []
     driver.onEvent((event) => events.push(event))
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
     const client = rpcMock.client
     expect(client).toBeDefined()
     client.emitUi({
@@ -825,7 +842,7 @@ describe('PiDriver', () => {
     })
     expect(asked?.questions?.[0]?.prompt.startsWith('Next step')).toBe(false)
     if (!asked) throw new Error('Expected Pi to emit a question request')
-    await driver.replyToQuestion('/project', sessionId, asked.requestId, [
+    await driver.replyToQuestion(projectPath(), sessionId, asked.requestId, [
       ['Fix both (Recommended)']
     ])
     expect(client.respondToExtensionUiRequest).toHaveBeenCalledWith('ui-q1', {
@@ -850,5 +867,231 @@ describe('PiDriver', () => {
     expect(result?.events ?? []).toEqual([])
     // And it must not be mistaken for a user message.
     expect(context.session.messages).toHaveLength(0)
+  })
+})
+
+const slackUtility: UtilityDefinitionFor<'mcp'> = {
+  id: 'slack-mcp',
+  kind: 'mcp',
+  name: 'Slack MCP',
+  description: 'Post to Slack.',
+  enabled: true,
+  activation: 'on_demand',
+  scope: { level: 'global' },
+  config: { transport: 'stdio', command: 'npx', args: ['-y', 'slack-mcp'] },
+  credentials: [
+    {
+      id: 'token',
+      label: 'Slack token',
+      secretRef: 'secret_1',
+      required: false,
+      environmentVariable: 'SLACK_MCP_XOXP_TOKEN'
+    }
+  ],
+  harnessBindings: [],
+  appOwned: false,
+  createdAt: 0,
+  updatedAt: 0
+}
+
+describe('PiDriver MCP server document', () => {
+  it('publishes the activated utilities, their config and their credentials', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    const publications = await driver.publishUtilityMcpServers(projectPath(), 'session-1', [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+
+    expect(publications.servers).toEqual([{ utilityId: 'slack-mcp', server: 'slack_mcp' }])
+    expect(publications.failures).toEqual([])
+    const document = JSON.parse(
+      (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+    ) as { version: number; servers: Array<{ name: string; config: unknown }> }
+    expect(document.version).toBe(1)
+    expect(document.servers).toEqual([
+      {
+        name: 'slack_mcp',
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        config: {
+          description: 'Post to Slack.',
+          exposure: 'codemode',
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', 'slack-mcp'],
+          env: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' }
+        }
+      }
+    ])
+  })
+
+  it('publishes an empty set when the thread activated nothing', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    await driver.publishUtilityMcpServers(projectPath(), 'session-1', [])
+
+    // Empty is a real instruction: pi drops the servers the app no longer
+    // publishes, which is how a disabled utility stops running.
+    expect(
+      JSON.parse(
+        (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+      )
+    ).toEqual({ version: 1, servers: [] })
+  })
+
+  it('removes the credential-bearing document when the session goes away', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.publishUtilityMcpServers(projectPath(), sessionId, [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+    const relative = `runtime/cio-core-tools/${sessionId}/mcp-servers.json`
+
+    await driver.deleteSession(projectPath(), sessionId)
+
+    expect(await engine.readRaw(relative)).toBeNull()
+  })
+})
+
+describe('PiDriver native MCP attribution', () => {
+  it('returns the utilities no pi server could be made for', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const broken: UtilityDefinitionFor<'mcp'> = {
+      ...slackUtility,
+      id: 'broken-mcp',
+      name: 'Broken MCP',
+      config: { transport: 'stdio' }
+    }
+
+    const published = await driver.publishUtilityMcpServers(projectPath(), 'session-1', [
+      { utility: broken, environment: {} }
+    ])
+
+    expect(published.servers).toEqual([])
+    expect(published.failures).toEqual([
+      {
+        utilityId: 'broken-mcp',
+        utilityName: 'Broken MCP',
+        reason: 'MCP utility "Broken MCP" requires a stdio command'
+      }
+    ])
+  })
+
+  it('names the utility behind a script call and reports it once', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    const calls: NativeUtilityInvocation[] = []
+    driver.onNativeUtilityCall((invocation) => calls.push(invocation))
+    await driver.publishUtilityMcpServers(projectPath(), sessionId, [
+      { utility: slackUtility, environment: {} }
+    ])
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+
+    // A script's call arrives as its own record with a parent call id.
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'mcp__slack_mcp__chat_postMessage',
+      parentToolCallId: 'call-script',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'posted' }] }
+    })
+    // The turn's repeat of the same terminal result must not report twice.
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'mcp__slack_mcp__chat_postMessage',
+      parentToolCallId: 'call-script',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'posted' }] }
+    })
+    // The RPC record path is async (session lookup first), so let it settle.
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const part = events
+      .flatMap((event) => (event.type === 'message.part.updated' ? [event.part] : []))
+      .find((candidate) => candidate.type === 'tool' && candidate.callID === 'call-1')
+    expect(part?.type === 'tool' ? part.state.title : undefined).toBe('Slack MCP: chat_postMessage')
+    expect(part?.type === 'tool' ? part.state.metadata : undefined).toMatchObject({
+      utilityId: 'slack-mcp',
+      utilityName: 'Slack MCP',
+      server: 'slack_mcp',
+      tool: 'chat_postMessage'
+    })
+    expect(calls).toEqual([
+      {
+        sessionId,
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        server: 'slack_mcp',
+        tool: 'chat_postMessage',
+        status: 'completed'
+      }
+    ])
+  })
+
+  it('leaves a tool from a server the app did not register alone', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    const calls: NativeUtilityInvocation[] = []
+    driver.onNativeUtilityCall((invocation) => calls.push(invocation))
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-2',
+      toolName: 'mcp__user_own_server__read_file',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'ok' }] }
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const part = events
+      .flatMap((event) => (event.type === 'message.part.updated' ? [event.part] : []))
+      .find((candidate) => candidate.type === 'tool' && candidate.callID === 'call-2')
+    expect(part?.type === 'tool' ? part.state.title : undefined).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it('reports a registration pi refused, with the utility it belongs to', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    const failures: NativeMcpServerFailure[] = []
+    driver.onNativeMcpFailure((failure) => failures.push(failure))
+    await driver.publishUtilityMcpServers(projectPath(), sessionId, [
+      { utility: slackUtility, environment: {} }
+    ])
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+
+    const report = {
+      statusKey: PI_MCP_FAILURE_STATUS_KEY,
+      statusText: JSON.stringify({ failures: [{ name: 'slack_mcp', reason: 'namespace taken' }] })
+    }
+    rpcMock.client.emitStatus(report)
+    // The extension retries on the next reconcile; the user hears it once.
+    rpcMock.client.emitStatus(report)
+
+    expect(failures).toEqual([
+      {
+        sessionId,
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        server: 'slack_mcp',
+        reason: 'namespace taken'
+      }
+    ])
   })
 })

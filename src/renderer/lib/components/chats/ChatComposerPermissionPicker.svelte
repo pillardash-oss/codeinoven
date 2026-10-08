@@ -31,16 +31,16 @@
 <!-- Permission level selector -->
 {#if readOnlyMode}
   <span
-    class="flex min-w-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
+    class="flex shrink-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
     title="Temporary chats can inspect context but cannot modify files or run commands"
   >
     <Shield size={12} class="shrink-0" />
     <span class="composer-control-label min-w-0 truncate">Read only</span>
   </span>
 {:else if !hidePermissionSelector || fileSystemMode === true}
-  <!-- Shrinkable: the label ellipsizes instead of wrapping, and disappears
-       entirely at the narrow tier so only the shield icon remains. -->
-  <div class="relative min-w-0 shrink">
+  <!-- Keep the permission hit area intact while the model group shrinks. At the
+       narrow tier the label drops out so the shield remains visible. -->
+  <div class="relative shrink-0">
     <button
       type="button"
       class="flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {permissionLevel ===
@@ -95,9 +95,8 @@
 {/if}
 
 <style>
-  /* The label ellipsizes as the composer tightens; at the narrow tier it drops
-     out entirely so only the shield icon remains. The container is the parent
-     composer (`.chat-composer`), so this query resolves against it. */
+  /* The label drops out at the narrow tier so the permission control stays
+     compact. The container is the parent composer (`.chat-composer`). */
   @container (max-width: 520px) {
     .composer-control-label {
       display: none;

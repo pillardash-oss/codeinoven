@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { ArrowDown, ArrowUp, Plus } from '@lucide/svelte'
-  import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import BrowserTabPlacementItems from './BrowserTabPlacementItems.svelte'
+  import { openBrowserNewTabMenu } from './browser-chrome-menus'
 
   /**
    * The menu behind every "new tab" affordance outside a tab's own row.
@@ -26,56 +24,38 @@
     trigger: Snippet
   }
 
-  let { groupId = null, boxId = null, anchorTabId = null, trigger }: Props = $props()
+  let { groupId, boxId, anchorTabId = null, trigger }: Props = $props()
 
-  const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
-
-  function openHere(): void {
-    globalBrowser.openNewTabAddress(groupId, boxId)
-  }
-
-  /** Open a blank tab beside another and take the caret, which is what "new tab
-   *  before/after this one" is. */
-  function createNear(position: 'before' | 'after'): void {
-    if (!anchorTabId) return
-    globalBrowser.createTab('', groupId, boxId, { tabId: anchorTabId, position })
-    globalBrowser.openAddressSpotlight()
-  }
-
-  function createPlaced(choice: { boxId?: string | null; groupId?: string | null }): void {
-    globalBrowser.openNewTabAddress(choice.groupId ?? groupId, choice.boxId ?? boxId)
+  async function openMenu(event: MouseEvent): Promise<void> {
+    event.preventDefault()
+    const anchorId = anchorTabId
+    const active = globalBrowser.activeTab
+    const targetGroupId = groupId === undefined ? (active?.groupId ?? null) : groupId
+    const targetBoxId = boxId === undefined ? (active?.boxId ?? null) : boxId
+    const choice = await openBrowserNewTabMenu(
+      {
+        groupId: targetGroupId,
+        boxId: targetBoxId,
+        anchored: anchorId !== null,
+        groups: globalBrowser.orderedGroups.map(({ id, name }) => ({ id, name })),
+        boxes: globalBrowser.boxes.map(({ id, name }) => ({ id, name }))
+      },
+      event.clientX,
+      event.clientY
+    )
+    if (!choice) return
+    if (choice.action === 'new') {
+      globalBrowser.openNewTabAddress(choice.groupId, choice.boxId)
+    } else if (anchorId && globalBrowser.tabById(anchorId)) {
+      globalBrowser.createTab('', targetGroupId, targetBoxId, {
+        tabId: anchorId,
+        position: choice.action
+      })
+      globalBrowser.openAddressSpotlight()
+    }
   }
 </script>
 
-<ContextMenu.Root>
-  <ContextMenu.Trigger class="contents">
-    {@render trigger()}
-  </ContextMenu.Trigger>
-  <ContextMenu.Portal>
-    <ContextMenu.Content
-      avoidCollisions
-      collisionPadding={12}
-      updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-    >
-      <ContextMenu.Item class={itemClass} onSelect={openHere}>
-        <Plus size={13} class="shrink-0 text-muted" />
-        New tab
-      </ContextMenu.Item>
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <BrowserTabPlacementItems onCreate={createPlaced} />
-      {#if anchorTabId}
-        <ContextMenu.Separator class="my-1 h-px bg-border" />
-        <ContextMenu.Item class={itemClass} onSelect={() => createNear('before')}>
-          <ArrowUp size={13} class="shrink-0 text-muted" />
-          New tab before this tab
-        </ContextMenu.Item>
-        <ContextMenu.Item class={itemClass} onSelect={() => createNear('after')}>
-          <ArrowDown size={13} class="shrink-0 text-muted" />
-          New tab after this tab
-        </ContextMenu.Item>
-      {/if}
-    </ContextMenu.Content>
-  </ContextMenu.Portal>
-</ContextMenu.Root>
+<div class="contents" role="presentation" oncontextmenu={(event) => void openMenu(event)}>
+  {@render trigger()}
+</div>

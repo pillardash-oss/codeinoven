@@ -1,10 +1,11 @@
-import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
+import { net, app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
-import { APP_NAME, APP_SLUG } from '../../../lib/brand'
+import { APP_NAME, APP_SLUG, GITHUB_URL } from '../../../lib/brand'
 import { atomicWrite } from '../../../lib/utils'
+import { ICON_MIME, storeAppearanceImage } from '../../../lib/icon-file'
 import { Logger } from '../../system/logger'
 import { resolveFavicons } from '../../editor/favicon-service'
 import { resolveAvatars } from '../../git/github-avatars'
@@ -18,6 +19,7 @@ import {
   validateRemoteImageUrls
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
+import type { SaveFileInput } from '../../../lib/ipc/invoke-app'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
 
@@ -30,6 +32,27 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     privileged,
     attachmentStorageDirectory
   } = ctx
+
+  ipcMain.handle('community:getIssueUrl', () => {
+    const platform =
+      process.platform === 'darwin'
+        ? process.arch === 'arm64'
+          ? 'macOS (Apple Silicon)'
+          : 'macOS (Intel)'
+        : process.platform === 'win32'
+          ? 'Windows'
+          : 'Linux'
+    const url = new URL(`${GITHUB_URL}/issues/new`)
+    url.searchParams.set('template', 'bug_report.yml')
+    url.searchParams.set('version', app.getVersion())
+    url.searchParams.set('platform', platform)
+    url.searchParams.set('logs', `OS: ${process.platform}\nArchitecture: ${process.arch}`)
+    return url.toString()
+  })
+
+  ipcMain.handle('network:restored', () => {
+    if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+  })
 
   // ─── System dialogs ────────────────────────────────────────────────────────
   ipcMain.handle('dialog:pickFolder', async () => {
@@ -122,6 +145,29 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       return tempPath
     } catch (error) {
       Logger.error('clipboard:saveImage failed:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('dialog:saveFile', async (_event, raw: unknown) => {
+    try {
+      const input = validateSaveFileInput(raw)
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save File',
+        defaultPath: input.suggestedName,
+        ...(input.filters ? { filters: input.filters } : {})
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await writeFile(result.filePath, input.contents, 'utf8')
+      await privilegedIpc.registerUserSelectedFile(result.filePath)
+      return result.filePath
+    } catch (error) {
+      Logger.error('dialog:saveFile failed:', error)
       return null
     }
   })
@@ -278,10 +324,25 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     }
   })
 
-  privileged('shell:openExternal', (_event, url: unknown) => {
+  privileged('appearance:storeImage', async (_event, sourcePath: unknown) => {
+    // A picked path is authorized for this process only, so it cannot be the
+    // path an appearance record keeps: that record outlives the process, and
+    // the next launch would read the stored path as out of scope. Copy the
+    // image into the app-owned appearance directory (registered as an artifact
+    // root) and answer with that copy plus its data URL, so the editor
+    // previews the very image it is about to persist.
+    const source = await privilegedIpc.resolveScopedPath(sourcePath)
+    const stored = await storeAppearanceImage(source)
+    await privilegedIpc.registerUserSelectedFile(stored)
+    const mime = ICON_MIME[extname(stored).toLowerCase()] ?? 'image/png'
+    const buffer = await readFile(stored)
+    return { path: stored, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+  })
+
+  privileged('shell:openExternal', async (_event, url: unknown) => {
     try {
       const safeUrl = privilegedIpc.validateExternalUrl(url)
-      void shell.openExternal(safeUrl)
+      await shell.openExternal(safeUrl)
     } catch (error) {
       Logger.error('shell:openExternal rejected unsafe URL:', error)
     }
@@ -525,7 +586,12 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       return `data:${mime};base64,${buffer.toString('base64')}`
     } catch (error) {
       if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
-      Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
+      // A display-only read, so a refusal is one informational line rather than
+      // an error with a stack: an appearance record written before picked images
+      // were copied into the app's own directory legitimately holds a path the
+      // next launch cannot authorize, and the row falls back to its favicon.
+      const reason = error instanceof Error ? error.message : String(error)
+      Logger.info('file:readAsDataUrl refused an unscoped path:', reason)
       return null
     }
   })
@@ -586,5 +652,40 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       electronVersion: process.versions.electron
     })
     return result.filePath
+  })
+}
+
+/** Validate a renderer-provided save request before it reaches a save dialog. */
+function validateSaveFileInput(value: unknown): SaveFileInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError('A save request is required.')
+  const raw = value as Record<string, unknown>
+  const suggestedName = requireString(raw.suggestedName, 'File name')
+  if (suggestedName.length > 255 || /[\\/\0\r\n]/u.test(suggestedName))
+    throw new TypeError('Choose a plain file name without a path.')
+  const contents = requireString(raw.contents, 'File contents', true)
+  if (Buffer.byteLength(contents, 'utf8') > 16 * 1024 * 1024)
+    throw new TypeError('The file is too large to save.')
+  const filters = validateSaveFileFilters(raw.filters)
+  return { suggestedName, contents, ...(filters ? { filters } : {}) }
+}
+
+function validateSaveFileFilters(value: unknown): SaveFileInput['filters'] {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8)
+    throw new TypeError('Invalid file filters.')
+  return value.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+      throw new TypeError('Invalid file filter.')
+    const filter = entry as Record<string, unknown>
+    const name = requireString(filter.name, 'Filter name')
+    const extensions = filter.extensions
+    if (
+      !Array.isArray(extensions) ||
+      extensions.length === 0 ||
+      extensions.some((item) => typeof item !== 'string')
+    )
+      throw new TypeError('Invalid file filter extensions.')
+    return { name, extensions: extensions.map((item) => String(item)) }
   })
 }

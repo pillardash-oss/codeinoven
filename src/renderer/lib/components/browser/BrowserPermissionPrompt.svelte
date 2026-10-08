@@ -119,7 +119,8 @@
       present({
         request,
         queueSize: popupContext.queueSize,
-        projectLabel: popupContext.projectLabel
+        projectLabel: popupContext.projectLabel,
+        systemAccessDenied: popupContext.systemAccessDenied
       })
     })
     document.addEventListener('keydown', onKeydown)
@@ -160,6 +161,11 @@
     {#if noteFor(context)}
       <p class="truncate text-xs text-muted">{noteFor(context)}</p>
     {/if}
+    {#if context.systemAccessDenied}
+      <p class="text-xs text-danger">
+        macOS blocked access. Enable camera or microphone access for CodeInOven in System Settings, then retry.
+      </p>
+    {/if}
     <div class="mt-0.5 flex gap-1.5" role="group" aria-label="Permission decision">
       <button
         type="button"
@@ -181,10 +187,12 @@
         type="button"
         {@attach trackAllowButton}
         class="h-6 min-w-0 flex-1 whitespace-nowrap bg-primary px-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Allow and remember for this site until you reset permissions"
+        title={context.systemAccessDenied
+          ? 'Retry macOS camera or microphone access for this request'
+          : 'Allow and remember for this site until you reset permissions'}
         onclick={() => decide('allow')}
       >
-        Allow
+        {context.systemAccessDenied ? 'Retry' : 'Allow'}
       </button>
     </div>
   </div>

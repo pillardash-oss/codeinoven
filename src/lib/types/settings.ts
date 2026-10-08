@@ -1,5 +1,6 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
-import type { AgentModelSelection } from './common'
+import type { CioCleanupCategoryId } from './cio-cleanup'
+import type { AgentModelSelection, InferenceMode, PermissionLevel, ThinkingLevel } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 import type { MediaProviderId } from '../media-generation'
 import type { BrowserSearchEngine } from '../browser-search-engines'
@@ -73,11 +74,11 @@ export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'prefe
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 
 /**
- * An audience a memory can be loaded for: the three surfaces that receive
+ * An audience a memory can be loaded for: the surfaces that receive
  * persistent memory. An entry applies to every audience when its scope set is
  * empty.
  */
-export type MemoryAudience = 'projects' | 'chat' | 'assistant'
+export type MemoryAudience = 'projects' | 'chat' | 'assistant' | 'browser'
 
 /**
  * One scope a memory carries: an audience, or a single place inside an
@@ -252,6 +253,38 @@ export interface DesignConfig {
 }
 
 /**
+ * A named preset for how a conversation runs: which harness and model, how hard
+ * it thinks, how fast it answers, and how much it is allowed to touch.
+ *
+ * A profile is what the user re-picks instead of re-tuning five separate
+ * controls, so it captures the whole shape of a run rather than the model alone.
+ *
+ * Stores the selected account handle and optional context-window override.
+ */
+export interface ModelProfile {
+  /** Stable handle the profile row is keyed by. */
+  id: string
+  /** Human name the user typed, e.g. `Deep review`. */
+  name: string
+  /** Harness that runs the conversation, e.g. `opencode`. */
+  harnessId: string
+  /** Provider under that harness, e.g. `anthropic`. */
+  providerId: string
+  /** Model under that provider. */
+  modelId: string
+  /** Reasoning effort, resolved against the model's presets when applied. */
+  thinkingLevel: ThinkingLevel
+  /** Speed tier: `normal` (standard), `fast`, or `ultrafast`. */
+  inferenceMode: InferenceMode
+  /** How tool-call permissions are handled while the profile is active. */
+  permissionLevel: PermissionLevel
+  /** Account handle, never the credential itself. */
+  accountId?: string
+  /** Context-window override in tokens; null restores the harness default. */
+  contextWindow?: number | null
+}
+
+/**
  * The backend that turns a prompt into an image, a clip or a track.
  *
  * One provider at a time, because one aggregator token already reaches many
@@ -325,6 +358,8 @@ export interface AppConfig {
   zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
   onboardingCompleted: boolean
+  /** Explicit consent for anonymous installation usage statistics. */
+  shareAnonymousUsage?: boolean
   threadLimit: number
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
@@ -347,6 +382,8 @@ export interface AppConfig {
   auxiliaryAgents: AuxiliaryAgentConfig
   /** Model the user assigned to each named design assignment (images, copy, video). */
   design: DesignConfig
+  /** Named presets the user can apply from the model picker to shape a whole run. */
+  modelProfiles: ModelProfile[]
   /**
    * Project-relative folders where authored work is written, app-wide.
    *
@@ -453,7 +490,23 @@ export interface AppConfig {
   inAppNotificationSound: InAppNotificationSoundSettings
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
   sound: import('../speech/types').SpeechSettings
+  /**
+   * Age in days after which CIO Cleanup deletes content of a workspace's `.cio`
+   * scratch folder. Bounded to `MIN/MAX_CIO_CLEANUP_RETENTION_DAYS`.
+   */
+  cioCleanupRetentionDays: number
+  /**
+   * `.cio` folders the sweep never enters, by category. A fresh install keeps
+   * designs, videos, and installed utilities, leaving the four scratch folders
+   * sweepable; the settings page toggles the list.
+   */
+  cioCleanupExcludedCategories: CioCleanupCategoryId[]
 }
+
+/** Bounds for `AppConfig.cioCleanupRetentionDays`. */
+export const MIN_CIO_CLEANUP_RETENTION_DAYS = 1
+export const MAX_CIO_CLEANUP_RETENTION_DAYS = 365
+export const DEFAULT_CIO_CLEANUP_RETENTION_DAYS = 30
 
 /** A single layer of the assembled prompt/behavior display. */
 export interface BehaviorLayer {
@@ -475,6 +528,7 @@ export type AppConfigPatch = Partial<
     | 'fontWeight'
     | 'zoomLevel'
     | 'onboardingCompleted'
+    | 'shareAnonymousUsage'
     | 'threadLimit'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
@@ -484,6 +538,7 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'auxiliaryAgents'
     | 'design'
+    | 'modelProfiles'
     | 'mediaGeneration'
     | 'workRoots'
     | 'rankingJudge'
@@ -515,5 +570,7 @@ export type AppConfigPatch = Partial<
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'
     | 'sound'
+    | 'cioCleanupRetentionDays'
+    | 'cioCleanupExcludedCategories'
   >
 >

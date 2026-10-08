@@ -21,6 +21,7 @@ import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
+import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
 import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
@@ -58,6 +59,12 @@ export interface BootstrapState {
   // shutdown pipeline.
   quitCleanupStarted: boolean
   quitConfirmed: boolean
+  /**
+   * A quit an update install drove, not the user. The park gate honours it so
+   * `autoUpdater.quitAndInstall()` can restart the app to apply an update
+   * instead of being swallowed by background mode's close-to-menu-bar path.
+   */
+  quitForUpdate: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
 
   // Renderer readiness and startup milestones.
@@ -90,6 +97,8 @@ export interface BootstrapState {
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
+  /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
+  cioCleanup: CioCleanupService | null
   routineManager: RoutineManager | null
   routineScheduler: RoutineSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
@@ -152,6 +161,7 @@ export function createBootstrapState(): BootstrapState {
     gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,
+    quitForUpdate: false,
     shutdownFailsafe: null,
     rendererReadyReported: false,
     packagedSmokeProofStarted: false,
@@ -174,6 +184,7 @@ export function createBootstrapState(): BootstrapState {
     powerWakeService: null,
     retryScheduler: null,
     heartbeatScheduler: null,
+    cioCleanup: null,
     routineManager: null,
     routineScheduler: null,
     backgroundRunLedger: null,

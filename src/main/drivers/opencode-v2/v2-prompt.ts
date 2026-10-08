@@ -119,19 +119,28 @@ const TOOL_ACTION_ALIASES: Record<string, string> = {
  *    behavior), so the harness's own defaults apply to every tool.
  *  - an allow-list → every restrictable tool action is denied, then the listed
  *    tools are granted back, then `external_directory` is allowed so an external
- *    read is auto-approved instead of hard-denied before the app's own
- *    permission card can approve it. `read` can never be part of the
+ *    read is auto-approved on unrestricted turns; read-only turns deny external
+ *    directories. Explicit allowlists also apply in Full Access.
+ *    `read` can never be part of the
  *    restriction (see {@link RESTRICTABLE_TOOL_ACTIONS}).
  */
 export function buildOpenCodeV2PermissionRuleset(
-  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools'>
+  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): OpenCodeV2PermissionRule[] {
-  if (opts.settings.permissionLevel === 'full_access') {
+  if (
+    opts.settings.permissionLevel === 'full_access' &&
+    opts.allowedTools === undefined &&
+    !opts.readOnly
+  ) {
     return [{ action: '*', resource: '*', effect: 'allow' }]
   }
   const rules: OpenCodeV2PermissionRule[] = []
   if (opts.allowedTools === undefined) {
-    rules.push({ action: 'external_directory', resource: '*', effect: 'allow' })
+    rules.push({
+      action: 'external_directory',
+      resource: '*',
+      effect: opts.readOnly ? 'deny' : 'allow'
+    })
     return rules
   }
   for (const action of RESTRICTABLE_TOOL_ACTIONS) {
@@ -143,7 +152,11 @@ export function buildOpenCodeV2PermissionRuleset(
     if (action === 'read') continue
     rules.push({ action, resource: '*', effect: 'allow' })
   }
-  rules.push({ action: 'external_directory', resource: '*', effect: 'allow' })
+  rules.push({
+    action: 'external_directory',
+    resource: '*',
+    effect: opts.readOnly ? 'deny' : 'allow'
+  })
   return rules
 }
 
@@ -178,7 +191,13 @@ export function buildOpenCodeV2ModelRef(
  * text that goes in it.
  */
 export function wrapOpenCodeV2SystemContext(systemPrompt: string): string {
-  return `[System instructions for this session]\n\n${systemPrompt}`
+  return [
+    '[System instructions for this session]',
+    systemPrompt,
+    'OpenCode V2 tool access: execute runs Code Mode scripts for tools in its catalog. That catalog is not the complete list of tools available to this model. Native read, glob, grep, edit, write, patch, and shell tools are called directly when exposed by the active agent and permissions. A missing search result inside execute does not establish that a native tool is unavailable. Use the native file tools directly for repository work; use execute for catalog tools. Do not interpret Code Mode instructions about catalog tools as prohibiting direct native tool calls.'
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /**

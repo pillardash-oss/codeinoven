@@ -33,6 +33,7 @@ import type {
 } from './driver.interface'
 import { QuestionRequestGoneError } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { opencodeNativeProviderIds } from '../agents/native-provider-config-service'
@@ -596,7 +597,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
         : await this.ensureServer(projectPath))
 
     const parts: Array<Record<string, unknown>> = [
-      { type: 'text', text: opts.text },
+      { type: 'text', text: prependHistoryRecap(opts.text, opts.historyRecap) },
       ...(await buildOpenCodePromptParts(opts.attachments))
     ]
     const body = buildOpenCodePromptBody(opts, parts)

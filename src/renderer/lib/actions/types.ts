@@ -71,6 +71,10 @@ export interface ActionThreadMeta {
   providerId: string | null
   /** Model identifier of the thread's current model. */
   modelId: string | null
+  /** Oven the thread runs on, when it is not this computer. */
+  oven?: { name: string; iconUrl: string | null } | null
+  /** Git branch the thread's checkout is on, when known. */
+  branch?: string | null
 }
 
 export interface ActionStatusBadge {
@@ -79,7 +83,8 @@ export interface ActionStatusBadge {
   stage?: 'pinned' | 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done'
   tone?: import('$shared/thread-status-policy').ThreadStatusTone
   kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
-  variant?: 'dot' | 'spinner'
+  variant?: 'dot' | 'spinner' | 'icon'
+  icon?: Component
   animated?: boolean
 }
 

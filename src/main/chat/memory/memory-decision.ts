@@ -100,6 +100,7 @@ const SCOPE_OPTIONS: Record<MemoryScope, string> = {
   projects: 'Applies to every project, but not to standalone chats.',
   chat: 'Applies to this chat and other standalone chats.',
   assistant: 'Applies to every assistant task, whatever its routine.',
+  browser: 'Applies to every browser chat, but not to projects or standalone chats.',
   project: 'Applies only to this project.',
   thread: 'Applies only to this conversation.',
   routine: 'Applies only to tasks in this routine.',

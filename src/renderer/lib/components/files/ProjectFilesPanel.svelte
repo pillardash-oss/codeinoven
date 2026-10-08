@@ -70,6 +70,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
+  import { ovenRootThread } from '$lib/oven-root-target'
   import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
@@ -108,7 +109,11 @@
    *  directory (a chat's artifact directory, an assistant task's working
    *  directory); real projects always use the project root regardless of the
    *  open thread. */
-  let mountThreadId = $derived(usesThreadWorkspaceMount(projectId) ? activeThreadId : null)
+  let mountThreadId = $derived(
+    usesThreadWorkspaceMount(projectId) || ovenRootThread(projectId) ? activeThreadId : null
+  )
+  /** Whether this tree is reading a checkout that lives on an Oven. */
+  let ovenFile = $derived(Boolean(ovenRootThread(projectId)))
   $effect(() => {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
@@ -680,6 +685,30 @@
     )
   }
 
+  /**
+   * Download one Oven file to this computer.
+   *
+   * The file lives on the Oven, so an external editor on this machine can only
+   * work on a copy; the panel offers this in place of Open in editor. The copy
+   * is read-only for the checkout   edits belong in the app editor, which saves
+   * back to the Oven.
+   */
+  async function saveSelectedAs(): Promise<void> {
+    if (!activeTab) return
+    try {
+      const path = await invoke(
+        'projectFiles:saveAs',
+        projectId,
+        activeTab.path,
+        workspaceState.activeScopeBucketIdFor(projectId),
+        mountThreadId ?? undefined
+      )
+      if (path) toast.success('Saved a copy', { description: path })
+    } catch (error) {
+      reportError(error, 'The file could not be saved')
+    }
+  }
+
   function startRename(): void {
     if (!activeTab || deletedAtCheckpoint) return
     renameTarget = {
@@ -1054,14 +1083,18 @@
           <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">
             <div class="text-center">
               <p class="text-xs font-medium text-dimmed">This file cannot be viewed here</p>
-              <p class="mt-1 text-[0.625rem] text-dimmed">You can open it with your editor.</p>
+              <p class="mt-1 text-[0.625rem] text-dimmed">
+                {ovenFile
+                  ? 'It lives on the Oven. Save a copy to open it here.'
+                  : 'You can open it with your editor.'}
+              </p>
             </div>
             <button
               type="button"
               class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
-              onclick={openSelectedInEditor}
+              onclick={ovenFile ? saveSelectedAs : openSelectedInEditor}
             >
-              Open in editor
+              {ovenFile ? 'Save a copy…' : 'Open in editor'}
             </button>
           </div>
         {/if}

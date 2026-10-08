@@ -123,6 +123,19 @@
     await updateConfig({ agentDefaults: next })
   }
 
+  async function selectRuntime(
+    role: AgentRole,
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    if (!defaults[role]) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      [role]: { ...defaults[role], ...runtime }
+    }
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
   async function clearModel(role: AgentRole): Promise<void> {
     const next = { ...defaults }
     delete next[role]
@@ -163,6 +176,18 @@
     const next: AgentDefaultsConfig = {
       ...defaults,
       imageDescriptor: { ...defaults.imageDescriptor, thinkingLevel: level }
+    }
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function selectImageDescriptorRuntime(
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    if (!defaults.imageDescriptor) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptor: { ...defaults.imageDescriptor, ...runtime }
     }
     defaults = next
     await updateConfig({ agentDefaults: next })
@@ -228,6 +253,18 @@
     await updateConfig({ agentDefaults: next })
   }
 
+  async function selectImageDescriptorFallbackRuntime(
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    if (!defaults.imageDescriptorFallback) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptorFallback: { ...defaults.imageDescriptorFallback, ...runtime }
+    }
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
   async function clearImageDescriptorFallback(): Promise<void> {
     const next = { ...defaults }
     delete next.imageDescriptorFallback
@@ -286,7 +323,9 @@
                 onSelect={(providerId, modelId, harnessId, accountId) =>
                   void selectModel(role.id, providerId, modelId, harnessId, accountId)}
                 thinkingLevel={selection?.thinkingLevel}
+                runtimeSettings={selection}
                 onSelectThinking={(level) => void selectThinking(role.id, level)}
+                onSelectRuntime={(runtime) => void selectRuntime(role.id, runtime)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -373,7 +412,9 @@
             onSelect={(providerId, modelId, harnessId, accountId) =>
               void selectImageDescriptor(providerId, modelId, harnessId, accountId)}
             thinkingLevel={defaults.imageDescriptor?.thinkingLevel}
+            runtimeSettings={defaults.imageDescriptor}
             onSelectThinking={(level) => void selectImageDescriptorThinking(level)}
+            onSelectRuntime={(runtime) => void selectImageDescriptorRuntime(runtime)}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
             onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -406,7 +447,7 @@
           </p>
         {:else if sameModel(defaults.imageDescriptor, defaults.imageDescriptorFallback)}
           <p class="mt-1 text-[0.6875rem] text-danger">
-            Same model as the primary   it cannot act as a fallback.
+            Same model as the primary it cannot act as a fallback.
           </p>
         {/if}
       </div>
@@ -432,7 +473,9 @@
             onSelect={(providerId, modelId, harnessId, accountId) =>
               void selectImageDescriptorFallback(providerId, modelId, harnessId, accountId)}
             thinkingLevel={defaults.imageDescriptorFallback?.thinkingLevel}
+            runtimeSettings={defaults.imageDescriptorFallback}
             onSelectThinking={(level) => void selectImageDescriptorFallbackThinking(level)}
+            onSelectRuntime={(runtime) => void selectImageDescriptorFallbackRuntime(runtime)}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
             onReorderFavorite={(draggedKey, targetKey, position) =>

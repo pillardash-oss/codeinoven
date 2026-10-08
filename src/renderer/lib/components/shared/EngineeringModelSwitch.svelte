@@ -67,6 +67,11 @@
     if (!settings || !onModelChange) return
     onModelChange({ ...settings, thinkingLevel: level })
   }
+
+  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    if (!settings || !onModelChange) return
+    onModelChange({ ...settings, ...runtime })
+  }
 </script>
 
 {#if settings && providers.length > 0 && onModelChange}
@@ -85,7 +90,9 @@
     variant="action"
     onSelect={chooseModel}
     thinkingLevel={settings.thinkingLevel}
+    runtimeSettings={settings}
     onSelectThinking={chooseThinking}
+    onSelectRuntime={chooseRuntime}
     {onToggleFavorite}
     {onReorderFavorite}
   />

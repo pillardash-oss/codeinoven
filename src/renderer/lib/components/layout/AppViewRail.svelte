@@ -5,7 +5,7 @@
   import AppRailUtilities from './AppRailUtilities.svelte'
   import RailHighlight from './RailHighlight.svelte'
   import type { HeaderViewOption, HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
-  import { ViewRailActivity, viewBadgeFor } from './view-rail-activity.svelte'
+  import { ViewRailActivity, viewBadgesFor } from './view-rail-activity.svelte'
 
   interface Props {
     /** The primary-view options, already ordered by the navigation controller. */
@@ -46,8 +46,9 @@
   settings) that used to sit in the project sidebar footer. Each view item
   carries the activity badge of its own family, so the project family's shared
   badge rides the last project view the user was on while Chat, Assistant or
-  Browser is on screen. The Browser has no thread family, so its item carries the
-  browser profile's outstanding downloads instead.
+  Browser is on screen. The Browser owns no listed thread family, so its item
+  carries the tab assistant conversations behind it, falling back to the browser
+  profile's outstanding downloads.
 -->
 <nav
   class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
@@ -60,11 +61,13 @@
 
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
-      {@const activityBadge = viewBadgeFor(
+      {@const badges = viewBadgesFor(
         option.id,
         projectBadgeOption,
         activity.counts,
-        activity.browserTransfers
+        activity.unreadCounts,
+        activity.browserTransfers,
+        activity.browserAssistant
       )}
       <AppRailButton
         label={option.label}
@@ -75,14 +78,35 @@
         onHover={() => onOptionHover(option.id)}
       >
         {#snippet badge()}
-          {#if activityBadge}
-            <WorkingCountBadge
-              icon={activityBadge.icon}
-              count={activityBadge.count}
-              label={activityBadge.label}
-              tone={activityBadge.tone}
-              class="absolute -top-1 -right-1"
-            />
+          {#if badges.activity || badges.unread}
+            <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
+              {#if badges.hasWorkingThreads && badges.activity}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
+                />
+              {/if}
+              {#if badges.unread}
+                <WorkingCountBadge
+                  icon={badges.unread.icon}
+                  count={badges.unread.count}
+                  label={badges.unread.label}
+                  tone={badges.unread.tone}
+                  colors={badges.unread.colors}
+                  class={badges.hasWorkingThreads ? '' : 'order-first'}
+                />
+              {/if}
+              {#if badges.activity && !badges.hasWorkingThreads}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
+                />
+              {/if}
+            </span>
           {/if}
         {/snippet}
       </AppRailButton>

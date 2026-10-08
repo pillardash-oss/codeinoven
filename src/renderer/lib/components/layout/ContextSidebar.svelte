@@ -1,7 +1,40 @@
+<script module lang="ts">
+  /**
+   * A tab's own presentation, resolved by the rail that owns it.
+   *
+   * The shell draws every tab from its stored title and its kind's icon. A tool
+   * that names itself dynamically can replace both: the Oven panel wears the
+   * Oven's own mark and name, which only the rail beside it can resolve.
+   */
+  export interface ContextSidebarTabPresentation {
+    /** Name the tab shows in place of its stored title. */
+    title: string
+    /** The tab's own mark as a data URL, when it has one. */
+    iconUrl?: string | null
+    /** Colour of the plain dot drawn when the tool has no image. */
+    color?: string | null
+  }
+</script>
+
 <script lang="ts">
-  import type { Snippet } from 'svelte'
-  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
+  import { feature } from '$lib/feature-registry'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
+    browserTabIndicators,
+    browserTabIndicatorSlotClass
+  } from '$lib/stores/browser-tab-status'
+  import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TerminalPlacement
+  } from '$lib/stores/context-sidebar.svelte'
+  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import {
+    AppWindow,
     Bell,
     Bot,
     Boxes,
@@ -10,8 +43,6 @@
     ChevronDown,
     Cloud,
     FileDiff,
-    MonitorCog,
-    AppWindow,
     Files,
     GitBranch,
     GlobeCode,
@@ -20,31 +51,20 @@
     Maximize2,
     MessageCircleDashed,
     MessagesCircle,
+    MonitorCog,
     Network,
     PanelBottom,
     PanelRight,
     Plus,
     Puzzle,
+    Server,
     SquareTerminal,
-    StickyNote,
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import {
-    contextSidebarState,
-    type ContextSidebarTab,
-    type TerminalPlacement
-  } from '$lib/stores/context-sidebar.svelte'
-  import {
-    browserTabIndicators,
-    browserTabIndicatorSlotClass
-  } from '$lib/stores/browser-tab-status'
-  import { faviconState } from '$lib/stores/favicons.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import { DropdownMenu } from 'bits-ui'
+  import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
   interface Props {
     tabs: ContextSidebarTab[]
@@ -55,15 +75,20 @@
     content: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
-    /** A right-click menu for one strip tab, rendered by the rail that owns the
-     *  tabs: only that rail knows what its own tabs can do (a browser tab's
-     *  agent conversation can be renamed and closed; a terminal cannot). The
-     *  shell only decides where the menu is anchored, so every rail keeps one
-     *  strip implementation. */
-    tabMenu?: Snippet<[ContextSidebarTab]>
     onFullscreenTab?: (id: string) => void
-    /** Callback for drag-to-reorder; position is relative to the target tab.
-     *  Only tabbed kinds render a strip, so this only reorders those. */
+    /** Native right-click menu for one strip tab. The rail that owns the tabs
+     *  opens an OS popup here, above any native page view, so the shell never
+     *  draws a document menu of its own. */
+    onTabContextMenu?: (id: string, event: MouseEvent) => void
+    /** The strip tab currently renamed inline, or null while none is. The rail
+     *  that owns the tabs holds this state; the shell only swaps the title for
+     *  an editor. */
+    renamingTabId?: string | null
+    /** The in-progress title while a strip tab is renamed inline. */
+    renameValue?: string
+    onRenameValueChange?: (value: string) => void
+    onRenameCommit?: () => void
+    onRenameCancel?: () => void
     onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     onWidthChange: (width: number) => void
     onHeightChange: (height: number) => void
@@ -75,10 +100,15 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
-    /** Close every popup window the tab's page opened. The popup rail's own close
-     *  button ends all of them at once: one tab close per window is the strip's
-     *  job, and this is the way out of a pile of them. */
-    onCloseAllPopupWindows?: () => void
+    /** Close all visible popup windows, including extension action pages. */
+    onClosePopups?: () => void
+    /**
+     * Resolve a tab's own presentation, for a tool that names itself from state
+     * the shell does not hold (the Oven panel wears the Oven's mark and name).
+     * A returned value replaces the shell's default icon and title; null keeps
+     * them.
+     */
+    tabPresentation?: (tab: ContextSidebarTab) => ContextSidebarTabPresentation | null
   }
 
   let {
@@ -92,18 +122,34 @@
     onClose,
     onFullscreenTab,
     onMoveTab,
+    onTabContextMenu,
+    renamingTabId = null,
+    renameValue = '',
+    onRenameValueChange,
+    onRenameCommit,
+    onRenameCancel,
     onWidthChange,
     onHeightChange,
     onTerminalPlacementChange,
     onTerminalDockToggle,
     onNewTerminal,
     onNewBrowser,
-    onCloseAllPopupWindows,
-    tabMenu
+    onClosePopups,
+    tabPresentation
   }: Props = $props()
 
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
+
+  /** A tab's own presentation, when the rail that owns it resolves one. */
+  function presentationFor(tab: ContextSidebarTab): ContextSidebarTabPresentation | null {
+    return tabPresentation?.(tab) ?? null
+  }
+
+  /** The name a tab shows: its own resolved title, else the stored one. */
+  function titleFor(tab: ContextSidebarTab): string {
+    return presentationFor(tab)?.title ?? tab.title
+  }
 
   // Resolve favicons for browser tab URLs so the strip can show the site's icon
   // once available. Resolution is deduped per hostname inside the store.
@@ -155,6 +201,7 @@
     'extensions',
     'git',
     'actions',
+    'sticky-notes',
     'thread-note',
     'coordinator',
     'assistant-how-to'
@@ -177,6 +224,11 @@
       return { projectId: tab.projectId, conversationId: tab.threadId }
     }
     return null
+  }
+
+  /** Closing a popup rail tab destroys that popup page. */
+  function closeLabel(tab: ContextSidebarTab): string {
+    return `Close ${titleFor(tab)}`
   }
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -204,10 +256,20 @@
   let siblingTabs = $derived(
     activeTab && !tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
   )
+  /**
+   * Tools the context rail toggles on and off. Their panel is dismissed from the
+   * rail icon that opened it, so the header names the tool without offering a
+   * second, competing way to close it.
+   */
+  const RAIL_DISMISSED_KINDS = new Set<ContextSidebarTab['kind']>(['oven'])
+
   /** Temporary chats close from their own tab, so they need no header cluster
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
-    terminalMode || browserMode || popupMode || (activeTab !== null && !tabbedMode)
+    terminalMode ||
+      browserMode ||
+      popupMode ||
+      (activeTab !== null && !tabbedMode && !RAIL_DISMISSED_KINDS.has(activeTab.kind))
   )
 
   let dragTabId = $state<string | null>(null)
@@ -308,6 +370,12 @@
     window.addEventListener('pointerup', onUp)
   }
 
+  /** Focus the inline rename input and select its text, so typing replaces it. */
+  function focusRenameInput(node: HTMLInputElement): void {
+    node.focus()
+    node.select()
+  }
+
   /**
    * The band's own width, and the two insets a panel has to leave clear for it.
    *
@@ -348,7 +416,22 @@
   ></div>
 
   {#snippet tabIcon(tab: ContextSidebarTab)}
-    {#if tab.kind === 'files'}
+    {@const presentation = presentationFor(tab)}
+    {#if presentation}
+      {#if presentation.iconUrl}
+        <img
+          src={presentation.iconUrl}
+          alt=""
+          class="h-3 w-3 shrink-0 object-contain"
+          aria-hidden="true"
+        />
+      {:else}
+        <span
+          class="h-2.5 w-2.5 shrink-0 rounded-full bg-muted"
+          style={presentation.color ? `background-color: ${presentation.color}` : ''}
+        ></span>
+      {/if}
+    {:else if tab.kind === 'files'}
       {#if tab.fileTabId}
         <FileTypeIcon path={tab.path ?? tab.title} size={12} />
       {:else}
@@ -383,6 +466,9 @@
       <MessagesCircle size={12} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'sticky-notes'}
+      {@const StickyNotesIcon = feature('sticky-notes').icon}
+      <StickyNotesIcon size={12} class="shrink-0" />
     {:else if tab.kind === 'attention'}
       <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
@@ -392,7 +478,8 @@
     {:else if tab.kind === 'cloud-deployment'}
       <Cloud size={12} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
-      <StickyNote size={12} class="shrink-0" />
+      {@const ThreadNoteIcon = feature('thread-note').icon}
+      <ThreadNoteIcon size={12} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -405,6 +492,8 @@
       <Puzzle size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
+    {:else if tab.kind === 'oven'}
+      <Server size={12} class="shrink-0" />
     {:else if tab.kind === 'assistant-how-to'}
       <Hammer size={12} class="shrink-0 text-primary" />
     {:else}
@@ -414,7 +503,7 @@
 
   {#snippet stripRowBody(tab: ContextSidebarTab)}
     {@const runtime = contextSidebarState.browserRuntime(tab.id)}
-    {@const indicators = browserTabIndicators(runtime)}
+    {@const indicators = browserTabIndicators(runtime, browserStore()?.hasPeek(tab.id))}
     {@const conversation = badgeConversation(tab)}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
@@ -425,6 +514,7 @@
         : ''}"
       draggable={onMoveTab ? 'true' : 'false'}
       role="listitem"
+      oncontextmenu={(event) => onTabContextMenu?.(tab.id, event)}
       ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
       ondragend={handleDragEnd}
       ondragover={(e: DragEvent) => handleDragOver(e, tab)}
@@ -453,7 +543,7 @@
         class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
         data-active-tab={activeTabId === tab.id ? 'true' : undefined}
-        title={tab.title}
+        title={titleFor(tab)}
         onclick={() => onSelect(tab.id)}
       >
         {#if indicators.length > 0}
@@ -467,11 +557,35 @@
         {:else}
           {@render tabIcon(tab)}
         {/if}
-        <span
-          class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
-            ? 'italic'
-            : ''}">{tab.title}</span
-        >
+        {#if renamingTabId === tab.id}
+          <input
+            use:focusRenameInput
+            value={renameValue ?? ''}
+            class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
+            aria-label={`Rename ${tab.title}`}
+            oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                onRenameCommit?.()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                onRenameCancel?.()
+              }
+            }}
+            onblur={() => onRenameCommit?.()}
+            onclick={(event) => event.stopPropagation()}
+            oncontextmenu={(event) => event.stopPropagation()}
+            onpointerdown={(event) => event.stopPropagation()}
+            ondragstart={(event) => event.preventDefault()}
+          />
+        {:else}
+          <span
+            class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+              ? 'italic'
+              : ''}">{tab.title}</span
+          >
+        {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
             <StatusBadge kind="attention" animated title="Needs attention" />
@@ -491,8 +605,8 @@
       <button
         type="button"
         class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={`Close ${tab.title}`}
-        title={`Close ${tab.title}`}
+        aria-label={closeLabel(tab)}
+        title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
       >
         <X size={11} />
@@ -515,19 +629,7 @@
   {/snippet}
 
   {#snippet stripRow(tab: ContextSidebarTab)}
-    {#if tabMenu}
-      <!-- The rail that owns this tab supplies its menu, so the right-click
-           behaviour of a tab belongs beside the tab's meaning. The trigger
-           carries no box of its own (`contents`), so the row keeps its layout. -->
-      <ContextMenu.Root>
-        <ContextMenu.Trigger class="contents">
-          {@render stripRowBody(tab)}
-        </ContextMenu.Trigger>
-        {@render tabMenu(tab)}
-      </ContextMenu.Root>
-    {:else}
-      {@render stripRowBody(tab)}
-    {/if}
+    {@render stripRowBody(tab)}
   {/snippet}
 
   {#if !headerless}
@@ -549,7 +651,7 @@
               ? 'italic'
               : ''}"
           >
-            {activeTab.title}
+            {titleFor(activeTab)}
           </span>
           {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
             <StatusBadge stage="working" animated title="Running" />
@@ -574,12 +676,12 @@
                   {#each siblingTabs as tab (tab.id)}
                     <DropdownMenu.Item
                       class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
-                      textValue={tab.title}
+                      textValue={titleFor(tab)}
                       onSelect={() => onSelect(tab.id)}
                     >
                       {@render tabIcon(tab)}
                       <span class="min-w-0 flex-1 truncate text-xs text-foreground"
-                        >{tab.title}</span
+                        >{titleFor(tab)}</span
                       >
                       {#if tab.id === activeTabId}
                         <span class="text-[0.625rem] text-dimmed">open</span>
@@ -602,7 +704,7 @@
                 class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another browser tab"
                 title="New browser tab"
-                onclick={onNewBrowser}
+                onclick={() => onNewBrowser?.()}
               >
                 <Plus size={13} />
               </button>
@@ -669,9 +771,9 @@
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={popupMode ? 'Close all popup windows' : `Close ${activeTab.title}`}
+              aria-label={popupMode ? 'Close all popups' : `Close ${activeTab.title}`}
               title={popupMode ? 'Close all popup windows' : 'Close panel'}
-              onclick={() => (popupMode ? onCloseAllPopupWindows?.() : onClose(activeTab.id))}
+              onclick={() => (popupMode ? onClosePopups?.() : onClose(activeTab.id))}
             >
               <X size={13} />
             </button>

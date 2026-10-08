@@ -811,15 +811,24 @@
     </p>
   {/if}
 
-  {#if gitState.error}
-    <p
+  <!-- The dock's parent renders the error notice. The expanded reader owns its notice. -->
+  {#if variant === 'fullscreen' && gitState.error}
+    <div
       class="flex shrink-0 items-center gap-1 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[0.625rem] text-danger"
-      title={gitState.error}
-      aria-label={gitState.error}
+      role="alert"
     >
       <TriangleAlert size={12} class="shrink-0" />
-      {gitState.error}
-    </p>
+      <p class="min-w-0 flex-1 break-words">{gitState.error}</p>
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-danger/10"
+        title="Dismiss Git error"
+        aria-label="Dismiss Git error"
+        onclick={() => (gitState.error = null)}
+      >
+        <X size={13} />
+      </button>
+    </div>
   {/if}
 {/snippet}
 

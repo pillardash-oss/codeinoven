@@ -2,10 +2,14 @@
   import {
     AlertTriangle,
     ChevronDown,
+    Download,
     FolderOpen,
+    Globe,
+    LoaderCircle,
     Pin,
     Plus,
     Puzzle,
+    Settings,
     Store,
     Trash2
   } from '@lucide/svelte'
@@ -31,10 +35,13 @@
   import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import { openBrowserExtensionMenu } from './browser-extension-menus'
+  import { hostOfUrl, runsOnHost } from '$shared/browser/browser-extension-site-rules'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
   import {
     DEFAULT_BOX_ID,
     DEFAULT_BOX_NAME,
+    boxIdForJar,
     defaultBrowserBox,
     extensionJarForBox,
     jarIdForBox
@@ -59,6 +66,7 @@
   /** The extension the uninstall confirmation is for, or null. */
   let uninstallTarget = $state<BrowserExtension | null>(null)
   let uninstalling = $state(false)
+  let draggingId = $state<string | null>(null)
 
   const extensions = $derived(browserExtensions.extensions)
 
@@ -89,13 +97,10 @@
   /**
    * The box the panel is scoped to, or the all-boxes value.
    *
-   * Null means follow the page on screen, so the panel describes whichever box the
-   * tab in front of the user lives in and an install lands in that same box without
-   * them having to say so. Picking a box by hand pins that choice until they switch
-   * again, and All boxes is the one that lists everything at once.
+   * The installed inventory starts with every box. A selected box filters the
+   * list, while an install still belongs to the page's current box by default.
    */
-  let pinnedBoxId = $state<string | null>(null)
-  const selection = $derived(pinnedBoxId ?? globalBrowser.activeTabBoxId)
+  let selection = $state(ALL_BOXES_SELECTION)
   /** The box in view, or null while the all view is up. */
   const scopedBox = $derived(
     selection === ALL_BOXES_SELECTION ? null : (globalBrowser.boxById(selection) ?? null)
@@ -127,6 +132,27 @@
   /** Whether each row has to say which boxes it runs in, which is only useful when
    *  more than one box is on screen. */
   const showChips = $derived(scopedBox === null)
+
+  function dropExtension(targetId: string): void {
+    const sourceId = draggingId
+    draggingId = null
+    if (!sourceId || sourceId === targetId) return
+    const reorderedShown = [...shown]
+    const sourceIndex = reorderedShown.findIndex((extension) => extension.id === sourceId)
+    const targetIndex = reorderedShown.findIndex((extension) => extension.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = reorderedShown.splice(sourceIndex, 1)
+    if (!source) return
+    reorderedShown.splice(targetIndex, 0, source)
+    const orderedShownIds = reorderedShown.map((extension) => extension.id)
+    let shownIndex = 0
+    const orderedIds = browserExtensions.extensions.map((extension) =>
+      shown.some((visible) => visible.id === extension.id)
+        ? (orderedShownIds[shownIndex++] ?? extension.id)
+        : extension.id
+    )
+    void browserExtensions.reorder(orderedIds)
+  }
 
   /** What the source column calls where the extension's files came from. */
   function sourceLabel(extension: BrowserExtension): string {
@@ -257,13 +283,28 @@
    *  box. A jar the extension names but that no longer exists is kept out of this
    *  list, which is why updating the boxes replaces the whole list rather than
    *  merging into it. */
-  function jarChoices(): { id: string; name: string }[] {
-    return [
+  function jarChoices(): {
+    id: string
+    name: string
+    accent: string
+    iconUrl: string | null
+  }[] {
+    const choices: { id: string; name: string }[] = [
       { id: '', name: globalBrowser.boxById(DEFAULT_BOX_ID)?.name ?? DEFAULT_BOX_NAME },
       ...globalBrowser.boxes
         .filter((box) => box.id !== DEFAULT_BOX_ID)
         .map((box) => ({ id: box.id, name: box.name }))
     ]
+    // The mark and accent each row wears are the box's own, resolved the way the
+    // boxes panel resolves them, so a list of boxes never reads as bare names.
+    return choices.map((choice) => {
+      const box = globalBrowser.boxById(boxIdForJar(choice.id))
+      return {
+        ...choice,
+        accent: box ? browserAppearanceAccent(box) : '',
+        iconUrl: box ? browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id)) : null
+      }
+    })
   }
 
   /** Whether an extension is loaded into one jar. */
@@ -278,6 +319,13 @@
       ? [...new Set([...extension.boxes, boxId])]
       : extension.boxes.filter((id) => id !== boxId)
     void browserExtensions.setBoxes(extension.id, next)
+  }
+
+  /** Open one extension's options/setup page in a new tab of the current jar. */
+  async function openExtensionOptions(extension: BrowserExtension): Promise<void> {
+    const tab = globalBrowser.activeTab
+    const url = await browserExtensions.openOptionsPage(extension.id, tab ? tab.boxId : null)
+    if (url) globalBrowser.open(url, null, tab ? (tab.boxId ?? '') : '')
   }
 
   /** Open the store in the box this panel is on, which is where the install for
@@ -389,8 +437,8 @@
 <div class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
     <p class="text-xs font-medium text-muted">
-      {shown.length}
-      {shown.length === 1 ? 'extension' : 'extensions'}
+      {extensions.length}
+      {extensions.length === 1 ? 'installed extension' : 'installed extensions'}
     </p>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
@@ -443,7 +491,7 @@
     <EnumSelect
       options={boxOptions}
       value={selection}
-      onChange={(id) => (pinnedBoxId = id)}
+      onChange={(id) => (selection = id)}
       placeholder="Choose a box"
       ariaLabel="Box whose extensions are listed"
       title="Box whose extensions are listed"
@@ -490,14 +538,33 @@
       title={scopedBox ? `Nothing in ${scopedBox.name} yet` : 'No extensions yet'}
       description={scopedBox
         ? 'Install one and it lands in this box. Other boxes can be turned on later from its settings.'
-        : 'An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a box has a tab open.'}
+        : 'An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a tab is open in one of them.'}
     />
   {:else}
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
       {#each shown as extension (extension.id)}
         {@const pin = pinAction(extension)}
         {@const popup = popupAction(extension)}
-        <li>
+        {@const updating = browserExtensions.isUpdating(extension.id)}
+        <li
+          draggable
+          ondragstart={(event) => {
+            draggingId = extension.id
+            event.dataTransfer?.setData('text/plain', extension.id)
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+          }}
+          ondragover={(event) => event.preventDefault()}
+          ondrop={(event) => {
+            event.preventDefault()
+            dropExtension(extension.id)
+          }}
+          ondragend={() => (draggingId = null)}
+          oncontextmenu={(event) => {
+            event.preventDefault()
+            void openBrowserExtensionMenu(extension, event.clientX, event.clientY)
+          }}
+          class:opacity-50={draggingId === extension.id}
+        >
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
           >
@@ -524,12 +591,40 @@
             {#if showChips}
               <BrowserBoxChips jars={extension.boxes} />
             {/if}
+            {#if extension.updateAvailableVersion || updating}
+              {@const updateTitle = extension.updateAvailableVersion
+                ? `Update ${extension.name} to version ${extension.updateAvailableVersion}`
+                : `Updating ${extension.name}`}
+              <button
+                type="button"
+                class="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-wait disabled:opacity-60"
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : updateTitle}
+                aria-label={updating ? `Updating ${extension.name}` : updateTitle}
+                onclick={() => void browserExtensions.updateFromWebStore(extension.id)}
+              >
+                {#if updating}
+                  <LoaderCircle size={12} class="animate-spin" />
+                  Updating
+                {:else}
+                  <Download size={12} />
+                  Update
+                {/if}
+              </button>
+            {/if}
             <Switch
               checked={extension.enabled}
-              title={extension.enabled ? `Disable ${extension.name}` : `Enable ${extension.name}`}
-              aria-label={extension.enabled
-                ? `Disable ${extension.name}`
-                : `Enable ${extension.name}`}
+              disabled={updating}
+              title={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
+              aria-label={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
               onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
             />
             <button
@@ -542,9 +637,9 @@
                     ? 'text-foreground'
                     : 'text-muted opacity-0 group-hover:opacity-100'
               ]}
-              disabled={pin.disabled}
-              title={pin.title}
-              aria-label={pin.title}
+              disabled={pin.disabled || updating}
+              title={updating ? `Updating ${extension.name}` : pin.title}
+              aria-label={updating ? `Updating ${extension.name}` : pin.title}
               onclick={() => void browserExtensions.setPinned(extension.id, !extension.pinned)}
             >
               <Pin size={13} />
@@ -570,6 +665,14 @@
           </div>
 
           {#if expandedId === extension.id}
+            {@const currentHost = globalBrowser.activeTab
+              ? hostOfUrl(globalBrowser.activeTab.url)
+              : null}
+            {@const runsHere = runsOnHost(
+              extension.blockedHosts,
+              extension.allowedHosts,
+              currentHost
+            )}
             <div
               id="extension-settings-{extension.id}"
               class="mb-1 space-y-2.5 rounded-lg border px-3 py-2.5"
@@ -585,12 +688,17 @@
                 </div>
                 <Switch
                   checked={extension.enabled}
-                  title={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
-                  aria-label={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
+                  disabled={updating}
+                  title={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
+                  aria-label={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
                   onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
                 />
               </div>
@@ -604,9 +712,26 @@
                 <div class="space-y-0.5 rounded-lg border p-1">
                   {#each jarChoices() as jar (jar.id)}
                     <div class="flex items-center justify-between gap-3 px-2 py-1">
-                      <p class="truncate text-[0.6875rem] text-foreground">{jar.name}</p>
+                      <span class="flex min-w-0 items-center gap-2">
+                        {#if jar.iconUrl}
+                          <img
+                            src={jar.iconUrl}
+                            alt=""
+                            class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                          />
+                        {:else}
+                          <span
+                            class="h-2 w-2 shrink-0 rounded-full"
+                            style:background-color={jar.accent}
+                          ></span>
+                        {/if}
+                        <span class="truncate text-[0.6875rem]" style="color: {jar.accent}">
+                          {jar.name}
+                        </span>
+                      </span>
                       <Switch
                         checked={runsInBox(extension, jar.id)}
+                        disabled={updating}
                         title={`Run in ${jar.name}`}
                         aria-label={`Run in ${jar.name}`}
                         onchange={(next) => toggleBox(extension, jar.id, next)}
@@ -617,8 +742,98 @@
               </div>
 
               <p class="text-[0.625rem] leading-relaxed text-dimmed">
-                Version {extension.version} · {extension.popupPath ? 'Has a popup' : 'No popup'}
+                Version {extension.version} · {extension.popupPath
+                  ? 'Has a popup'
+                  : 'No popup'}{extension.optionsPath ? ' · Has a setup page' : ''}
               </p>
+
+              {#if extension.optionsPath}
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                  title={`Open the ${extension.name} setup page`}
+                  aria-label={`Open the ${extension.name} setup page`}
+                  onclick={() => void openExtensionOptions(extension)}
+                >
+                  <Settings size={13} />
+                  Open setup page
+                </button>
+              {/if}
+
+              <div class="space-y-1.5">
+                <p class="text-xs text-foreground">Site access</p>
+                <p class="text-[0.625rem] leading-relaxed text-dimmed">
+                  {#if currentHost}
+                    {runsHere
+                      ? `Runs on ${currentHost}. Block it to disable the extension for just this site.`
+                      : `Blocked on ${currentHost}. Allow it to enable the extension for just this site.`}
+                  {:else}
+                    Open a website to allow or block this extension for just that site.
+                  {/if}
+                  {#if extension.allowedHosts.length > 0}
+                    Allowed-only mode: runs solely on {extension.allowedHosts.join(', ')}.
+                  {/if}
+                </p>
+                {#if currentHost}
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                    disabled={updating}
+                    title={runsHere
+                      ? `Disable ${extension.name} on ${currentHost}`
+                      : `Enable ${extension.name} on ${currentHost}`}
+                    aria-label={runsHere
+                      ? `Disable ${extension.name} on ${currentHost}`
+                      : `Enable ${extension.name} on ${currentHost}`}
+                    onclick={() => {
+                      if (!currentHost) return
+                      if (runsHere) {
+                        void browserExtensions.setSiteRules(
+                          extension.id,
+                          [...extension.blockedHosts, currentHost],
+                          extension.allowedHosts
+                        )
+                      } else {
+                        void browserExtensions.setSiteRules(
+                          extension.id,
+                          extension.blockedHosts.filter((entry) => entry !== currentHost),
+                          extension.allowedHosts.length > 0 &&
+                            !extension.allowedHosts.includes(currentHost)
+                            ? [...extension.allowedHosts, currentHost]
+                            : extension.allowedHosts
+                        )
+                      }
+                    }}
+                  >
+                    <Globe size={13} />
+                    {runsHere ? `Disable on ${currentHost}` : `Enable on ${currentHost}`}
+                  </button>
+                {/if}
+                {#if extension.blockedHosts.length > 0 || extension.allowedHosts.length > 0}
+                  <div class="space-y-1 rounded-lg border p-2">
+                    {#if extension.blockedHosts.length > 0}
+                      <p class="text-[0.625rem] text-dimmed">
+                        Blocked: {extension.blockedHosts.join(', ')}
+                      </p>
+                    {/if}
+                    {#if extension.allowedHosts.length > 0}
+                      <p class="text-[0.625rem] text-dimmed">
+                        Allowed: {extension.allowedHosts.join(', ')}
+                      </p>
+                    {/if}
+                    <button
+                      type="button"
+                      class="text-[0.625rem] text-muted underline"
+                      disabled={updating}
+                      title="Clear per-site rules"
+                      aria-label="Clear per-site rules"
+                      onclick={() => void browserExtensions.setSiteRules(extension.id, [], [])}
+                    >
+                      Clear per-site rules
+                    </button>
+                  </div>
+                {/if}
+              </div>
 
               <p
                 class="rounded-lg border bg-elevated/50 px-2.5 py-2 text-[0.625rem] leading-relaxed text-dimmed"
@@ -658,8 +873,9 @@
               <button
                 type="button"
                 class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
-                title={`Uninstall ${extension.name}`}
-                aria-label={`Uninstall ${extension.name}`}
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
+                aria-label={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
                 onclick={() => (uninstallTarget = extension)}
               >
                 <Trash2 size={13} />
@@ -673,8 +889,8 @@
     <p
       class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed"
     >
-      An extension is loaded into each box you enable it in, and only while a box has a tab open.
-      Turn it off to unload it everywhere without uninstalling.
+      An extension is loaded into each box you enable it in, and only while a tab is open in that
+      box, in any browser. Turn it off to unload it everywhere without uninstalling.
     </p>
   {/if}
 </div>

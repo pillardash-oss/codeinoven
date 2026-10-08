@@ -6,7 +6,7 @@ import type {
 import { uuidv7 } from '$shared/id'
 import { parseModelKey } from '$lib/model-keys'
 import type { ModelScope } from './thread-settings.svelte'
-import { setDraftLabelCookie } from './draft-label'
+import { clearDraftLabelCookie, setDraftLabelCookie } from './draft-label'
 import {
   commitDraftStateNow,
   flushAllDraftCommits,
@@ -253,6 +253,37 @@ export class RendererRecoveryStore {
     setDraftLabelCookie(threadId, entry.text)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+  }
+
+  /**
+   * Drop the drafts of threads that no longer exist, in one state write.
+   *
+   * A draft whose thread row is gone has no composer left to open onto, so it
+   * can only ever be dead weight: the workspace's draft rescue asked the
+   * database about it again on every pass, one round trip at a time, and got
+   * the same nothing back. Keeping them was unbounded, and a store that had
+   * accumulated fifty of them paid fifty round trips to learn nothing. Forgetting
+   * them is what makes that pass finish empty.
+   *
+   * No `thread:setDraftState` commit is issued: the thread row this draft would
+   * be written onto does not exist, so there is nothing on the main side to
+   * update. The label cookie is cleared because the sidebar's placeholder reads
+   * it, and a draft that can never be shown must not label anything.
+   */
+  forgetDraftRefs(refs: ReadonlyArray<{ projectId: string; threadId: string }>): void {
+    if (refs.length === 0) return
+    const next = { ...this.composerDrafts }
+    const forgotten: string[] = []
+    for (const ref of refs) {
+      const key = recoveryDraftKey(ref.projectId, ref.threadId)
+      if (!(key in next)) continue
+      delete next[key]
+      forgotten.push(ref.threadId)
+    }
+    if (forgotten.length === 0) return
+    this.composerDrafts = next
+    for (const threadId of forgotten) clearDraftLabelCookie(threadId)
+    this.persist()
   }
 
   /** Every thread whose composer holds unsent content, as (projectId, threadId)

@@ -94,6 +94,7 @@
   import GitStatusPanelCommitComposer from './GitStatusPanelCommitComposer.svelte'
   import GitStatusPanelCommitSearch from './GitStatusPanelCommitSearch.svelte'
   import GitStatusPanelNotices from './GitStatusPanelNotices.svelte'
+  import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import GitStatusPanelRepoStates from './GitStatusPanelRepoStates.svelte'
   import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
   import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
@@ -156,6 +157,23 @@
   let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
+
+  /**
+   * Whether this panel's Git state comes from an Oven, and which one. The store
+   * resolves it from the active scope it already reads against, so the panel
+   * never has to re-derive the thread's Oven at render time.
+   */
+  let ovenTarget = $derived(gitState.remoteTarget)
+  /**
+   * Why the repository check itself failed, or null.
+   *
+   * A preflight that never answered leaves the working-tree read with nothing
+   * to report from, so this carries the reason for the remote case; a local
+   * project keeps its existing "not a repository" answer.
+   */
+  let preflightError = $state<string | null>(null)
+  /** Why the Oven could not answer, for the surface overlay, or null. */
+  let ovenError = $derived(ovenTarget ? (gitState.workingTreeError ?? preflightError) : null)
 
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
@@ -530,8 +548,11 @@
   async function loadRepoState(force = false): Promise<void> {
     // Re-checking in place must not blank a panel that is already showing data:
     // the "Checking repository" takeover belongs to the first answer, not to a
-    // refresh of one.
-    if (!force) repoState = 'loading'
+    // refresh of one. A remote checkout's last-known read counts as data, so a
+    // cached tree stays on screen, dimmed by the surface overlay, until the new
+    // preflight answers.
+    if (!force) repoState = gitState.showingCachedStatus ? 'git' : 'loading'
+    preflightError = null
     try {
       // Cached per project, so re-opening the panel does not spawn git again to
       // ask a question whose answer has not changed.
@@ -552,8 +573,14 @@
       }
       repoState = 'git'
       await refreshStatus()
-    } catch {
-      repoState = 'not_git'
+    } catch (reason) {
+      // A preflight that could not answer is not the same as "this is not a
+      // repository". On an Oven the round trip itself may have failed, and
+      // claiming otherwise would show a git-less panel for a healthy checkout
+      // at exactly the moment the user needs to see its last-known state. The
+      // surface overlay states the real reason.
+      preflightError = reason instanceof Error ? reason.message : 'Git could not be read.'
+      repoState = gitState.remoteTarget ? 'git' : 'not_git'
     }
   }
 
@@ -3614,223 +3641,236 @@
   </div>
 
   <!-- Content (scrollable) -->
-  <div class="min-h-0 flex-1 overflow-auto" onscroll={handleContentScroll}>
-    {#if repoState === 'loading' || repoState === 'git_unavailable' || repoState === 'not_git'}
-      <GitStatusPanelRepoStates
-        {repoState}
-        {preflightDetail}
-        onInitialize={() => void initializeRepository()}
-      />
-    {:else}
-      <GitStatusPanelNotices
-        {scopeUnhealthy}
-        {projectId}
-        {scopeBucketId}
-        {conflictState}
-        {conflicted}
-        {conflictRowAborts}
-        {integrationActions}
-        onRepaired={() => void refreshStatus()}
-      />
+  <OvenSurfaceOverlay
+    active={Boolean(ovenTarget)}
+    loading={gitState.isBusy('refresh')}
+    showingCached={gitState.showingCachedStatus}
+    error={ovenError}
+    title="Git could not be read from the Oven"
+    loadingLabel="Reading Git from the Oven…"
+    onRetry={() => void loadRepoState(true)}
+  >
+    <div class="min-h-0 flex-1 overflow-auto" onscroll={handleContentScroll}>
+      {#if repoState === 'loading' || repoState === 'git_unavailable' || repoState === 'not_git'}
+        <GitStatusPanelRepoStates
+          {repoState}
+          {preflightDetail}
+          onInitialize={() => void initializeRepository()}
+        />
+      {:else}
+        <GitStatusPanelNotices
+          {scopeUnhealthy}
+          {projectId}
+          {scopeBucketId}
+          {conflictState}
+          {conflicted}
+          {conflictRowAborts}
+          {integrationActions}
+          suppressError={Boolean(ovenError)}
+          onRepaired={() => void refreshStatus()}
+        />
 
-      {#if identityNeeded}
-        <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
-          <p class="text-[0.625rem] font-medium text-foreground">Commit identity not configured</p>
-          {#if showIdentityForm}
-            <div class="mt-2 space-y-1.5">
-              <input
-                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                placeholder="Name"
-                bind:value={identityName}
-              />
-              <input
-                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                placeholder="Email"
-                type="email"
-                bind:value={identityEmail}
-              />
-              <div class="flex items-center justify-end gap-1.5">
-                <button
-                  type="button"
-                  class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
-                  onclick={() => (showIdentityForm = false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  disabled={!identityName.trim() || !identityEmail.trim()}
-                  onclick={() => void saveIdentity()}
-                >
-                  Save
-                </button>
+        {#if identityNeeded}
+          <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
+            <p class="text-[0.625rem] font-medium text-foreground">
+              Commit identity not configured
+            </p>
+            {#if showIdentityForm}
+              <div class="mt-2 space-y-1.5">
+                <input
+                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  placeholder="Name"
+                  bind:value={identityName}
+                />
+                <input
+                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  placeholder="Email"
+                  type="email"
+                  bind:value={identityEmail}
+                />
+                <div class="flex items-center justify-end gap-1.5">
+                  <button
+                    type="button"
+                    class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
+                    onclick={() => (showIdentityForm = false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    disabled={!identityName.trim() || !identityEmail.trim()}
+                    onclick={() => void saveIdentity()}
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
-            </div>
-          {:else}
-            <button
-              type="button"
-              class="mt-1.5 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-              onclick={() => {
-                identityName = gitState.identity?.name ?? ''
-                identityEmail = gitState.identity?.email ?? ''
-                showIdentityForm = true
-              }}
-            >
-              Set identity
-            </button>
-          {/if}
-        </div>
-      {/if}
+            {:else}
+              <button
+                type="button"
+                class="mt-1.5 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                onclick={() => {
+                  identityName = gitState.identity?.name ?? ''
+                  identityEmail = gitState.identity?.email ?? ''
+                  showIdentityForm = true
+                }}
+              >
+                Set identity
+              </button>
+            {/if}
+          </div>
+        {/if}
 
-      {#if activeTab === 'changes'}
-        <GitStatusPanelChangesView
-          {selectedCommit}
-          {status}
-          {changes}
-          {conflictSections}
-          {stagedSections}
-          {workingSections}
-          {commitDiffChanges}
-          {commitTree}
-          {commitTreeCollapsedDirs}
-          {changesView}
-          {loadingCommitDiff}
-          {diffs}
-          {expanded}
-          {loadingDiff}
-          {diffErrors}
-          {commitDiffs}
-          {commitExpanded}
-          {loadingCommitDiffFile}
-          {commitDiffErrors}
-          bind:selectedPaths
-          {paneClass}
-          {toggleDiff}
-          {toggleStage}
-          {toggleSelection}
-          {toggleSectionSelection}
-          {stagePathsAction}
-          {requestStashFor}
-          {openInEditor}
-          {ignorePathsAction}
-          {requestDiscard}
-          {routeConflictResolution}
-          {restoreFromSource}
-          {toggleCommitDiff}
-          {toggleCommitDir}
-          {requestRemoveCommitChanges}
-        />
-      {:else if activeTab === 'history'}
-        <GitGraphView
-          commits={commitHistory}
-          loading={loadingHistory}
-          loadingMore={loadingMoreHistory}
-          hasMore={historyHasMore}
-          {unpushedCount}
-          upstream={status?.upstream ?? null}
-          {remoteUpdates}
-          selectedHash={selectedCommit?.hash ?? null}
-          onSelectCommit={(commit) => void selectCommit(commit)}
-        >
-          {#snippet menu({ commit, isHead }: { commit: GitCommitInfo; isHead: boolean })}
-            {@render commitActions(commit, isHead)}
-          {/snippet}
-        </GitGraphView>
-      {:else if activeTab === 'branches'}
-        <GitStatusPanelBranchesView
-          branches={gitState.branches}
-          {localBranches}
-          {worktreeBranches}
-          {localBranchNames}
-          bind:creatingBranch
-          bind:newBranchName
-          onCreateBranch={(name) => void createBranchAction(name)}
-          onRequestCheckout={requestCheckout}
-          onFetchBranch={(branch) => void fetchBranchAction(branch)}
-          onRequestDeleteBranch={requestDeleteBranch}
-          onRequestDeleteRemoteBranch={requestDeleteRemoteBranch}
-        />
-      {:else if activeTab === 'pulls'}
-        <div class="h-full min-h-0">
-          {#if selectedPullRequest && githubIdentity}
-            <GitPullRequestDetail
-              {projectId}
-              {threadId}
-              identity={githubIdentity}
-              summary={selectedPullRequest}
-              bind:tab={prDetailTab}
-              onBack={() => (selectedPullRequest = null)}
-              onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
-              onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
-              onOpenThread={(threadId) => void openAgentThread(threadId)}
-              onOpenWorkflowRun={openWorkflowRunFromCheck}
-              onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
-              onResolveWithAgent={(pr) => void startConflictResolution(pr)}
-            />
-          {:else}
-            <!--
+        {#if activeTab === 'changes'}
+          <GitStatusPanelChangesView
+            {selectedCommit}
+            {status}
+            {changes}
+            {conflictSections}
+            {stagedSections}
+            {workingSections}
+            {commitDiffChanges}
+            {commitTree}
+            {commitTreeCollapsedDirs}
+            {changesView}
+            {loadingCommitDiff}
+            {diffs}
+            {expanded}
+            {loadingDiff}
+            {diffErrors}
+            {commitDiffs}
+            {commitExpanded}
+            {loadingCommitDiffFile}
+            {commitDiffErrors}
+            bind:selectedPaths
+            {paneClass}
+            {toggleDiff}
+            {toggleStage}
+            {toggleSelection}
+            {toggleSectionSelection}
+            {stagePathsAction}
+            {requestStashFor}
+            {openInEditor}
+            {ignorePathsAction}
+            {requestDiscard}
+            {routeConflictResolution}
+            {restoreFromSource}
+            {toggleCommitDiff}
+            {toggleCommitDir}
+            {requestRemoveCommitChanges}
+          />
+        {:else if activeTab === 'history'}
+          <GitGraphView
+            commits={commitHistory}
+            loading={loadingHistory}
+            loadingMore={loadingMoreHistory}
+            hasMore={historyHasMore}
+            {unpushedCount}
+            upstream={status?.upstream ?? null}
+            {remoteUpdates}
+            selectedHash={selectedCommit?.hash ?? null}
+            onSelectCommit={(commit) => void selectCommit(commit)}
+          >
+            {#snippet menu({ commit, isHead }: { commit: GitCommitInfo; isHead: boolean })}
+              {@render commitActions(commit, isHead)}
+            {/snippet}
+          </GitGraphView>
+        {:else if activeTab === 'branches'}
+          <GitStatusPanelBranchesView
+            branches={gitState.branches}
+            {localBranches}
+            {worktreeBranches}
+            {localBranchNames}
+            bind:creatingBranch
+            bind:newBranchName
+            onCreateBranch={(name) => void createBranchAction(name)}
+            onRequestCheckout={requestCheckout}
+            onFetchBranch={(branch) => void fetchBranchAction(branch)}
+            onRequestDeleteBranch={requestDeleteBranch}
+            onRequestDeleteRemoteBranch={requestDeleteRemoteBranch}
+          />
+        {:else if activeTab === 'pulls'}
+          <div class="h-full min-h-0">
+            {#if selectedPullRequest && githubIdentity}
+              <GitPullRequestDetail
+                {projectId}
+                {threadId}
+                identity={githubIdentity}
+                summary={selectedPullRequest}
+                bind:tab={prDetailTab}
+                onBack={() => (selectedPullRequest = null)}
+                onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
+                onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+                onOpenThread={(threadId) => void openAgentThread(threadId)}
+                onOpenWorkflowRun={openWorkflowRunFromCheck}
+                onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
+                onResolveWithAgent={(pr) => void startConflictResolution(pr)}
+              />
+            {:else}
+              <!--
               The panel draws the filter and the actions for this list in its own
               rows, so the list renders rows and paging only (`showControls`).
             -->
-            <GitPullRequestList
-              {projectId}
-              identity={githubIdentity}
-              {githubConnected}
-              state={prListState}
-              filter={prListFilter}
-              sort={prListSort}
-              page={prListPage}
-              showControls={false}
-              selected={prListSelection}
-              onSelectionChange={(next) => (prListSelection = next)}
-              onAction={handlePrListAction}
-              onStateChange={selectPrListState}
-              onFilterChange={selectPrListFilter}
-              onSortChange={selectPrListSort}
-              onPageChange={selectPrListPage}
-              onOpen={(pr) => (selectedPullRequest = pr)}
-              onFullscreen={() => openPullRequestFullscreen(null)}
-              onSignIn={() => githubSignIn.start()}
-              onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-            />
-          {/if}
-        </div>
-      {:else if activeTab === 'deployments'}
-        <GitDeploymentsMonitor
-          {projectId}
-          identity={githubIdentity}
-          {githubConnected}
-          bind:selectedDeployment
-          bind:selectedRun
-          onSignIn={() => githubSignIn.start()}
-          requestedRunId={requestedWorkflowRunId}
-          onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
-          onAgentDiagnoseRun={startWorkflowDiagnosis}
-          onAgentDiagnoseDeployment={startDeploymentDiagnosis}
-        />
-      {:else if activeTab === 'stashes'}
-        <GitStatusPanelStashesView
-          {selectedStash}
-          {loadingStashDiff}
-          {stashDiffChanges}
-          {stashDiffs}
-          {loadingStashDiffFile}
-          {stashDiffErrors}
-          {stashExpanded}
-          stashes={gitState.stashes}
-          {stashOpBusy}
-          stashPopBusy={gitState.isBusy('stash-pop')}
-          onSelectStash={(stash) => void selectStash(stash)}
-          onToggleStashDiff={(change) => void toggleStashDiff(change)}
-          onRestore={(path, target) =>
-            void restoreFromSource(selectedStash?.id ?? 'HEAD', path, target)}
-          onPopStash={(id) => void popStash(id)}
-          onRequestStashDrop={requestStashDrop}
-        />
+              <GitPullRequestList
+                {projectId}
+                identity={githubIdentity}
+                {githubConnected}
+                state={prListState}
+                filter={prListFilter}
+                sort={prListSort}
+                page={prListPage}
+                showControls={false}
+                selected={prListSelection}
+                onSelectionChange={(next) => (prListSelection = next)}
+                onAction={handlePrListAction}
+                onStateChange={selectPrListState}
+                onFilterChange={selectPrListFilter}
+                onSortChange={selectPrListSort}
+                onPageChange={selectPrListPage}
+                onOpen={(pr) => (selectedPullRequest = pr)}
+                onFullscreen={() => openPullRequestFullscreen(null)}
+                onSignIn={() => githubSignIn.start()}
+                onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+              />
+            {/if}
+          </div>
+        {:else if activeTab === 'deployments'}
+          <GitDeploymentsMonitor
+            {projectId}
+            identity={githubIdentity}
+            {githubConnected}
+            bind:selectedDeployment
+            bind:selectedRun
+            onSignIn={() => githubSignIn.start()}
+            requestedRunId={requestedWorkflowRunId}
+            onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
+            onAgentDiagnoseRun={startWorkflowDiagnosis}
+            onAgentDiagnoseDeployment={startDeploymentDiagnosis}
+          />
+        {:else if activeTab === 'stashes'}
+          <GitStatusPanelStashesView
+            {selectedStash}
+            {loadingStashDiff}
+            {stashDiffChanges}
+            {stashDiffs}
+            {loadingStashDiffFile}
+            {stashDiffErrors}
+            {stashExpanded}
+            stashes={gitState.stashes}
+            {stashOpBusy}
+            stashPopBusy={gitState.isBusy('stash-pop')}
+            onSelectStash={(stash) => void selectStash(stash)}
+            onToggleStashDiff={(change) => void toggleStashDiff(change)}
+            onRestore={(path, target) =>
+              void restoreFromSource(selectedStash?.id ?? 'HEAD', path, target)}
+            onPopStash={(id) => void popStash(id)}
+            onRequestStashDrop={requestStashDrop}
+          />
+        {/if}
       {/if}
-    {/if}
-  </div>
+    </div>
+  </OvenSurfaceOverlay>
 
   <GitStatusPanelCommitComposer
     {repoState}

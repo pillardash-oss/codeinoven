@@ -1,0 +1,138 @@
+name: Build and package the application
+description: >-
+  The per-platform build body shared by the nightly and stable release
+  workflows. Both channels ship the same matrix and used to spell these steps
+  out twice; the only real differences between them were the publish channel
+  and the build version, which are inputs here.
+
+inputs:
+  name:
+    description: Human label for this platform, used in step names.
+    required: true
+  target:
+    description: electron-builder target (`mac`, `win`, or `linux`).
+    required: true
+  arch:
+    description: Architecture flag passed to electron-builder (for example `--arm64`).
+    required: true
+  artifact:
+    description: Suffix for the uploaded artifact name (`mac-arm64`, `win-x64`, ...).
+    required: true
+  app-dir:
+    description: Directory electron-builder leaves the unpacked app in.
+    required: true
+  publish-channel:
+    description: >-
+      electron-builder publish channel. Leave empty for a stable release; set to
+      the channel name (for example `nightly`) for a prerelease.
+    required: false
+    default: ''
+  build-version:
+    description: >-
+      Full version written into the packaged app's metadata. Nightly builds need
+      this because the prerelease tag sorts differently from the branch version.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Bun and dependencies
+      uses: ./.github/actions/setup
+      with:
+        install: 'true'
+
+    # Note: scripts/patch-binary-data.ts is NOT invoked here. The postinstall
+    # hook in package.json already runs it (with three sibling patches) on every
+    # `bun install --frozen-lockfile`, and quality.yml's macOS and Windows jobs
+    # have always relied on that alone. Adding an explicit step only creates a
+    # second place to remember.
+
+    - name: Install Linux native launcher headers
+      if: inputs.target == 'linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+
+    - name: Build Pi harness
+      shell: bash
+      run: bun run harness:build-pi
+
+    - name: Build Apple Silicon speech workers
+      if: inputs.target == 'mac'
+      shell: bash
+      run: |
+        bun run speech:build-mlx
+        bun run speech:build-coreml
+        bun run speech:build-native-capture
+
+    - name: Build production bundle
+      shell: bash
+      run: bun run build:production
+
+    - name: Clean stale packaged output
+      shell: bash
+      run: |
+        # Leftover artifacts from earlier builds (stale .bin symlinks, old app
+        # bundles) collide with electron-builder's dependency traversal and
+        # fail packaging with EEXIST. Packaging must start from a clean dist/.
+        rm -rf dist
+
+    - name: Package ${{ inputs.name }}
+      shell: bash
+      env:
+        CSC_LINK: ${{ env.CSC_LINK }}
+        CSC_KEY_PASSWORD: ${{ env.CSC_KEY_PASSWORD }}
+        APPLE_ID: ${{ env.APPLE_ID }}
+        APPLE_APP_SPECIFIC_PASSWORD: ${{ env.APPLE_APP_SPECIFIC_PASSWORD }}
+        APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
+        BUILD_TARGET: ${{ inputs.target }}
+        PUBLISH_CHANNEL: ${{ inputs.publish-channel }}
+        BUILD_VERSION: ${{ inputs.build-version }}
+      run: |
+        if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+          echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
+          exit 1
+        fi
+        if [ "$BUILD_TARGET" = "mac" ]; then
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
+            exit 1
+          fi
+        fi
+        # The installer formats a release publishes are owned by
+        # scripts/release-artifacts.ts, which the upload globs below and the
+        # checksum and publish steps all follow.
+        extra=(-c.forceCodeSigning=true)
+        if [ -n "$PUBLISH_CHANNEL" ]; then
+          extra+=(-c.publish.channel="$PUBLISH_CHANNEL")
+        fi
+        if [ -n "$BUILD_VERSION" ]; then
+          extra+=(-c.extraMetadata.version="$BUILD_VERSION")
+        fi
+        bunx electron-builder --"$BUILD_TARGET" ${{ inputs.arch }} --publish never "${extra[@]}"
+
+    - name: Verify packaged artifacts
+      shell: bash
+      run: bun run verify:packaged-app --target "${{ inputs.target }}" --artifact-dir dist
+
+    - name: Launch packaged application through workspace readiness
+      uses: ./.github/actions/startup-smoke
+      with:
+        target: ${{ inputs.target }}
+        app-dir: ${{ inputs.app-dir }}
+        output: .cio/tmp/startup-smoke-${{ inputs.target }}.json
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: codeinoven-${{ inputs.artifact }}
+        path: |
+          dist/*.dmg
+          dist/*.zip
+          dist/*.exe
+          dist/*.AppImage
+          dist/*.deb
+          dist/*.blockmap
+          dist/*.yml
+          .cio/tmp/startup-smoke-*.json
+        if-no-files-found: error

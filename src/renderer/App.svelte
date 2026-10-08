@@ -3,6 +3,7 @@
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
   import {
@@ -37,23 +38,33 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
+  import { viewShowsProject, viewShowsScopedSidebar } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { isBrowserLoaded, loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
+  import {
+    browserStore,
+    isBrowserLoaded,
+    loadBrowser,
+    withBrowser
+  } from '$lib/stores/browser-access.svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { installBrowserShortcutPublishing } from '$lib/keymap/browser-shortcuts'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
@@ -62,10 +73,12 @@
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
@@ -94,6 +107,7 @@
     type Thread
   } from '$shared/types'
   import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
   import {
     actionId,
@@ -108,6 +122,10 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
+  import {
+    workspaceTourViewFor,
+    type WorkspaceTourView
+  } from '$lib/components/onboarding/onboarding-tour-steps'
 
   type View = MainView
 
@@ -137,6 +155,9 @@
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
+  /** A content view's own tour, running on its own step counter. */
+  let viewTourView = $state<WorkspaceTourView | null>(null)
+  let viewTourStep = $state(0)
   let onboardingInitialized = false
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
@@ -313,6 +334,14 @@
     }
   })
 
+  /** A view's empty state, or the palette, can request that view's own tour. */
+  $effect(() => {
+    const view = workspaceState.consumeViewTourRequest()
+    if (!view) return
+    viewTourView = view
+    viewTourStep = 0
+  })
+
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
@@ -439,6 +468,7 @@
     // its chunks and its runtime are both warmed here rather than at boot.
     if (id === 'browser') void loadBrowser()
     if (id === 'chats') navigation.preloadNavigationThreads('chats')
+    else if (id === 'scoped-threads') navigation.preloadScopedThreads()
     else navigation.preloadNavigationThreads('projects')
   }
 
@@ -585,7 +615,7 @@
     }
 
     const scopedContext = scopeState.sidebarContext
-    if ((activeView === 'projects' || activeView === 'projects-scope') && scopedContext) {
+    if (scopedContext && viewShowsScopedSidebar(activeView, true)) {
       // Docked scoped-threads sidebar: create in the docked scope's project and
       // bucket, never in whatever thread happens to be open.
       workspaceState.requestCreateThread(scopedContext.bucketId)
@@ -642,6 +672,11 @@
         onboardingStep = 0
         onboardingOpen = true
         return
+      case 'app:tour-view': {
+        const view = workspaceTourViewFor(activeView)
+        if (view) workspaceState.requestViewTour(view)
+        return
+      }
       case 'app:terminal': {
         const thread = workspaceState.selectedThread
         if (!thread) return
@@ -863,38 +898,38 @@
   /**
    * Focus a project picked from the Switch project spotlight.
    *
-   * The scoped threads view keeps its docked sidebar: the picked project becomes
-   * the docked scope and the conversation is cleared, so the sidebar shows the
-   * new project's scoped threads. Every other view lands on the Projects view
-   * with the project's most recent thread open, matching how focusing a project
-   * already works elsewhere (OS hand-off, existing-project spotlight, header tabs).
+   * A view that already shows the picked project keeps it: the scoped state
+   * stays docked on the project (it is that project's own thread list), the
+   * Threads timeline keeps the pick while its project filter lets the project
+   * through, and the Scope board follows the project it is already showing. The
+   * picked project becomes the view's project and its most recent thread opens
+   * in place, so nothing the current view can already show is taken away from
+   * it.
+   *
+   * Every other case lands on the Projects view with the project's most recent
+   * thread open, matching how focusing a project already works elsewhere (OS
+   * hand-off, existing-project spotlight, header tabs): that is what a project
+   * the current view cannot show gets, one filtered out of the Threads timeline
+   * or one picked from a view with no project threads of its own (Chats, the
+   * Assistant, the browser, the takeover pages).
    */
   function focusProjectFromSpotlight(project: Project): void {
-    const scopedThreadsActive =
-      (activeView === 'projects' || activeView === 'projects-scope') &&
-      scopeState.sidebarContext !== null
     const iconUrl =
       scopeState.projects.find((candidate) => candidate.id === project.id)?.iconUrl ?? null
-
-    if (scopedThreadsActive) {
-      void scopeState.activateProject(project.id)
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-      workspaceState.activeProjectIconUrl = iconUrl
-      rendererRecovery.setSelectedProject(project.id)
-      scopeState.showSidebarForProject(project.id)
-      return
-    }
+    const keepsProject = viewShowsProject(activeView, project.id, {
+      scopedProjectId: scopeState.sidebarContext?.projectId ?? null,
+      threadsViewShowsProject: threadProjectFilterState.matches(project.id),
+      boardProjectId: scopeState.activeProjectId
+    })
 
     // Navigate before selecting the thread so the shell's content-view reconcile
     // never paints the Projects family's remembered thread for a frame.
-    const wasOnProjectsView = activeView === 'projects' || activeView === 'projects-scope'
-    if (!wasOnProjectsView) navigate('projects')
+    if (!keepsProject) navigate('projects')
     void scopeState.activateProject(project.id)
 
     // Picking the project that is already focused keeps the conversation the user
     // is reading instead of jumping to its latest thread.
-    if (wasOnProjectsView && workspaceState.selectedThread?.projectId === project.id) return
+    if (keepsProject && workspaceState.selectedThread?.projectId === project.id) return
 
     const thread =
       scopeState.allScopeThreads
@@ -905,13 +940,20 @@
             !isOrchestrationChildThread(candidate)
         )
         .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    // Only a kept view can still be docked in the scoped state   leaving for the
+    // Projects view above closes the sidebar with the scope state itself. There
+    // the scope sidebar is the picked project's own thread list, so it follows
+    // the thread the pick opened (its bucket and stage), exactly as the scope
+    // sidebar's own project switcher does.
     if (thread) {
       workspaceState.openThread(thread, project, iconUrl)
+      if (scopeState.sidebarContext) scopeState.showSidebarForThread(thread)
     } else {
       workspaceState.clearThread()
       workspaceState.activeProject = project
       workspaceState.activeProjectIconUrl = iconUrl
       rendererRecovery.setSelectedProject(project.id)
+      if (scopeState.sidebarContext) scopeState.showSidebarForProject(project.id)
     }
   }
 
@@ -965,8 +1007,17 @@
     const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
-      activeView === 'projects-scope' ||
-      (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      viewShowsScopedSidebar(activeView, scopeState.sidebarContext !== null)
+
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      // A browser tab's conversation has no workspace thread and is deliberately
+      // in no thread list, so the browser view is the only thing that can show
+      // it. Handing it to `workspaceState.openThread` below would select a thread
+      // no view owns, which is the dead button this branch exists to avoid.
+      navigate('browser')
+      await withBrowser((store) => store.revealAssistantChat(thread.id))
+      return
+    }
 
     if (family === 'chats') {
       // A chat is only ever shown by the chats view.
@@ -1180,6 +1231,17 @@
   }
 
   function handleFind(): void {
+    const browserTabId = browserKeyboardFocus.tabId
+    if (browserTabId) {
+      browserFindState.open(browserTabId)
+      return
+    }
+    if (activeView === 'browser') {
+      void withBrowser((store) => {
+        if (store.activeTab) browserFindState.open(store.activeTab.id)
+      })
+      return
+    }
     const active = document.activeElement instanceof Element ? document.activeElement : null
     if (active?.closest('[data-region="file-tree"]')) {
       findNavState.focusFileTreeFilter++
@@ -1273,6 +1335,29 @@
       handleCloseShortcut()
       return
     }
+    // DOM focus in browser chrome must answer the same bindings as the native
+    // page. This also covers the interval before its main-process claim lands.
+    const browserTabId = browserKeyboardFocus.tabId
+    if (browserTabId || activeView === 'browser') {
+      if (keymapState.matches('browser-find', e)) {
+        e.preventDefault()
+        if (!e.repeat) handleFind()
+        return
+      }
+      const previous = keymapState.matches('browser-find-previous', e)
+      if (previous || keymapState.matches('browser-find-next', e)) {
+        e.preventDefault()
+        if (!e.repeat) {
+          if (browserTabId) browserFindState.step(browserTabId, previous ? 'previous' : 'next')
+          else
+            void withBrowser((store) => {
+              if (store.activeTab)
+                browserFindState.step(store.activeTab.id, previous ? 'previous' : 'next')
+            })
+        }
+        return
+      }
+    }
     if (keymapState.matches('nav-find', e)) {
       e.preventDefault()
       if (e.repeat) return
@@ -1302,8 +1387,8 @@
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
       // The browser view's left sidebar is the app's own sidebar (its chrome and
       // tab strip), so the chord folds it the same way it folds the workspace
-      // one. (While the browser owns the keyboard this chord belongs to Save
-      // page, which is why the browser entry in the header also toggles it.)
+      // one. Page save is unbound by default, so the chord reaches this handler
+      // instead of the browser.
       if (activeView === 'browser') {
         e.preventDefault()
         if (e.repeat) return
@@ -1400,6 +1485,18 @@
       }
 
       requestThreadForCurrentView()
+      return
+    }
+    if (keymapState.matches('browser-reopen-tab', e)) {
+      // The browser's own page is a native view, so this normally never fires:
+      // main claims the chord in the page and forwards the same action to the
+      // view that owns the strip. It is the fallback for the one state where no
+      // page holds the keyboard   the Browser view with every tab closed   so a
+      // mistaken last close can still be undone.
+      if (activeView !== 'browser') return
+      e.preventDefault()
+      if (e.repeat) return
+      void withBrowser((store) => store.reopenLastClosedTab())
     }
   }
 
@@ -1482,6 +1579,13 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // The keymap pushes the browser's chords whenever the config loads, but main's
+    // window-bound browser handlers are registered after the first paint, so that
+    // push can land before they exist and be dropped. The browser would then claim
+    // none of its own keys (Cmd/Ctrl+T, Cmd/Ctrl+W, find) until the next keymap
+    // change. This publishes now and again on every `app:featuresReady`, which
+    // main sends once those handlers are up.
+    installBrowserShortcutPublishing(keymapState)
     // Every launch leaves the browser alone: no chunk fetched, no store built,
     // no stored tab list read, no listener registered. The one exception is a
     // session that restores straight onto the browser view, where the page the
@@ -1541,16 +1645,31 @@
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness. It fades out rather than going
          `display: none`, so the swap cross-fades with the page arriving on top
-         while keeping it out of the tab order and the accessibility tree. -->
+         while keeping it out of the tab order and the accessibility tree.
+
+         Visibility is transitioned on the way OUT only, and the arriving shell
+         takes `transition-property: opacity` without it. A transitioned
+         visibility computes `hidden` for the instant a switch starts   the
+         after-change value of an interpolated visibility is `visible` only
+         once the transition has actually begun, and that first frame is
+         exactly when a return to the conversation asks its composer to take
+         the caret. Measured in this app: with visibility transitioned in both
+         directions, no element inside the arriving shell accepts focus until a
+         later frame, so the composer silently refused the caret; with the
+         incoming direction untransitioned the same focus request lands on the
+         frame it is made. The outgoing direction keeps the transition, which is
+         what holds the fading shell on screen instead of blanking it the moment
+         the other page arrives. -->
       <div
-        class="h-full transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none {showsContentView
-          ? 'visible opacity-100'
-          : 'invisible pointer-events-none opacity-0'}"
+        class="h-full duration-200 ease-out motion-reduce:transition-none {showsContentView
+          ? 'visible opacity-100 transition-[opacity]'
+          : 'invisible pointer-events-none opacity-0 transition-[opacity,visibility]'}"
       >
         <Workspace
           mode={lastContentView}
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
+          setupTourOpen={onboardingOpen}
           {navigate}
           lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
@@ -1600,6 +1719,16 @@
           <p class="text-sm text-dimmed">Coming soon</p>
         </div>
       {/if}
+      {#if activeView === 'scope' || isSettingsView(activeView)}
+        <GlobalContextSidebar />
+      {/if}
+      {#if browserStore()?.peekTab}
+        {#key browserStore()?.peekTab?.id}
+          {#await import('$lib/components/browser/BrowserPeekWindow.svelte') then { default: BrowserPeekWindow }}
+            <BrowserPeekWindow />
+          {/await}
+        {/key}
+      {/if}
     </main>
   </div>
 
@@ -1630,6 +1759,21 @@
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
+  {/if}
+  {#if viewTourView}
+    <!-- A view's own tour: the same spotlight presentation as the setup tour,
+         over that view's steps. Remounted per step so each target is measured
+         once it is on screen. -->
+    {#key viewTourStep}
+      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
+        <OnboardingTour
+          tour={viewTourView}
+          step={viewTourStep}
+          onStepChange={(step) => (viewTourStep = step)}
+          onFinish={() => (viewTourView = null)}
+        />
+      {/await}
+    {/key}
   {/if}
   {#if onboardingOpen}
     {#key onboardingStep}
@@ -1723,6 +1867,17 @@
     {/await}
   {/if}
 
+  {#if ovenSetupStore.initialized}
+    {#await import('$lib/components/settings/OvenSetupModal.svelte') then { default: OvenSetupModal }}
+      <OvenSetupModal
+        open={ovenSetupStore.open}
+        initialOvenId={ovenSetupStore.ovenId}
+        onComplete={(ovenId) => ovenSetupStore.markComplete(ovenId)}
+        onClose={() => ovenSetupStore.close()}
+      />
+    {/await}
+  {/if}
+
   {#if harnessLifecycleStore.runs.length}
     <!-- Floats above every view   survives navigation while tasks keep running. -->
     {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
@@ -1755,6 +1910,13 @@
     <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
     {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
       <GitSyncDockHost />
+    {/await}
+  {/if}
+
+  {#if cioCleanupStore.jobs.length}
+    <!-- Floats above every view so a manual cleanup keeps reporting while the user works. -->
+    {#await import('$lib/components/cio/CioCleanupDockHost.svelte') then { default: CioCleanupDockHost }}
+      <CioCleanupDockHost />
     {/await}
   {/if}
 

@@ -10,11 +10,13 @@
 
 import type { BrowserLoadError } from '$shared/ipc-contract'
 import type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
+import { DEFAULT_BOX_ID } from '$shared/browser/global-browser-tabs'
 
-// The stored shape's bounds and its shared appearance vocabulary live beside the
-// stored record itself (`$shared/browser/global-browser-tabs`), because the main
-// process validates the same payload. They are re-exported here so every browser
-// surface keeps importing one module for the model's limits.
+// The stored shape's bounds, its shared appearance vocabulary and the id of the
+// profile's own box live beside the stored record itself
+// (`$shared/browser/global-browser-tabs`), because the main process validates the
+// same payload and resolves that id to a partition. They are re-exported here so
+// every browser surface keeps importing one module for the model's limits.
 export {
   MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
@@ -27,6 +29,7 @@ export {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
+export { DEFAULT_BOX_ID, isBrowserBoxId } from '$shared/browser/global-browser-tabs'
 export type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 
 /** Live runtime state of one global tab, keyed by tab id. */
@@ -60,33 +63,31 @@ export interface GlobalBrowserGroup extends BrowserAppearance {
   description: string
   /** A pinned fold stays at the top of the strip, like a pinned thread. */
   pinned: boolean
+  collapsed?: boolean
 }
 
 /**
  * One browser box: a named container for cookies and site data.
  *
- * A box is a storage identity, not a window and not a process. Tabs that name
- * the same box share one Chromium session and therefore one set of logins;
- * tabs in different boxes are as separate as two different browsers, which is
- * the whole point. It wears the same appearance vocabulary as a group so the
- * strip's resolvers, the appearance editor and the icon cache are reused rather
- * than reinvented.
+ * A box is a storage identity of the profile, not of a context, and not a window
+ * and not a process. Every context that names the same box shares one Chromium
+ * session and therefore one set of logins, whichever context made them; contexts
+ * in different boxes are as separate as two different browsers, which is the
+ * whole point. It wears the same appearance vocabulary as a group so the strip's
+ * resolvers, the appearance editor and the icon cache are reused rather than
+ * reinvented.
  */
 export interface GlobalBrowserBox extends BrowserAppearance {
   id: string
   name: string
 }
 
-/**
- * The box every context has without making one: the jar the browser's own pages
- * live in.
- *
- * Naming it is what lets the boxes panel, the extensions panel and the install
- * target treat "a box" and "no box" as one question with one answer. The id is a
- * literal rather than a minted uuid because a stored extension record has to keep
- * pointing at the same jar across releases.
- */
-export const DEFAULT_BOX_ID = 'box:default'
+// The profile's own box id lives with the rest of the shared browser vocabulary
+// (`$shared/browser/global-browser-tabs`) and is re-exported above, because the
+// main process resolves it to a partition too. It is the box every context has
+// without making one: the global browser's own jar, which is why naming it from a
+// conversation browses the profile the person does rather than the conversation's
+// own.
 
 /** What the default box is called before the user renames it. */
 export const DEFAULT_BOX_NAME = 'Default'
@@ -173,10 +174,13 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   /**
    * The box this tab runs against, or null for the browser's own default jar.
    *
-   * A tab cannot change jars in place, because cookies do not migrate between
-   * partitions, so this is fixed when the tab is created and carried to the main
-   * process on every `browser:show` and `browser:navigate`. "Reopen in box" is
-   * the only honest way to move a page, and it is a close plus an open.
+   * A box id names one jar for the whole profile, so this tab shares its cookies
+   * and logins with every other context that picks the same box, the global
+   * browser included. A tab cannot change jars in place, because cookies do not
+   * migrate between partitions, so this is fixed when the tab is created and
+   * carried to the main process on every `browser:show` and `browser:navigate`.
+   * "Reopen in box" is the only honest way to move a page, and it is a close plus
+   * an open.
    */
   boxId: string | null
   createdAt: number
@@ -195,6 +199,31 @@ export interface GlobalBrowserTab extends BrowserAppearance {
    * restart restores both.
    */
   assistantThreadId: string | null
+}
+
+/**
+ * How many closed tabs this session keeps for a reopen.
+ *
+ * The reopen stack is a convenience, not a record: quitting empties it, and a
+ * browser only needs to remember far enough back for a person to undo a
+ * handful of mistaken closes. The bound mirrors the main process's own closed
+ * history set, so the two never disagree about which tab is still reopenable.
+ */
+export const MAX_REOPENED_BROWSER_TABS = 20
+
+/** One tab closed this session, kept so it can be reopened.
+ *
+ * The tab is stored whole (with its strip position) because reopening restores
+ * it, not merely its address: the label, colour, icon, group and box all come
+ * back the way the user arranged them. It is deliberately never written to the
+ * durable tab list   a restart forgets the reopen stack, exactly as a browser
+ * does.
+ */
+export interface ClosedGlobalBrowserTab {
+  /** The tab as it was, so a reopen restores it rather than a bare address. */
+  tab: GlobalBrowserTab
+  /** The position it held in the strip, clamped when the strip has shrunk. */
+  index: number
 }
 
 /** Whether two load errors describe the same failure. Main sends a fresh object

@@ -1,3 +1,4 @@
+import { isUsageLimitNoticeText } from './provider-issue'
 import type { AgentMessage, AgentPart, PromptAttachment } from './types'
 
 /**
@@ -86,33 +87,47 @@ function userRequestAttachments(message: AgentMessage): PromptAttachment[] {
 
 /** Whether an assistant message shows the user a visible answer. */
 function hasVisibleAnswer(message: AgentMessage): boolean {
-  if (message.visibility === 'hidden') return false
-  return message.parts.some((part) => part.type === 'text' && part.text.trim().length > 0)
+  if (message.visibility === 'hidden' || message.error) return false
+  const text = message.parts
+    .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim()
+  return text.length > 0 && !isUsageLimitNoticeText(text)
 }
 
 /**
- * The newest user request whose turn ended without a visible answer, or
- * undefined when the last request was answered. Read newest first: an answer
- * retires the request behind it, while a turn that produced no answer (an
+ * All user requests since the last visible answer, or undefined when there
+ * are none. Read newest first: an answer retires the requests behind it,
+ * while a turn that produced no answer (an
  * empty or tool-only record, a provider failure) leaves it pending. A request
  * that carries files but no prose counts: the files are the ask.
  */
 export function pendingContinuationRequest(
   messages: readonly AgentMessage[]
 ): PendingContinuationRequest | undefined {
+  const requests: PendingContinuationRequest[] = []
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (!message) continue
     if (message.role === 'assistant') {
-      if (hasVisibleAnswer(message)) return undefined
+      if (hasVisibleAnswer(message)) break
       continue
     }
     if (isActivityOnlyUserMessage(message) || isAppActionChip(message)) continue
     const text = userRequestText(message).trim()
     const attachments = userRequestAttachments(message)
-    if (text || attachments.length > 0) return { text, attachments }
+    if (text || attachments.length > 0) requests.push({ text, attachments })
   }
-  return undefined
+  if (requests.length === 0) return undefined
+  requests.reverse()
+  return {
+    text: requests
+      .map((request) => request.text)
+      .filter(Boolean)
+      .join('\n\n'),
+    attachments: requests.flatMap((request) => request.attachments)
+  }
 }
 
 /** Separator between the relay's parts, and its total cost for three parts. */

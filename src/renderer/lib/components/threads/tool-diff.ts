@@ -74,27 +74,21 @@ function snippetDiff(beforeSource: string, afterSource: string): ToolDiffLine[] 
     suffix += 1
   }
   const lines: ToolDiffLine[] = [
-    ...before.slice(0, prefix).map((text, index): ToolDiffLine => ({
+    ...before.slice(0, prefix).map((text): ToolDiffLine => ({
       kind: 'context',
-      text,
-      beforeLine: index + 1,
-      afterLine: index + 1
+      text
     })),
-    ...before.slice(prefix, before.length - suffix).map((text, index): ToolDiffLine => ({
+    ...before.slice(prefix, before.length - suffix).map((text): ToolDiffLine => ({
       kind: 'deleted',
-      text,
-      beforeLine: prefix + index + 1
+      text
     })),
-    ...after.slice(prefix, after.length - suffix).map((text, index): ToolDiffLine => ({
+    ...after.slice(prefix, after.length - suffix).map((text): ToolDiffLine => ({
       kind: 'added',
-      text,
-      afterLine: prefix + index + 1
+      text
     })),
-    ...before.slice(before.length - suffix).map((text, index): ToolDiffLine => ({
+    ...before.slice(before.length - suffix).map((text): ToolDiffLine => ({
       kind: 'context',
-      text,
-      beforeLine: before.length - suffix + index + 1,
-      afterLine: after.length - suffix + index + 1
+      text
     }))
   ]
   return compactContext(lines)
@@ -102,13 +96,15 @@ function snippetDiff(beforeSource: string, afterSource: string): ToolDiffLine[] 
 
 function fullLineDiff(
   beforeSource: string | undefined,
-  afterSource: string | undefined
+  afterSource: string | undefined,
+  beforeStartLine?: number,
+  afterStartLine?: number
 ): ToolDiffLine[] {
   // Shared with the checkpoint diff viewer: exact LCS for small inputs, a
   // bounded Myers diff for large ones. The old 500k-cell fallback to a naive
   // prefix/suffix snippet rendered a small edit in a large file as a whole-file
   // rewrite, because a line insertion shifts every subsequent line.
-  const lines = computeDiffLines(beforeSource, afterSource)
+  const lines = computeDiffLines(beforeSource, afterSource, beforeStartLine, afterStartLine)
   return compactContext(lines as unknown as ToolDiffLine[])
 }
 
@@ -293,7 +289,7 @@ export function checkpointPathsForTool(
 
 export function checkpointToolDiff(diff: TurnCheckpointFileDiff): ToolFileDiff | null {
   if (diff.binary) return null
-  const lines = fullLineDiff(diff.before, diff.after)
+  const lines = fullLineDiff(diff.before, diff.after, diff.beforeStartLine, diff.afterStartLine)
   return lines.length > 0
     ? {
         path: diff.path,

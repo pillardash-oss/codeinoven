@@ -2,23 +2,25 @@
   import { Globe, Lock, LockOpen } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { boxIdForJar } from '$lib/stores/global-browser-types'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import {
-  BROWSER_HISTORY_GLOBAL_SCOPE,
-  browserHistory
-} from '$lib/stores/browser-history.svelte'
+  import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
+  import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
     /** The address the spotlight opened on, selected and ready to replace. */
     initialValue: string
+    boxId: GlobalBrowserTab['boxId']
     /** Open a resolved address: navigate the tab this was opened from, or make a
      *  new one when it has no page yet. */
     onOpen: (url: string) => void
     onClose: () => void
   }
 
-  let { initialValue, onOpen, onClose }: Props = $props()
+  let { initialValue, boxId, onOpen, onClose }: Props = $props()
 
   /**
    * The browser view's address palette.
@@ -27,9 +29,9 @@
    * app's own palette: the whole window is available to it, so the address is
    * replaced in a palette pre-filled with the page on screen and selected, with
    * the pages the user has already been to offered underneath. Those pages are the
-   * global browser's own, because a visit belongs to the browser that made it: a
-   * page read inside a thread's browser is that thread's, and is never offered
-   * here.
+   * selected profile box's history: when a thread and the global browser use the
+   * same box, both offer the same visits. Unboxed thread history stays within its
+   * conversation and is never offered here.
    *
    * The thread browser does not use this. Its address bar is the field itself and
    * brings the same history down in a drawer under it
@@ -60,9 +62,23 @@
   let addressInput = $state<HTMLInputElement | null>(null)
 
   const suggestions = $derived(
-    browserHistory.suggestionsFor(BROWSER_HISTORY_GLOBAL_SCOPE, value, SUGGESTION_LIMIT)
+    browserHistory.suggestionsFor(
+      browserHistory.scopeFor(BROWSER_HISTORY_GLOBAL_SCOPE, '', boxId),
+      value,
+      SUGGESTION_LIMIT
+    )
   )
   const secure = $derived(initialValue.startsWith('https:'))
+
+  /** The box the tab on screen runs in, so the palette names the identity the
+   *  address will open in. A tab with no box runs in the default jar. */
+  const spotlightBox = $derived(
+    globalBrowser.boxById(boxIdForJar(boxId)) ?? globalBrowser.activeBox
+  )
+  const spotlightBoxIcon = $derived(
+    browserAppearanceIconUrl(spotlightBox, globalBrowser.boxIconUrl(spotlightBox.id))
+  )
+  const spotlightBoxAccent = $derived(browserAppearanceAccent(spotlightBox))
 
   function open(url: string): void {
     onOpen(url)
@@ -148,7 +164,20 @@
     {#if error}
       <span class="shrink-0 pr-1 text-[0.6875rem] text-danger">{error}</span>
     {:else}
-      <span class="shrink-0 pr-1 text-[0.6875rem] text-dimmed">Enter to open</span>
+      <span
+        class="flex shrink-0 items-center gap-1.5 py-1 pr-1"
+        title={`In box: ${spotlightBox.name}`}
+        aria-label={`In box ${spotlightBox.name}`}
+      >
+        <span class="flex h-4 w-4 items-center justify-center" aria-hidden="true">
+          {#if spotlightBoxIcon}
+            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          {:else}
+            <span class="h-2 w-2 rounded-full" style:background-color={spotlightBoxAccent}></span>
+          {/if}
+        </span>
+        <span class="max-w-24 truncate text-[0.6875rem] text-muted">{spotlightBox.name}</span>
+      </span>
     {/if}
   </div>
 

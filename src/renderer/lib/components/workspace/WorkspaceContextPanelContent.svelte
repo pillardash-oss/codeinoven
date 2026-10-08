@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SvelteMap } from 'svelte/reactivity'
+  import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
@@ -30,11 +31,15 @@
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
+    active: boolean
     gitPanelProjectId: string | null
     gitPanelScopeBucketId: string
+    /** Whether the keep-mounted Git panel is the visible surface right now. */
+    gitPanelVisible: boolean
     terminalFullscreenTabId: string | null
     browserFullscreenTabId: string | null
     activeProject: Project | null
+    selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
     coordinator: ReturnType<typeof coordinatorDockState.forThread>
@@ -50,11 +55,14 @@
   }
 
   let {
+    active,
     gitPanelProjectId,
     gitPanelScopeBucketId,
+    gitPanelVisible,
     terminalFullscreenTabId,
     browserFullscreenTabId,
     activeProject,
+    selectedThread = null,
     projectIcons,
     browser,
     coordinator,
@@ -83,7 +91,11 @@
     const tab = activeContextTab
     if (!tab) return ''
     if (tab.kind !== 'files') return tab.id
-    const mountThreadId = usesThreadWorkspaceMount(tab.projectId) ? tab.threadId : 'project'
+    const mountThreadId =
+      usesThreadWorkspaceMount(tab.projectId) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+        ? `${tab.threadId}:${selectedThread?.settings?.ovenId}`
+        : 'project'
     return `files:${tab.projectId}:${mountThreadId}`
   })
 
@@ -96,6 +108,16 @@
    * cannot ride a translate: the box it reports as the view's bounds would move
    * with the transform. It fades instead, which leaves its geometry alone.
    */
+  let remoteThread = $derived(
+    selectedThread?.settings?.ovenId &&
+      selectedThread.settings.ovenId !== 'local' &&
+      activeContextTab &&
+      'projectId' in activeContextTab &&
+      activeContextTab.projectId === selectedThread.projectId
+      ? selectedThread
+      : null
+  )
+
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
 
   /** The thread whose own workspace the file tree mounts. Only a chat or an
@@ -151,11 +173,11 @@
 {#if gitPanelProjectId}
   {#key gitPanelProjectId}
     {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
-      <div class="h-full" style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}>
+      <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
         <GitStatusPanel
           projectId={gitPanelProjectId}
           threadId={gitPanelThreadId}
-          scopeBucketId={gitPanelScopeBucketId}
+          scopeBucketId={ovenRootKey(gitPanelProjectId) ?? gitPanelScopeBucketId}
         />
       </div>
     {/await}
@@ -178,7 +200,14 @@
         in:fly={panelReveal(activePanelIsBrowser)}
         out:fly={panelReveal(true)}
       >
-        {#if activeContextTab.kind === 'files'}
+        {#if activeContextTab.kind === 'oven'}
+          {#await import('../threads/OvenSidebarPanel.svelte') then { default: OvenSidebarPanel }}
+            {#if remoteThread}<OvenSidebarPanel thread={remoteThread} />{/if}
+          {/await}
+        {:else if remoteThread && activeContextTab.kind === 'diff'}
+          <!-- Rendered by the persistent, keep-mounted Git panel above: an Oven
+               thread has no local turn checkpoints to diff. -->
+        {:else if activeContextTab.kind === 'files'}
           {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
             <ProjectFilesPanel
               projectId={activeContextTab.projectId}
@@ -262,6 +291,12 @@
           {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
             <NotificationPanel />
           {/await}
+        {:else if activeContextTab.kind === 'sticky-notes'}
+          {#if active}
+            {#await import('../notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
+              <StickyNotesPanel />
+            {/await}
+          {/if}
         {:else if activeContextTab.kind === 'assistant-how-to'}
           {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
             <HowToPanel

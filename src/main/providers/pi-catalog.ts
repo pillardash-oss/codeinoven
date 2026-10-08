@@ -14,7 +14,9 @@ import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 interface RegistryModule {
   getBuiltinProviders(): string[]
-  getBuiltinModels(provider: string): Record<string, unknown>
+  /** Chat models of one provider. Pi 1.0.0 returns the generated catalog as a
+   * list (0.99.x returned an id-keyed record); only its length is read. */
+  getBuiltinModels(provider: string): unknown[]
   builtinProviders(): Array<{ id: string; name?: string }>
 }
 
@@ -51,7 +53,7 @@ export async function listPiCatalogProviders(_projectPath?: string): Promise<Off
   return registry.getBuiltinProviders().map((id) => {
     let modelCount = 0
     try {
-      modelCount = Object.keys(registry.getBuiltinModels(id) ?? {}).length
+      modelCount = registry.getBuiltinModels(id)?.length ?? 0
     } catch {
       // A provider without a generated catalog still stays searchable.
     }

@@ -53,8 +53,8 @@ class BrowserPopupWindowsState {
       if (!live.has(id)) this.popups.delete(id)
     }
     for (const popup of popups) this.popups.set(popup.id, popup)
-    // A popup that ended hands the rail to the newest one left rather than
-    // leaving a pick that no longer exists.
+    // A popup that leaves the visible list hands the rail to the newest one left
+    // rather than leaving a pick that is no longer available.
     if (this.selectedId !== null && !live.has(this.selectedId)) this.selectedId = null
   }
 
@@ -80,25 +80,24 @@ class BrowserPopupWindowsState {
     return popups
   }
 
-  /**
-   * One rail tab per popup a browser tab holds, in the order they opened.
-   *
-   * The tab is the popup: the rail's strip is the list of windows and a popup
-   * that ends simply stops appearing here, so no surface has to prune the strip.
-   * An extension's popup is named after the extension and wears its icon, because
-   * that page is the extension's own UI and the title it sets is not its name.
-   */
-  tabsFor(tabId: string): BrowserPopupWindowContextTab[] {
-    return this.forTab(tabId).map((popup) => {
-      const extension = this.extensionFor(popup)
-      return {
-        id: popup.id,
-        kind: 'popup-window' as const,
-        title: extension?.name ?? (popup.title || popup.url || 'Popup window'),
-        openerTabId: popup.tabId,
-        favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined
-      }
-    })
+  /** Every visible popup window in this browser, across tabs and boxes. */
+  all(): BrowserPopupWindow[] {
+    return [...this.popups.values()]
+  }
+
+  /** One rail tab per visible popup window, across the whole browser. */
+  tabs(): BrowserPopupWindowContextTab[] {
+    return this.all().map((popup) => this.toContextTab(popup))
+  }
+
+  private toContextTab(popup: BrowserPopupWindow): BrowserPopupWindowContextTab {
+    const extension = this.extensionFor(popup)
+    return {
+      id: popup.id,
+      kind: 'popup-window',
+      title: extension?.name ?? (popup.title || popup.url || 'Popup window'),
+      favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined
+    }
   }
 
   /** The extension one extension-popup belongs to, or null for a page's popup. */
@@ -113,10 +112,9 @@ class BrowserPopupWindowsState {
    * Open one extension's own popup in the rail.
    *
    * An extension's action popup has no toolbar to hang from here, so the rail is
-   * its host. Main answers with the popup's id, which is the popup already open
-   * when that extension already has one in this tab, and the rail then draws it
-   * like any other popup: a tab of its own, placed by the panel, closed from the
-   * strip.
+   * its host. Main answers with the id of the cached popup for that extension's
+   * box session, and the rail then draws it like any other popup: a tab of its own,
+   * placed by the panel and closed from the strip.
    */
   async openExtension(
     owner: { projectId: string; threadId: string; tabId: string; boxId: string | null },
@@ -148,11 +146,10 @@ class BrowserPopupWindowsState {
   }
 
   /**
-   * The popup one extension already has open in one tab, if it has one.
+   * The popup one extension currently associates with one tab, if it has one.
    *
-   * An extension has at most one popup per tab, so this is how a surface that
-   * wears the extension (a header pin, the extension's own row) says whether its
-   * popup is up without keeping a second copy of that answer.
+   * The header pin and extension row use the active tab to query their box's
+   * current action state without keeping a second copy of that answer.
    */
   extensionPopupFor(extensionId: string, tabId: string): string | null {
     for (const popup of this.forTab(tabId)) {
@@ -161,13 +158,9 @@ class BrowserPopupWindowsState {
     return null
   }
 
-  /**
-   * The popup the rail shows for a browser tab: the one the user picked, or the
-   * newest still open. Null when that tab holds none, which is when the rail has
-   * nothing left to display.
-   */
-  activeFor(tabId: string): BrowserPopupWindow | null {
-    const popups = this.forTab(tabId)
+  /** The popup the global rail shows, or the newest visible popup. */
+  active(): BrowserPopupWindow | null {
+    const popups = this.all()
     if (popups.length === 0) return null
     const picked = popups.find((popup) => popup.id === this.selectedId)
     if (picked) return picked
@@ -177,14 +170,6 @@ class BrowserPopupWindowsState {
   /** Show one popup: the rail's frame places it and its tab reads as current. */
   select(popupId: string): void {
     this.selectedId = popupId
-  }
-
-  /**
-   * Close every popup one browser tab holds, for the rail's own close control:
-   * the windows end and their tabs leave the strip with them.
-   */
-  closeForTab(tabId: string): void {
-    for (const popup of this.forTab(tabId)) this.close(popup.id)
   }
 
   /** Place a popup's page over the frame the panel measured for it. */
@@ -202,7 +187,19 @@ class BrowserPopupWindowsState {
     void invoke('browser:focusPopupWindow', popupId).catch(() => {})
   }
 
-  /** Close a popup on the user's behalf: its page stops and it leaves the rail. */
+  /** Hide an extension popup while keeping its page parked for reuse. */
+  dismiss(popupId: string): void {
+    void invoke('browser:dismissPopupWindow', popupId).catch((error: unknown) => {
+      reportError(error, 'That popup window could not be hidden.')
+    })
+  }
+
+  /** Close every visible popup, including extension action pages. */
+  closeAll(): void {
+    for (const popup of this.all()) this.close(popup.id)
+  }
+
+  /** Close a popup and destroy its page. */
   close(popupId: string): void {
     void invoke('browser:closePopupWindow', popupId).catch((error: unknown) => {
       reportError(error, 'That popup window could not be closed.')

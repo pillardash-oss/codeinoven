@@ -245,6 +245,10 @@ export class BackgroundLifecycleService {
   /** A window now exists: restore the Dock icon and push the current role. */
   onWindowOpened(window: BrowserWindow): void {
     this.showDock()
+    // Reconcile the menu bar icon here too, so a window that opens after the
+    // process lost its icon (a role change, a missed event) brings it straight
+    // back instead of waiting for the next periodic tick.
+    this.syncTray()
     this.pushRoleTo(window)
     this.refreshAttention()
   }
@@ -328,12 +332,14 @@ export class BackgroundLifecycleService {
   }
 
   /**
-   * Make this instance the owner of scheduled work, at the user's request. A
-   * secondary's "Make this the main instance" action asks for it, which is the
-   * escape hatch when the elected owner is a stale window, or a crashed process
-   * still in the registry, and the user wants the schedule where they are
-   * working. The previous owner steps down through the same ownership
-   * notification and shows the secondary notice instead.
+   * Make this instance the main instance that owns scheduled work, at the user's
+   * request. A secondary's "Make this the main instance" action asks for it,
+   * which is the escape hatch when the elected owner is a stale window, or a
+   * crashed process still in the registry, and the user wants the schedule where
+   * they are working. The choice is durable: it is remembered for this app, so a
+   * later launch of it reclaims the schedule after a restart. The previous owner
+   * steps down through the same ownership notification and shows the secondary
+   * notice instead.
    */
   takeOverControl(): boolean {
     return instanceRegistry.transferOwnership(process.pid)
@@ -604,6 +610,12 @@ export class BackgroundLifecycleService {
 
   private drainActivationRequests(): void {
     if (this.stopped) return
+    // Self-heal the menu bar icon. It is created on startup, on a config
+    // change, on an ownership/membership change, and on a window open, but any
+    // of those can be missed or coalesced, and a process that owns the schedule
+    // must never sit with an empty menu bar. This tick already runs every two
+    // seconds, and the check is a single field read whenever the icon exists.
+    if (!this.tray) this.syncTray()
     let files: string[]
     try {
       files = readdirSync(this.activationDir).filter((name) => name.endsWith('.json'))

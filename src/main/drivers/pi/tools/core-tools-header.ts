@@ -32,7 +32,9 @@ import { Type } from 'typebox'
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
+const CIO_HISTORY_RECAP_PATH = '__CIO_HISTORY_RECAP_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
+const CIO_MCP_SERVERS_PATH = '__CIO_MCP_SERVERS_PATH__'
 
 // The tools pi bundles itself. When the driver hands this session a tool
 // allowlist (File-System-OFF chat threads), every call to one of these that
@@ -148,6 +150,30 @@ function loadCioSystemPrompt() {
   }
 }
 
+// The driver rewrites this file per turn with the restored history replay for
+// a rebuilt session (fork, account/harness switch, edited or deleted history).
+// The context hook returns it as its own leading user message so it lands in
+// the user channel   the replay mixes the user's words, tool output, and file
+// content, so the system role would grant all of it system authority. An empty
+// file means no replay this turn. The context hook runs before every LLM call
+// in an agent loop, so the read is cached by mtime: a large replay is read once
+// per turn instead of once per tool-loop iteration.
+let cachedHistoryRecapMtimeMs = -1
+let cachedHistoryRecap = ''
+function loadCioHistoryRecap() {
+  try {
+    const info = statSync(CIO_HISTORY_RECAP_PATH)
+    if (info.mtimeMs === cachedHistoryRecapMtimeMs) return cachedHistoryRecap
+    cachedHistoryRecapMtimeMs = info.mtimeMs
+    cachedHistoryRecap = readFileSync(CIO_HISTORY_RECAP_PATH, 'utf8').trim()
+    return cachedHistoryRecap
+  } catch {
+    cachedHistoryRecapMtimeMs = -1
+    cachedHistoryRecap = ''
+    return ''
+  }
+}
+
 // The driver rewrites this file per turn with the session's allowed built-in
 // tool names (empty JSON array = unrestricted). Read at every tool call so a
 // File-System toggle takes effect without restarting the pi session.
@@ -160,6 +186,31 @@ function loadCioAllowedTools() {
     return parsed.filter(function (entry) {
       return typeof entry === 'string'
     })
+  } catch {
+    return []
+  }
+}
+
+// The driver rewrites this file with the MCP servers the app itself registered
+// on pi's MCP host for this session (the utilities this thread activated). A
+// server named here is an app-bound utility the user enabled, exactly like the
+// cio_util_* gateway tools, and its calls carry no card for the same reason:
+// the app chose the server, resolved its credentials and knows what it is. A
+// server pi picked up from the user's own mcp.json is NOT named here and keeps
+// the unclassified-surface card.
+function loadCioMcpServerNames() {
+  try {
+    const parsed = JSON.parse(readFileSync(CIO_MCP_SERVERS_PATH, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.servers)) return []
+    const names: string[] = []
+    for (const entry of parsed.servers) {
+      if (!entry || typeof entry !== 'object') continue
+      if (typeof entry.name !== 'string' || entry.name.length === 0) continue
+      // Pi's tool namespace replaces a dash with an underscore in the server
+      // segment, so compare the normalised prefixes.
+      names.push('mcp__' + entry.name.replace(/-/g, '_') + '__')
+    }
+    return names
   } catch {
     return []
   }
@@ -432,6 +483,10 @@ function evaluateGate(toolName, input, cwd) {
   // pi reports it as read-only.
   if (CIO_PI_BUILTIN_TOOLS.has(toolName) || isCioOwnToolName(toolName)) return null
   if (cioReadOnlyTools.has(toolName)) return null
+  // An app-bound MCP server the user enabled is not an unknown surface.
+  for (const prefix of loadCioMcpServerNames()) {
+    if (toolName.indexOf(prefix) === 0) return null
+  }
   return gateHit(
     toolName,
     'runs "' + toolName + '", a tool CodeInOven cannot verify as read-only',

@@ -37,6 +37,7 @@ const PREVIEW_TYPES: Record<string, PreviewType> = {
   '.jpeg': previewType('.jpeg', 'image/jpeg', IMAGE_MAX_BYTES),
   '.gif': previewType('.gif', 'image/gif', IMAGE_MAX_BYTES),
   '.webp': previewType('.webp', 'image/webp', IMAGE_MAX_BYTES),
+  '.avif': previewType('.avif', 'image/avif', IMAGE_MAX_BYTES),
   // SVG is intentionally excluded: project-controlled active XML must not run
   // in a privileged custom-scheme document. It remains available as text.
   '.ico': previewType('.ico', 'image/x-icon', IMAGE_MAX_BYTES),
@@ -182,6 +183,43 @@ async function serveFile(
   }
 }
 
+async function serveRemoteFile(
+  file: { size: number; read(offset: number): Promise<Uint8Array> },
+  type: PreviewType,
+  request: Request
+): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD')
+    return new Response('Method not allowed', { status: 405 })
+  if (file.size < 1 || file.size > type.maxBytes) return notFound()
+  const rangeValue = request.headers.get('range')
+  const range = byteRange(rangeValue, file.size)
+  if (!range)
+    return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${file.size}` } })
+  const headers = previewHeaders(type, range.end - range.start + 1)
+  if (rangeValue !== null)
+    headers.set('Content-Range', `bytes ${range.start}-${range.end}/${file.size}`)
+  if (request.method === 'HEAD') return new Response(null, { status: 200, headers })
+  let offset = range.start
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (offset > range.end) {
+        controller.close()
+        return
+      }
+      try {
+        const bytes = await file.read(offset)
+        if (bytes.length === 0) throw new Error('The remote preview changed while being read.')
+        const chunk = bytes.subarray(0, range.end - offset + 1)
+        offset += chunk.length
+        controller.enqueue(chunk)
+      } catch (error) {
+        controller.error(error)
+      }
+    }
+  })
+  return new Response(body, { status: rangeValue !== null ? 206 : 200, headers })
+}
+
 function decodeSegments(pathname: string): string[] {
   return pathname
     .split('/')
@@ -245,6 +283,8 @@ export function installFilePreviewProtocol(
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
+        const remote = await projectFiles.remoteFileReader?.(projectId, threadId, relativePath)
+        if (remote) return serveRemoteFile(remote, type, request)
         const absolutePath = await projectFiles.resolveForExternalEditor(
           projectId,
           relativePath,

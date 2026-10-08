@@ -15,12 +15,14 @@ import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
+import { updateBlockers } from '$lib/stores/update-blockers.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   DEFAULT_THREAD_TITLE,
@@ -116,12 +118,15 @@ function showAgentNotification(
   // (the user is already on this thread) stays silent.
   playInAppAlert(notificationSoundKind(payload.kind, payload.projectId))
   notificationPanelState.add(payload)
-  const id = payload.id
+  // No `onDismiss`: a toast is a transient announcement that expires on its own,
+  // so letting its expiry retire the panel entry would drop exactly the
+  // notifications the user walked away from. The panel is the durable inbox and
+  // a toast is not; the two are retired separately, the panel entry only by
+  // opening its thread (see `reconcileThread`) or by the user dismissing it.
   const options = {
-    id,
+    id: payload.id,
     description: payload.body,
     duration: 8_000,
-    onDismiss: () => notificationPanelState.dismiss(id),
     action: {
       label: 'Open thread',
       onClick: (): void => {
@@ -243,6 +248,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
   scopeJobs.listen()
+  // Same reason: the settings page and the file tree's exclusion menu read this
+  // store's state, and neither of them owns the subscription that fills it.
+  cioCleanupStore.listen()
   const unsubscribeCloseShortcut = subscribeGuarded('window:closeShortcut', () => {
     deps.handleCloseShortcut()
   })
@@ -269,7 +277,10 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // the main process. Deferring `init` also defers its two push subscriptions;
   // both stores read the current status, so a push that lands in the gap is
   // recovered by that read rather than lost.
-  scheduleDeferredWork('updater:init', () => updaterState.init())
+  scheduleDeferredWork('updater:init', () => {
+    updaterState.init()
+    updateBlockers.init()
+  })
   scheduleDeferredWork('skillUpdates:init', () => skillUpdateState.init())
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
@@ -294,6 +305,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeHistoryForward()
     unsubscribeOpenedPaths()
     updaterState.destroy()
+    updateBlockers.destroy()
     skillUpdateState.destroy()
   }
 }

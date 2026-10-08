@@ -5,6 +5,7 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { openBrowserExtensionMenu } from '$lib/components/browser/browser-extension-menus'
 
   /**
    * The extensions the user pinned, worn by the header while the browser view is
@@ -31,10 +32,11 @@
   /** The pins this box can act on, in the order they were installed. */
   const pinned = $derived(tab ? browserExtensions.pinnedExtensionsInJar(tab.boxId ?? '') : [])
 
-  /** The popup one pinned extension already has open, or null when it has none. */
+  /** The popup this pin is currently displaying, rather than a retained page. */
   function openPopupFor(extensionId: string): string | null {
-    if (!tab) return null
-    return browserPopupWindows.extensionPopupFor(extensionId, tab.id)
+    if (!tab || !globalBrowser.popupsSidebarShown) return null
+    const popupId = browserPopupWindows.extensionPopupFor(extensionId, tab.id)
+    return browserPopupWindows.active()?.id === popupId ? popupId : null
   }
 
   /** What one pin's control says, the same words for the tooltip and for a reader
@@ -42,7 +44,7 @@
   function pinLabel(extension: BrowserExtension): string {
     return openPopupFor(extension.id) === null
       ? `Open the ${extension.name} popup`
-      : `Close the ${extension.name} popup`
+      : `Hide the ${extension.name} popup`
   }
 
   /** Chrome's own shape for a long badge: anything past four characters becomes
@@ -61,9 +63,29 @@
    * that fails to decode must never be what the user sees.
    */
   const undrawableIcons = new SvelteSet<string>()
+  let draggingId = $state<string | null>(null)
+
+  function dropPinned(targetId: string): void {
+    const sourceId = draggingId
+    draggingId = null
+    if (!sourceId || sourceId === targetId) return
+    const reordered = [...pinned]
+    const sourceIndex = reordered.findIndex((extension) => extension.id === sourceId)
+    const targetIndex = reordered.findIndex((extension) => extension.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = reordered.splice(sourceIndex, 1)
+    if (!source) return
+    reordered.splice(targetIndex, 0, source)
+    const ids = reordered.map((extension) => extension.id)
+    let index = 0
+    const orderedIds = browserExtensions.extensions.map((extension) =>
+      pinned.some((pin) => pin.id === extension.id) ? (ids[index++] ?? extension.id) : extension.id
+    )
+    void browserExtensions.reorder(orderedIds)
+  }
 
   /**
-   * Open a pinned extension's popup in the rail, or close the one it already has.
+   * Open a pinned extension's popup in the rail, or hide the one it already has.
    *
    * The popup is hosted by the rail, which is chrome of this same view, so all the
    * click has to do is make sure that tool is the one showing.
@@ -71,9 +93,9 @@
   async function toggle(extensionId: string): Promise<void> {
     const current = tab
     if (!current) return
-    const open = browserPopupWindows.extensionPopupFor(extensionId, current.id)
+    const open = openPopupFor(extensionId)
     if (open !== null) {
-      browserPopupWindows.close(open)
+      browserPopupWindows.dismiss(open)
       return
     }
     const popupId = await browserPopupWindows.openExtension(
@@ -102,6 +124,19 @@
           : extension.iconDataUrl}
       <button
         type="button"
+        draggable
+        ondragstart={(event) => {
+          draggingId = extension.id
+          event.dataTransfer?.setData('text/plain', extension.id)
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+        }}
+        ondragover={(event) => event.preventDefault()}
+        ondrop={(event) => {
+          event.preventDefault()
+          dropPinned(extension.id)
+        }}
+        ondragend={() => (draggingId = null)}
+        class:opacity-50={draggingId === extension.id}
         class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 hover:bg-elevated focus-visible:bg-elevated {openPopupFor(
           extension.id
         )
@@ -111,6 +146,10 @@
         aria-label={pinLabel(extension)}
         aria-pressed={openPopupFor(extension.id) !== null}
         onclick={() => void toggle(extension.id)}
+        oncontextmenu={(event) => {
+          event.preventDefault()
+          void openBrowserExtensionMenu(extension, event.clientX, event.clientY)
+        }}
       >
         {#if icon}
           <img

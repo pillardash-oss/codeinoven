@@ -205,7 +205,26 @@ class TerminalSessionManager {
       binding.scopeBucketId,
       binding.directory
     )
+    this.repaintShell(session)
     this.focusIfRequested(session, options)
+  }
+
+  /**
+   * Make a reattached shell redraw its prompt.
+   *
+   * A shell's first prompt often arrives while the canvas is still settling
+   * into its final size, and ghostty-web exposes no public repaint, so the
+   * buffer sat there unpainted until the next keystroke: the panel looked like
+   * a blank terminal that only woke up on input. Nudging the grid one row down
+   * and straight back makes the renderer redraw and sends the shell a resize,
+   * which is what reprints its prompt. The visible size never changes.
+   */
+  private repaintShell(session: TerminalSession): void {
+    if (session.kind !== 'shell' || !session.ptySpawned) return
+    const { cols, rows } = session.term
+    if (cols < 2 || rows < 2) return
+    session.term.resize(cols, rows - 1)
+    session.term.resize(cols, rows)
   }
 
   /** Where a respawn must start: the live binding its panel keeps current, else

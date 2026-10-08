@@ -98,6 +98,33 @@ Verification is **scoped** — you check, lint, format, and test only the files 
 - Run tests before changing code (baseline) and after (regression check), and confirm nothing regressed.
 - If you are unsure whether a full `bun run verify` is appropriate, ask.
 
+### Continuous integration
+
+The workflows share reusable actions instead of restating steps, so a change to
+one place covers every workflow:
+
+| Action                            | Owns                                                                |
+| --------------------------------- | ------------------------------------------------------------------- |
+| `.github/actions/setup`           | checkout, the pinned Bun, the engine check, and the frozen install  |
+| `.github/actions/build-app`       | the per-platform build, package, verify, and smoke body             |
+| `.github/actions/publish-release` | checksums, release notes, publish, and the download-mirror dispatch |
+| `.github/actions/startup-smoke`   | the packaged-app launch retry loop                                  |
+
+Three rules keep that from drifting again:
+
+- **`.bun-version` is the only place the toolchain version lives.** Never pass a
+  literal `bun-version` to `setup-bun`; `package.json`'s `engines.bun` and
+  `packageManager` declare the floor, and `scripts/check-bun-version.ts` fails
+  the run when the two disagree.
+- **The installer formats a release publishes are owned by
+  `scripts/release-artifacts.ts`.** Add a format there, not in a `find` filter.
+- **The promotion-skip rule lives in the `policy` job** of `quality.yml` and
+  `security.yml`, because a composite action cannot set a job-level `if`. Give a
+  heavy job `needs: [policy]` and `if: needs.policy.outputs.skip != 'true'`.
+
+`scripts/ci-local.ts` mirrors these stages locally, so `bun run ci:local` runs
+the host-appropriate set before you push.
+
 ---
 
 ## Architecture rules
@@ -127,6 +154,12 @@ some changes get extra review scrutiny:
   any addition in the PR.
 - **Secrets scanning** runs on every push (Gitleaks) and `bun audit` runs in
   CI. Do not commit `.env` files or tokens.
+- **`bun audit` is never invoked directly.** Run the `audit` script
+  (`bun run audit`), which carries the accepted-advisory list. Add to that
+  script only when no patched release exists anywhere on the path, and say so
+  in the comment it requires. `GHSA-ch52-4w7c-c8xp` is the current entry: it has
+  no upstream fix and its only path is the build-time Electron download. See
+  the `audit` job in `.github/workflows/security.yml`.
 
 ---
 

@@ -9,6 +9,10 @@ title = 'CodeInOven gitleaks config'
 useDefault = true
 
 [[allowlists]]
+description = 'The Oven agent tests carry a structurally valid but synthetic SSH key pair; the private-key body decodes only to a test-only marker, so it can never authenticate anything'
+regexes = ['''dGVzdC1vbmx5LWtleS1ibG9i''']
+
+[[allowlists]]
 description = 'Fake credentials in test fixtures, plus the published installed-app OAuth client secret'
 paths = [
   '''^tests/main/utilities/cio-diagnostics-service\.test\.ts$'''

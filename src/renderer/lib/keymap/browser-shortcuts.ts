@@ -18,7 +18,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings
 } from '$shared/ipc-contract'
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, subscribe } from '$lib/ipc.svelte'
 import { isMacPlatform, parseKeymapTrigger, resolveChordModifiers } from './keymap'
 
 /**
@@ -39,13 +39,25 @@ const ACTION_ENTRIES: ReadonlyArray<readonly [BrowserShortcutAction, string]> = 
   ['toggleDevTools', 'browser-devtools'],
   ['closeTab', 'browser-close-tab'],
   ['newTab', 'browser-new-tab'],
+  ['reopenTab', 'browser-reopen-tab'],
   ['find', 'browser-find'],
   ['findNext', 'browser-find-next'],
   ['findPrevious', 'browser-find-previous'],
   // The notes rail is this view's right sidebar, so it answers the same
   // user-visible binding every other view's right sidebar answers, and a user
   // rebind moves both at once.
-  ['toggleNotes', 'nav-toggle-right-sidebar']
+  ['toggleNotes', 'nav-toggle-right-sidebar'],
+  ...(
+    [
+      'nav-projects',
+      'nav-threads',
+      'nav-projects-with-scope',
+      'nav-scope',
+      'nav-chats',
+      'nav-browser',
+      'nav-assistant'
+    ] as const
+  ).map((id): readonly [BrowserShortcutAction, string] => [id, id])
 ]
 
 /** Only the effective key tokens per id are needed, which is what the keymap
@@ -104,4 +116,41 @@ export function browserSwitcherChords(source: BrowserShortcutKeySource): Browser
 export function publishBrowserShortcutBindings(source: BrowserShortcutKeySource): void {
   void invoke('browser:setShortcutBindings', browserShortcutBindings(source)).catch(() => {})
   void invoke('browser:setSwitcherBindings', browserSwitcherChords(source)).catch(() => {})
+}
+
+/** Whether {@link installBrowserShortcutPublishing} has already run. */
+let publishingInstalled = false
+
+/**
+ * Keep main's copy of the browser's chords current for the whole session.
+ *
+ * The keymap pushes its chords whenever the config loads or the user rebinds
+ * one, but the browser's handlers in main are window-bound and registered after
+ * the first paint, so a push that lands before they exist is dropped and the
+ * browser would claim none of its shortcuts until the next keymap change. This
+ * publishes once outright and again on every `app:featuresReady`, which main
+ * sends after those handlers exist, so the chords are always the effective ones
+ * on the window actually on screen.
+ *
+ * Called once by the browser runtime, because a session that never opens the
+ * browser needs no chords claimed for it.
+ */
+export function installBrowserShortcutPublishing(source: BrowserShortcutKeySource): void {
+  if (publishingInstalled) return
+  publishingInstalled = true
+  subscribe('browser:navigationKey', (chord) => {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: chord.key,
+        metaKey: chord.meta,
+        ctrlKey: chord.control,
+        shiftKey: chord.shift,
+        altKey: chord.alt,
+        bubbles: true,
+        cancelable: true
+      })
+    )
+  })
+  publishBrowserShortcutBindings(source)
+  subscribe('app:featuresReady', () => publishBrowserShortcutBindings(source))
 }

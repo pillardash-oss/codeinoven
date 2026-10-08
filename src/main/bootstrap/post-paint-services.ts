@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { settingsWithRoutineTarget } from '../../lib/routine-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
@@ -36,7 +37,9 @@ import {
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { getActiveThreadProjects } from '../database/active-thread-report'
 import { ThreadRepo } from '../database/repositories/thread-repo'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
@@ -109,6 +112,7 @@ async function attachBrowserService(
       )
     )
     .catch(() => {})
+  service.setAgentActionApprover((request) => chatEngine.requestBrowserActionApproval(request))
   chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
     service.executeUtility(operation, input, browserContext)
   )
@@ -179,10 +183,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ThreadTransferService },
     { RoutineManager },
     { RoutineSchedulerService },
-    { broadcastMissedRunsChanged, broadcastAutoAnswersChanged, broadcastBackgroundRunsChanged },
+    {
+      broadcastMissedRunsChanged,
+      broadcastAutoAnswersChanged,
+      broadcastBackgroundRunsChanged,
+      broadcastSkippedRoutineRunsChanged
+    },
     { SkillUpdateService },
     { SecretVault },
-    { GitHubAuthService }
+    { GitHubAuthService },
+    { CioCleanupService },
+    { broadcastCioCleanupProgress, broadcastCioCleanupState }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -208,7 +219,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
-    import('../git/github-auth-service')
+    import('../git/github-auth-service'),
+    import('../cio-cleanup/cio-cleanup-service'),
+    import('../cio-cleanup/cio-cleanup-events')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -229,6 +242,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
+  // CIO Cleanup resolves the same roots the app boots a session in, and reports
+  // into the app-root dock exactly like the other background jobs do.
+  state.cioCleanup = new CioCleanupService({
+    database,
+    storage,
+    boards: scopeManager,
+    scopeRoots: {
+      resolve: async (target) => {
+        const resolution = await scopeRootResolver.resolve(target)
+        return resolution.ok ? { ok: true, root: resolution.root } : { ok: false }
+      }
+    },
+    hasActiveProcesses: (projectId, scopeBucketId) =>
+      state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
+      Promise.resolve(false),
+    onProgress: broadcastCioCleanupProgress,
+    onStateChanged: broadcastCioCleanupState
+  })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
@@ -263,6 +294,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // An update install owns its quit: background mode would otherwise park on the
+  // `app.quit()` the updater triggers and the update would never apply. The flag
+  // is cleared again if the install cannot proceed, so the app stays parkable.
+  state.updaterService.attachUpdateQuitHooks({
+    begin: () => {
+      state.quitForUpdate = true
+    },
+    end: () => {
+      state.quitForUpdate = false
+    }
+  })
   // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
   // where the updater is born, so the tray item is live the moment the updater is.
   state.backgroundLifecycle?.setUpdater({
@@ -283,6 +325,25 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
   }
+  // A scoped utility is not only a registry entry: the app installs it into the
+  // project's own `.cio/utilities`, or into the thread's folder under the config
+  // root. One service owns those folders, because the IPC writes, the
+  // marketplace installs and the sweep that removes a thread all have to agree
+  // on where a scoped capability lives.
+  const { UtilityScopeFootprintService } = await import('../utilities/utility-scope-footprint')
+  const utilityFootprint = new UtilityScopeFootprintService(storage, {
+    resolveProjectPath: async (projectId) => {
+      const project = await projectManager.getProject(projectId).catch(() => null)
+      return project?.path ?? null
+    },
+    listProjectPaths: async () =>
+      // Read on the database worker: an install pass runs on a user's write and
+      // over the background reconcile, and neither may hold the main thread on a
+      // SQLite read.
+      (await new ProjectRepo(database).listViaWorker())
+        .filter((project) => project.source !== 'ssh' && project.path)
+        .map((project) => ({ id: project.id, path: project.path }))
+  })
   // Installed skills ride the app-update check cycle: the same startup,
   // six-hourly and explicit check that looks for a new build also keeps the
   // marketplace skills CodeInOven placed up to date, in small batches.
@@ -291,7 +352,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       storage,
       home: app.getPath('home'),
       resolveProjectPath: resolveProjectRoot,
-      githubToken: () => githubAuthService.resolveToken()
+      githubToken: () => githubAuthService.resolveToken(),
+      // A managed copy the updater rewrites is a scoped install too, so a
+      // project-scoped one refreshes the file the project shows.
+      footprint: utilityFootprint
     },
     listProjectIds: async () => (await projectManager.listProjects()).map((project) => project.id)
   })
@@ -368,7 +432,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // to, so the models the user picked for the routine are the models its
       // runs actually use. A routine without a model set keeps the thread's own.
       const primary = routinePrimaryModel(routine?.agents)
-      const runSettings = primary ? settingsWithRoutineModel(task.settings, primary) : task.settings
+      // The routine's execution target is the default for every run it
+      // dispatches; a task that already picked an Oven of its own keeps it.
+      const targeted = settingsWithRoutineTarget(task.settings, routine?.execution)
+      const runSettings = primary ? settingsWithRoutineModel(targeted, primary) : targeted
       return chatEngine.createAssistantRunThread({
         task,
         settings: runSettings,
@@ -413,6 +480,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
+    broadcastSkippedRoutineRunsChanged(state.routineScheduler?.listSkippedRoutineRuns() ?? [])
     state.backgroundLifecycle?.refreshAttention()
   })
   // Background wake: the machine is held awake inside the lead window before a
@@ -649,7 +717,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // half of the thread's error card, which the icon mirrors.
     state.backgroundLifecycle?.requestAttentionRefresh()
   })
-  state.updaterService.setChatEngine(state.chatEngine)
+  // The engine counts the working sessions but cannot name them; the shared
+  // report is what the close gate lists too, so an install prompt and a quit
+  // prompt describe the same work the same way.
+  state.updaterService.setChatEngine(state.chatEngine, () => getActiveThreadProjects(database))
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
   // reclaimed without ever touching a harness the user runs outside the app.
@@ -679,6 +750,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
@@ -686,6 +758,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     threadDeletion: context.threadDeletion,
     hydrationHandlersRegistered: true,
     speechService: state.speechService,
+    utilityFootprint,
     onScopedPathResolver: (resolve) => {
       state.appfileScopedPathResolver = resolve
     }
@@ -703,6 +776,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.threadTransfer.start()
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
+  // Every scoped utility gets its install folder back once the app is up, so a
+  // registry entry written before this pass existed, or one whose project moved
+  // while the app was closed, never stays an entry with nothing on disk.
+  void (async () => {
+    const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
+    await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
+  })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
   context.onFeaturesReady()
   state.resolveFeaturesReady?.()
   state.resolveFeaturesReady = null
@@ -733,6 +813,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
+    const { ovenTerminalLaunch } = await import('../ovens/oven-terminal')
     state.ptyService = new PtyService(
       storage,
       database,
@@ -751,7 +832,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // User typed in a project terminal   open a user-activity window so
         // their shell-driven edits are excluded from concurrent agent turns.
         state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
-      }
+      },
+      ovenTerminalLaunch(storage, vault, database)
     )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects
@@ -769,7 +851,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Optional IPC   registered only after the services exist.
     if (state.updaterService) {
       state.updaterService.addActivitySource({
-        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0
+        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0,
+        describeOtherSessions: () => state.ptyService?.describeSessions() ?? [],
+        terminateActiveWork: async () => {
+          state.ptyService?.closeAllSessions()
+        }
       })
     }
     state.ptyService.register()
@@ -830,7 +916,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.computerUsePipService ?? undefined,
       // A capability the user switches off must stop being callable in the turns
       // that are already running, without the user restarting anything.
-      (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve()
+      (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve(),
+      utilityFootprint
     )
     state.gatewaySupervisor = registerGatewayIpc(
       storage,
@@ -888,6 +975,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Routine scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      // Daily, silent, and bounded per pass: a stale scratch backlog is reclaimed
+      // in the background instead of hammering the disk in one go.
+      await state.cioCleanup?.start()
+    } catch (error) {
+      Logger.error('CIO Cleanup startup failed (non-fatal):', error)
     }
 
     // A machine that slept through a slot catches up when it wakes or unlocks.

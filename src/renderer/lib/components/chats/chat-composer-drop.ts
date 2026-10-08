@@ -42,7 +42,7 @@ export interface ComposerDropContext {
  * be an element the composer must not capture as an attachment.
  */
 const SELF_HANDLED_DROP_REGIONS =
-  '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"]'
+  '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"], [data-drop-region="browser-bookmarks"]'
 
 function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boolean {
   return (
@@ -178,6 +178,11 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
     // Every drop ends the drag, including one that lands on the sidebar, the
     // file tree, or outside the window.
     clearDropState()
+    // A drag the composer could never attach (an in-app reorder carrying its own
+    // MIME type, or plain text) is not this surface's drop. Without this gate a
+    // reorder dropped over the conversation was read as an empty attachment drag
+    // and warned about nothing.
+    if (!dropCarriesAttachable(e.dataTransfer)) return
     if (ctx.getReadOnlyMode() && !ctx.getAllowAttachments()) return
     if (ctx.getSelectedHarnessLacksAttachments()) {
       if (dropCarriesAttachable(e.dataTransfer)) {

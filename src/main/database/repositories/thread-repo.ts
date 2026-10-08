@@ -1,6 +1,8 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
+import { DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
+  ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
@@ -298,6 +300,33 @@ function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
     ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
     : 'ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, last_activity DESC'
+}
+
+/**
+ * The WHERE clause for every thread a Threads view must carry whatever the
+ * recency window is: pinned rows, rows in a status that a Threads view ranks
+ * above done, and every row of a pinned-like scope. The non-done and scoped
+ * parts are bounded by the user's own choices, never by thread history.
+ */
+function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
+  where: string
+  params: unknown[]
+} {
+  const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
+  const statusPlaceholders = DONE_THREAD_STATUSES.map(() => '?').join(', ')
+  params.push(...DONE_THREAD_STATUSES)
+  let visibility = `(pinned = 1 OR status NOT IN (${statusPlaceholders}))`
+  const bucketIds = [...scopedBucketIds]
+  if (bucketIds.length > 0) {
+    visibility = `(pinned = 1 OR status NOT IN (${statusPlaceholders}) OR scope_bucket_id IN (${bucketIds
+      .map(() => '?')
+      .join(', ')}))`
+    params.push(...bucketIds)
+  }
+  return {
+    where: `WHERE archived = 0 AND project_id != ? AND ${visibility}`,
+    params
+  }
 }
 
 function buildListClauses(
@@ -796,9 +825,91 @@ export class ThreadRepo {
     return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
   }
 
+  /**
+   * Every active thread the Threads view must carry whatever the bounded
+   * recency window pulls: pinned rows, rows in a non-done status, and every row
+   * of a pinned-like scope (see `ScopeManager.scopedBucketIds`). Without this,
+   * a spec thread or a pinned scope's older thread falls past the 200-row
+   * activity window and never renders, even though the view ranks it above the
+   * done rows that did load.
+   */
+  async listAlwaysVisibleViaWorker(
+    scopedBucketIds: ReadonlySet<string>,
+    hydrateUsage = true
+  ): Promise<Thread[]> {
+    const { where, params } = buildAlwaysVisibleClauses(scopedBucketIds)
+    const orderBy = buildOrderBy({ order: 'activity' })
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where} ${orderBy}`,
+      params,
+      0
+    )
+    const rows = result.ok
+      ? (result.rows as unknown as ThreadRow[])
+      : this.db.all<ThreadRow>(`SELECT * FROM threads ${where} ${orderBy}`, ...params)
+    return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
+  }
+
   /** Initial workspace rows omit optional usage metadata so first paint stays bounded. */
   listAllForHydrationViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
     return this.listAllViaWorker(options, false)
+  }
+
+  /**
+   * Titles of the given threads, read on the database worker.
+   *
+   * For a background service that labels a workspace without hydrating whole
+   * thread rows, and must not read SQLite on the main thread (see
+   * `docs/APP-BIBLE.md`). Ids with no row are simply absent from the map.
+   */
+  async listTitlesViaWorker(ids: readonly string[]): Promise<Map<string, string>> {
+    const titles = new Map<string, string>()
+    const unique = [...new Set(ids)].filter((id) => id.length > 0)
+    if (unique.length === 0) return titles
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT id, title FROM threads WHERE id IN (${placeholders})`,
+      unique,
+      0
+    )
+    if (!result.ok) return titles
+    for (const row of result.rows) {
+      if (typeof row['id'] === 'string' && typeof row['title'] === 'string') {
+        titles.set(row['id'], row['title'])
+      }
+    }
+    return titles
+  }
+
+  /**
+   * Assistant task ids grouped by the routine they belong to, read on the
+   * database worker. Every task of a routine mounts that routine's single
+   * workspace directory, so a caller that owns the directory needs their ids to
+   * recognise the same folder under each task's own identity. Routine ids with
+   * no task are simply absent from the map.
+   */
+  async listAssistantTaskIdsByRoutineViaWorker(
+    routineIds: readonly string[]
+  ): Promise<Map<string, string[]>> {
+    const grouped = new Map<string, string[]>()
+    const unique = [...new Set(routineIds)].filter((id) => id.length > 0)
+    if (unique.length === 0) return grouped
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT id, routine_id FROM threads WHERE project_id = ? AND routine_id IN (${placeholders})`,
+      [ASSISTANT_SPACE_ID, ...unique],
+      0
+    )
+    if (!result.ok) return grouped
+    for (const row of result.rows) {
+      const id = row['id']
+      const routineId = row['routine_id']
+      if (typeof id !== 'string' || typeof routineId !== 'string') continue
+      const tasks = grouped.get(routineId)
+      if (tasks) tasks.push(id)
+      else grouped.set(routineId, [id])
+    }
+    return grouped
   }
 
   /**

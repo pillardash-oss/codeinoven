@@ -47,3 +47,7 @@ export function brandUserAgent(userAgent: string, version: string): string {
 export const WEBSITE_URL = 'https://codeinoven.com'
 export const GITHUB_URL = 'https://github.com/pillardash-oss/codeinoven'
 export const X_URL = 'https://x.com/codeinoven'
+
+/** Support address also used by the package author metadata. */
+export const SUPPORT_EMAIL = 'hey@pillardash.com'
+export const FEEDBACK_URL = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`${APP_NAME} feedback`)}`

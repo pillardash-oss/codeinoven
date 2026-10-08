@@ -1,5 +1,6 @@
 import type {
   AgentModelSelection,
+  ModelRuntimeSettings,
   InferenceMode,
   ModelIdentity,
   PermissionLevel,
@@ -41,7 +42,7 @@ export type AuxiliaryAgentConfig = Record<string, AgentModelSelection>
 export type RankingJudgeKind = 'automatic' | 'typesafe' | 'model'
 
 /** Persisted ranking-judge preference. The model fields apply to `model` only. */
-export interface RankingJudgeConfig {
+export interface RankingJudgeConfig extends ModelRuntimeSettings {
   kind: RankingJudgeKind
   harnessId?: string
   providerId?: string
@@ -65,6 +66,10 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /** Execution environment. Missing means this computer. */
+  ovenId?: string
+  /** Absolute workspace on the selected Oven, independent of the local project path. */
+  ovenPath?: string
   /** Agent harness responsible for the session, e.g. opencode or codex. */
   harnessId: string
   /** Model provider exposed by the harness, e.g. anthropic or openai. */
@@ -77,6 +82,8 @@ export interface ThreadSettings {
   thinkingLevel: ThinkingLevel
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
+  /** Per-thread context budget, applied by the native harness. */
+  contextWindow?: number
   permissionLevel: PermissionLevel
   /** Optional multi-agent planning workflow layered on Engineering mode. */
   assignmentMode?: boolean
@@ -162,8 +169,16 @@ export interface ProviderModel {
   toolcall: boolean
   /** Maximum tokens the provider allows in one model context. */
   contextWindow?: number
+  /** Maximum tokens the model can generate in one response, when the provider
+   *  reports it. A provider bills this completion against the same context
+   *  window, so the app reserves it when budgeting a turn. */
+  maxOutputTokens?: number
   /** True when the harness exposes a fast-inference tier for this model. */
   fastSupported?: boolean
+  /** True when the catalog exposes the ultrafast service tier. */
+  ultrafastSupported?: boolean
+  /** Context budgets selectable through this harness. */
+  contextWindows?: number[]
 }
 
 /** A harness provider and the models it currently exposes. */

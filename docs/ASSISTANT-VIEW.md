@@ -180,10 +180,22 @@ the app's clock for Assistant View.
   contract into its system prompt exactly as it does for the task. The tick also
   runs with no window at all in background mode (see **Background mode**), so "the
   app is open" now means "the backend is running", not "a window is visible".
-- **Firing happens exactly once, on the elected owner.** Every scheduler tick is
+- **Firing happens exactly once, on the main instance.** Every scheduler tick is
   gated on `instanceRegistry.isIncumbentInstance()`, so a second CodeInOven
   process on the same config root schedules nothing and can never double-fire a
-  slot.
+  slot. The main instance is the one the user designated (see **Background
+  mode**), or, with no live designation, the longest-running live process.
+  Build type never decides it: a packaged app and a development launch are equal
+  candidates until one is designated.
+- **A run streaming in another instance offers its transfer.** An assistant task
+  and its runs are different threads, so an assistant run executes on its own
+  thread and the task can look idle in a window that is not running it. When
+  another instance owns a run, the task and run rows wear the still **running in
+  another instance** mark (the window icon, not a spinner) and carry a
+  **Transfer** action, and opening the task shows that run's transfer card above
+  the composer without locking the task's own composer. Opening the run thread
+  directly shows the same card in place of its composer, exactly as any other
+  thread does.
 - **A run is named for what it runs.** The run's visible prompt is built by
   `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
   its title, but a routine's Getting started thread is its authoring host, not
@@ -234,7 +246,9 @@ the app's clock for Assistant View.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
-  the caller can open it. Neither is automatic.
+  the caller can open it. Neither is automatic. An unattended run recorded in the
+  ledger is acknowledged separately by `assistant:dismissBackgroundRun`, which
+  drops the durable entry from every "While you were away" surface.
 
 ## Background mode (menu bar)
 
@@ -247,23 +261,30 @@ Cmd+Q so a routine still fires on time. It is on by default
   SQLite, the 30s tick, the menu bar icon, and window-bound services are torn
   down before the renderer dies (`BackgroundLifecycleService.park`). A login
   launch in background mode boots with no splash and no window at all.
-- **One backend, one owner.** Every process attaches to the same config root, and
-  the longest-running live process owns the scheduled work
+- **One backend, one main instance.** Every process attaches to the same config
+  root, and exactly one of them owns the scheduled work
   (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
-  schedulers are all gated on it. A secondary instance keeps a fully usable
-  window, shows a standing **Running in another instance** status bar at the
-  bottom of the app, and quits on close rather than parking.
-- **Ownership can be transferred.** The secondary's bottom bar offers **Make this
-  the main instance**, which writes an owner override
-  (`instances/owner.json`) naming this pid (`instanceRegistry.transferOwnership`).
-  The previous owner steps down through the same ownership notification: it
-  destroys its menu bar icon, its schedulers stop firing, and its own bar now
-  reads **Running in another instance**. The new owner creates the icon and runs
-  the missed-slot catch-up. This is the escape hatch when the elected owner is a
-  stale window, or a crashed process still in the registry, and the user wants
-  the schedule in the instance they are actually working in. The override is
-  honoured only while its target is live; when that process dies the election
-  resumes on the next heartbeat, so a transfer can never strand scheduling.
+  schedulers are all gated on it. The main instance is an explicit, durable
+  choice: **Make this the main instance** designates an app, and that app owns
+  the schedule whenever it is running, even if another process started earlier,
+  and reclaims it after it restarts. With no designated app running, the
+  longest-running live process is elected instead, so scheduling is never
+  stranded. A secondary instance keeps a fully usable window, shows a standing
+  **Running in another instance** status bar at the bottom of the app, and quits
+  on close rather than parking.
+- **Ownership can be transferred, and the choice is remembered.** The
+  secondary's bottom bar offers **Make this the main instance**, which writes the
+  designation to `instances/owner.json` (`instanceRegistry.transferOwnership`).
+  The record names the chosen app's stable identity (`instanceKey`, its
+  executable path) alongside the pid, so a later launch of that same app reclaims
+  the schedule without the user repeating the choice; the pid only picks between
+  simultaneous launches of that app. The previous owner steps down through the
+  same ownership notification: it destroys its menu bar icon, its schedulers stop
+  firing, and its own bar now reads **Running in another instance**. The new
+  owner creates the icon and runs the missed-slot catch-up. While the designated
+  app is not running, the election resumes on the next heartbeat, so a transfer
+  can never strand scheduling; when the designated app returns it takes the
+  schedule back.
 - **A probe launch stays out.** Setting `CODEINOVEN_NO_BACKGROUND` on an
   unpackaged launch (normally alongside a scratch `CODEINOVEN_CONFIG_ROOT`)
   skips background registration entirely: no menu bar icon, no login item, no
@@ -272,7 +293,7 @@ Cmd+Q so a routine still fires on time. It is on by default
   beside the running app. The opt-out is never inferred from an isolated data
   root, because probing the menu bar itself needs background mode on.
 - **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
-  and **Quit CodeInOven** (the direct quit, also bound to Cmd/Ctrl+Shift+Q through
+  and **Quit CodeInOven** (the direct quit, also bound to Cmd/Ctrl+Shift+D through
   the keymap); the icon is the monochrome mark, or the mark with a bold
   exclamation when a thread holds a live problem. While windowless the Dock
   icon is hidden and restored when a window opens. The error state mirrors the
@@ -291,6 +312,16 @@ Cmd+Q so a routine still fires on time. It is on by default
   recorded so the app never decides silently (see **Auto-resolved gates**). A
   permission gate has no timer, so it parks durably and flips the icon; nothing
   proceeds until the user answers.
+- **Restart to update is a real quit.** `autoUpdater.quitAndInstall()` restarts
+  the app to apply a downloaded update, and background mode must not swallow that
+  restart. The install brackets the quit through
+  `UpdaterService.attachUpdateQuitHooks`, which raises `state.quitForUpdate` for
+  the duration, so neither the closing window nor `before-quit` parks. The flag
+  is consumed by the first `before-quit` and cleared if the install fails, so a
+  restart the user declines (unsaved files, a working thread) leaves the app
+  parkable again on the next close. An install that happened windowless leaves
+  the background-relaunch marker, so the next launch comes back into the menu bar
+  rather than onto the screen.
 - **Sleep.** A machine that is asleep cannot run work. Inside
   `backgroundWakeLeadMs` before a due run the app holds
   `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
@@ -339,12 +370,20 @@ default:
   Assistants tab exposes no sub-filter buttons; with nothing to show it renders
   only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
-  app was closed when the machine simply slept through the window;
+  app was closed when the machine simply slept through the window. An entry's
+  title names the task or routine through `assistantSubjectName`, so a run of a
+  routine's Getting started host reads as the routine, never as "Getting
+  started";
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
-  settled, any persisted failure, and how many gates it answered for you), and a
-  routine profile's **Run history** list in the how-to panel. A run whose thread
-  was later deleted still shows, as non-clickable evidence.
+  settled, any persisted failure, and how many gates it answered for you), with a
+  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
+  durable ledger entry, and a routine profile's **Run history** list in the
+  how-to panel. A run whose thread was later deleted still shows, as
+  non-clickable evidence. These rows name the task or routine the same way, so
+  the section never falls back to the authoring host's fixed title. Dismissing a
+  run is the user acknowledging evidence they no longer need: the row leaves
+  every surface and does not return on the next launch.
 
 ## Auto-resolved gates (attention rail)
 
@@ -380,6 +419,22 @@ main process tags a run thread's notification with `source: 'assistant'`
 (`notificationSource` in `src/main/notifications/notification-service.ts`), so
 the panel routes it to the Assistants tab instead of Projects and the card names
 its own status (done, needs attention, spec ready, error).
+
+A completed run of a **routine** names the report rather than the space: the
+notification's title is the task or routine's own name, so the entry says what
+finished and whose it is instead of a bare **Assistant Done**. Every assistant
+notice resolves the same subject through `assistantSubjectName`
+(`src/main/notifications/notification-service.ts`): a run names the task it ran,
+a task names itself, and a routine's Getting started authoring host names its
+routine rather than its fixed title. The same rule is what turns a failure into
+**Slack digest hit an error** instead of the generic **Assistant hit an error**,
+and the renderer's thread-state hydration
+(`notification-panel.svelte.ts`) resolves the identical subject, so a failure
+surfaced on the next launch reads the same as the live one. The name is resolved
+from the run's `assistantTaskId`/`routineId` (`getViaWorker`), read on the worker
+so naming a notification never holds the main thread. A completed authoring turn
+keeps the generic assistant copy; a failure or parked card there names the
+routine, because "Assistant hit an error" says nothing about what failed.
 
 The assistant is a surface with its own accent colour, the colour stored on the
 hidden assistant space project (the payload's `projectColor`, `#ec4899` by
@@ -434,7 +489,10 @@ success green, mirroring how a chat response toast uses its own colour.
 
 The left sidebar shows only routines, their tasks, and each task's runs, with no
 title header and no composer. Everything the view offers lives on the app header,
-registered by the workspace through `viewActions`:
+registered by the workspace through `viewActions`. The header itself wears the
+selected thread's routine icon (`getRoutineIcon`, falling back to
+`RoutineDefaultIcon`), exactly as the sidebar row does, so an open assistant
+thread names its routine at a glance instead of showing no mark at all.
 
 - **Search** (`AssistantSearchControl.svelte`) filters routines, tasks, and runs.
   Runs get their own result section, since a run is a row on the sidebar too.
@@ -519,7 +577,16 @@ control nested inside a row's button. A task row also pulses while any of its
 runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
-execution.
+execution. A run lifted to its routine's own level (`routineSiblingRuns`) names
+the task it ran on its own line (`contextLabel`), because it has no parent row
+above it to say which task it belongs to, and a row that is actually working
+reads **Running now** instead of a stale schedule time.
+
+Selecting a run from a notification follows the same focus-follow rule as every
+other thread: the workspace fetches and adds the run's parent task when it falls
+outside the bounded recent hydration slice, counts a run as sidebar content, and
+reveals and highlights the row even when the thread was not in the first loaded
+page, so a thread opened from a notification is never left unhighlighted.
 
 A task or run row's status indicator comes from the same canonical mapping every
 other thread surface reads, `statusBadgeForThread`

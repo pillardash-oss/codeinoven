@@ -29,11 +29,14 @@
      *  focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
+    oven?: import('svelte').Snippet
+    onOpenOven?: () => void
     report?: ComposerWorkerReport
   }
 </script>
 
 <script lang="ts">
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import {
     ChevronDown,
     ClipboardCheck,
@@ -85,6 +88,7 @@
     onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
     report?: ComposerWorkerReport
+    oven?: import('svelte').Snippet
   }
 
   let {
@@ -99,21 +103,40 @@
     onSwitchProject,
     onOpenScopeView,
     onScopeMenuClosed,
-    report
+    report,
+    oven
   }: Props = $props()
 
   let menuOpen = $state(false)
   let creatingAuto = $state(false)
   let createModalOpen = $state(false)
+  /**
+   * Thread the full creation form was opened for. Frozen at open time because
+   * the docked run outlives this shoe and the props keep tracking the selected
+   * thread, so assigning on completion must never read them back.
+   */
+  let createTarget: { projectId: string; threadId: string } | null = $state(null)
   /** Full change-scope modal, opened by right-clicking the scope badge. */
   let changeScopeOpen = $state(false)
   /** The worker reporting dropdown, and the confirmation that guards turning it off. */
   let reportMenuOpen = $state(false)
   let reportConfirmOpen = $state(false)
 
-  async function assignScope(bucketId: string): Promise<void> {
+  trackEscapeMenu(() => menuOpen, closeMenu)
+  trackEscapeMenu(
+    () => reportMenuOpen,
+    () => {
+      reportMenuOpen = false
+    }
+  )
+
+  async function assignScopeToThread(
+    targetProjectId: string,
+    targetThreadId: string,
+    bucketId: string
+  ): Promise<void> {
     try {
-      const updated = await invoke('thread:update', projectId, threadId, {
+      const updated = await invoke('thread:update', targetProjectId, targetThreadId, {
         scopeBucketId: bucketId
       })
       workspaceState.updateThread(updated)
@@ -124,12 +147,38 @@
     }
   }
 
+  async function assignScope(bucketId: string): Promise<void> {
+    await assignScopeToThread(projectId, threadId, bucketId)
+  }
+
+  /** Freeze the creation target and open the full scope form. */
+  function openCreateModal(): void {
+    createTarget = { projectId, threadId }
+    createModalOpen = true
+  }
+
+  /** Apply a freshly created scope to the thread the form was opened for. */
+  function assignCreatedScope(bucketId: string): void {
+    const target = createTarget
+    createTarget = null
+    if (!target) {
+      void assignScope(bucketId)
+      return
+    }
+    void assignScopeToThread(target.projectId, target.threadId, bucketId)
+  }
+
   /** Create a scope + isolated worktree in one go; the thread lands in the new
    *  scope and the agent performs its work there with the copy environment. */
   async function autoCreateScope(): Promise<void> {
     if (creatingAuto) return
     creatingAuto = true
-    const board = scopeState.boards.get(projectId)
+    // Freeze the initiating thread: the run outlives this menu and the props
+    // keep tracking the selected thread, so reading them on completion would
+    // move whichever thread the user switched to instead of this one.
+    const targetProjectId = projectId
+    const targetThreadId = threadId
+    const board = scopeState.boards.get(targetProjectId)
     const candidate = `Auto scope ${board ? board.buckets.length + 1 : 2}`
     // Names are how scopes are referenced, so an auto name must never collide
     // with a renamed or still-present scope on the board.
@@ -140,7 +189,7 @@
     // The run reports through the app-level worktree dock, so the panel survives
     // this menu closing and the user moving on to the new thread.
     scopeJobs.create(
-      projectId,
+      targetProjectId,
       {
         title,
         isolated: true,
@@ -148,7 +197,9 @@
         environmentMode: 'copy' as ScopeEnvironmentMode
       },
       {
-        onCreated: (createdId) => void assignScope(createdId)
+        targetThreadId,
+        onCreated: (createdId) =>
+          void assignScopeToThread(targetProjectId, targetThreadId, createdId)
       }
     )
     creatingAuto = false
@@ -309,7 +360,7 @@
           autofocusSearch
           label="Thread scope"
           onSelect={selectScope}
-          onCreateScope={() => (createModalOpen = true)}
+          onCreateScope={openCreateModal}
           onClose={closeMenu}
         />
       </div>
@@ -342,21 +393,25 @@
     </ProjectSwitch>
   {/if}
 
-  <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
-  <span
-    class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
-    title={source === 'ssh'
-      ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
-      : 'Project runs locally on this machine'}
-  >
-    {#if source === 'ssh'}
-      <Globe size={10} class="shrink-0" />
-      <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
-    {:else}
-      <Monitor size={10} class="shrink-0" />
-      <span>Local</span>
-    {/if}
-  </span>
+  {#if oven}
+    {@render oven()}
+  {:else}
+    <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
+    <span
+      class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
+      title={source === 'ssh'
+        ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
+        : 'Project runs locally on this machine'}
+    >
+      {#if source === 'ssh'}
+        <Globe size={10} class="shrink-0" />
+        <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
+      {:else}
+        <Monitor size={10} class="shrink-0" />
+        <span>Local</span>
+      {/if}
+    </span>
+  {/if}
 
   {#if project?.branch}
     <span
@@ -472,7 +527,8 @@
   <ScopeCreateModal
     open={createModalOpen}
     {projectId}
-    onCreated={(createdId) => void assignScope(createdId)}
+    targetThreadId={createTarget?.threadId ?? threadId}
+    onCreated={(createdId) => assignCreatedScope(createdId)}
     onClose={() => (createModalOpen = false)}
   />
 {/if}
