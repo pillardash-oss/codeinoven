@@ -78,20 +78,37 @@ export function browserSiteHost(url: string): string {
   }
 }
 
+/** The normalized origin of a page's URL (`https://host`), or an empty string
+ *  while the address is blank or not an http(s) URL. The site menu's manual
+ *  permission section acts on this: camera, microphone, location and
+ *  notifications can be allowed or blocked for the site without waiting for
+ *  the page to request them. */
+export function browserSiteOrigin(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return parsed.origin
+  } catch {
+    return ''
+  }
+}
+
 /**
- * Open the site-settings menu (a host header, then the clearing actions) under
- * a chrome button. Resolves `true` once the popup is handed to the OS, `false`
- * when the call failed, so the caller can drop its `aria-expanded` state.
+ * Open the site-settings menu (manual per-site permissions, then the clearing
+ * actions) under a chrome button. Resolves `true` once the popup is handed
+ * to the OS, `false` when the call failed, so the caller can drop its
+ * `aria-expanded` state.
  */
 export function openBrowserSiteMenu(
   projectId: string,
   host: string,
+  origin: string,
   anchor: HTMLElement,
   boxId: string | null = null,
   boxName = ''
 ): Promise<boolean> {
   const { x, y } = anchorBelow(anchor)
-  return openBrowserSiteMenuAt(projectId, host, x, y, boxId, boxName)
+  return openBrowserSiteMenuAt(projectId, host, origin, x, y, boxId, boxName)
 }
 
 /**
@@ -106,6 +123,7 @@ export function openBrowserSiteMenu(
 export function openBrowserSiteMenuAt(
   projectId: string,
   host: string,
+  origin: string,
   x: number,
   y: number,
   boxId: string | null = null,
@@ -115,6 +133,7 @@ export function openBrowserSiteMenuAt(
     'browser:siteMenu',
     projectId,
     host,
+    origin,
     boxId,
     boxName,
     Math.max(0, Math.round(x)),

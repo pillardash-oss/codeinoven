@@ -15,6 +15,7 @@ import { browserBookmarks } from './browser-bookmarks.svelte'
 import { installStoreExtensionOffer, storeExtensionOffer } from './browser-extension-store-offer'
 import {
   browserSiteHost,
+  browserSiteOrigin,
   openBrowserSiteMenuAt
 } from '$lib/components/browser/browser-chrome-menus'
 import { sidebarState } from './sidebar.svelte'
@@ -302,6 +303,7 @@ class BrowserStripOverlayState {
         void openBrowserSiteMenuAt(
           GLOBAL_BROWSER_PROJECT_ID,
           browserSiteHost(tab.url),
+          browserSiteOrigin(tab.url),
           x,
           y + TOAST_OVERLAY_TOP,
           globalBrowser.activeTabBoxId,

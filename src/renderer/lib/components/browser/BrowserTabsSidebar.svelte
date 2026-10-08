@@ -47,7 +47,7 @@
   import BrowserTabModal from './BrowserTabModal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
-  import { browserSiteHost, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
+  import { browserSiteHost, browserSiteOrigin, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
 
   interface Props {
     /** Summon the address spotlight, which is how Cmd/Ctrl+L also opens it. */
@@ -315,6 +315,7 @@
     void openBrowserSiteMenu(
       GLOBAL_BROWSER_PROJECT_ID,
       host,
+      browserSiteOrigin(tab.url),
       button,
       globalBrowser.activeTabBoxId,
       globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
