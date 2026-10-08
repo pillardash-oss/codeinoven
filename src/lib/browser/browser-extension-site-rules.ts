@@ -96,23 +96,30 @@ export function allowPatternsForHost(host: string): string[] {
  * the original patterns already cover, so an allowlist never broadens an
  * extension past what it declared.
  */
+export interface ExtensionManifestLike {
+  [key: string]: unknown
+  content_scripts?: Array<Record<string, unknown> | null> | unknown
+}
+
 export function filterManifestForSiteRules(
-  original: Record<string, unknown>,
+  original: ExtensionManifestLike,
   blockedHosts: readonly string[],
   allowedHosts: readonly string[]
-): Record<string, unknown> | null {
+): ExtensionManifestLike | null {
   if (blockedHosts.length === 0 && allowedHosts.length === 0) return null
-  const scripts = original['content_scripts']
+  const scripts = original.content_scripts
   if (!Array.isArray(scripts)) return null
   let changed = false
   const nextScripts = scripts.map((entry) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry
     const record = entry as Record<string, unknown>
-    const matches = Array.isArray(record['matches'])
-      ? record['matches'].filter((item): item is string => typeof item === 'string')
+    const matchesRaw = record.matches
+    const excludeRaw = record.exclude_matches
+    const matches = Array.isArray(matchesRaw)
+      ? matchesRaw.filter((item): item is string => typeof item === 'string')
       : []
-    const exclude = Array.isArray(record['exclude_matches'])
-      ? record['exclude_matches'].filter((item): item is string => typeof item === 'string')
+    const exclude = Array.isArray(excludeRaw)
+      ? excludeRaw.filter((item): item is string => typeof item === 'string')
       : []
     let nextMatches = matches
     if (allowedHosts.length > 0) {

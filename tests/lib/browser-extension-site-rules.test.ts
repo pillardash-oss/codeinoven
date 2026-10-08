@@ -43,7 +43,11 @@ describe('browser extension site rules', () => {
       ['example.com'],
       []
     )
-    expect(filtered?.content_scripts[0].exclude_matches).toContain('*://example.com/*')
+    const scripts = filtered?.content_scripts as unknown[] | undefined
+    expect(Array.isArray(scripts)).toBe(true)
+    const first = scripts?.[0] as Record<string, unknown> | undefined
+    expect(first && typeof first === 'object').toBe(true)
+    expect((first as any).exclude_matches).toContain('*://example.com/*')
   })
 
   it('intersects an allowlist with declared matches', () => {
@@ -52,6 +56,10 @@ describe('browser extension site rules', () => {
       [],
       ['example.com']
     )
-    expect(filtered?.content_scripts[0].matches).toContain('*://example.com/*')
+    const scripts = filtered?.content_scripts as unknown[] | undefined
+    expect(Array.isArray(scripts)).toBe(true)
+    const first = scripts?.[0] as Record<string, unknown> | undefined
+    expect(first && typeof first === 'object').toBe(true)
+    expect((first as any).matches).toContain('*://example.com/*')
   })
 })
