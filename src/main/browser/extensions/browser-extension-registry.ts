@@ -426,6 +426,9 @@ export class BrowserExtensionRegistry {
       boxes?: string[]
       pinned?: boolean
       optionsPath?: string | null
+      /** Cleared when the declared popup file is missing from the installed
+       *  copy, so the surface stops offering a popup that can never load. */
+      popupPath?: string | null
       blockedHosts?: string[]
       allowedHosts?: string[]
       /** Recomputed when the app's own surface changes, which is why it is
@@ -444,6 +447,12 @@ export class BrowserExtensionRegistry {
         patch.optionsPath === null
           ? null
           : optionalBoundedString(patch.optionsPath, MAX_OPTIONS_PATH_LENGTH)
+    }
+    if (patch.popupPath !== undefined) {
+      record.popupPath =
+        patch.popupPath === null
+          ? null
+          : optionalBoundedString(patch.popupPath, MAX_POPUP_PATH_LENGTH)
     }
     if (patch.blockedHosts !== undefined) record.blockedHosts = parseSiteHosts(patch.blockedHosts)
     if (patch.allowedHosts !== undefined) record.allowedHosts = parseSiteHosts(patch.allowedHosts)

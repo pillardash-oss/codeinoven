@@ -23,7 +23,7 @@
  */
 
 import { createHash, generateKeyPairSync } from 'node:crypto'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import JSZip from 'jszip'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
@@ -323,6 +323,26 @@ export function extensionPageUrl(id: string, pagePath: string | null): string | 
   }
   if (resolved.protocol !== 'chrome-extension:' || resolved.host !== id) return null
   return resolved.href
+}
+
+/**
+ * Whether a manifest-declared page is really a file inside the extension's own
+ * folder. A package can declare a popup its files do not contain, and the only
+ * thing that currently notices is the popup load itself, which fails with
+ * `ERR_FILE_NOT_FOUND` after the rail already opened a tab for it.
+ */
+export async function extensionPageFileExists(
+  extensionDir: string,
+  pagePath: string | null
+): Promise<boolean> {
+  if (!pagePath) return false
+  const absolute = join(extensionDir, pagePath)
+  if (!isInside(extensionDir, absolute)) return false
+  try {
+    return (await stat(absolute)).isFile()
+  } catch {
+    return false
+  }
 }
 
 function backgroundOf(manifest: Record<string, unknown>): ManifestRecord['background'] {

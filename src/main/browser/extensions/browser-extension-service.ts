@@ -72,6 +72,7 @@ import {
 } from './browser-extension-webstore'
 import {
   EXTENSION_MANIFEST_NAME,
+  extensionPageFileExists,
   extensionPageUrl,
   extensionPopupUrl,
   readActionIconDataUrl,
@@ -798,6 +799,9 @@ export class BrowserExtensionService {
       if (result.skippedLinks > 0) {
         warnings.push(`${result.skippedLinks} symbolic links in the folder were skipped`)
       }
+      if (result.popupMissing) {
+        warnings.push('Its popup page is missing from the package, so it has no popup to open.')
+      }
       if (result.manifestVersion === 2) {
         warnings.push(
           'This is a Manifest V2 extension. The runtime warns that support for it is deprecated.'
@@ -949,6 +953,9 @@ export class BrowserExtensionService {
       await this.unloadEverywhere(original.id)
 
       const warnings: string[] = []
+      if (result.popupMissing) {
+        warnings.push('Its popup page is missing from the package, so it has no popup to open.')
+      }
       if (result.manifestVersion === 2) {
         warnings.push(
           'This is a Manifest V2 extension. The runtime warns that support for it is deprecated.'
@@ -1120,6 +1127,7 @@ export class BrowserExtensionService {
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
       await this.refreshOptionsPath(directory, record)
+      await this.refreshPopupAvailability(directory, record)
       await this.applySiteRulesToManifest(directory, record)
       await this.makeManifestLoadable(directory)
       await this.loadExtensionWhenReady(state.session, directory, record.injected !== 'none')
@@ -1364,6 +1372,39 @@ export class BrowserExtensionService {
       await writeFile(manifestPath, `${JSON.stringify(filtered, null, 2)}\n`)
     } catch (error) {
       Logger.dev('Browser extension site rules could not be applied:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Stop offering a popup whose file is missing from the installed copy.
+   *
+   * A package can declare `action.default_popup` without shipping the file, and
+   * a copy on disk can lose it. The first notice today is the popup load itself,
+   * which fails with `ERR_FILE_NOT_FOUND` after the rail already opened a popup
+   * for it. Clearing the offer here turns that into a row warning instead, and a
+   * reinstall restores the popup because the worker reports it again.
+   */
+  private async refreshPopupAvailability(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    if (!record.popupPath) return
+    try {
+      if (await extensionPageFileExists(directory, record.popupPath)) return
+      const patched = await this.registry.patch(record.id, { popupPath: null })
+      if (patched) {
+        record.popupPath = patched.popupPath
+        await this.registry.warn(
+          record.id,
+          'Its popup page is missing from the installed copy, so it has no popup to open.'
+        )
+        this.host.publish()
+      }
+    } catch (error) {
+      Logger.dev('Browser extension popup availability could not be refreshed:', {
         extensionId: record.id,
         error
       })
