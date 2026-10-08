@@ -9,6 +9,7 @@
   import { type BrowserSurface, browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import BrowserFindBar from './BrowserFindBar.svelte'
+  import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { openBrowserPageMenuAt } from './browser-chrome-menus'
 
@@ -90,6 +91,8 @@
   /** Whether this tab's find bar is up. It is a row of this frame, and the store
    *  is its authority because the sidebar panel shows a tab's page too. */
   const findOpen = $derived(browserFindState.stateFor(tabId).open)
+  /** A blank tab has no address yet: show the empty state instead of a native page. */
+  const isBlank = $derived(tab.url === '' && !runtime.loading && !loadError)
 
   /**
    * Carry out a browser shortcut that belongs to this frame's tab.
@@ -141,8 +144,9 @@
     // A tab showing the error card has no page to place. The attachment is not
     // applied on this edge, but the resize observer and the window listener are
     // live the whole time, so this guard is what keeps them from putting the
-    // empty native view back over the card.
-    if (loadError) return
+    // empty native view back over the card. A blank tab is the same: its empty
+    // state is DOM, so no native page may cover it.
+    if (loadError || isBlank) return
     // Ask the store directly instead of reading the template's `pageVisible`
     // derived: this also runs from ResizeObserver and attachment continuations.
     if (holdPage || !browserVisibility.isVisible(tabId, bounds)) return
@@ -206,7 +210,7 @@
    * handed to the overlay for a view nobody can see.
    */
   $effect(() => {
-    const frame = pageAttachable && !loadError ? contentRect : null
+    const frame = pageAttachable && !loadError && !isBlank ? contentRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
       return
@@ -282,8 +286,8 @@
   {/if}
   <div
     {@attach attachContentElement}
-    {@attach pageAttachable && !loadError && manageNativeView}
-    class="relative min-h-0 flex-1"
+    {@attach pageAttachable && !loadError && !isBlank && manageNativeView}
+    class="relative flex min-h-0 flex-1 flex-col"
     role="presentation"
     oncontextmenu={(event) => {
       // The page itself renders in a native view above this host, so a click it
@@ -301,6 +305,14 @@
         canGoBack={runtime.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {:else if isBlank}
+      <BrowserBlankTab
+        projectId={GLOBAL_BROWSER_CONTEXT.projectId}
+        threadId={GLOBAL_BROWSER_CONTEXT.threadId}
+        boxId={tab.boxId}
+        autofocus
+        onNavigate={(url) => globalBrowser.openInActiveTab(url)}
       />
     {/if}
   </div>

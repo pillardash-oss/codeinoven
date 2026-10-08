@@ -12,6 +12,7 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
+  import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
@@ -141,6 +142,8 @@
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
+  /** A blank tab has no address yet: show the empty state instead of a native page. */
+  let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
    * Whether element inspection is armed on this tab.
    *
@@ -303,7 +306,7 @@
    * claim the same screen space.
    */
   $effect(() => {
-    const frame = panelVisible && !pageState.loadError ? contentRect : null
+    const frame = panelVisible && !pageState.loadError && !isBlank ? contentRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
       return
@@ -338,8 +341,9 @@
     // A tab showing the error card has no page to place. The attachment is not
     // applied on that edge, but the resize observer and the sidebar's entry
     // animation keep calling here, so this guard is what stops them putting the
-    // empty native view back over the card.
-    if (pageState.loadError) return
+    // empty native view back over the card. A blank tab is the same: its empty
+    // state is DOM, so no native page may cover it.
+    if (pageState.loadError || isBlank) return
     try {
       const currentUrl = (tab as BrowserContextTab | null)?.url ?? tabInitialUrl
       const revision = stateRevision
@@ -515,7 +519,7 @@
 </script>
 
 <div
-  {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
+  {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
   <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
@@ -693,6 +697,13 @@
         canGoBack={pageState.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {:else if isBlank}
+      <BrowserBlankTab
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        onNavigate={navigate}
       />
     {/if}
   </div>
