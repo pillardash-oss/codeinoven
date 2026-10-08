@@ -364,6 +364,7 @@ import {
 import { capPersistedPart } from './bounded-tool-output'
 import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
 import { readTurnStreamLog } from './turn-stream-log'
+import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
@@ -1879,7 +1880,8 @@ export class ChatEngine {
         info.driverId,
         { type: 'permission.asked', sessionId: info.sessionId, permission },
         undefined,
-        settle
+        settle,
+        request.review
       )
     } catch (error) {
       this.pendingPermissions.delete(permission.id)
@@ -13002,6 +13004,10 @@ export class ChatEngine {
     // sidebar indicator never stays stuck on "working". A deliberate stop is
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      await this.storage.drainRaw(turnStreamPath(projectId, threadId))
+      await this.threadManager.loadMessagePage(projectId, threadId, undefined, 1)
+    }
     clearNotificationAborting(projectId, threadId)
     if (abortFailure) throw abortFailure
   }
@@ -23627,6 +23633,11 @@ export class ChatEngine {
     threadId: string,
     query: TurnStreamPartsQuery = {}
   ): Promise<TurnStreamPartsPage | TurnStreamPartsChange> {
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      // Repair settled browser history before the trace loader can compact old
+      // turns out of the only record that still holds their assistant messages.
+      await this.threadManager.loadMessagePage(projectId, threadId, undefined, 1)
+    }
     const streamPath = turnStreamPath(projectId, threadId)
     const entry = this.turnStreamCache.get(streamPath) ?? {
       consumedBytes: 0,
@@ -24955,7 +24966,8 @@ export class ChatEngine {
     driverId: string,
     event: Extract<AgentEvent, { type: 'permission.asked' }>,
     sourceDriver?: HarnessDriver,
-    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction']
+    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction'],
+    browserReview?: BrowserActionReview
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.sessionRegistry.get(sessionId)
@@ -24983,6 +24995,25 @@ export class ChatEngine {
         ? { unclassifiedTool: unclassifiedTool.trim() }
         : {})
     })
+    // Only an app-owned browser call may supply this decision. Harness metadata
+    // cannot turn an unclassified tool into an automatically approved action.
+    if (settleBrowserAction && browserReview && level === 'auto_review') {
+      const decision = browserReview.approved ? 'auto_review' : 'ask'
+      policy = {
+        ...policy,
+        approved: browserReview.approved,
+        decision,
+        risk: browserReview.risk,
+        reason: browserReview.reason,
+        approval: { required: !browserReview.approved },
+        ledger: {
+          ...policy.ledger,
+          decision,
+          risk: browserReview.risk,
+          reason: browserReview.reason
+        }
+      }
+    }
     if (!policy.approved) {
       policy = {
         ...policy,

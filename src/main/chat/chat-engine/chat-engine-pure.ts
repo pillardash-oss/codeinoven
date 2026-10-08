@@ -1031,9 +1031,7 @@ export function recommendedQuestionAnswer(question: AgentQuestion): string {
   )
 }
 
-export function turnStreamPath(projectId: string, threadId: string): string {
-  return `projects/${projectId}/threads/${threadId}/stream.jsonl`
-}
+export { turnStreamPath } from '../turn-stream'
 
 export function deliverBroadcast(event: AgentEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {

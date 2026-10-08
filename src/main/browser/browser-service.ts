@@ -65,6 +65,12 @@ import type {
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
+import {
+  browserActionTargetScript,
+  reviewBrowserAction,
+  type BrowserActionTarget,
+  type BrowserActionReview
+} from './browser-service/browser-action-policy'
 import { isVideoCaptureUrl } from '../../lib/video/project'
 import {
   boundedBrowserTabHistory,
@@ -437,11 +443,9 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * The browser operations a page belonging to the user answers.
  *
  * A browser tab's assistant conversation answers about the page on screen, so its
- * browser capability is attached to that tab. Only the reading operations are
- * allowed there: they observe the page, while everything else in the capability
- * changes it. File upload is the one reviewed exception: Auto Review uses a
- * native file chooser or an exact-file confirmation, while Full Access may name
- * the files directly. Navigation, clicks and resizing remain agent-page only.
+ * browser capability is attached to that tab. Reading operations observe it;
+ * mutations pass through action-aware Auto Review. File upload uses a native
+ * file chooser or exact-file confirmation, while Full Access may name files.
  */
 const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
 const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
@@ -463,6 +467,7 @@ export interface BrowserAgentActionApproval {
   action: string
   origin: string
   pageUrl: string
+  review: BrowserActionReview
 }
 
 /** Outcome of a permission-card approval. An alternative carries the user's correction. */
@@ -1850,35 +1855,34 @@ export class BrowserService {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // The user's tab is read-only by default. Full Access follows the thread's
-    // permission tier; Auto Review asks the user to approve each page mutation.
-    // File upload has its own exact-file review and never submits a form.
+    // Review effects, rather than prompting for every click on an attached page.
+    // Agent-owned pages use the same gate; uploads keep their exact-file review.
+    let reviewedTarget: BrowserActionTarget | null = null
     if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
       if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
         throw new Error(
           `The page the user is on is attached for reading (${[...ATTACHED_PAGE_READ_OPERATIONS].join(', ')}), so "${operation}" is unavailable.`
         )
       }
-      if (
-        context.permissionLevel === 'auto_review' &&
-        operation !== 'upload' &&
-        !(await this.approveAttachedPageOperation(operation, input, tab, {
-          projectId,
-          threadId,
-          sessionId: context.sessionId
-        }))
-      ) {
-        return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
-      }
     }
     if (
-      attached &&
-      !ATTACHED_PAGE_READ_OPERATIONS.has(operation) &&
-      !ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)
+      context.permissionLevel !== 'full_access' &&
+      ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) &&
+      operation !== 'upload'
     ) {
-      throw new Error(
-        `The page the user is on cannot run "${operation}". Open a page of your own first.`
-      )
+      const reviewed = await this.approveAttachedPageOperation(operation, input, tab, {
+        projectId,
+        threadId,
+        sessionId: context.sessionId
+      })
+      if (!reviewed.approved) {
+        return {
+          ...this.utilityTabContext(tabId, tab),
+          page: attached ? 'user' : 'agent',
+          cancelled: true
+        }
+      }
+      reviewedTarget = reviewed.target
     }
     // An operation is a use: it revives a tab the agent owns that was evicted
     // from the parked set, and protects it from eviction while the agent keeps
@@ -1947,6 +1951,7 @@ export class BrowserService {
     if (operation === 'click') {
       const selector = this.requiredInputString(input, 'selector')
       const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
+        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { clicked: false, reason: 'target changed; inspect the page and retry' };` : ''}
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { clicked: false, reason: 'not found' };
         element.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1959,6 +1964,7 @@ export class BrowserService {
       const selector = this.requiredInputString(input, 'selector')
       const text = this.requiredInputString(input, 'text', true)
       const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
+        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { typed: false, reason: 'target changed; inspect the page and retry' };` : ''}
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { typed: false, reason: 'not found' };
         element.focus();
@@ -1988,17 +1994,24 @@ export class BrowserService {
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
-  /** Ask before an Auto Review turn mutates the page the user is viewing. */
+  /** Route a browser action through the ledger and confirm consequential effects. */
   private async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,
     tab: BrowserTab,
     context: { projectId: string; threadId: string; sessionId?: string }
-  ): Promise<boolean> {
+  ): Promise<{ approved: boolean; target: BrowserActionTarget | null }> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
     const pageUrl = contents.getURL()
     const pageGeneration = tab.navigationGeneration
+    const target: BrowserActionTarget | null =
+      operation === 'click' || operation === 'type'
+        ? await contents.executeJavaScript(
+            browserActionTargetScript(this.requiredInputString(input, 'selector'))
+          )
+        : null
+    const review = reviewBrowserAction(operation, input, target)
     let action: string
     if (operation === 'click') {
       action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
@@ -2021,13 +2034,14 @@ export class BrowserService {
       operation,
       action,
       origin: safeOrigin(pageUrl),
-      pageUrl
+      pageUrl,
+      review
     })
     const approved = typeof decision === 'boolean' ? decision : decision.approved
     if (typeof decision !== 'boolean' && decision.alternative) {
       throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
     }
-    if (!approved) return false
+    if (!approved) return { approved: false, target }
     if (
       contents.isDestroyed() ||
       tab.navigationGeneration !== pageGeneration ||
@@ -2037,7 +2051,7 @@ export class BrowserService {
         'The page changed while the browser action was being approved; retry on the current page'
       )
     }
-    return true
+    return { approved: true, target }
   }
 
   /**
