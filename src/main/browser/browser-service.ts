@@ -1376,6 +1376,29 @@ export class BrowserService {
         validateExtensionUpdatePatch(rawPatch)
       )
     })
+    replaceHandler('browser:darkReaderTabState', async (_event, rawTabId) => {
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.darkReaderTabState(tab.projectId, tab.boxId, tab.view.webContents.id)
+    })
+    replaceHandler('browser:darkReaderTabScope', async (_event, rawTabId, action) => {
+      if (
+        action !== 'only-tab' &&
+        action !== 'disable-tab' &&
+        action !== 'enable-tab' &&
+        action !== 'reset-tabs'
+      ) {
+        throw new TypeError('Dark Reader tab action is invalid')
+      }
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.setDarkReaderTabScope(
+        tab.projectId,
+        tab.boxId,
+        tab.view.webContents.id,
+        action
+      )
+    })
     replaceHandler('browser:extensionPickFolder', async () => {
       await this.extensions.whenReady()
       return this.extensions.pickFolder()
@@ -1462,6 +1485,7 @@ export class BrowserService {
       const extensionId = validateExtensionId(rawExtensionId)
       const boxId = validateOptionalBoxId(rawBoxId)
       await this.extensions.whenReady()
+      await this.extensions.ensureExtensionPagesAvailable(extensionId)
       return this.extensions.optionsUrlFor(extensionId, GLOBAL_BROWSER_PROJECT_ID, boxId)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
@@ -3624,6 +3648,7 @@ export class BrowserService {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
+    await this.extensions.ensureExtensionPagesAvailable(extensionId)
     const url = requestedUrl ?? this.extensions.popupUrlFor(extensionId, projectId, boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a

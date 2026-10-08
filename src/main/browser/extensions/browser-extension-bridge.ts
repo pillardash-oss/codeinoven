@@ -161,6 +161,8 @@ export interface BrowserExtensionBridgeDeps {
    * already open and the runtime gives it no way to ask.
    */
   tabReplay?: () => { name: string; args: unknown[] }[]
+  /** Temporary app-owned policies must precede document messages on restart. */
+  policyReplay?: () => unknown[]
   /** The bridge page could not be brought up, so nothing can be delivered. */
   onUnavailable: (reason: string) => void
   /**
@@ -344,6 +346,10 @@ export class BrowserExtensionBridge {
   private lastSeq = 0
   /** The last user-script file request answered, so one is never written twice. */
   private lastUserScriptRequest = 0
+  private resolveReady: (ready: boolean) => void = () => {}
+  private readonly ready = new Promise<boolean>((resolve) => {
+    this.resolveReady = resolve
+  })
 
   constructor(private readonly deps: BrowserExtensionBridgeDeps) {}
 
@@ -381,6 +387,7 @@ export class BrowserExtensionBridge {
         await this.push({ kind: 'startup' })
         await this.replayTabs()
         if (this.disposed || this.view !== view) return
+        this.resolveReady(true)
         this.poll = setInterval(() => {
           void this.drain()
           void this.answerFrameRequests()
@@ -411,6 +418,19 @@ export class BrowserExtensionBridge {
     )
   }
 
+  /** Await document cleanup before unloading invalidates content-script contexts. */
+  async request(command: Record<string, unknown>): Promise<void> {
+    if (!(await this.ready)) throw new Error('The extension bridge could not load')
+    const contents = this.view?.webContents
+    if (!contents || this.disposed || contents.isDestroyed()) {
+      throw new Error('The extension bridge is unavailable')
+    }
+    await contents.executeJavaScript(
+      `globalThis.__cioBridgeRequest(${JSON.stringify(command)})`,
+      true
+    )
+  }
+
   /**
    * Hand the worker the tab state it cannot ask for itself.
    *
@@ -418,6 +438,7 @@ export class BrowserExtensionBridge {
    * no live tabs.
    */
   private async replayTabs(): Promise<void> {
+    for (const command of this.deps.policyReplay?.() ?? []) await this.push(command)
     const events = this.deps.tabReplay?.() ?? []
     const commands = events.map((event) => ({
       kind: 'tab',
@@ -654,6 +675,7 @@ export class BrowserExtensionBridge {
   }
 
   private stop(): void {
+    this.resolveReady(false)
     if (this.poll) {
       clearInterval(this.poll)
       this.poll = null

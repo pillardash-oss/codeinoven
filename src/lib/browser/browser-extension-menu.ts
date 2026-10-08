@@ -21,6 +21,9 @@ export interface BrowserExtensionMenuInput {
   runsOnHost: boolean
   /** Whether the extension runs in the tab jar on screen. */
   runsInJar: boolean
+  tabControl: boolean
+  enabledInTab: boolean
+  tabScoped: boolean
 }
 
 export type BrowserExtensionMenuChoice =
@@ -31,5 +34,9 @@ export type BrowserExtensionMenuChoice =
   | 'allow-site'
   | 'block-site'
   | 'clear-site-rules'
+  | 'only-tab'
+  | 'disable-tab'
+  | 'enable-tab'
+  | 'reset-tabs'
   | 'manage'
   | 'remove'

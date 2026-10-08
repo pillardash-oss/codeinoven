@@ -151,6 +151,165 @@
     (...args) =>
       answerWith(args[args.length - 1], value)
 
+  // Electron loads these copies with allowFileAccess:false. Dark Reader awaits
+  // this callback while building its settings page; a missing method leaves its
+  // UI request unanswered forever.
+  ensureNamespace('extension', { isAllowedFileSchemeAccess: answering(false) }, [])
+
+  // Dark Reader's site toggle covers every tab with that hostname. Keep the
+  // app's temporary tab scope at the message boundary instead, so the extension
+  // still owns theme creation, updates and cleanup in every document.
+  const darkReader = chromeApi.runtime.id === 'eimadpbcbfnmbkopoojfekhnkhdbieeh'
+  const darkReaderFrames = new Map()
+  const darkReaderListeners = new Set()
+  let darkReaderPolicy = { onlyTabId: null, disabledTabIds: [] }
+  const darkReaderAllowsTab = (id) =>
+    (darkReaderPolicy.onlyTabId === null || darkReaderPolicy.onlyTabId === id) &&
+    !darkReaderPolicy.disabledTabIds.includes(id)
+  const darkReaderThemeTypes = new Set([
+    'bg-cs-add-dynamic-theme',
+    'bg-cs-add-css-filter',
+    'bg-cs-add-static-theme',
+    'bg-cs-add-svg-filter',
+    'bg-cs-clean-up'
+  ])
+  const darkReaderDelivery = (id, message) =>
+    darkReaderAllowsTab(id) ? message : { type: 'bg-cs-clean-up', scriptId: message.scriptId }
+  if (darkReader) {
+    const messages = chromeApi.runtime.onMessage
+    const addListener = messages.addListener.bind(messages)
+    const removeListener = messages.removeListener.bind(messages)
+    messages.addListener = (listener) => {
+      darkReaderListeners.add(listener)
+      addListener(listener)
+    }
+    messages.removeListener = (listener) => {
+      darkReaderListeners.delete(listener)
+      removeListener(listener)
+    }
+    const wrappedTabs = new WeakSet()
+    for (const root of roots) {
+      const tabs = root.tabs
+      if (!tabs || typeof tabs.sendMessage !== 'function' || wrappedTabs.has(tabs)) continue
+      wrappedTabs.add(tabs)
+      const sendMessage = tabs.sendMessage.bind(tabs)
+      tabs.sendMessage = (id, message, ...args) => {
+        if (message && darkReaderThemeTypes.has(message.type)) {
+          const options = args[0] && typeof args[0] === 'object' ? args[0] : {}
+          const key = id + ':' + (options.documentId || options.frameId || 0)
+          darkReaderFrames.delete(key)
+          darkReaderFrames.set(key, { id, message, options, sendMessage })
+          // Bound retained theme payloads even on pages with many frames.
+          if (darkReaderFrames.size > 512)
+            darkReaderFrames.delete(darkReaderFrames.keys().next().value)
+          message = darkReaderDelivery(id, message)
+        }
+        return sendMessage(id, message, ...args)
+      }
+    }
+  }
+  const applyDarkReaderPolicy = (command) => {
+    if (!darkReader) return
+    darkReaderPolicy = {
+      onlyTabId: typeof command.onlyTabId === 'number' ? command.onlyTabId : null,
+      disabledTabIds: Array.isArray(command.disabledTabIds) ? command.disabledTabIds : []
+    }
+    for (const frame of darkReaderFrames.values()) {
+      Promise.resolve(
+        frame.sendMessage(frame.id, darkReaderDelivery(frame.id, frame.message), frame.options)
+      ).catch(() => {})
+    }
+    if (command.enable === true || command.refresh === true) {
+      // Use Dark Reader's own UI protocol to switch it on. The caller is the
+      // app-owned bridge, and the scope is installed before themes are emitted.
+      const sender = {
+        id: chromeApi.runtime.id,
+        url: chromeApi.runtime.getURL('ui/popup/index.html')
+      }
+      for (const listener of darkReaderListeners) {
+        try {
+          listener(
+            {
+              type: 'ui-bg-change-settings',
+              data: command.enable === true ? { enabled: true } : {}
+            },
+            sender,
+            noop
+          )
+        } catch (error) {
+          state.errors.push('dark-reader-enable: ' + String(error))
+        }
+      }
+    }
+  }
+  const setDarkReaderPower = async (command) => {
+    if (!darkReader) return
+    if (command.enabled === false) {
+      // Clean every document we delivered a theme to, including frames that the
+      // extension's own startup state has not finished recording yet.
+      const frames = [...darkReaderFrames.values()]
+      for (let offset = 0; offset < frames.length; offset += 16) {
+        await Promise.allSettled(
+          frames
+            .slice(offset, offset + 16)
+            .map((frame) =>
+              frame.sendMessage(
+                frame.id,
+                { type: 'bg-cs-clean-up', scriptId: frame.message.scriptId },
+                frame.options
+              )
+            )
+        )
+      }
+      return
+    }
+    // Reloading an extension does not re-inject its manifest scripts into pages
+    // already open. Run the declared scripts, in order and in their declared
+    // worlds, through the extension's own scripting API without reloading sites.
+    const manifest = chromeApi.runtime.getManifest()
+    const scripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : []
+    const matches = (url, pattern) => {
+      if (pattern === '<all_urls>') return /^https?:/u.test(url)
+      if (typeof pattern !== 'string') return false
+      const match = /^(\*|https?):\/\/(\*|\*\.[^/]+|[^/]+)(\/.*)$/u.exec(pattern)
+      if (!match) return false
+      const parsed = new URL(url)
+      if (match[1] !== '*' && parsed.protocol !== match[1] + ':') return false
+      const host = match[2]
+      if (
+        host !== '*' &&
+        !(host.startsWith('*.')
+          ? parsed.hostname === host.slice(2) || parsed.hostname.endsWith(host.slice(1))
+          : parsed.hostname === host)
+      )
+        return false
+      const path = match[3].replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+      return new RegExp('^' + path + '$').test(parsed.pathname + parsed.search)
+    }
+    for (const tab of Object.values(tabActivity.tabs)) {
+      if (!tab || !/^https?:/u.test(tab.url || '')) continue
+      for (const script of scripts) {
+        if (!Array.isArray(script.js) || script.js.length === 0) continue
+        if (
+          !script.matches?.some((pattern) => matches(tab.url, pattern)) ||
+          script.exclude_matches?.some((pattern) => matches(tab.url, pattern))
+        )
+          continue
+        try {
+          await chromeApi.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: script.all_frames === true },
+            files: script.js,
+            world: script.world || 'ISOLATED'
+          })
+        } catch (error) {
+          state.errors.push('dark-reader-inject: ' + String(error))
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    applyDarkReaderPolicy({ ...darkReaderPolicy, enable: true })
+  }
+
   // ── Namespaces Electron does not compile in at all ───────────────────────────
   ensureNamespace('webNavigation', { getFrame: noop, getAllFrames: noop }, [
     'onBeforeNavigate',
@@ -1615,7 +1774,19 @@
       dispatcher.__cioEmit(args)
       entry.errors += state.errors.length - errorsBefore
     }
-    if (command.kind === 'tab') {
+    if (command.kind === 'dark-reader-power') {
+      void setDarkReaderPower(command).then(
+        () => bridgePort?.postMessage({ kind: 'command-complete', requestId: command.requestId }),
+        (error) =>
+          bridgePort?.postMessage({
+            kind: 'command-complete',
+            requestId: command.requestId,
+            error: String(error)
+          })
+      )
+    } else if (command.kind === 'dark-reader-tab-policy') {
+      applyDarkReaderPolicy(command)
+    } else if (command.kind === 'tab') {
       const args = Array.isArray(command.args) ? command.args : []
       if (command.name === 'onActivated') {
         if (args[0] && typeof args[0].tabId === 'number') tabActivity.activeTabId = args[0].tabId
@@ -1673,6 +1844,14 @@
         }
       } else if (command.name === 'onRemoved' && typeof args[0] === 'number') {
         delete tabActivity.tabs[String(args[0])]
+      }
+      if (
+        command.name === 'onRemoved' ||
+        (command.name === 'onUpdated' && args[1] && args[1].status === 'loading')
+      ) {
+        for (const [key, frame] of darkReaderFrames) {
+          if (frame.id === args[0]) darkReaderFrames.delete(key)
+        }
       }
       if (typeof tabActivity.activeTabId === 'number') {
         for (const key of Object.keys(tabActivity.tabs)) {

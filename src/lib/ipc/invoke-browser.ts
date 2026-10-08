@@ -2,6 +2,7 @@ import type {
   BrowserNewTabMenuInput,
   BrowserNewTabMenuChoice
 } from '../browser/browser-new-tab-menu'
+import type { DarkReaderTabAction, DarkReaderTabState } from '../browser/browser-darkreader-control'
 import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
@@ -414,6 +415,11 @@ export const invokeBrowserContract = {
     BrowserExtension
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  'browser:darkReaderTabState': {} as Contract<[tabId: string], DarkReaderTabState>,
+  'browser:darkReaderTabScope': {} as Contract<
+    [tabId: string, action: DarkReaderTabAction],
+    DarkReaderTabState
+  >,
   'browser:extensionReorder': {} as Contract<[orderedIds: string[]], void>,
   /** Check again and apply the newest validated Web Store package for one extension. */
   'browser:extensionUpdateFromWebStore': {} as Contract<[extensionId: string], BrowserExtension>,

@@ -64,6 +64,21 @@ export function showBrowserExtensionMenu(
         enabled: true,
         click: click('clear-site-rules')
       },
+      ...(input.tabControl
+        ? [
+            { type: 'separator' as const },
+            { label: 'Enable only in this tab', click: click('only-tab') },
+            {
+              label: input.enabledInTab ? 'Disable in this tab' : 'Enable in this tab',
+              click: click(input.enabledInTab ? 'disable-tab' : 'enable-tab')
+            },
+            {
+              label: 'Use normal settings in all tabs',
+              enabled: input.tabScoped,
+              click: click('reset-tabs')
+            }
+          ]
+        : []),
       { type: 'separator' },
       { label: 'Manage extensions', click: click('manage') },
       { label: `Remove ${input.extensionName}`, click: click('remove') }
@@ -106,6 +121,9 @@ export function validateBrowserExtensionMenuInput(value: unknown): BrowserExtens
     hasOptions: record['hasOptions'] === true,
     host: typeof host === 'string' && host.length > 0 && host.length <= 260 ? host : null,
     runsOnHost: record['runsOnHost'] !== false,
-    runsInJar: record['runsInJar'] !== false
+    runsInJar: record['runsInJar'] !== false,
+    tabControl: record['tabControl'] === true,
+    enabledInTab: record['enabledInTab'] !== false,
+    tabScoped: record['tabScoped'] === true
   }
 }

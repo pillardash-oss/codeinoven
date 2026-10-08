@@ -6,6 +6,7 @@ import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
 import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
 import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
+import { DARK_READER_EXTENSION_ID } from '$shared/browser/browser-darkreader-control'
 
 /** Open the native context menu for one extension and run the choice. */
 export async function openBrowserExtensionMenu(
@@ -17,6 +18,13 @@ export async function openBrowserExtensionMenu(
   const jar = tab ? (tab.boxId ?? '') : ''
   const host = tab ? hostOfUrl(tab.url) : null
   const runsInJar = tab ? extension.enabled && extension.boxes.includes(tab.boxId ?? '') : false
+  const tabState =
+    tab && extension.id === DARK_READER_EXTENSION_ID
+      ? await invoke('browser:darkReaderTabState', tab.id).catch((error: unknown) => {
+          logRendererError('Dark Reader tab controls could not be read', error)
+          return null
+        })
+      : null
   const choice = await invoke(
     'browser:extensionMenu',
     {
@@ -29,7 +37,10 @@ export async function openBrowserExtensionMenu(
       hasOptions: extension.optionsPath !== null,
       host,
       runsOnHost: runsOnHost(extension.blockedHosts, extension.allowedHosts, host),
-      runsInJar
+      runsInJar,
+      tabControl: tabState !== null && extension.boxes.includes(jar) && host !== null,
+      enabledInTab: tabState?.enabled ?? true,
+      tabScoped: tabState?.scoped ?? false
     },
     Math.max(0, Math.round(x)),
     Math.max(0, Math.round(y))
@@ -38,17 +49,25 @@ export async function openBrowserExtensionMenu(
     return null
   })
   if (choice === null) return
-  await runBrowserExtensionMenuChoice(extension, choice, host, jar)
+  await runBrowserExtensionMenuChoice(extension, choice, host, jar, tab?.id ?? null)
 }
 
 async function runBrowserExtensionMenuChoice(
   extension: BrowserExtension,
   choice: BrowserExtensionMenuChoice,
   host: string | null,
-  jar: string
+  jar: string,
+  tabId: string | null
 ): Promise<void> {
   const tab = globalBrowser.activeTab
   switch (choice) {
+    case 'only-tab':
+    case 'disable-tab':
+    case 'enable-tab':
+    case 'reset-tabs': {
+      if (tabId) await invoke('browser:darkReaderTabScope', tabId, choice)
+      return
+    }
     case 'open-popup': {
       if (!tab) return
       const open = browserPopupWindows.extensionPopupFor(extension.id, tab.id)
