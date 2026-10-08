@@ -103,6 +103,11 @@ import {
 import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
 import { showBrowserTabSelectionMenu } from './browser-service/browser-tab-selection-menu'
 import { showBrowserTabContextMenu } from './browser-service/browser-tab-context-menu'
+import { showBrowserAgentTabMenu } from './browser-service/browser-agent-tab-menu'
+import {
+  showBrowserExtensionMenu,
+  validateBrowserExtensionMenuInput
+} from './browser-service/browser-extension-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -214,11 +219,11 @@ import {
   validateBrowserUrl,
   validateBrowserTabSelectionMenuInput,
   validateBrowserTabContextMenuInput,
+  validateBrowserAgentTabMenuInput,
   validateDownloadId,
   validateInspectorMarkers,
   validateInspectorReferenceId,
   validateInspectorTheme,
-  validateOptionalBrowserUrl,
   validateOptionalBoxId,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -300,7 +305,7 @@ import {
   extensionPageTabsScript,
   type BrowserExtensionPageTab
 } from './extensions/browser-extension-page-tabs'
-import { BROWSER_EXTENSION_STORE_DIR } from './extensions/browser-extension-registry'
+import { resolveBrowserExtensionStoreDir } from './extensions/browser-extension-registry'
 import {
   BrowserFindSessions,
   browserFindResultFor,
@@ -445,6 +450,29 @@ const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
   'viewport',
   'upload'
 ])
+
+/** Approval request for an agent mutation on the page the user is viewing. */
+export interface BrowserAgentActionApproval {
+  projectId: string
+  threadId: string
+  sessionId?: string
+  operation: string
+  /** Human-readable description shown on the permission card. */
+  action: string
+  origin: string
+  pageUrl: string
+}
+
+/** Outcome of a permission-card approval. An alternative carries the user's correction. */
+export interface BrowserAgentActionDecision {
+  approved: boolean
+  alternative?: string
+}
+
+/** Resolves an attached-page mutation through the permission card. */
+export type BrowserAgentActionApprover = (
+  request: BrowserAgentActionApproval
+) => Promise<BrowserAgentActionDecision | boolean>
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -678,6 +706,13 @@ export class BrowserService {
    * the feature is per live jar, not per app launch.
    */
   private readonly extensions: BrowserExtensionService
+  /**
+   * Permission-card approver for attached-page mutations, supplied by the app
+   * at boot. When present, Auto Review routes through the thread's permission
+   * card instead of the native dialog, so the request sets `awaiting_approval`,
+   * notifies attention, and stays covered by policy automation.
+   */
+  private agentActionApprover: BrowserAgentActionApprover | null = null
 
   constructor(
     private readonly window: BrowserWindow,
@@ -952,11 +987,12 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const initialUrl = validateOptionalBrowserUrl(rawInitialUrl)
-        const bounds = validateBounds(rawBounds)
-        // Absent on every call that predates boxes, and on every agent-driven
-        // tab, which is what makes "no box whatsoever" the same code path.
         const boxId = validateOptionalBoxId(rawBoxId)
+        const initialUrl =
+          rawInitialUrl === undefined || rawInitialUrl === null || rawInitialUrl === ''
+            ? ''
+            : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
+        const bounds = validateBounds(rawBounds)
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
         // scripts never get a receiver in that document, and later calls such as
@@ -1160,8 +1196,8 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const url = validateBrowserUrl(rawUrl)
         const boxId = validateOptionalBoxId(rawBoxId)
+        const url = this.validateTabNavigationUrl(projectId, boxId, rawUrl)
         // Main creates a tab on `browser:show`, so a tab the renderer already knows
         // can still be unknown here: a fresh tab whose page has not been shown yet
         // because an overlay (the address spotlight) covers its frame. Ensuring the
@@ -1340,6 +1376,29 @@ export class BrowserService {
         validateExtensionUpdatePatch(rawPatch)
       )
     })
+    replaceHandler('browser:darkReaderTabState', async (_event, rawTabId) => {
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.darkReaderTabState(tab.projectId, tab.boxId, tab.view.webContents.id)
+    })
+    replaceHandler('browser:darkReaderTabScope', async (_event, rawTabId, action) => {
+      if (
+        action !== 'only-tab' &&
+        action !== 'disable-tab' &&
+        action !== 'enable-tab' &&
+        action !== 'reset-tabs'
+      ) {
+        throw new TypeError('Dark Reader tab action is invalid')
+      }
+      await this.extensions.whenReady()
+      const tab = this.requireTab(validateTabId(rawTabId))
+      return this.extensions.setDarkReaderTabScope(
+        tab.projectId,
+        tab.boxId,
+        tab.view.webContents.id,
+        action
+      )
+    })
     replaceHandler('browser:extensionPickFolder', async () => {
       await this.extensions.whenReady()
       return this.extensions.pickFolder()
@@ -1409,6 +1468,25 @@ export class BrowserService {
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       return showBrowserTabContextMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:agentTabMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserAgentTabMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserAgentTabMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:extensionMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserExtensionMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserExtensionMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:openExtensionPage', async (_event, rawExtensionId, rawBoxId) => {
+      const extensionId = validateExtensionId(rawExtensionId)
+      const boxId = validateOptionalBoxId(rawBoxId)
+      await this.extensions.whenReady()
+      await this.extensions.ensureExtensionPagesAvailable(extensionId)
+      return this.extensions.optionsUrlFor(extensionId, GLOBAL_BROWSER_PROJECT_ID, boxId)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -1570,6 +1648,11 @@ export class BrowserService {
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.tabMarkRecogniser = recogniser
   }
+
+  /** Register the permission-card approver for attached-page mutations. */
+  setAgentActionApprover(approver: BrowserAgentActionApprover | null): void {
+    this.agentActionApprover = approver
+  }
   /**
    * Set the search engine the context menu's web search uses.
    *
@@ -1698,6 +1781,7 @@ export class BrowserService {
       // design and video preview sessions) omit it, and the upload fallback then
       // treats the missing level as review-required rather than full access.
       permissionLevel?: PermissionLevel
+      sessionId?: string
     }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
@@ -1762,7 +1846,11 @@ export class BrowserService {
       if (
         context.permissionLevel === 'auto_review' &&
         operation !== 'upload' &&
-        !(await this.approveAttachedPageOperation(operation, input, tab))
+        !(await this.approveAttachedPageOperation(operation, input, tab, {
+          projectId,
+          threadId,
+          sessionId: context.sessionId
+        }))
       ) {
         return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
       }
@@ -1888,7 +1976,8 @@ export class BrowserService {
   private async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,
-    tab: BrowserTab
+    tab: BrowserTab,
+    context: { projectId: string; threadId: string; sessionId?: string }
   ): Promise<boolean> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
@@ -1909,17 +1998,20 @@ export class BrowserService {
       throw new Error(`Auto Review does not support the browser action "${operation}"`)
     }
 
-    const approval = await dialog.showMessageBox(this.window, {
-      type: 'warning',
-      title: 'Approve browser action',
-      message: `Allow the agent to act on ${safeOrigin(pageUrl)}?`,
-      detail: action,
-      buttons: ['Cancel', 'Allow'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
+    const approver = this.agentActionApprover
+    if (!approver) throw new Error('Browser conversation approval is unavailable')
+    const decision = await approver({
+      ...context,
+      operation,
+      action,
+      origin: safeOrigin(pageUrl),
+      pageUrl
     })
-    if (approval.response !== 1) return false
+    const approved = typeof decision === 'boolean' ? decision : decision.approved
+    if (typeof decision !== 'boolean' && decision.alternative) {
+      throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
+    }
+    if (!approved) return false
     if (
       contents.isDestroyed() ||
       tab.navigationGeneration !== pageGeneration ||
@@ -3267,11 +3359,7 @@ export class BrowserService {
       })
     })
     view.webContents.on('will-navigate', (event, url) => {
-      try {
-        validateBrowserUrl(url)
-      } catch {
-        event.preventDefault()
-      }
+      if (!this.isAllowedTabNavigation(projectId, tab.boxId, url)) event.preventDefault()
     })
     this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
     return tab
@@ -3306,7 +3394,10 @@ export class BrowserService {
       owner.projectId === GLOBAL_BROWSER_PROJECT_ID
     ) {
       try {
-        this.openPeekFromWindowRequest(owner, validateBrowserUrl(details.url))
+        this.openPeekFromWindowRequest(
+          owner,
+          this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+        )
       } catch (error: unknown) {
         Logger.error('Browser Peek rejected unsafe URL:', error)
       }
@@ -3317,7 +3408,10 @@ export class BrowserService {
       if (popup) return popup
     }
     try {
-      this.openNewTabFor(owner, validateBrowserUrl(details.url))
+      this.openNewTabFor(
+        owner,
+        this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+      )
     } catch (error: unknown) {
       Logger.error('Browser popup rejected unsafe URL:', error)
     }
@@ -3554,6 +3648,7 @@ export class BrowserService {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
+    await this.extensions.ensureExtensionPagesAvailable(extensionId)
     const url = requestedUrl ?? this.extensions.popupUrlFor(extensionId, projectId, boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a
@@ -4385,7 +4480,7 @@ export class BrowserService {
   private async writeExtensionPageTabsPreload(): Promise<string | null> {
     const file = join(
       getConfigRoot(),
-      BROWSER_EXTENSION_STORE_DIR,
+      resolveBrowserExtensionStoreDir(),
       EXTENSION_PAGE_TABS_PRELOAD_FILE
     )
     try {
@@ -5089,6 +5184,12 @@ export class BrowserService {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
+          const reason = error instanceof Error && error.message ? error.message : String(error)
+          this.setTabLoadError(tabId, {
+            kind: 'network',
+            code: 0,
+            description: reason || 'The page could not be opened'
+          })
           this.publishState(tabId)
         })
       })
@@ -5099,6 +5200,49 @@ export class BrowserService {
       })
     this.pendingNavigationStarts.set(tabId, navigationStart)
     return navigationStart
+  }
+
+  /**
+   * Whether a tab may navigate to an address. HTTP and HTTPS always may. A
+   * `chrome-extension://` address may only when it names an enabled extension
+   * that runs in that tab's own jar, so one box can never open another jar's
+   * extension files.
+   */
+  private isAllowedTabNavigation(projectId: string, boxId: string | null, url: string): boolean {
+    try {
+      validateBrowserUrl(url)
+      return true
+    } catch {
+      // Not http(s). Only an installed extension page in this jar passes.
+    }
+    try {
+      return this.extensions.isExtensionPageAllowed(url, projectId, boxId)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Validate an address a tab is about to load. Accepts http(s) plus an
+   * extension page allowed in that jar. Throws when neither passes, so callers
+   * keep the same refusal shape as before.
+   */
+  private validateTabNavigationUrl(
+    projectId: string,
+    boxId: string | null,
+    value: unknown
+  ): string {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new TypeError('Browser URL must be a string of at most 8192 characters')
+    }
+    const candidate = value
+    try {
+      return validateBrowserUrl(candidate)
+    } catch {
+      // Fall through to the extension-page check below.
+    }
+    if (this.extensions.isExtensionPageAllowed(candidate, projectId, boxId)) return candidate
+    throw new TypeError('Browser URL must use http or https')
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page

@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -6,10 +7,35 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "embedded_icon.h"
 
 extern char **environ;
+
+// Supervisor state: the launcher stays alive as the bundle's main executable
+// and supervises the Electron child. execv() used to reuse this PID for
+// Electron, which broke macOS MenuBarAgent status-item registration
+// ("mismatched pid version") and hid the production menu bar icon.
+// A fresh Electron PID registered through posix_spawn() fixes the tray.
+static pid_t electron_child_pid = -1;
+static pid_t splash_helper_pid = -1;
+
+static void forward_signal_to_children(int signal_number) {
+  if (electron_child_pid > 0) kill(electron_child_pid, signal_number == SIGINT ? SIGINT : SIGTERM);
+  if (splash_helper_pid > 0) kill(splash_helper_pid, SIGTERM);
+}
+
+static void install_signal_forwarding(void) {
+  struct sigaction action = {0};
+  action.sa_handler = forward_signal_to_children;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = 0;
+  sigaction(SIGTERM, &action, NULL);
+  sigaction(SIGINT, &action, NULL);
+  // SIGHUP (terminal close) ends the app rather than orphaning Electron.
+  sigaction(SIGHUP, &action, NULL);
+}
 
 static const char *HELPER_ARGUMENT = "--codeinoven-native-splash-helper";
 static NSWindow *placeholder_window = nil;
@@ -222,10 +248,45 @@ static int launch_electron(int argc, const char *argv[]) {
   if (electronArguments == NULL) return 73;
   electronArguments[0] = (char *)electronPath.fileSystemRepresentation;
   for (int index = 1; index < argc; index += 1) electronArguments[index] = (char *)argv[index];
-  execv(electronArguments[0], electronArguments);
-  if (helperPid > 0) kill(helperPid, SIGTERM);
+
+  // Spawn Electron as a fresh process instead of execv() into it. The fresh
+  // PID lets macOS register the status item cleanly; the launcher supervises
+  // (like Windows already does), forwards termination, and exits with the
+  // child's status so launch tooling still sees Electron's exit code.
+  pid_t electronPid = -1;
+  const int electronSpawn = posix_spawn(&electronPid, electronArguments[0], NULL, NULL,
+                                        electronArguments, environ);
+  if (electronSpawn != 0) {
+    free(electronArguments);
+    if (helperPid > 0) kill(helperPid, SIGTERM);
+    return 74;
+  }
   free(electronArguments);
-  return 74;
+  electron_child_pid = electronPid;
+  splash_helper_pid = helperPid;
+  install_signal_forwarding();
+
+  int electronStatus = 0;
+  pid_t waited = -1;
+  do {
+    waited = waitpid(electronPid, &electronStatus, 0);
+  } while (waited < 0 && errno == EINTR);
+  electron_child_pid = -1;
+
+  // The splash helper quits on its own after the handoff (or after 15s), but
+  // never outlive the app: Electron's exit is the end of the launch.
+  if (helperPid > 0) {
+    kill(helperPid, SIGTERM);
+    // Reap a possibly already-exited helper without blocking Electron's exit.
+    int helperStatus = 0;
+    waitpid(helperPid, &helperStatus, WNOHANG);
+  }
+  splash_helper_pid = -1;
+
+  if (waited < 0) return 75;
+  if (WIFEXITED(electronStatus)) return WEXITSTATUS(electronStatus);
+  if (WIFSIGNALED(electronStatus)) return 128 + WTERMSIG(electronStatus);
+  return 75;
 }
 
 int main(int argc, const char *argv[]) {

@@ -136,7 +136,7 @@ export async function removeDir(dirPath: string): Promise<void> {
  * therefore the one signal a shared utility can use to tell a development
  * launch from a shipped one without importing `electron`.
  */
-function isUnpackagedElectronLaunch(): boolean {
+export function isUnpackagedElectronLaunch(): boolean {
   const electronProcess = process as NodeJS.Process & { readonly defaultApp?: boolean }
   return electronProcess.defaultApp === true
 }

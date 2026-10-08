@@ -211,7 +211,9 @@ describe('validateAppConfigPatch', () => {
             modelId: 'claude-opus-4-8',
             thinkingLevel: 'high',
             inferenceMode: 'fast',
-            permissionLevel: 'full_access'
+            permissionLevel: 'full_access',
+            accountId: 'opencode.work',
+            contextWindow: 1_000_000
           }
         ]
       })
@@ -266,7 +268,9 @@ describe('validateAppConfigPatch', () => {
           modelId: 'claude-opus-4-8',
           thinkingLevel: 'high',
           inferenceMode: 'fast',
-          permissionLevel: 'full_access'
+          permissionLevel: 'full_access',
+          accountId: 'opencode.work',
+          contextWindow: 1_000_000
         }
       ]
     })
@@ -352,8 +356,7 @@ describe('validateAppConfigPatch', () => {
       ]
     },
     {
-      // A profile never stores an account, so accepting one here would persist a
-      // credential the profile has no say in.
+      // Account handles must be strings.
       modelProfiles: [
         {
           id: 'deep-review',
@@ -364,7 +367,7 @@ describe('validateAppConfigPatch', () => {
           thinkingLevel: 'high',
           inferenceMode: 'fast',
           permissionLevel: 'full_access',
-          accountId: 'opencode.work'
+          accountId: 42
         }
       ]
     },

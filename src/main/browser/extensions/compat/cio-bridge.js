@@ -45,12 +45,24 @@
    * port disconnects with the worker and a fresh one is what starts it again.
    */
   let port = null
+  const requests = new Map()
+  let requestSequence = 0
   const frameRequests = []
   const ensurePort = () => {
     if (port) return port
     try {
       port = chromeApi.runtime.connect({ name: '__cio:bridge' })
       port.onMessage.addListener((request) => {
+        if (request && request.kind === 'command-complete') {
+          const pending = requests.get(request.requestId)
+          if (pending) {
+            requests.delete(request.requestId)
+            clearTimeout(pending.timer)
+            if (request.error) pending.reject(new Error(request.error))
+            else pending.resolve()
+          }
+          return
+        }
         if (request && request.kind === 'frames-query' && frameRequests.length < 64) {
           frameRequests.push(request)
         }
@@ -88,6 +100,16 @@
 
   /** Main pushes one command into the extension's service worker through this. */
   globalThis.__cioBridgeReceive = (command) => send(command)
+  globalThis.__cioBridgeRequest = (command) =>
+    new Promise((resolve, reject) => {
+      const requestId = ++requestSequence
+      const timer = setTimeout(() => {
+        requests.delete(requestId)
+        reject(new Error('The extension did not complete the request'))
+      }, 10000)
+      requests.set(requestId, { resolve, reject, timer })
+      send({ ...command, requestId })
+    })
 
   /** Main answers a small batch using the session's actual frame tree. */
   globalThis.__cioBridgeDrainFrameRequests = () => JSON.stringify(frameRequests.splice(0, 8))

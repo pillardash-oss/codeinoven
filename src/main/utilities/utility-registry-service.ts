@@ -37,12 +37,18 @@ import {
   VIDEO_CAPABILITY_NAME,
   VIDEO_CAPABILITY_SUMMARY
 } from '../../lib/video-skill'
+import {
+  ARTIFACT_CAPABILITY_DOCS,
+  ARTIFACT_CAPABILITY_NAME,
+  ARTIFACT_CAPABILITY_SUMMARY
+} from '../../lib/artifact-skill'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
 // `fs`-importing `utils` dependency) into client bundles.
 import {
+  APP_ARTIFACT_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
@@ -52,6 +58,7 @@ import {
   canToggleUtilityEnabled
 } from '../../lib/utility-ids'
 export {
+  APP_ARTIFACT_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
@@ -308,6 +315,21 @@ export class UtilityRegistryService {
         updatedAt: now
       }
     ]
+    defaults.push({
+      id: APP_ARTIFACT_UTILITY_ID,
+      kind: 'skill',
+      name: ARTIFACT_CAPABILITY_NAME,
+      description: ARTIFACT_CAPABILITY_SUMMARY,
+      enabled: true,
+      activation: 'on_demand',
+      scope: { level: 'global' },
+      config: { instructions: ARTIFACT_CAPABILITY_DOCS },
+      credentials: [],
+      harnessBindings: [{ harnessId: ALL_HARNESSES_BINDING_ID, strategy: 'skill' }],
+      appOwned: true,
+      createdAt: now,
+      updatedAt: now
+    })
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     const rebound = this.normalizeAppOwnedBindings(registry)

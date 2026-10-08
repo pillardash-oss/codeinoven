@@ -1,8 +1,11 @@
+import { toast } from 'svelte-sonner'
+import ExistingModelProfileToast from './ExistingModelProfileToast.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import {
   MAX_MODEL_PROFILES,
+  activeModelProfile,
   normalizeModelProfileName,
   renameModelProfile,
   uniqueModelProfileId,
@@ -88,6 +91,14 @@ export function createModelProfilesController(): ModelProfilesController {
       )
     },
     async save(settings: ModelProfileSettings, name: string): Promise<boolean> {
+      const duplicate = activeModelProfile(
+        this.profiles.filter((profile) => profile.accountId === settings.accountId),
+        settings
+      )
+      if (duplicate) {
+        toast.info(ExistingModelProfileToast, { componentProps: { name: duplicate.name } })
+        return false
+      }
       const trimmed = normalizeModelProfileName(name)
       // A profile with no model names nothing the app could run, so it is refused
       // here rather than stored as a row that applies to a plausible default.
@@ -99,6 +110,8 @@ export function createModelProfilesController(): ModelProfilesController {
         harnessId: settings.harnessId,
         providerId: settings.providerId,
         modelId: settings.modelId,
+        accountId: settings.accountId,
+        contextWindow: settings.contextWindow ?? null,
         thinkingLevel: settings.thinkingLevel,
         inferenceMode: settings.inferenceMode ?? 'normal',
         permissionLevel: settings.permissionLevel

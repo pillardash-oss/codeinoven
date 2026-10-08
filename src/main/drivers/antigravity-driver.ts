@@ -47,11 +47,12 @@ import { presentProviderError } from '../../lib/provider-issue'
  */
 async function runAgy(
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  accountEnvironment: NodeJS.ProcessEnv = {}
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
   try {
     const result = await runHarnessCommand('agy', args, {
-      env: buildProcessEnvironment(),
+      env: buildProcessEnvironment({ ...process.env, ...accountEnvironment }),
       timeoutMs
     })
     return { succeeded: true, ...result }
@@ -87,17 +88,23 @@ const ANTIGRAVITY_BRAIN_FIND_TIMEOUT_MS = 60_000
 /** How long after process exit the tailer keeps catching final flushes. */
 const ANTIGRAVITY_BRAIN_TAIL_GRACE_MS = 4_000
 /**
- * Root of Antigravity's per-conversation "brain" directories under the user
+ * Root of Antigravity's per-conversation "brain" directories under the account
  * home. agy persists the per-step thinking trace it strips from headless
  * streams there: `brain/<conversation_id>/.system_generated/logs/transcript.jsonl`.
+ * Managed containers override HOME, so the brain root follows the same home
+ * or isolated accounts would share one transcript directory.
  */
-function brainTranscriptRoot(): string {
-  return brainRootOverride ?? join(homedir(), '.gemini', 'antigravity-cli', 'brain')
+function accountHome(environment: NodeJS.ProcessEnv = {}): string {
+  return environment['HOME'] ?? environment['USERPROFILE'] ?? homedir()
 }
 
-function brainTranscriptPath(conversationId: string): string {
+function brainTranscriptRoot(environment: NodeJS.ProcessEnv = {}): string {
+  return brainRootOverride ?? join(accountHome(environment), '.gemini', 'antigravity-cli', 'brain')
+}
+
+function brainTranscriptPath(conversationId: string, environment: NodeJS.ProcessEnv = {}): string {
   return join(
-    brainTranscriptRoot(),
+    brainTranscriptRoot(environment),
     conversationId,
     '.system_generated',
     'logs',
@@ -111,9 +118,9 @@ function brainTranscriptPath(conversationId: string): string {
  * must start reading at the end of the bytes that predate it rather than
  * replaying every earlier turn's thinking into the new message.
  */
-function brainTranscriptSize(conversationId: string): number {
+function brainTranscriptSize(conversationId: string, environment: NodeJS.ProcessEnv = {}): number {
   try {
-    return statSync(brainTranscriptPath(conversationId)).size
+    return statSync(brainTranscriptPath(conversationId, environment)).size
   } catch {
     return 0
   }
@@ -760,12 +767,15 @@ export class AntigravityDriver extends PersistentCliDriver {
   private modelVariants = new Map<string, Map<ThinkingLevel, string>>()
   private modelVariantsAttempted = false
 
-  constructor(storage: StorageEngine) {
+  constructor(
+    storage: StorageEngine,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
+  ) {
     super(storage)
   }
 
   protected async ensureCliReady(): Promise<void> {
-    const result = await runAgy(['--version'], AGY_PROBE_TIMEOUT_MS)
+    const result = await runAgy(['--version'], AGY_PROBE_TIMEOUT_MS, this.accountEnvironment)
     if (!result.succeeded) {
       const detail = result.stderr.trim() || result.stdout.trim() || 'unknown error'
       throw new Error(`Antigravity CLI is unavailable: ${detail}`)
@@ -773,7 +783,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {
-    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS)
+    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS, this.accountEnvironment)
     if (!result.succeeded) return []
     const parsed = parseAntigravityModels(result.stdout)
     this.modelVariants = parsed.variants
@@ -788,7 +798,7 @@ export class AntigravityDriver extends PersistentCliDriver {
    * OpenUsage companion app installed.
    */
   async readAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
-    return readAntigravityAccountUsage()
+    return readAntigravityAccountUsage(this.accountEnvironment)
   }
 
   /** Cheapest available catalog model, shared by title and grading runs. */
@@ -890,7 +900,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   private async ensureModelVariants(): Promise<void> {
     if (this.modelVariantsAttempted || this.modelVariants.size > 0) return
     this.modelVariantsAttempted = true
-    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS)
+    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS, this.accountEnvironment)
     if (result.succeeded) this.modelVariants = parseAntigravityModels(result.stdout).variants
   }
 
@@ -976,7 +986,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     return {
       command: 'agy',
       args,
-      env: buildProcessEnvironment(),
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
       onJsonRecord: (value) => {
         if (turnState.conversationId) return
         const conversationId = stringValue(record(value)?.['conversation_id'])
@@ -1020,7 +1030,9 @@ export class AntigravityDriver extends PersistentCliDriver {
       session,
       projectPath,
       conversationId,
-      offset: skipExistingEntries ? brainTranscriptSize(conversationId) : 0,
+      offset: skipExistingEntries
+        ? brainTranscriptSize(conversationId, this.accountEnvironment)
+        : 0,
       pending: '',
       giveUpAfter: Date.now() + ANTIGRAVITY_BRAIN_FIND_TIMEOUT_MS,
       timer: null,
@@ -1060,7 +1072,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       return
     }
     try {
-      const path = brainTranscriptPath(watcher.conversationId)
+      const path = brainTranscriptPath(watcher.conversationId, this.accountEnvironment)
       if (!existsSync(path)) {
         if (Date.now() > watcher.giveUpAfter) this.stopBrainTraceWatcher(sessionId)
         return

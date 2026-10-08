@@ -27,6 +27,7 @@ import type { BrowserExtensionInjection, BrowserExtensionProgress } from '../../
 import { injectCompatibilityPreamble } from './browser-extension-inject'
 import { deriveExtensionId, isExtensionId, readCrxHeader } from './browser-extension-crx'
 import {
+  extensionPageFileExists,
   extractZipToDirectory,
   generateExtensionKey,
   hashExtensionDirectory,
@@ -64,6 +65,10 @@ export interface ExtensionPrepareResult extends ExtensionSourceSummary {
   entry: string | null
   /** Symbolic links skipped while copying a folder. */
   skippedLinks: number
+  /** True when the manifest declared a popup whose file was not in the package.
+   *  The summary's `popupPath` is already null in that case; this flag is what
+   *  lets the service warn about it instead of silently dropping the popup. */
+  popupMissing: boolean
 }
 
 export type ExtensionPrepareMessage =
@@ -203,6 +208,17 @@ async function prepare(): Promise<ExtensionPrepareResult> {
   report('registering', 'Reading the finished extension')
   const record = await readManifestRecord(request.destinationDir)
   const summary = summariseExtensionSource(record)
+  // A package can declare a popup its files do not contain. Offering it anyway
+  // ends in `ERR_FILE_NOT_FOUND` once the rail already opened a popup for it,
+  // so the install reports no popup instead and says why.
+  let popupMissing = false
+  if (
+    summary.popupPath &&
+    !(await extensionPageFileExists(request.destinationDir, summary.popupPath))
+  ) {
+    popupMissing = true
+    summary.popupPath = null
+  }
   const iconDataUrl = await readManifestIconDataUrl(request.destinationDir, manifest)
   const sourceHash = await hashExtensionDirectory(request.destinationDir)
 
@@ -213,7 +229,8 @@ async function prepare(): Promise<ExtensionPrepareResult> {
     sourceHash,
     injected: injection.injection,
     entry: injection.entry,
-    skippedLinks
+    skippedLinks,
+    popupMissing
   }
 }
 

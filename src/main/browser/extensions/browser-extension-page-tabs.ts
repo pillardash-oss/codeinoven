@@ -22,6 +22,7 @@
 
 import pageTabsSource from './compat/cio-page-tabs.js?raw'
 import storageEventsSource from './compat/cio-storage-events.js?raw'
+import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
 
 /** Where a push leaves the tab, read by the page's wrappers on every call. */
 export const EXTENSION_PAGE_TAB_GLOBAL = '__cioPageTabsSnapshot'
@@ -56,7 +57,7 @@ export interface BrowserExtensionPageTab {
  * already holding keeps answering from the fresh one.
  */
 export function extensionPageTabsScript(tab: BrowserExtensionPageTab): string {
-  return `${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
+  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
 }
 
 /** Name of the generated preload file, written into the extension store root. */
@@ -97,6 +98,7 @@ if (location.protocol === 'chrome-extension:') {
     tab = null
   }
   const source =
+    ${JSON.stringify(darkReaderStorageSource)} + '\\n;\\n' +
     ${JSON.stringify(storageEventsSource)} + '\\n;\\n' +
     'globalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ' + JSON.stringify(tab) + '\\n' + ${JSON.stringify(pageTabsSource)}
   webFrame.executeJavaScript(source).catch(() => {})

@@ -422,6 +422,7 @@ import { deriveTitleFromText } from './title-generator'
 import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
+import { inlineArtifactMessage } from './inline-artifact-service'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
 import { writeAssistantReport } from './assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../lib/assistant-reports'
@@ -1606,6 +1607,20 @@ export class ChatEngine {
       }
     )
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
+    this.utilityOrchestration.setArtifactExecutor(async (_operation, input, context) => {
+      const thread = await this.threadManager.getThread(context.projectId, context.threadId)
+      if (!thread) throw new Error('Artifact thread no longer exists')
+      const root = await this.resolveThreadPath(context.projectId, context.threadId)
+      const message = await inlineArtifactMessage(input, { ...context, root })
+      await this.threadManager.upsertMessages(context.projectId, context.threadId, [message])
+      this.broadcast({
+        type: 'artifact.rendered',
+        sessionId: thread.sessionId ?? `${context.projectId}:${context.threadId}`,
+        ...context,
+        message
+      })
+      return { rendered: true, messageId: message.id }
+    })
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
@@ -1722,6 +1737,8 @@ export class ChatEngine {
         )
       case 'pi':
         return new PiDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      case 'antigravity':
+        return new AntigravityDriver(this.storage, environment)
       default:
         throw new Error(`${harnessId} does not support isolated account containers.`)
     }
@@ -1829,6 +1846,47 @@ export class ChatEngine {
       this.accountDrivers.delete(accountId)
     }
     return this.accountRegistry.remove(accountId)
+  }
+
+  /** App-owned browser calls share the same policy, queue and attention events as harness calls. */
+  async requestBrowserActionApproval(
+    request: import('../browser/browser-service').BrowserAgentActionApproval
+  ): Promise<import('../browser/browser-service').BrowserAgentActionDecision> {
+    const info = request.sessionId ? this.sessionRegistry.get(request.sessionId) : undefined
+    if (!info || info.projectId !== request.projectId || info.threadId !== request.threadId) {
+      throw new Error('The browser action has no active conversation session')
+    }
+    let settle!: (approved: boolean, alternative?: string) => void
+    const decision = new Promise<import('../browser/browser-service').BrowserAgentActionDecision>(
+      (resolve) => {
+        settle = (approved, alternative) => resolve({ approved, alternative })
+      }
+    )
+    const permission: PermissionRequest = {
+      id: randomUUID(),
+      sessionId: info.sessionId,
+      permission: 'browser_action',
+      patterns: [],
+      metadata: {
+        surface: `browser.${request.operation}`,
+        description: request.action,
+        origin: request.origin,
+        pageUrl: request.pageUrl
+      }
+    }
+    try {
+      await this.handlePermissionAsked(
+        info.driverId,
+        { type: 'permission.asked', sessionId: info.sessionId, permission },
+        undefined,
+        settle
+      )
+    } catch (error) {
+      this.pendingPermissions.delete(permission.id)
+      settle(false)
+      throw error
+    }
+    return decision
   }
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
@@ -3507,6 +3565,11 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (!pending.settleBrowserAction) continue
+      this.pendingPermissions.delete(requestId)
+      pending.settleBrowserAction(false)
+    }
     this.ovenChat.dispose()
     if (this.streamBroadcastTimer) {
       clearTimeout(this.streamBroadcastTimer)
@@ -7198,7 +7261,9 @@ export class ChatEngine {
           message: pending.issueMessage,
           harnessId: pending.harnessId,
           retryable: true,
-          ...(pending.retryAt === undefined ? {} : { retryAt: pending.retryAt }),
+          ...(pending.retryAt === undefined
+            ? {}
+            : { retryAt: pending.resetAt ?? pending.retryAt, autoResumeAt: pending.retryAt }),
           ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
           ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
         }
@@ -9184,7 +9249,7 @@ export class ChatEngine {
         )
     )
     if (driverId !== 'claude-code') void scheduleAutoTitle()
-    const isChatThread = project.id === INBOX_PROJECT_ID
+    const isChatThread = project.id === INBOX_PROJECT_ID || project.id === GLOBAL_BROWSER_PROJECT_ID
     // An assistant task is its own class: neither a project thread nor a chat.
     // It carries the app-owned assistant prompt and its own lean harness agent.
     const isAssistantTask = project.id === ASSISTANT_SPACE_ID
@@ -9642,7 +9707,11 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
-    const chatWorkspaceRoot = this.storage.resolve(chatThreadWorkspaceDirectory(threadId))
+    const chatWorkspaceRoot = this.storage.resolve(
+      projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? browserThreadWorkspaceDirectory(threadId)
+        : chatThreadWorkspaceDirectory(threadId)
+    )
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
@@ -10037,10 +10106,14 @@ export class ChatEngine {
         allowedTools:
           isChatThread &&
           !chatFileSystemEnabled &&
-          !utilitySetupAllowed &&
-          settings.providerId &&
-          settings.modelId
-            ? [...CHAT_WEB_ONLY_TOOLS, ...chatGatewayAllowedTools(driverId)]
+          (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
+            ? [
+                ...CHAT_WEB_ONLY_TOOLS,
+                ...chatGatewayAllowedTools(driverId),
+                ...(projectId === GLOBAL_BROWSER_PROJECT_ID
+                  ? ['read', 'write', 'edit', 'glob', 'grep']
+                  : [])
+              ]
             : undefined,
         agent: utilitySetupRequested
           ? leanAgentNameForMode('utility-setup')
@@ -13462,6 +13535,14 @@ export class ChatEngine {
     const pending = this.pendingPermissions.get(requestId)
     if (!pending || pending.session.projectId !== projectId) {
       Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
+      return
+    }
+
+    if (pending.settleBrowserAction) {
+      if (reply === 'always' && pending.policy.risk === 'critical') {
+        throw new Error('Critical permissions cannot be approved permanently')
+      }
+      await this.replyPermissionRaw(pending, reply, 'user', alternativeInstruction)
       return
     }
 
@@ -22263,6 +22344,13 @@ export class ChatEngine {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.session.projectId !== projectId || pending.session.threadId !== threadId) continue
       this.pendingPermissions.delete(requestId)
+      pending.settleBrowserAction?.(false)
+      this.broadcast({
+        type: 'permission.replied',
+        sessionId: pending.request.sessionId,
+        requestId,
+        reply: 'reject'
+      })
     }
   }
 
@@ -22624,6 +22712,7 @@ export class ChatEngine {
       // auto-resume record for it (a re-reported error re-tracks it).
       if (event.status.state === 'working' || event.status.state === 'idle') {
         this.retryScheduler?.clear(event.sessionId)
+        this.retryScheduler?.resumed(event.sessionId)
       }
     } else {
       if (
@@ -24274,7 +24363,6 @@ export class ChatEngine {
     if (!driver) return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
-    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
     if (retryAt === undefined) {
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
@@ -24291,6 +24379,8 @@ export class ChatEngine {
       // is still limited, the next failure re-tracks with a fresh cooldown.
       retryAt = Date.now() + USAGE_RESET_FALLBACK_RETRY_MS
     }
+    const resetAt = retryAt
+    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
     if (!hasRetryAt && !usageResetWait) return false
     // A deliberate user stop is never overwritten by a new wait. This is the
@@ -24314,7 +24404,7 @@ export class ChatEngine {
       projectId: info.projectId,
       threadId: info.threadId,
       harnessId: issue.harnessId ?? info.driverId,
-      ...(hasRetryAt ? { retryAt } : {}),
+      ...(hasRetryAt ? { retryAt, resetAt } : {}),
       issueKind: issue.kind,
       issueMessage: issue.message,
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
@@ -24331,6 +24421,15 @@ export class ChatEngine {
         errorDetail: issue.rawError
       })
       return false
+    }
+    const current = this.sessionStatuses.get(sessionId)
+    if (current?.state === 'waiting' || current?.state === 'error') {
+      const status: AgentSessionStatus = {
+        ...current,
+        issue: { ...current.issue, retryAt: resetAt, autoResumeAt: retryAt }
+      }
+      this.sessionStatuses.set(sessionId, status)
+      this.broadcast({ type: 'session.status', sessionId, status })
     }
     return true
   }
@@ -24776,7 +24875,8 @@ export class ChatEngine {
     scratchPaths: string[]
     restrictToAllowed: boolean
   }> {
-    const isChat = info.projectId === INBOX_PROJECT_ID
+    const isChat =
+      info.projectId === INBOX_PROJECT_ID || info.projectId === GLOBAL_BROWSER_PROJECT_ID
     // A chat and a browser tab's agent chat each own an app-storage workspace,
     // and the directory their session runs in is that workspace, so it is
     // pre-authorized scratch. An assistant task deliberately gets none: it is
@@ -24851,7 +24951,8 @@ export class ChatEngine {
   private async handlePermissionAsked(
     driverId: string,
     event: Extract<AgentEvent, { type: 'permission.asked' }>,
-    sourceDriver?: HarnessDriver
+    sourceDriver?: HarnessDriver,
+    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction']
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.sessionRegistry.get(sessionId)
@@ -24866,10 +24967,11 @@ export class ChatEngine {
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode: level,
+      mode:
+        info.projectId === GLOBAL_BROWSER_PROJECT_ID && restrictToAllowed ? 'auto_review' : level,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
-      ...(restrictToAllowed ? { restrictToAllowed } : {})
+      ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,
       paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
@@ -24909,6 +25011,7 @@ export class ChatEngine {
       session: info,
       request: enrichedRequest,
       policy,
+      settleBrowserAction,
       resumeStatus
     }
     this.pendingPermissions.set(request.id, pending)
@@ -24931,6 +25034,19 @@ export class ChatEngine {
       }
       if (this.pendingPermissions.get(request.id) !== pending) return
       this.broadcast({ ...event, permission: enrichedRequest })
+    }
+    if (
+      info.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+      restrictToAllowed &&
+      !settleBrowserAction &&
+      !policy.approved &&
+      (commands.length > 0 ||
+        /(?:read|edit|write|glob|grep|list|bash|shell|external.directory)/iu.test(
+          request.permission
+        ))
+    ) {
+      await this.replyPermissionRaw(pending, 'reject', 'policy:filesystem-disabled')
+      return
     }
     if (await this.achievementOwnsDecisions(thread ?? null)) {
       try {
@@ -24969,8 +25085,38 @@ export class ChatEngine {
   private async replyPermissionRaw(
     pending: PendingPermissionInfo,
     reply: PermissionReply,
-    decidedBy: string
+    decidedBy: string,
+    alternative?: string
   ): Promise<void> {
+    if (pending.settleBrowserAction) {
+      if (this.pendingPermissions.get(pending.request.id) !== pending) return
+      await this.recordPermissionDecision(pending, reply, decidedBy)
+      if (this.pendingPermissions.get(pending.request.id) !== pending) return
+      const remaining = [...this.pendingPermissions.values()].some(
+        (other) => other !== pending && other.session.sessionId === pending.session.sessionId
+      )
+      try {
+        await this.threadManager.setStatus(
+          pending.session.projectId,
+          pending.session.threadId,
+          remaining ? 'awaiting_approval' : pending.resumeStatus
+        )
+      } catch (error) {
+        this.pendingPermissions.delete(pending.request.id)
+        pending.settleBrowserAction(false)
+        throw error
+      }
+      if (this.pendingPermissions.get(pending.request.id) !== pending) return
+      this.pendingPermissions.delete(pending.request.id)
+      this.broadcast({
+        type: 'permission.replied',
+        sessionId: pending.request.sessionId,
+        requestId: pending.request.id,
+        reply
+      })
+      pending.settleBrowserAction(reply !== 'reject', alternative)
+      return
+    }
     const driver =
       pending.driver ?? this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) return
@@ -24989,6 +25135,8 @@ export class ChatEngine {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.sessionId === sessionId) {
         this.pendingPermissions.delete(requestId)
+        pending.settleBrowserAction?.(false)
+        this.broadcast({ type: 'permission.replied', sessionId, requestId, reply: 'reject' })
       }
     }
   }

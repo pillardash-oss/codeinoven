@@ -20,12 +20,27 @@ import {
   parseGlobalBrowserTabsSnapshot,
   type GlobalBrowserTabsSnapshot
 } from '../../lib/browser/global-browser-tabs'
-import { ensureDir, getConfigRoot, readJson, writeJson } from '../../lib/utils'
+import { ensureDir, getConfigRoot, isUnpackagedElectronLaunch, readJson, writeJson } from '../../lib/utils'
 import { Logger } from '../system/logger'
+
+/**
+ * Where this launch reads and writes the tab list. Packaged prod keeps the
+ * established file untouched; an unpackaged dev launch uses a `-dev` variant
+ * so its tabs and boxes never mix with prod. Boxes live inside this snapshot
+ * and map to partitions in the launch's own Chromium profile (`electron` vs
+ * `dev-browser-profile`), so sharing the file would point dev tabs at box IDs
+ * with no cookies behind them.
+ */
+export function resolveGlobalBrowserTabsStateRelativePath(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return GLOBAL_BROWSER_TABS_STATE_RELATIVE_PATH.replace(/\.json$/, '-dev.json')
+  }
+  return GLOBAL_BROWSER_TABS_STATE_RELATIVE_PATH
+}
 
 export class GlobalBrowserTabsStore {
   private get filePath(): string {
-    return join(getConfigRoot(), GLOBAL_BROWSER_TABS_STATE_RELATIVE_PATH)
+    return join(getConfigRoot(), resolveGlobalBrowserTabsStateRelativePath())
   }
 
   /** The stored tab list, or null when nothing has ever been stored. A corrupt

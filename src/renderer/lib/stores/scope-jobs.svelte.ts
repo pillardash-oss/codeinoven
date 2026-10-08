@@ -114,6 +114,8 @@ export interface ScopeJob {
   projectId: string
   /** Bucket the job belongs to; null until a brand new scope's bucket exists. */
   scopeBucketId: string | null
+  /** Thread that initiated the run; the scope lands on this thread, never the selected one. */
+  targetThreadId: string | null
   kind: ScopeJobKind
   /** Who started the run, so the panel can say an agent did it. */
   origin: ScopeJobOrigin
@@ -152,6 +154,8 @@ export interface ScopeCreateJobInput extends ScopeWorktreeCreateInput {
 export interface ScopeCreateJobOptions {
   /** Set when the worktree is created for a scope that already exists. */
   existingBucketId?: string | null
+  /** Thread that started the run; scope assignment lands here even after a thread switch. */
+  targetThreadId?: string | null
   onCreated?: (bucketId: string) => void
 }
 
@@ -279,6 +283,7 @@ class ScopeJobStore {
     const job = this.#push({
       projectId,
       scopeBucketId: options.existingBucketId ?? null,
+      targetThreadId: options.targetThreadId ?? null,
       kind: 'create',
       title: input.title,
       isolated: input.isolated,
@@ -295,11 +300,12 @@ class ScopeJobStore {
   adopt(
     projectId: string,
     input: { bucketId: string; title: string; sourcePath: string; runSetup: boolean },
-    options: { onAdopted?: () => void } = {}
+    options: { onAdopted?: () => void; targetThreadId?: string | null } = {}
   ): string {
     const job = this.#push({
       projectId,
       scopeBucketId: input.bucketId,
+      targetThreadId: options.targetThreadId ?? null,
       kind: 'adopt',
       title: input.title,
       isolated: true,
@@ -344,6 +350,26 @@ class ScopeJobStore {
         job.projectId === projectId &&
         job.scopeBucketId === bucketId
     )
+  }
+
+  /**
+   * Running create/adopt work targeting one thread. A send parked while this
+   * exists must stay queued until the scope lands, so a message typed during a
+   * worktree build runs in the new scope instead of the old one.
+   */
+  pendingScopeJobForThread(projectId: string, threadId: string): ScopeJob | undefined {
+    return this.jobs.find(
+      (job) =>
+        job.status === 'running' &&
+        job.projectId === projectId &&
+        job.targetThreadId === threadId &&
+        (job.kind === 'create' || job.kind === 'adopt')
+    )
+  }
+
+  /** True while a scope worktree run still owns the thread's next send. */
+  hasPendingScopeJob(projectId: string, threadId: string): boolean {
+    return this.pendingScopeJobForThread(projectId, threadId) !== undefined
   }
 
   /**
@@ -621,6 +647,7 @@ class ScopeJobStore {
   #push(input: {
     projectId: string
     scopeBucketId: string | null
+    targetThreadId?: string | null
     kind: ScopeJobKind
     origin?: ScopeJobOrigin
     title: string
@@ -634,6 +661,7 @@ class ScopeJobStore {
       id: crypto.randomUUID(),
       projectId: input.projectId,
       scopeBucketId: input.scopeBucketId,
+      targetThreadId: input.targetThreadId ?? null,
       kind: input.kind,
       origin: input.origin ?? 'user',
       title: input.title,

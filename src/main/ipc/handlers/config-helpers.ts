@@ -411,7 +411,9 @@ const MODEL_PROFILE_FIELDS = new Set([
   'modelId',
   'thinkingLevel',
   'inferenceMode',
-  'permissionLevel'
+  'permissionLevel',
+  'accountId',
+  'contextWindow'
 ])
 
 /**
@@ -421,9 +423,7 @@ const MODEL_PROFILE_FIELDS = new Set([
  * a permission level, because applying one replaces all five at once. A profile
  * missing any of them would apply a partial preset the user never described, so it
  * is refused here rather than stored inert. Ids are unique because a picker row is
- * keyed by id. No account field exists: the account is resolved when a profile is
- * applied, so accepting one here would be storing a credential the profile never
- * had a say in.
+ * keyed by id. Optional account handles and context-window overrides are validated here too.
  */
 function validateModelProfiles(value: unknown): ModelProfile[] {
   if (!Array.isArray(value)) throw new TypeError('Model profiles must be an array')
@@ -476,6 +476,15 @@ function validateModelProfiles(value: unknown): ModelProfile[] {
       thinkingLevel: validateThinkingLevel(entry.thinkingLevel, `${label} thinking level`),
       inferenceMode: inferenceMode as InferenceMode,
       permissionLevel: permissionLevel as PermissionLevel
+    }
+    if (entry.accountId !== undefined) {
+      profile.accountId = requireString(entry.accountId, `${label} account ID`)
+    }
+    if (entry.contextWindow !== undefined) {
+      profile.contextWindow =
+        entry.contextWindow === null
+          ? null
+          : validateModelRuntimeSettings({ contextWindow: entry.contextWindow }).contextWindow
     }
     if (!isUsableModelProfile(profile)) {
       throw new TypeError(`${label} must name a harness, a provider, and a model`)

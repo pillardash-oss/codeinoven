@@ -775,6 +775,20 @@
           "scenario": "Model picker or one of its panels open."
         },
         {
+          "id": "palette-model-rail",
+          "keys": ["arrowleft"],
+          "label": "Focus model picker rail",
+          "description": "Moves focus from picker entries to the section rail.",
+          "scenario": "Model picker open."
+        },
+        {
+          "id": "palette-model-entries",
+          "keys": ["arrowright"],
+          "label": "Focus model picker entries",
+          "description": "Moves focus from the section rail to its entries.",
+          "scenario": "Model picker open."
+        },
+        {
           "id": "palette-model-select",
           "keys": ["enter"],
           "label": "Select model",

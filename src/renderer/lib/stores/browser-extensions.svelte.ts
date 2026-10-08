@@ -416,7 +416,13 @@ class BrowserExtensionsState {
   /** Send one patch to main and apply the record it answers with. */
   private async patch(
     extensionId: string,
-    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean },
+    patch: {
+      enabled?: boolean
+      boxes?: string[]
+      pinned?: boolean
+      blockedHosts?: string[]
+      allowedHosts?: string[]
+    },
     fallback: string
   ): Promise<void> {
     try {
@@ -424,6 +430,29 @@ class BrowserExtensionsState {
       this.apply(extension)
     } catch (error: unknown) {
       reportError(error, fallback)
+    }
+  }
+
+  /** Replace per-site rules. Both lists are full replacements, never deltas. */
+  async setSiteRules(
+    extensionId: string,
+    blockedHosts: string[],
+    allowedHosts: string[]
+  ): Promise<void> {
+    await this.patch(
+      extensionId,
+      { blockedHosts, allowedHosts },
+      'The extension site rules could not be updated.'
+    )
+  }
+
+  /** Open one extension's options/setup page in a new global browser tab. */
+  async openOptionsPage(extensionId: string, boxId: string | null): Promise<string | null> {
+    try {
+      return await invoke('browser:openExtensionPage', extensionId, boxId)
+    } catch (error: unknown) {
+      reportError(error, 'The extension setup page could not be opened.')
+      return null
     }
   }
 

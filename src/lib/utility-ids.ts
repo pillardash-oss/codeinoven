@@ -53,6 +53,9 @@ export const APP_DESIGN_UTILITY_ID = 'cio:design'
  */
 export const APP_VIDEO_UTILITY_ID = 'cio:video'
 
+/** App-owned generation guidance and inline rendering contract. */
+export const APP_ARTIFACT_UTILITY_ID = 'cio:artifact'
+
 /**
  * App-owned knowledge a user may switch off.
  *
@@ -83,7 +86,8 @@ export const APP_VIDEO_UTILITY_ID = 'cio:video'
 const DISABLEABLE_APP_OWNED_UTILITY_IDS: ReadonlySet<string> = new Set([
   APP_ADB_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
-  APP_VIDEO_UTILITY_ID
+  APP_VIDEO_UTILITY_ID,
+  APP_ARTIFACT_UTILITY_ID
 ])
 
 /**

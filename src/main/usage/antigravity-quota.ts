@@ -80,8 +80,8 @@ interface AntigravityTokenStore {
   }
 }
 
-/** Access token minted by a refresh, reused until it expires. */
-let cachedAccessToken: { token: string; expiresAt: number } | null = null
+/** Access tokens minted by refresh, reused until expiry, keyed per account. */
+const cachedAccessTokens = new Map<string, { token: string; expiresAt: number }>()
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
@@ -276,7 +276,10 @@ async function refreshAccessToken(refreshToken: string): Promise<string | undefi
     const accessToken = stringValue(payload?.['access_token'])
     if (accessToken === undefined) return undefined
     const expiresIn = finiteNumber(payload?.['expires_in']) ?? 3_600
-    cachedAccessToken = { token: accessToken, expiresAt: Date.now() + expiresIn * 1_000 }
+    cachedAccessTokens.set(refreshToken, {
+      token: accessToken,
+      expiresAt: Date.now() + expiresIn * 1_000
+    })
     return accessToken
   } catch (error) {
     Logger.dev('Antigravity token refresh failed:', error)
@@ -284,10 +287,12 @@ async function refreshAccessToken(refreshToken: string): Promise<string | undefi
   }
 }
 
-function usableCachedToken(): string | undefined {
-  if (!cachedAccessToken) return undefined
-  if (cachedAccessToken.expiresAt - TOKEN_EXPIRY_SKEW_MS <= Date.now()) return undefined
-  return cachedAccessToken.token
+function usableCachedToken(refreshToken: string | undefined): string | undefined {
+  if (refreshToken === undefined) return undefined
+  const cached = cachedAccessTokens.get(refreshToken)
+  if (!cached) return undefined
+  if (cached.expiresAt - TOKEN_EXPIRY_SKEW_MS <= Date.now()) return undefined
+  return cached.token
 }
 
 function usableStoredToken(store: AntigravityTokenStore): string | undefined {
@@ -321,7 +326,7 @@ export async function readAntigravityAccountUsage(
   if (!store) return null
   const refreshToken = stringValue(store.token?.refresh_token)
   let refreshed = false
-  let accessToken = usableCachedToken() ?? usableStoredToken(store)
+  let accessToken = usableCachedToken(refreshToken) ?? usableStoredToken(store)
   if (accessToken === undefined && refreshToken !== undefined) {
     accessToken = await refreshAccessToken(refreshToken)
     refreshed = true

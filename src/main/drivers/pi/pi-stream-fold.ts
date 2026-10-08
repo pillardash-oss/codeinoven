@@ -823,6 +823,9 @@ export function mapPiRecord(
   }
 
   if (type === 'agent_settled') {
+    // A cancelled run can retain its last provider error; cancellation is not
+    // a terminal provider failure. Pi 1.1.0 reports it explicitly.
+    if (entry['aborted'] === true) return { events: [] }
     const session = context.session
     const lastAssistant = [...session.messages].reverse().find((message) => {
       return message.role === 'assistant'

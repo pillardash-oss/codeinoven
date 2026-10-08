@@ -12,6 +12,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
+  import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
@@ -22,6 +23,7 @@
     Boxes,
     Clock,
     Download,
+    FolderTree,
     MessagesCircle,
     Puzzle
   } from '@lucide/svelte'
@@ -122,7 +124,8 @@
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
-    const hasAgent = tab ? globalBrowser.agentChatFor(tab.id) !== null : false
+    const activeChat = tab ? globalBrowser.agentChatFor(tab.id) : null
+    const hasAgent = activeChat !== null
     /** Every visible popup remains reachable when the selected tab or box changes. */
     const popupWindows = browserPopupWindows.all()
     const browserTools: ContextDockItem[] = [
@@ -225,9 +228,35 @@
             // The conversation wears the Chats view's mark: it is a chat, not a
             // status, so it takes no tone either.
             icon: MessagesCircle,
-            active: globalBrowser.agentSidebarShown,
-            onSelect: () => globalBrowser.toggleAgentSidebar()
-          }
+            active:
+              globalBrowser.agentSidebarShown &&
+              browserAssistant.artifactThreadId !== activeChat?.threadId,
+            onSelect: () => {
+              if (browserAssistant.artifactThreadId === activeChat?.threadId)
+                globalBrowser.showAgentSidebar()
+              else globalBrowser.toggleAgentSidebar()
+            }
+          },
+          ...(activeChat && browserAssistant.hasArtifacts(activeChat.threadId)
+            ? [
+                {
+                  id: 'artifacts',
+                  label: 'Conversation artifacts',
+                  icon: FolderTree,
+                  active:
+                    globalBrowser.agentSidebarShown &&
+                    browserAssistant.artifactThreadId === activeChat.threadId,
+                  onSelect: () => {
+                    const chat = globalBrowser.agentChatFor(tab.id)
+                    if (!chat) return
+                    contextSidebarState.activateThread(GLOBAL_BROWSER_PROJECT_ID, chat.threadId)
+                    contextSidebarState.openFiles(GLOBAL_BROWSER_PROJECT_ID, chat.threadId)
+                    globalBrowser.showAgentSidebar()
+                    browserAssistant.showArtifacts(chat.threadId)
+                  }
+                }
+              ]
+            : [])
         ]
       : []
     return [browserTools, tabTools].filter((group) => group.length > 0)
@@ -240,10 +269,6 @@
       globalBrowser.notificationsShown ||
       globalBrowser.stickyNotesShown
   )
-
-  $effect(() => {
-    if (globalBrowser.stickyNotesShown) globalBrowser.hideContextSidebarForAppPanel()
-  })
 
   /**
    * True while the user drags the rail's edge, so the track skips its width
@@ -274,7 +299,7 @@
    * every other view's: search the tab strip, then open a tab. Creating a group
    * stays a tab's own context-menu action, so it is deliberately absent here.
    */
-  $effect(() => {
+  onMount(() => {
     viewActions.set('browser', [
       {
         id: 'search-tabs',
@@ -351,7 +376,15 @@
   })
 </script>
 
-<div class="flex h-full min-h-0" data-region="browser-view">
+<div
+  {@attach () => {
+    if (globalBrowser.stickyNotesShown) globalBrowser.hideContextSidebarForAppPanel()
+    const chat = activeTab ? globalBrowser.agentChatFor(activeTab.id) : null
+    if (chat) void browserAssistant.refreshArtifacts(chat.threadId)
+  }}
+  class="flex h-full min-h-0"
+  data-region="browser-view"
+>
   <!-- The sidebar is the browser's chrome (address, history, downloads) as well
        as its tab strip, so it is present with no tab open too: that is where the
        first address is typed. It is the app's own left sidebar, so it docks,

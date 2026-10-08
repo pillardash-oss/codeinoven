@@ -247,41 +247,48 @@ describe('applyModelProfile', () => {
     ).toBeUndefined()
   })
 
-  it('leaves the context window alone when the model did not change', () => {
-    const applied = applyModelProfile(settings({ contextWindow: 1_000_000 }), profile(), [
-      catalog()
-    ])
-    expect(applied.contextWindow).toBe(1_000_000)
+  it('restores the saved context window when the model did not change', () => {
+    const applied = applyModelProfile(
+      settings({ contextWindow: 1_000_000 }),
+      profile({ contextWindow: 200_000 }),
+      [catalog()]
+    )
+    expect(applied.contextWindow).toBe(200_000)
   })
 
-  it('resolves the account by the harness rule while applying', () => {
+  it('restores the saved account while applying', () => {
     const same = applyModelProfile(
       settings({ accountId: 'opencode.work', permissionLevel: 'auto_review' }),
-      profile()
+      profile({ accountId: 'opencode.personal' })
     )
-    expect(same.accountId).toBe('opencode.work')
+    expect(same.accountId).toBe('opencode.personal')
 
     const crossed = applyModelProfile(
       settings({ accountId: 'opencode.work', modelId: 'other', permissionLevel: 'auto_review' }),
-      profile({ harnessId: 'codex', providerId: 'openai' })
+      profile({ harnessId: 'codex', providerId: 'openai', accountId: 'codex.work' })
     )
-    expect(crossed.accountId).toBe('codex.default')
+    expect(crossed.accountId).toBe('codex.work')
   })
 })
 
 describe('activeModelProfile', () => {
   it('ticks the profile only once the whole preset is live', () => {
-    const rows = [profile()]
+    const rows = [
+      profile({ contextWindow: 200_000, accountId: 'opencode.work' }),
+      profile({ id: 'long-review', contextWindow: 1_000_000, accountId: 'opencode.work' })
+    ]
     expect(
       activeModelProfile(rows, {
         harnessId: 'opencode',
         providerId: 'anthropic',
         modelId: 'claude-opus-4-8',
         thinkingLevel: 'high',
+        contextWindow: 1_000_000,
+        accountId: 'opencode.work',
         inferenceMode: 'normal',
         permissionLevel: 'full_access'
       })?.id
-    ).toBe('deep-review')
+    ).toBe('long-review')
 
     expect(
       activeModelProfile(rows, {
@@ -289,6 +296,8 @@ describe('activeModelProfile', () => {
         providerId: 'anthropic',
         modelId: 'claude-opus-4-8',
         thinkingLevel: 'high',
+        contextWindow: 1_000_000,
+        accountId: 'opencode.work',
         inferenceMode: 'normal',
         permissionLevel: 'auto_review'
       })
@@ -320,7 +329,7 @@ describe('activeModelProfile', () => {
     ).toBe('deep-review')
   })
 
-  it('ignores the account, which a profile never stores', () => {
+  it('keeps legacy profiles usable without a saved account', () => {
     // A held record carries an account even though the profile does not, so the
     // comparison is written to see past one: this stands in for the composer's own
     // settings, which `activeModelProfile` is never told about.

@@ -82,6 +82,8 @@
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
+  import InlineMediaFigure from './InlineMediaFigure.svelte'
+  import InlineImageFigure from './InlineImageFigure.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -187,6 +189,7 @@
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
@@ -5776,6 +5779,13 @@
       idleAttentionHandled = false
       return
     }
+    // A scope worktree still building for this thread holds the queue: the
+    // message must wait for the scope switch, not run in the old checkout.
+    // Reset the guard so the scope job settling retries automatically.
+    if (!hasController && scopeJobs.hasPendingScopeJob(projectId, id)) {
+      idleAttentionHandled = false
+      return
+    }
     const pending = queuedMessage
     const pendingAttachments = queuedAttachments
     const pendingPromptContext = queuedPromptContext
@@ -5824,6 +5834,21 @@
     idleAttentionHandled = true
     void handleIdleAttention()
   }
+
+  /**
+   * Flush a scope-parked send once its worktree run settles. The queue hold
+   * above resets its guard while the run is pending, so the settling job
+   * transitioning out of `running` must wake the dispatcher; otherwise the
+   * parked message waits until the next unrelated idle event.
+   */
+  $effect(() => {
+    if (hasController) return
+    const stillPending = scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (stillPending) return
+    if (!queuedMessage && !queuedHasContent) return
+    if (busy) return
+    scheduleIdleAttention()
+  })
 
   /** Clear the in-memory head entry and dequeue the persisted head message.
    *  Remaining queued messages stay in the FIFO for the next idle turn. */
@@ -6087,7 +6112,13 @@
     const dependencyThreads = startAfterThreads.filter(
       (reference) => reference.id !== thread.id && reference.id.length > 0
     )
-    if (dependencyThreads.length > 0 || (busy && !direct)) {
+    // A scope worktree still building for this thread owns the next send: park
+    // the message behind the scope switch so it runs in the new scope instead
+    // of the old one. Direct steers cannot bypass it because the checkout the
+    // message must run in does not exist yet.
+    const pendingScopeSwitch =
+      !hasController && scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (dependencyThreads.length > 0 || (busy && !direct) || pendingScopeSwitch) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext
@@ -11763,7 +11794,30 @@
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
-            {#if msg.role === 'user'}
+            {#if msg.inlineArtifact}
+              <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
+                {#each msg.parts as part (part.id)}
+                  {#if part.type === 'text'}
+                    <MarkdownView text={part.text} />
+                  {:else if part.type === 'file' && isImageMime(part.mime)}
+                    <InlineImageFigure
+                      url={part.url}
+                      mime={part.mime}
+                      filename={part.filename ?? 'Image'}
+                      {imageUrls}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
+                    <InlineMediaFigure
+                      src={part.url}
+                      kind={isVideoMime(part.mime) ? 'video' : 'audio'}
+                      filename={part.filename ?? 'Media'}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {/if}
+                {/each}
+              </div>
+            {:else if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
                 <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
@@ -11886,10 +11940,39 @@
                         />
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
-                        <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
-                          {#each msg.parts as part (part.id)}
-                            {#if part.type === 'file'}
-                              {@const imageFile = isImageMime(part.mime)}
+                        {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
+                        {@const imageParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> => isImageMime(p.mime)
+                        )}
+                        {@const otherParts = fileParts.filter(
+                          (p): p is Extract<AgentPart, { type: 'file' }> => !isImageMime(p.mime)
+                        )}
+                        <!-- Attached images render large and inline (two-up
+                             on wide transcripts), each expanding into the
+                             fullscreen viewer with sibling navigation. -->
+                        {#if imageParts.length > 0}
+                          <div
+                            class="mt-2 grid grid-cols-1 gap-2 border-t border-border pt-2 xl:grid-cols-2"
+                          >
+                            {#each imageParts as part (part.id)}
+                              <FileCitationContextMenu
+                                projectId={thread.projectId}
+                                citation={citationForFilePart(part)}
+                              >
+                                <InlineImageFigure
+                                  url={part.url}
+                                  mime={part.mime}
+                                  filename={part.filename ?? part.url.split('/').pop() ?? 'image'}
+                                  {imageUrls}
+                                  onExpand={() => openMessageViewer(msg, part)}
+                                />
+                              </FileCitationContextMenu>
+                            {/each}
+                          </div>
+                        {/if}
+                        {#if otherParts.length > 0}
+                          <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
+                            {#each otherParts as part (part.id)}
                               {@const mediaKind = isVideoMime(part.mime)
                                 ? 'video'
                                 : isAudioMime(part.mime)
@@ -11902,41 +11985,7 @@
                                 Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
                               {@const partName =
                                 part.filename ?? part.url.split('/').pop() ?? 'file'}
-                              {#if imageFile}
-                                <FileCitationContextMenu
-                                  projectId={thread.projectId}
-                                  citation={citationForFilePart(part)}
-                                >
-                                  <button
-                                    type="button"
-                                    class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
-                                    title="Preview {part.filename ?? 'image'}"
-                                    aria-label="Preview {part.filename ?? 'image'}"
-                                    onclick={() => openMessageViewer(msg, part)}
-                                  >
-                                    <img
-                                      src={imageUrls.getUrl(part.url)}
-                                      alt={part.filename ?? 'image'}
-                                      class="h-16 w-24 object-cover"
-                                      onerror={(e: Event) =>
-                                        void imageUrls.bindImage(
-                                          part.url,
-                                          part.mime,
-                                          e.currentTarget as HTMLImageElement
-                                        )}
-                                    />
-                                    <div
-                                      class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
-                                    >
-                                      <span
-                                        class="text-[0.625rem] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
-                                      >
-                                        Preview
-                                      </span>
-                                    </div>
-                                  </button>
-                                </FileCitationContextMenu>
-                              {:else if mediaKind}
+                              {#if mediaKind}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
@@ -11973,9 +12022,9 @@
                                   )}
                                 </FileCitationContextMenu>
                               {/if}
-                            {/if}
-                          {/each}
-                        </div>
+                            {/each}
+                          </div>
+                        {/if}
                       {/if}
                     </div>
                     <div

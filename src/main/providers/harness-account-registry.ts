@@ -382,6 +382,12 @@ export class HarnessAccountRegistry {
         return { CLAUDE_CONFIG_DIR: root }
       case 'muse':
         return { XDG_CONFIG_HOME: `${root}/config`, XDG_DATA_HOME: `${root}/data` }
+      case 'antigravity':
+        // agy keeps its OAuth token under `~/.gemini/antigravity-cli/` and
+        // honors HOME (or USERPROFILE on Windows) when locating it. Pointing
+        // both at the managed container isolates one Google account per
+        // CodeInOven account without touching the user's default login.
+        return { HOME: root, USERPROFILE: root }
       default:
         return {}
     }

@@ -1,4 +1,5 @@
 import { relative, sep } from 'node:path'
+import { EXPERT_FALLBACK_GUIDANCE } from '../../lib/experts'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
@@ -36,8 +37,8 @@ import type { MediaGenerationService } from './media-generation-service'
  * of byte ceilings for generated media.
  *
  * The operation never chooses a model. A craft with no user-assigned generation
- * model is refused by name, so the agent asks the user to pick one instead of
- * quietly reaching for a default.
+ * model is refused by name with guidance to use the calling agent's own
+ * generation tools instead. No app-managed default is selected.
  */
 
 export interface MediaGenerationExecutorOptions {
@@ -126,7 +127,7 @@ export function createMediaGenerationExecutor(
     const assigned = mediaModelForKind(config.design, kind)
     if (!assigned) {
       throw new Error(
-        `The user has not put a model on ${designAssignmentOutputWork(kind)}. Ask them to assign one in Settings, Design, and name the craft as "${kind}". Never choose a generation model yourself.`
+        `The user has not put a model on ${designAssignmentOutputWork(kind)}. ${EXPERT_FALLBACK_GUIDANCE}`
       )
     }
     const ref = parseMediaModelRef(assigned.model)

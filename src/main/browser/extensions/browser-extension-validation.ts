@@ -104,12 +104,20 @@ export function validateExtensionUpdatePatch(value: unknown): {
   enabled?: boolean
   boxes?: string[]
   pinned?: boolean
+  blockedHosts?: string[]
+  allowedHosts?: string[]
 } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Browser extension update is invalid')
   }
   const record = value as Record<string, unknown>
-  const patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean } = {}
+  const patch: {
+    enabled?: boolean
+    boxes?: string[]
+    pinned?: boolean
+    blockedHosts?: string[]
+    allowedHosts?: string[]
+  } = {}
   if (record['enabled'] !== undefined) {
     if (typeof record['enabled'] !== 'boolean') {
       throw new TypeError('Browser extension enabled flag is invalid')
@@ -125,8 +133,47 @@ export function validateExtensionUpdatePatch(value: unknown): {
     }
     patch.pinned = record['pinned']
   }
-  if (patch.enabled === undefined && patch.boxes === undefined && patch.pinned === undefined) {
+  if (record['blockedHosts'] !== undefined) {
+    patch.blockedHosts = parseSiteHostList(record['blockedHosts'])
+  }
+  if (record['allowedHosts'] !== undefined) {
+    patch.allowedHosts = parseSiteHostList(record['allowedHosts'])
+  }
+  if (
+    patch.enabled === undefined &&
+    patch.boxes === undefined &&
+    patch.pinned === undefined &&
+    patch.blockedHosts === undefined &&
+    patch.allowedHosts === undefined
+  ) {
     throw new TypeError('Browser extension update changed nothing')
   }
   return patch
+}
+
+const MAX_SITE_HOSTS_PER_PATCH = 200
+const MAX_SITE_HOST_LENGTH = 260
+
+function parseSiteHostList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser extension site list is invalid')
+  }
+  const out: string[] = []
+  for (const candidate of value) {
+    if (typeof candidate !== 'string') {
+      throw new TypeError('Browser extension site list is invalid')
+    }
+    const host = candidate.trim().toLowerCase()
+    if (host.length === 0 || host.length > MAX_SITE_HOST_LENGTH) {
+      throw new TypeError('Browser extension site is invalid')
+    }
+    if (host.includes('\0') || host.includes('/') || host.includes(':') || host.includes(' ')) {
+      throw new TypeError('Browser extension site is invalid')
+    }
+    const cleaned = host.replace(/^\*\./u, '')
+    if (cleaned.length === 0 || out.includes(cleaned)) continue
+    out.push(cleaned)
+    if (out.length > MAX_SITE_HOSTS_PER_PATCH) break
+  }
+  return out
 }

@@ -33,6 +33,7 @@ import {
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
+import { reportError } from './app-errors.svelte'
 
 /** The title a fresh assistant conversation starts on before the model names it
  *  from the user's first question. */
@@ -52,6 +53,39 @@ class BrowserAssistantState {
   /** The conversation still being resolved for a tab, so a second ask while the
    *  first is in flight reuses it instead of creating a second thread. */
   private readonly pending = new Map<string, Promise<BrowserAssistantChat>>()
+  artifactThreadId = $state<string | null>(null)
+  showArtifacts(threadId: string): void {
+    this.artifactThreadId = threadId
+  }
+  showConversation(): void {
+    this.artifactThreadId = null
+  }
+  private readonly artifactThreads = new SvelteMap<string, boolean>()
+  private readonly artifactLoads: Record<string, boolean> = {}
+  hasArtifacts(threadId: string): boolean {
+    return this.artifactThreads.get(threadId) === true
+  }
+  async refreshArtifacts(threadId: string): Promise<void> {
+    if (this.artifactLoads[threadId]) return
+    this.artifactLoads[threadId] = true
+    try {
+      const entries = await invoke(
+        'projectFiles:list',
+        GLOBAL_BROWSER_PROJECT_ID,
+        '',
+        undefined,
+        threadId
+      )
+      this.artifactThreads.set(
+        threadId,
+        entries.some((entry) => !entry.name.startsWith('.'))
+      )
+    } catch (error) {
+      reportError(error, 'Browser conversation artifacts could not be loaded.')
+    } finally {
+      delete this.artifactLoads[threadId]
+    }
+  }
   private started = false
 
   /** Register this store's subscriptions. Idempotent, and deliberately not run
@@ -59,7 +93,17 @@ class BrowserAssistantState {
   start(): void {
     if (this.started) return
     this.started = true
-    subscribe('thread:updated', (thread) => this.applyThreadUpdate(thread))
+    subscribe('thread:updated', (thread) => {
+      this.applyThreadUpdate(thread)
+      if (
+        thread.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+        this.byThread.has(thread.id) &&
+        thread.status !== 'executing' &&
+        thread.status !== 'planning'
+      ) {
+        void this.refreshArtifacts(thread.id)
+      }
+    })
     subscribe('thread:deleted', (projectId, threadId) => {
       if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return
       this.forget(threadId)
@@ -212,6 +256,7 @@ class BrowserAssistantState {
     const threadId = this.byTab.get(browserTabId)
     if (!threadId) return null
     this.byTab.delete(browserTabId)
+    this.artifactThreads.delete(threadId)
     this.byThread.delete(threadId)
     return threadId
   }
@@ -236,6 +281,7 @@ class BrowserAssistantState {
   private forget(threadId: string): void {
     const chat = this.byThread.get(threadId)
     if (!chat) return
+    this.artifactThreads.delete(threadId)
     this.byThread.delete(threadId)
     if (this.byTab.get(chat.browserTabId) === threadId) this.byTab.delete(chat.browserTabId)
     threadMessages.clear(GLOBAL_BROWSER_PROJECT_ID, threadId)

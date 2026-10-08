@@ -152,6 +152,14 @@ export const MERMAID_OUTPUT_INSTRUCTION = [
   'Do not add decorative diagrams.'
 ].join(' ')
 
+export const ARTIFACT_OUTPUT_INSTRUCTION = [
+  'Default artifact styling must use the live app CSS tokens from src/renderer/app.css. HTML and SVG previews receive these tokens and update with the active theme and Appearance settings. Use var(--color-app), var(--color-surface), var(--color-elevated), var(--color-foreground), var(--color-muted), var(--color-border), var(--color-primary), var(--color-on-primary), and semantic status colors. Use var(--font-app) and var(--font-mono), inherit base font size/weight, and use rem for typography and spacing. SVG fill/stroke may use these variables; use currentColor for text. Do not redefine app tokens, hardcode a light/dark palette, or use external fonts by default. Only use a different palette or typography when the user explicitly requests it; authored styles can override the defaults. Raster image pixels cannot react to theme changes, so prefer token-based HTML/SVG for theme-adaptive diagrams.',
+
+  'When the user requests generation or editing of a standalone image, graphic, audio or video, or explicitly requests an HTML/SVG or inline artifact, use inline delivery by default unless the user requests otherwise. They do not need to say artifact or inline. Website/prototype implementation stays with task-specific capabilities. For requested media delivery, load the app-owned cio-artifact skill via cio_util_init with utility_id cio:artifact. Preserve the requested medium and prefer an available direct media generator. Generate the requested asset in the authorized workspace, then call cio_util_use with utility_id cio:artifact, operation render and input.path pointing to that file. The app owns inline rendering; do not emit artifact fences to replace that operation.',
+  'For HTML/SVG, save a complete self-contained document: inline `<style>` allowed, no `<script>`, no external URLs, smaller than 64000 UTF-8 bytes.',
+  'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.'
+].join(' ')
+
 export const DEPLOYMENT_URL_SYSTEM_INSTRUCTION = [
   'Before planning canonical URLs, cross-service links, callback URLs, public asset origins, or deployment URLs, inspect the project for existing URL configuration in `.env.example`, public environment declarations, framework configuration, deployment manifests, and URL constants.',
   'Inspect only relevant public URL keys and never expose unrelated environment values or secrets.',
@@ -642,7 +650,7 @@ export function formatOpenAnnotations(
 /**
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
- * planning or implementation instruction exactly once; mermaid and question
+ * planning or implementation instruction exactly once; mermaid, artifact and question
  * instructions are injected here for the conversational modes (`chat` and
  * `assistant`), where no app layer supplies them.
  *
@@ -679,6 +687,7 @@ export function composeTurnSystemPrompt(input: {
     input.utilityInstructions,
     input.routineInstruction,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+    conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined
   ]
     .filter(Boolean)
@@ -722,7 +731,9 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.routineInstruction
+    input.routineInstruction,
+    ARTIFACT_OUTPUT_INSTRUCTION,
+    'In studio output, keep artifact fences inside the appropriate Markdown string field and preserve the required structured output contract.'
   ]
     .filter(Boolean)
     .join('\n\n')

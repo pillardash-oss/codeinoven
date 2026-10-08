@@ -119,19 +119,28 @@ const TOOL_ACTION_ALIASES: Record<string, string> = {
  *    behavior), so the harness's own defaults apply to every tool.
  *  - an allow-list → every restrictable tool action is denied, then the listed
  *    tools are granted back, then `external_directory` is allowed so an external
- *    read is auto-approved instead of hard-denied before the app's own
- *    permission card can approve it. `read` can never be part of the
+ *    read is auto-approved on unrestricted turns; read-only turns deny external
+ *    directories. Explicit allowlists also apply in Full Access.
+ *    `read` can never be part of the
  *    restriction (see {@link RESTRICTABLE_TOOL_ACTIONS}).
  */
 export function buildOpenCodeV2PermissionRuleset(
-  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools'>
+  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): OpenCodeV2PermissionRule[] {
-  if (opts.settings.permissionLevel === 'full_access') {
+  if (
+    opts.settings.permissionLevel === 'full_access' &&
+    opts.allowedTools === undefined &&
+    !opts.readOnly
+  ) {
     return [{ action: '*', resource: '*', effect: 'allow' }]
   }
   const rules: OpenCodeV2PermissionRule[] = []
   if (opts.allowedTools === undefined) {
-    rules.push({ action: 'external_directory', resource: '*', effect: 'allow' })
+    rules.push({
+      action: 'external_directory',
+      resource: '*',
+      effect: opts.readOnly ? 'deny' : 'allow'
+    })
     return rules
   }
   for (const action of RESTRICTABLE_TOOL_ACTIONS) {
@@ -143,7 +152,11 @@ export function buildOpenCodeV2PermissionRuleset(
     if (action === 'read') continue
     rules.push({ action, resource: '*', effect: 'allow' })
   }
-  rules.push({ action: 'external_directory', resource: '*', effect: 'allow' })
+  rules.push({
+    action: 'external_directory',
+    resource: '*',
+    effect: opts.readOnly ? 'deny' : 'allow'
+  })
   return rules
 }
 

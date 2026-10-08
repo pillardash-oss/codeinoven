@@ -392,6 +392,18 @@ describe('opencode v2 permission rules', () => {
     expect(buildOpenCodeV2PermissionRuleset({ settings: settings('full_access') })).toEqual([
       { action: '*', resource: '*', effect: 'allow' }
     ])
+    const restricted = buildOpenCodeV2PermissionRuleset({
+      settings: settings('full_access'),
+      allowedTools: ['webfetch'],
+      readOnly: true
+    })
+    expect(restricted).toContainEqual({
+      action: 'external_directory',
+      resource: '*',
+      effect: 'deny'
+    })
+    expect(restricted).toContainEqual({ action: 'bash', resource: '*', effect: 'deny' })
+    expect(restricted).not.toContainEqual({ action: '*', resource: '*', effect: 'allow' })
   })
 
   it('never denies read or emits a catch-all deny, which break the harness', () => {

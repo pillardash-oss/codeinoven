@@ -6,6 +6,8 @@
   import MarkdownTable from './MarkdownTable.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
+  import ArtifactCard from './ArtifactCard.svelte'
+  import { artifactKindForLang, artifactNeedsCodeFallback } from './artifact'
   import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
   import { groupHtmlContainers, type MarkdownNode } from './html-containers'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -432,8 +434,11 @@
       {@html htmlFragment(node.raw, repository)}
     {:else if isCodeToken(node.token)}
       {@const language = node.token.lang?.split(/\s+/)[0]?.toLowerCase()}
+      {@const artifactKind = artifactKindForLang(language)}
       {#if language === 'mermaid' && isCompleteFence(node.token)}
         <MermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
+      {:else if artifactKind && isCompleteFence(node.token) && !artifactNeedsCodeFallback(node.token.text)}
+        <ArtifactCard code={node.token.text} kind={artifactKind} />
       {:else}
         <CodeBlock code={node.token.text} lang={language} />
       {/if}

@@ -259,12 +259,7 @@ export interface DesignConfig {
  * A profile is what the user re-picks instead of re-tuning five separate
  * controls, so it captures the whole shape of a run rather than the model alone.
  *
- * It deliberately carries no account. A credential belongs to the moment it was
- * made, not to a preset that may be applied months later on a different machine
- * with different accounts, so the account is resolved when the profile is
- * applied: the current one while the harness is unchanged, and the target
- * harness's default account when the profile crosses harnesses. See
- * `modelProfileAccountId` in `src/lib/model-profiles.ts`.
+ * Stores the selected account handle and optional context-window override.
  */
 export interface ModelProfile {
   /** Stable handle the profile row is keyed by. */
@@ -283,6 +278,10 @@ export interface ModelProfile {
   inferenceMode: InferenceMode
   /** How tool-call permissions are handled while the profile is active. */
   permissionLevel: PermissionLevel
+  /** Account handle, never the credential itself. */
+  accountId?: string
+  /** Context-window override in tokens; null restores the harness default. */
+  contextWindow?: number | null
 }
 
 /**

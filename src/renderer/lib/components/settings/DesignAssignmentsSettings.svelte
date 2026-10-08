@@ -19,6 +19,7 @@
     uniqueDesignAssignmentId
   } from '$shared/design-assignments'
   import {
+    MEDIA_MODEL_CHOICES,
     MEDIA_MODEL_MAX_LENGTH,
     mediaProviderLabel,
     parseMediaModelRef
@@ -76,8 +77,30 @@
   let mediaModelDrafts = $state<Record<string, string>>({})
   /** One short message per row, shown only while a change cannot be saved. */
   let rowErrors = $state<Record<string, string>>({})
+  let outputDrafts = $state<Record<string, DesignAssignmentOutput>>({})
+
+  function outputOf(assignment: DesignAssignment): DesignAssignmentOutput {
+    return outputDrafts[assignment.id] ?? designAssignmentOutput(assignment)
+  }
   /** The generation model being typed in the add form. */
   let draftMediaModel = $state('')
+  let customMediaModels = $state<Record<string, boolean>>({})
+  let draftCustomMediaModel = $state(false)
+
+  function mediaOptions(
+    output: DesignAssignmentOutput,
+    current: string
+  ): { id: string; label: string }[] {
+    const choices = output === 'text' ? [] : [...MEDIA_MODEL_CHOICES[output]]
+    if (
+      current &&
+      parseMediaModelRef(current) &&
+      !choices.some((choice) => choice.id === current)
+    ) {
+      choices.push({ id: current, label: current })
+    }
+    return [...choices, { id: 'custom', label: 'Custom model' }]
+  }
 
   /** Harness catalogs are app-wide, so this holds with no project selected. */
   const catalogProjectId = $derived(rendererRecovery.selectedProjectId ?? INBOX_PROJECT_ID)
@@ -144,6 +167,9 @@
     accountId?: string
   ): Promise<void> {
     rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
+    const cleared = { ...rowErrors }
+    delete cleared[assignment.id]
+    rowErrors = cleared
     // The thinking level belongs to the model that was replaced, so it is only
     // carried over when the new model is the same one on the same harness.
     const previous = assignment.selection
@@ -159,7 +185,7 @@
       ...(sameModel && previous.thinkingLevel ? { thinkingLevel: previous.thinkingLevel } : {})
     }
     await persist(
-      replace(assignment, { selection }),
+      replace(assignment, { selection, produces: outputOf(assignment) }),
       'The design assignment model could not be saved.'
     )
   }
@@ -190,13 +216,14 @@
    *
    * A row can only run the craft it has a model for: a media craft needs a
    * generation model and a text craft needs a harness model. Switching to a
-   * craft the row cannot run is refused with a message rather than saved, because
-   * a saved row with no model for its craft would silently never run.
+   * craft the row cannot run is held as a local draft so its picker is visible.
+   * The role and model are saved together once the user chooses a valid model.
    */
   async function selectOutput(
     assignment: DesignAssignment,
     output: DesignAssignmentOutput
   ): Promise<void> {
+    outputDrafts = { ...outputDrafts, [assignment.id]: output }
     const ready = designAssignmentIsMedia(output)
       ? parseMediaModelRef(assignment.mediaModel ?? '') !== null
       : isUsableDesignSelection(assignment.selection)
@@ -204,7 +231,7 @@
       rowErrors = {
         ...rowErrors,
         [assignment.id]: designAssignmentIsMedia(output)
-          ? `Enter a generation model before making this row ${designAssignmentOutputLabel(output)}.`
+          ? `Choose a generation model to save this row as ${designAssignmentOutputLabel(output)}.`
           : 'Pick a harness model before making this row a copywriting assignment.'
       }
       return
@@ -232,7 +259,10 @@
    */
   async function commitMediaModel(assignment: DesignAssignment): Promise<void> {
     const typed = mediaModelOf(assignment).trim()
-    if (typed === (assignment.mediaModel ?? '')) {
+    if (
+      typed === (assignment.mediaModel ?? '') &&
+      outputOf(assignment) === designAssignmentOutput(assignment)
+    ) {
       const cleared = { ...mediaModelDrafts }
       delete cleared[assignment.id]
       mediaModelDrafts = cleared
@@ -249,7 +279,7 @@
     delete cleared[assignment.id]
     rowErrors = cleared
     await persist(
-      replace(assignment, { mediaModel: typed }),
+      replace(assignment, { mediaModel: typed, produces: outputOf(assignment) }),
       'The generation model could not be saved.'
     )
     const drafts = { ...mediaModelDrafts }
@@ -318,6 +348,7 @@
     draftLabel = ''
     draftSelection = null
     draftMediaModel = ''
+    draftCustomMediaModel = false
   }
 
   async function confirmRemoval(): Promise<void> {
@@ -430,7 +461,7 @@
                   <div class="mt-1">
                     <EnumSelect
                       options={outputOptions}
-                      value={designAssignmentOutput(assignment)}
+                      value={outputOf(assignment)}
                       onChange={(output) => void selectOutput(assignment, output)}
                       placeholder="Role"
                       ariaLabel={`The role the ${assignment.label} assignment covers`}
@@ -442,33 +473,53 @@
 
                 <div class="flex w-64 shrink-0 items-center gap-1.5">
                   <div class="min-w-0 flex-1">
-                    {#if designAssignmentIsMedia(designAssignmentOutput(assignment))}
-                      <label
-                        class="block text-xs text-muted"
-                        for={`design-assignment-model-${assignment.id}`}
-                      >
-                        Generation model
-                      </label>
-                      <input
-                        id={`design-assignment-model-${assignment.id}`}
-                        class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
-                        type="text"
-                        maxlength={MEDIA_MODEL_MAX_LENGTH}
-                        placeholder="owner/model-name"
-                        value={mediaModelOf(assignment)}
-                        disabled={!settingsReady}
-                        title={`The ${providerLabel} model that produces this work`}
-                        oninput={(event) => {
-                          mediaModelDrafts = {
-                            ...mediaModelDrafts,
-                            [assignment.id]: event.currentTarget.value
-                          }
-                        }}
-                        onblur={() => void commitMediaModel(assignment)}
-                        onkeydown={(event) => {
-                          if (event.key === 'Enter') event.currentTarget.blur()
-                        }}
-                      />
+                    {#if designAssignmentIsMedia(outputOf(assignment))}
+                      <span class="block text-xs text-muted">Generation model</span>
+                      <div class="mt-1">
+                        <EnumSelect
+                          options={mediaOptions(outputOf(assignment), assignment.mediaModel ?? '')}
+                          value={customMediaModels[assignment.id]
+                            ? 'custom'
+                            : (assignment.mediaModel ?? null)}
+                          placeholder="Choose model"
+                          ariaLabel={`Generation model for ${assignment.label}`}
+                          title={`Choose the ${providerLabel} model for ${assignment.label}`}
+                          disabled={!settingsReady}
+                          onChange={(model) => {
+                            customMediaModels = {
+                              ...customMediaModels,
+                              [assignment.id]: model === 'custom'
+                            }
+                            if (model !== 'custom') {
+                              mediaModelDrafts = { ...mediaModelDrafts, [assignment.id]: model }
+                              void commitMediaModel(assignment)
+                            }
+                          }}
+                        />
+                      </div>
+                      {#if customMediaModels[assignment.id]}
+                        <input
+                          id={`design-assignment-model-${assignment.id}`}
+                          class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                          type="text"
+                          maxlength={MEDIA_MODEL_MAX_LENGTH}
+                          placeholder="owner/model-name"
+                          value={mediaModelOf(assignment)}
+                          disabled={!settingsReady}
+                          aria-label={`Custom generation model for ${assignment.label}`}
+                          title={`The ${providerLabel} model that produces this work`}
+                          oninput={(event) => {
+                            mediaModelDrafts = {
+                              ...mediaModelDrafts,
+                              [assignment.id]: event.currentTarget.value
+                            }
+                          }}
+                          onblur={() => void commitMediaModel(assignment)}
+                          onkeydown={(event) => {
+                            if (event.key === 'Enter') event.currentTarget.blur()
+                          }}
+                        />
+                      {/if}
                       {#if rowErrors[assignment.id]}
                         <p class="mt-1 text-xs text-danger" role="alert">
                           {rowErrors[assignment.id]}
@@ -585,6 +636,10 @@
               options={outputOptions}
               value={draftOutput}
               onChange={(output) => {
+                if (output !== draftOutput) {
+                  draftMediaModel = ''
+                  draftCustomMediaModel = false
+                }
                 draftOutput = output
               }}
               placeholder="Role"
@@ -596,19 +651,34 @@
         </div>
         <div class="w-64 shrink-0">
           {#if draftIsMedia}
-            <label class="block text-xs text-muted" for="design-assignment-new-model">
-              Generation model
-            </label>
-            <input
-              id="design-assignment-new-model"
-              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
-              type="text"
-              maxlength={MEDIA_MODEL_MAX_LENGTH}
-              placeholder="owner/model-name"
-              bind:value={draftMediaModel}
-              disabled={!settingsReady || atCapacity}
-              title={`The ${providerLabel} model this work is generated with`}
-            />
+            <span class="block text-xs text-muted">Generation model</span>
+            <div class="mt-1">
+              <EnumSelect
+                options={mediaOptions(draftOutput, draftMediaModel)}
+                value={draftCustomMediaModel ? 'custom' : draftMediaModel || null}
+                placeholder="Choose model"
+                ariaLabel="Generation model for the new assignment"
+                title={`Choose the ${providerLabel} generation model`}
+                disabled={!settingsReady || atCapacity}
+                onChange={(model) => {
+                  draftCustomMediaModel = model === 'custom'
+                  if (model !== 'custom') draftMediaModel = model
+                }}
+              />
+            </div>
+            {#if draftCustomMediaModel}
+              <input
+                id="design-assignment-new-model"
+                class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                type="text"
+                maxlength={MEDIA_MODEL_MAX_LENGTH}
+                placeholder="owner/model-name"
+                bind:value={draftMediaModel}
+                disabled={!settingsReady || atCapacity}
+                aria-label="Custom generation model for the new assignment"
+                title={`The ${providerLabel} model this work is generated with`}
+              />
+            {/if}
           {:else}
             <span class="block text-xs text-muted">Model</span>
             <div class="mt-1">
@@ -669,7 +739,7 @@
         {:else if draftLabel.trim().length === 0}
           Name the work first.
         {:else if draftIsMedia && parseMediaModelRef(draftMediaModel) === null}
-          Enter the generation model this craft runs on, like black-forest-labs/flux-1.1-pro.
+          Choose a generation model for this work.
         {:else if !draftIsMedia && !draftSelection}
           Pick the model that does this work; the assignment is saved with it.
         {:else}

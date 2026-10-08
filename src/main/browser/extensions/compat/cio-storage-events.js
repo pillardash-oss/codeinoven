@@ -37,12 +37,24 @@
   const received = new Set()
   const sender = crypto.randomUUID()
   let sequence = 0
-  const accept = (notice) => {
+  const accept = (notice, ownWrite = false) => {
     if (!notice || typeof notice.id !== 'string' || !areaEvents.has(notice.areaName)) return false
     if (received.has(notice.id)) return false
     received.add(notice.id)
     if (received.size > 128) received.delete(received.values().next().value)
-    emit(notice.changes, notice.areaName)
+    const changes = { ...notice.changes }
+    // The single Dark Reader worker already owns its live frame map. Echoing
+    // queued snapshots back into that same map overwrites documents that
+    // connected after the snapshot was taken. Other contexts still receive the
+    // complete storage event, and settings changes retain normal delivery.
+    if (
+      ownWrite &&
+      typeof document === 'undefined' &&
+      globalThis.chrome.runtime.id === 'eimadpbcbfnmbkopoojfekhnkhdbieeh'
+    ) {
+      delete changes['TabManager-state']
+    }
+    emit(changes, notice.areaName)
     return true
   }
   const emit = (changes, areaName) => {
@@ -76,7 +88,7 @@
   const publish = (changes, areaName) => {
     if (!Object.keys(changes).length) return
     const notice = { id: sender + ':' + ++sequence, changes, areaName }
-    accept(notice)
+    accept(notice, true)
     try {
       channel.postMessage(notice)
       if (typeof document !== 'undefined' && ports.size < 64) {
@@ -177,6 +189,13 @@
                 name,
                 name === 'clear' ? [] : [name === 'set' ? values : args[0]],
                 (error) => {
+                  // Complete the write before notifying observers. Otherwise
+                  // Dark Reader treats its own save as a competing update and
+                  // reloads stale frame state while another document connects.
+                  if (callback) {
+                    callbackCalled = true
+                    callback()
+                  }
                   if (!error) {
                     const changes = {}
                     const changedKeys =
@@ -197,10 +216,6 @@
                       changes[key] = change
                     }
                     publish(changes, areaName)
-                  }
-                  if (callback) {
-                    callbackCalled = true
-                    callback()
                   }
                 }
               )

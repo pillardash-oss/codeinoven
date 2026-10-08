@@ -96,12 +96,12 @@
   let canSignIn = $derived(
     authStatus !== null &&
       authStatus.capabilities !== null &&
-      authStatus.capabilities.loginHandoff !== false &&
-      !(harness.id === 'antigravity' && authStatus.state === 'authenticated')
+      authStatus.capabilities.loginHandoff !== false
   )
 
-  /** Antigravity has one keyring-backed Google account and no explicit login
-   *  command. Its bare `agy` launch is only a login handoff while signed out. */
+  /** Antigravity keeps one Google account per HOME container. A new sign-in
+   *  writes into a fresh managed container, so an already-connected default
+   *  account never blocks adding another. */
   let antigravityConnected = $derived(
     harness.id === 'antigravity' && authStatus?.state === 'authenticated'
   )

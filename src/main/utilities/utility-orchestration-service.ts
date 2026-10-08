@@ -15,6 +15,7 @@ import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
 import {
+  APP_ARTIFACT_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
@@ -328,6 +329,8 @@ export type BrowserUtilityExecutor = (
     projectId: string
     threadId: string
     permissionLevel: PermissionLevel
+    /** Harness session owning the turn, so attached-page approvals surface on its permission card. */
+    sessionId?: string
   }
 ) => Promise<unknown>
 
@@ -500,6 +503,7 @@ export class UtilityOrchestrationService {
   private readonly structuredRoutes: ReadonlySet<string>
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
+  private artifactExecutor: DesignCapabilityExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
   private designPreviewExecutor: DesignCapabilityExecutor | null = null
   private designAssignmentExecutor: DesignCapabilityExecutor | null = null
@@ -609,6 +613,10 @@ export class UtilityOrchestrationService {
    */
   setImageDescriptorExecutor(executor: ImageDescriptorExecutor | null): void {
     this.imageDescriptorExecutor = executor
+  }
+
+  setArtifactExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.artifactExecutor = executor
   }
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
@@ -955,6 +963,11 @@ export class UtilityOrchestrationService {
       ...(hasAdbCapability
         ? [
             `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+          ]
+        : []),
+      ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
+        ? [
+            `The app-owned cio-artifact skill (utility ${APP_ARTIFACT_UTILITY_ID}) handles explicitly requested inline artifacts. Only when the user asks to create or edit an artifact inside this thread, activate it with ${UTILITY_ACTIVATE_TOOL_NAME} before producing the output. It covers image, audio, video, HTML and SVG delivery and prefers available direct generators. For ordinary design or media work use the task-specific capability. Inline artifact requests take this route before the design/video guidance below.`
           ]
         : []),
       ...(hasDesignCapability
@@ -1791,6 +1804,29 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
       return { tools: ROUTINE_AUTHORING_OPERATIONS }
     }
+    if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
+      return {
+        instructions: (resolved.utility.config as { instructions: string }).instructions,
+        tools: [
+          {
+            name: 'render',
+            description:
+              'Render a generated local file inline in this conversation. The app validates its path and format and chooses the image, audio, video or themed HTML/SVG preview.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Absolute or workspace-relative path to an existing generated file.'
+                }
+              },
+              required: ['path'],
+              additionalProperties: false
+            }
+          }
+        ]
+      }
+    }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
@@ -2006,7 +2042,15 @@ export class UtilityOrchestrationService {
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId,
-        permissionLevel: state.request.permissionLevel
+        permissionLevel: state.request.permissionLevel,
+        sessionId: state.request.sessionId
+      })
+    } else if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
+      if (operation !== 'render' || !this.artifactExecutor)
+        throw new Error('The artifact capability exposes render only')
+      result = await this.artifactExecutor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, four operation groups with different owners: `preview`

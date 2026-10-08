@@ -9,8 +9,10 @@ export interface PendingRetryRecord {
   projectId: string
   threadId: string
   harnessId: string
-  /** Epoch ms when the provider window resets; absent when only manual retry is available. */
+  /** Epoch ms for admission after the reset buffer; absent for manual-only retries. */
   retryAt?: number
+  /** Provider reset before the admission buffer. */
+  resetAt?: number
   /** Provider-reported retry attempt when the reset was surfaced. */
   attempt?: number
   /** Provider-neutral failure kind   drives how the restored card renders. */
@@ -62,7 +64,7 @@ const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
  */
 export class RetrySchedulerService {
   private readonly pending = new Map<string, PendingRetryRecord>()
-  private readonly resuming = new Set<string>()
+  private readonly resuming = new Map<string, PendingRetryRecord>()
   private timer: ReturnType<typeof setInterval> | null = null
   private timerStopped = false
   private enabled = false
@@ -235,6 +237,11 @@ export class RetrySchedulerService {
     return this.pending.get(sessionId)
   }
 
+  /** Admission ends when the harness starts, rather than when its turn finishes. */
+  resumed(sessionId: string): void {
+    if (this.resuming.delete(sessionId)) this.tick()
+  }
+
   /** Number of pending reset retries (tests/logging). */
   get size(): number {
     return this.pending.size
@@ -315,6 +322,9 @@ export class RetrySchedulerService {
       threadId,
       harnessId,
       ...(retryAt === undefined ? {} : { retryAt }),
+      ...(typeof record.resetAt === 'number' && Number.isFinite(record.resetAt)
+        ? { resetAt: record.resetAt }
+        : {}),
       issueKind: issueKind as AgentProviderIssueKind,
       issueMessage,
       ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
@@ -414,7 +424,7 @@ export class RetrySchedulerService {
       if (this.pending.get(record.sessionId) === record && !this.resuming.has(record.sessionId)) {
         // Keep the durable wait until admission succeeds. Reserve it before
         // calling the engine so overlapping ticks cannot dispatch it twice.
-        this.resuming.add(record.sessionId)
+        this.resuming.set(record.sessionId, record)
         void this.fire(record)
       }
     }
@@ -473,13 +483,14 @@ export class RetrySchedulerService {
         }
       }
     } finally {
-      this.resuming.delete(record.sessionId)
+      if (this.resuming.get(record.sessionId) === record) this.resuming.delete(record.sessionId)
       // Shutdown clears the in-memory ledger but keeps its saved waits.
       // A late admission must not persist that cleared shutdown snapshot.
       if (this.continueThread === callback) {
         void this.persist()
         this.refreshTimer()
         this.notifyChange()
+        this.tick()
       }
     }
   }

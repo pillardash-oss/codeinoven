@@ -1,3 +1,4 @@
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
 import { createHash } from 'node:crypto'
 import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -14,6 +15,7 @@ import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,
   chatThreadWorkspaceDirectory,
+  browserThreadWorkspaceDirectory,
   featureSlugFromTitle,
   PROJECT_DATA_DIRECTORY
 } from '../../lib/project-artifacts'
@@ -240,8 +242,12 @@ export class GeneratedArtifactService {
     // directory its session runs in and the root its file tree mounts, so an
     // image is written, scanned, and cited in the same place. The older roots
     // stay readable for a chat that predates the consolidation.
-    if (thread.projectId === INBOX_PROJECT_ID) {
-      const workspaceRoot = this.storage.resolve(chatThreadWorkspaceDirectory(thread.id))
+    if (thread.projectId === INBOX_PROJECT_ID || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const workspaceRoot = this.storage.resolve(
+        thread.projectId === GLOBAL_BROWSER_PROJECT_ID
+          ? browserThreadWorkspaceDirectory(thread.id)
+          : chatThreadWorkspaceDirectory(thread.id)
+      )
       return {
         scope: 'chat',
         projectPath: workspaceRoot,
@@ -272,7 +278,10 @@ export class GeneratedArtifactService {
       ...message,
       parts: [...message.parts]
     }))
-    const assistantMessages = messages.filter((message) => message.role === 'assistant')
+    // Explicit app-published artifacts already have validated presentation paths.
+    const assistantMessages = messages.filter(
+      (message) => message.role === 'assistant' && !message.inlineArtifact
+    )
     if (assistantMessages.length === 0) return { messages: inputMessages, changed: false }
 
     const knownIdentities = new Set<string>()
@@ -540,8 +549,12 @@ export function artifactInstruction(
   thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug'>,
   options?: { chatWorkspaceRoot?: string; chatFileSystemMode?: boolean }
 ): string {
-  if (thread.projectId === INBOX_PROJECT_ID) {
-    const relativeRoot = `${promptPath(chatThreadWorkspaceDirectory(thread.id))}/`
+  if (thread.projectId === INBOX_PROJECT_ID || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    const relativeRoot = `${promptPath(
+      thread.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? browserThreadWorkspaceDirectory(thread.id)
+        : chatThreadWorkspaceDirectory(thread.id)
+    )}/`
     const absoluteRoot = options?.chatWorkspaceRoot
     const rootLabel = absoluteRoot ? `${relativeRoot} (absolute: ${absoluteRoot})` : relativeRoot
     const destinationRule =
