@@ -697,6 +697,20 @@ export class AgentPluginService {
       }
     }
     if (utilities.length === 0) throw new Error('This plugin has no supported skills or MCP tools')
+    const requiredCredentialVariables = new Set<string>()
+    for (const utility of utilities) {
+      if (utility.kind !== 'mcp') continue
+      const config = utility.config as McpUtilityConfig
+      const configuredValues = [
+        ...Object.values(config.environment ?? {}),
+        ...Object.values(config.headers ?? {})
+      ]
+      for (const value of configuredValues) {
+        for (const match of value.matchAll(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/gu)) {
+          if (match[1]) requiredCredentialVariables.add(match[1])
+        }
+      }
+    }
     const unsupportedComponents: string[] = []
     for (const component of ['hooks', 'agents', 'commands'])
       if (entry.components.includes(component as AgentPluginMarketEntry['components'][number]))
@@ -715,6 +729,7 @@ export class AgentPluginService {
       source: { ...entry.source, ref: sourceRef },
       installPath: this.storage.resolve(relativePath),
       utilityIds: [],
+      requiredCredentialVariables: [...requiredCredentialVariables],
       installedAt: Date.now(),
       updatedAt: null,
       availableVersion: null,

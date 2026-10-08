@@ -342,6 +342,9 @@
     {:else}
       <div class="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {#each visibleEntries as entry (entry.id)}
+          {@const unsupportedComponents = entry.components.filter((component) =>
+            ['hooks', 'agents', 'commands', 'apps', 'lspServers'].includes(component)
+          )}
           <article class="flex min-w-0 gap-4 rounded-xl border bg-surface p-4">
             <div
               class="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-elevated text-base font-semibold text-muted"
@@ -379,11 +382,22 @@
               {#if entry.unsupportedReason}
                 <p class="mt-2 text-xs text-amber-600">{entry.unsupportedReason}</p>
               {/if}
+              {#if unsupportedComponents.length > 0}
+                <p class="mt-2 text-xs text-amber-600">
+                  Requires unsupported features: {unsupportedComponents.join(', ')}
+                </p>
+              {/if}
               {#if entry.installed}
                 {@const installedPlugin = installed.find((plugin) => plugin.id === entry.id)}
                 {#if installedPlugin?.unsupportedComponents.length}
                   <p class="mt-2 text-xs text-amber-600">
                     Requires native support: {installedPlugin.unsupportedComponents.join(', ')}
+                  </p>
+                {/if}
+                {#if installedPlugin?.requiredCredentialVariables.length}
+                  <p class="mt-2 text-xs text-muted">
+                    Configure {installedPlugin.requiredCredentialVariables.join(', ')} in the plugin's
+                    MCP utilities before connecting.
                   </p>
                 {/if}
               {/if}

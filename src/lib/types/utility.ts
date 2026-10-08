@@ -440,6 +440,7 @@ export interface InstalledAgentPlugin {
   source: { repository: string; ref: string; path: string }
   installPath: string
   utilityIds: string[]
+  requiredCredentialVariables: string[]
   installedAt: number
   updatedAt: number | null
   availableVersion: string | null
