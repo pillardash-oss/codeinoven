@@ -864,6 +864,7 @@ export class Database {
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
       this.migrateCustomSvgIcons(connection)
+      this.migrateProjectOvenColumn(connection)
       this.migrateStickyNoteImagePath(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
@@ -883,6 +884,22 @@ export class Database {
       if (!columns.has('custom_svg')) {
         connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
       }
+    }
+  }
+
+  /**
+   * A project created for a remote Oven records that Oven's registry id, so its
+   * chats can seed their own Oven binding. Databases from before Oven projects
+   * have no such column and read back as unbound, which is the local default.
+   */
+  private migrateProjectOvenColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('oven_id')) {
+      connection.exec('ALTER TABLE projects ADD COLUMN oven_id TEXT')
     }
   }
 

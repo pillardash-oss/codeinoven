@@ -380,6 +380,15 @@
     void load()
   })
 
+  // Open the New Oven editor when another surface asked for it: the Add Project
+  // flow's "no Ovens yet" empty state sends this before navigating here, so the
+  // user lands in the creation form rather than an empty list. The request is
+  // claimed exactly once, so remounting this page never reopens an editor the
+  // user already dismissed.
+  $effect(() => {
+    if (settingsUiState.takeNewOvenRequest()) openEditor()
+  })
+
   let lastOvenFocus = 0
   /**
    * Reveal the Oven another surface asked for: expand it, bring it into view,

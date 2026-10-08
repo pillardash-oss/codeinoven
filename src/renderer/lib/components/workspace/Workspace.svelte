@@ -61,7 +61,8 @@
     persistInheritedThreadSettings,
     settingsForNewAssistantTask,
     settingsForNewThread,
-    threadWithInheritedSettings
+    threadWithInheritedSettings,
+    withProjectOven
   } from '$lib/thread-settings-inheritance'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { toPosixPath } from '$shared/paths'
@@ -3623,7 +3624,11 @@
     const inheritedSettings =
       project.id === ASSISTANT_SPACE_ID
         ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
-        : settingsForNewThread(activeThread, threadSettings.lastUsed)
+        : withProjectOven(
+            settingsForNewThread(activeThread, threadSettings.lastUsed),
+            project,
+            activeThread?.projectId === project.id
+          )
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
       // A routine-scoped create always lands inside its routine, even when it
@@ -3679,7 +3684,9 @@
         workspaceState.requestFocusComposer()
       } else {
         // Open instantly   settings/lifecycle sync is best-effort off the critical path
-        const needsSettingsUpdate = Boolean(activeThread?.settings)
+        // A project bound to an Oven always refreshes the reused blank thread, so
+        // it starts on the project's Oven even when nothing was open to inherit.
+        const needsSettingsUpdate = Boolean(activeThread?.settings) || Boolean(project.ovenId)
         const thread = existing
         upsertThreadInList(thread)
         threadMessages.seedEmpty(thread.projectId, thread.id)

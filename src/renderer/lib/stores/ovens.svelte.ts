@@ -85,7 +85,7 @@ class OvenIdentityStore {
       name: oven.name,
       local: false,
       color: oven.color,
-      iconUrl: ovenMark(oven)
+      iconUrl: ovenMarkUrl(oven)
     }
   }
 
@@ -161,7 +161,7 @@ function localHarnessInventory(
 }
 
 /** The Oven's own icon as a data URL, preferring an uploaded image. */
-function ovenMark(oven: Oven): string | null {
+export function ovenMarkUrl(oven: Oven): string | null {
   if (oven.imageDataUrl) return oven.imageDataUrl
   if (oven.customSvg) return getCustomSvgDataUrl(oven.customSvg, oven.color)
   return getIconSvgDataUrl(oven.icon, oven.color)

@@ -5,12 +5,13 @@
     FolderInput,
     FolderKanban,
     GitBranch,
-    Globe,
-    Loader2
+    Loader2,
+    Server
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
+  import OvenProjectModal from './OvenProjectModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -44,9 +45,6 @@
     onClose = () => {}
   }: Props = $props()
 
-  const componentId = $props.id()
-  const sshProjectFormId = `${componentId}-ssh-project-form`
-
   /** Highest trigger value already handled. The control unmounts in other modes
    *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
    *  a stale trigger from re-opening the add-project flow on remount. */
@@ -62,10 +60,8 @@
       else void addLocalFolder()
     }
   })
-  let showSshModal = $state(false)
+  let showOvenModal = $state(false)
   let showGitCloneModal = $state(false)
-  let newProjectName = $state('')
-  let newProjectHost = $state('')
 
   let showTrackingModal = $state(false)
   let pendingProjectFolder = $state('')
@@ -153,28 +149,12 @@
     }
   }
 
-  function addSshProject(): void {
-    showSshModal = true
+  function addOvenProject(): void {
+    showOvenModal = true
   }
 
   function addGitCloneProject(): void {
     showGitCloneModal = true
-  }
-
-  async function createSshProject(): Promise<void> {
-    if (!newProjectName.trim() || !newProjectHost.trim()) return
-    const host = newProjectHost.trim()
-    const project = await invoke('project:create', {
-      name: newProjectName.trim(),
-      path: host,
-      source: 'ssh',
-      host,
-      changeTrackingMode: 'manual'
-    })
-    await onProjectCreated(project)
-    showSshModal = false
-    newProjectName = ''
-    newProjectHost = ''
   }
 </script>
 
@@ -206,11 +186,11 @@
         </DropdownMenu.Item>
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-          title="Add a project on an Oven over SSH"
-          onSelect={addSshProject}
+          title="Add a project on one of your Ovens"
+          onSelect={addOvenProject}
         >
-          <Globe size={14} class="shrink-0 text-muted" />
-          Oven / SSH
+          <Server size={14} class="shrink-0 text-muted" />
+          Oven Project
         </DropdownMenu.Item>
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
@@ -242,13 +222,13 @@
       <button
         type="button"
         class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
-        title="Add a project on an Oven over SSH"
-        onclick={addSshProject}
+        title="Add a project on one of your Ovens"
+        onclick={addOvenProject}
       >
-        <Globe size={16} class="shrink-0 text-muted" />
+        <Server size={16} class="shrink-0 text-muted" />
         <span>
-          <span class="block text-sm font-medium">Oven / SSH</span>
-          <span class="mt-0.5 block text-xs text-dimmed">Add a project on an Oven over SSH.</span>
+          <span class="block text-sm font-medium">Oven Project</span>
+          <span class="mt-0.5 block text-xs text-dimmed">Pick an Oven and a folder on it.</span>
         </span>
       </button>
       <button
@@ -273,61 +253,7 @@
   {onProjectCreated}
 />
 
-<Modal open={showSshModal} title="Add Oven Project" onClose={() => (showSshModal = false)}>
-  <form
-    id={sshProjectFormId}
-    class="space-y-4"
-    onsubmit={(event: SubmitEvent) => {
-      event.preventDefault()
-      void createSshProject()
-    }}
-  >
-    <div>
-      <label class="mb-1 block text-xs font-medium text-muted" for="shared-ssh-name">
-        Project Name
-      </label>
-      <input
-        id="shared-ssh-name"
-        type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        placeholder="My Oven Project"
-        bind:value={newProjectName}
-      />
-    </div>
-    <div>
-      <label class="mb-1 block text-xs font-medium text-muted" for="shared-ssh-host">
-        Host Name
-      </label>
-      <input
-        id="shared-ssh-host"
-        type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        placeholder="user@192.168.1.10 or myserver.local"
-        bind:value={newProjectHost}
-      />
-      <p class="mt-1 text-xs text-dimmed">SSH host for this Oven.</p>
-    </div>
-  </form>
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Cancel"
-      onclick={() => (showSshModal = false)}
-    >
-      Cancel
-    </button>
-    <button
-      type="submit"
-      form={sshProjectFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Add this Oven project"
-    >
-      Add project
-    </button>
-  {/snippet}
-</Modal>
+<OvenProjectModal open={showOvenModal} onClose={() => (showOvenModal = false)} {onProjectCreated} />
 
 <Modal open={showTrackingModal} title="Set Up Change Tracking" onClose={closeTrackingModal}>
   <div class="space-y-4">

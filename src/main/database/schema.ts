@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS projects (
   path               TEXT NOT NULL DEFAULT '',
   source             TEXT NOT NULL DEFAULT 'local' CHECK(source IN ('local','ssh')),
   host               TEXT,
+  oven_id            TEXT,
   provider_id        TEXT NOT NULL DEFAULT '',
   workflow_id        TEXT NOT NULL DEFAULT 'default',
   thread_limit       INTEGER NOT NULL DEFAULT 70,

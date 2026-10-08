@@ -6,7 +6,8 @@
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
-    threadWithInheritedSettings
+    threadWithInheritedSettings,
+    withProjectOven
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
   import {
@@ -207,7 +208,11 @@
   async function createThread(bucketId: string): Promise<void> {
     if (!activeProject) return
     const activeThread = workspaceState.selectedThread
-    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
+    const inheritedSettings = withProjectOven(
+      settingsForNewThread(activeThread, threadSettings.lastUsed),
+      activeProject,
+      activeThread?.projectId === activeProject.id
+    )
     const existing = findEmptyNewThread(scopeState.allScopeThreads, activeProject.id, bucketId)
     if (existing) {
       if (workspaceState.selectedThread?.id === existing.id) {
