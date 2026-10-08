@@ -271,6 +271,17 @@
   const showProfilesRail = $derived(profiles !== null)
   /** Harness icons are worth a rail section only when there is a choice to make. */
   const showHarnessesRail = $derived(harnessOptions.length > 1)
+  // Match the rail's buttons, gaps, padding, and separator; the model list
+  // fills this height instead of forcing the dropdown to its maximum.
+  const railHeight = $derived.by(() => {
+    const fixed = 1 + Number(hasFavorites) + Number(showProfilesRail)
+    const harnesses = showHarnessesRail ? Math.min(harnessOptions.length, 7) : 0
+    const outerGaps = harnesses ? fixed + 1 : fixed - 1
+    const harnessGaps = Math.max(0, harnesses - 1)
+    const rem =
+      (fixed + harnesses) * 2 + (outerGaps + harnessGaps) * 0.125 + 1 + (harnesses ? 0.5 : 0)
+    return `calc(${rem}rem + ${harnesses ? 1 : 0}px)`
+  })
   /**
    * The rail section actually driving the list. A view whose content vanished
    * (last favorite removed, profiles hidden, harness gone from the catalog)
@@ -572,7 +583,8 @@
       if (pickerRoot === node) pickerRoot = undefined
     }
   }}
-  class="flex min-h-0 flex-1 items-stretch"
+  class="flex min-h-0 items-stretch"
+  style:height={railHeight}
 >
   <ModelPickerRail
     view={effectiveView}
