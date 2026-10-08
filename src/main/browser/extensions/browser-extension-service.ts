@@ -32,7 +32,7 @@
 /// <reference types="vite/client" />
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve, sep } from 'node:path'
 import { dialog, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
@@ -72,9 +72,11 @@ import {
 } from './browser-extension-webstore'
 import {
   EXTENSION_MANIFEST_NAME,
+  extensionPageUrl,
   extensionPopupUrl,
   readActionIconDataUrl,
-  readManifestObject
+  readManifestObject,
+  readManifestRecord
 } from './browser-extension-source'
 import { stripInstalledManifestPermissions } from './browser-extension-manifest'
 import {
@@ -82,11 +84,13 @@ import {
   BROWSER_EXTENSION_STORE_DIR,
   BrowserExtensionRegistry,
   extensionRunsInJar,
+  extensionRunsOnHost,
   extensionSourceDirectory,
   toExtensionView,
   type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
 } from './browser-extension-registry'
+import { filterManifestForSiteRules } from '../../../lib/browser/browser-extension-site-rules'
 import { materializeUserScriptFiles } from './browser-extension-user-scripts'
 
 /** How often progress reaches the renderer. A download reports per chunk and the
@@ -387,6 +391,37 @@ export class BrowserExtensionService {
   }
 
   /**
+   * The options document one installed extension declares, as an address, when
+   * it is enabled and runs in the jar asked for. Null when it declares none or
+   * the jar does not run it.
+   */
+  optionsUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
+    const record = this.registry.get(extensionId)
+    if (!record || !record.enabled) return null
+    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
+    return extensionPageUrl(record.id, record.optionsPath)
+  }
+
+  /**
+   * Whether a `chrome-extension://` address names a file of an enabled
+   * extension that runs in the jar asked for. Any path inside that extension is
+   * allowed, because setup flows span more than the single options file: the
+   * options page links to its own setup pages.
+   */
+  isExtensionPageAllowed(rawUrl: string, projectId: string, boxId: string | null): boolean {
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return false
+    }
+    if (parsed.protocol !== 'chrome-extension:' || !isExtensionId(parsed.host)) return false
+    const record = this.registry.get(parsed.host)
+    if (!record || !record.enabled) return false
+    return extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)
+  }
+
+  /**
    * Install one extension, or queue it behind the installs already running.
    *
    * Two run at once and everything else waits. Nothing is shared between them: the
@@ -484,7 +519,13 @@ export class BrowserExtensionService {
    * that declares a popup, since opening that popup is the only thing a pin does. */
   async update(
     extensionId: string,
-    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
+    patch: {
+      enabled?: boolean
+      boxes?: string[]
+      pinned?: boolean
+      blockedHosts?: string[]
+      allowedHosts?: string[]
+    }
   ): Promise<BrowserExtension> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
     if (this.updatingIds.has(extensionId)) throw new Error('That extension is being updated')
@@ -503,6 +544,9 @@ export class BrowserExtensionService {
     }
     const record = await this.registry.patch(extensionId, patch)
     if (!record) throw new Error('That extension is not installed')
+    if (patch.blockedHosts !== undefined || patch.allowedHosts !== undefined) {
+      await this.unloadEverywhere(extensionId)
+    }
     await this.reconcileLiveJars()
     this.host.publish()
     return this.toView(record)
@@ -774,6 +818,9 @@ export class BrowserExtensionService {
         source: input.source,
         webstoreId,
         popupPath: result.popupPath,
+        optionsPath: result.optionsPath,
+        blockedHosts: [],
+        allowedHosts: [],
         pinned: false,
         iconDataUrl: result.iconDataUrl,
         declaredPermissions: result.declaredPermissions,
@@ -925,6 +972,7 @@ export class BrowserExtensionService {
         version: result.version,
         description: result.description,
         popupPath: result.popupPath,
+        optionsPath: result.optionsPath,
         pinned: current.pinned && result.popupPath !== null,
         iconDataUrl: result.iconDataUrl,
         declaredPermissions: result.declaredPermissions,
@@ -1071,6 +1119,8 @@ export class BrowserExtensionService {
       await this.restoreInterruptedSource(record.id)
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
+      await this.refreshOptionsPath(directory, record)
+      await this.applySiteRulesToManifest(directory, record)
       await this.makeManifestLoadable(directory)
       await this.loadExtensionWhenReady(state.session, directory, record.injected !== 'none')
       state.ids.add(record.id)
@@ -1229,6 +1279,91 @@ export class BrowserExtensionService {
       })
     } catch (error) {
       Logger.dev('Browser extension capability report could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Fill in the options page for an extension installed before it was tracked.
+   * Reads the installed manifest once and patches the record when it names an
+   * options document the record does not have yet.
+   */
+  private async refreshOptionsPath(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    if (record.optionsPath) return
+    try {
+      const manifest = await readManifestRecord(directory)
+      if (!manifest.optionsPath) return
+      const patched = await this.registry.patch(record.id, {
+        optionsPath: manifest.optionsPath
+      })
+      if (patched) {
+        record.optionsPath = patched.optionsPath
+        this.host.publish()
+      }
+    } catch (error) {
+      Logger.dev('Browser extension options path could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Whether an extension runs on one host. Blocked wins. Extension pages have
+   * no host and always run, so setup flows never lock themselves out.
+   */
+  isExtensionEnabledOnHost(extensionId: string, host: string | null): boolean {
+    const record = this.registry.get(extensionId)
+    if (!record || !record.enabled) return false
+    return extensionRunsOnHost(record, host)
+  }
+
+  /**
+   * Apply per-site rules to an installed copy before Chromium loads it.
+   *
+   * Reads from a preserved original manifest so unblocking restores the exact
+   * bytes the extension shipped. Blocked hosts are appended to each content
+   * script's `exclude_matches`. A non-empty allowlist intersects each content
+   * script's `matches` with the allowed hosts. Host permissions keep `<all_urls>`
+   * because that grant has no exclude mechanism; content scripts carry the block.
+   */
+  private async applySiteRulesToManifest(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    const manifestPath = join(directory, EXTENSION_MANIFEST_NAME)
+    const originalPath = join(directory, 'cio-original-manifest.json')
+    try {
+      const hasRules = record.blockedHosts.length > 0 || record.allowedHosts.length > 0
+      if (!hasRules) {
+        if (!existsSync(originalPath)) return
+        const original = await readFile(originalPath, 'utf8')
+        const current = await readFile(manifestPath, 'utf8').catch(() => null)
+        if (current !== null && current !== original) {
+          await writeFile(manifestPath, original)
+        }
+        return
+      }
+      if (!existsSync(originalPath)) {
+        const current = await readFile(manifestPath, 'utf8')
+        await writeFile(originalPath, current)
+      }
+      const originalText = await readFile(originalPath, 'utf8')
+      const original = JSON.parse(originalText) as Record<string, unknown>
+      const filtered = filterManifestForSiteRules(
+        original,
+        record.blockedHosts,
+        record.allowedHosts
+      )
+      if (filtered === null) return
+      await writeFile(manifestPath, `${JSON.stringify(filtered, null, 2)}\n`)
+    } catch (error) {
+      Logger.dev('Browser extension site rules could not be applied:', {
         extensionId: record.id,
         error
       })

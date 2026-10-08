@@ -43,6 +43,10 @@ import type {
   BrowserAgentTabMenuInput
 } from '../browser/browser-agent-tab-menu'
 import type {
+  BrowserExtensionMenuChoice,
+  BrowserExtensionMenuInput
+} from '../browser/browser-extension-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -419,7 +423,16 @@ export const invokeBrowserContract = {
    *  extension. A pin is refused past `MAX_PINNED_EXTENSIONS`, and for an
    *  extension with no popup to open. */
   'browser:extensionUpdate': {} as Contract<
-    [extensionId: string, patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }],
+    [
+      extensionId: string,
+      patch: {
+        enabled?: boolean
+        boxes?: string[]
+        pinned?: boolean
+        blockedHosts?: string[]
+        allowedHosts?: string[]
+      }
+    ],
     BrowserExtension
   >,
   /** Ask the user for an unpacked extension folder. Null when they cancel. */
@@ -482,6 +495,16 @@ export const invokeBrowserContract = {
   'browser:agentTabMenu': {} as Contract<
     [input: BrowserAgentTabMenuInput, x: number, y: number],
     BrowserAgentTabMenuChoice | null
+  >,
+  /** Open the native context menu for one browser extension. */
+  'browser:extensionMenu': {} as Contract<
+    [input: BrowserExtensionMenuInput, x: number, y: number],
+    BrowserExtensionMenuChoice | null
+  >,
+  /** Open one extension's options/setup page in a new global browser tab. */
+  'browser:openExtensionPage': {} as Contract<
+    [extensionId: string, boxId: string | null],
+    string | null
   >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],

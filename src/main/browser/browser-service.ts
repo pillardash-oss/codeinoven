@@ -104,6 +104,10 @@ import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
 import { showBrowserTabSelectionMenu } from './browser-service/browser-tab-selection-menu'
 import { showBrowserTabContextMenu } from './browser-service/browser-tab-context-menu'
 import { showBrowserAgentTabMenu } from './browser-service/browser-agent-tab-menu'
+import {
+  showBrowserExtensionMenu,
+  validateBrowserExtensionMenuInput
+} from './browser-service/browser-extension-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -220,7 +224,6 @@ import {
   validateInspectorMarkers,
   validateInspectorReferenceId,
   validateInspectorTheme,
-  validateOptionalBrowserUrl,
   validateOptionalBoxId,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -984,11 +987,12 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const initialUrl = validateOptionalBrowserUrl(rawInitialUrl)
-        const bounds = validateBounds(rawBounds)
-        // Absent on every call that predates boxes, and on every agent-driven
-        // tab, which is what makes "no box whatsoever" the same code path.
         const boxId = validateOptionalBoxId(rawBoxId)
+        const initialUrl =
+          rawInitialUrl === undefined || rawInitialUrl === null || rawInitialUrl === ''
+            ? ''
+            : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
+        const bounds = validateBounds(rawBounds)
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
         // scripts never get a receiver in that document, and later calls such as
@@ -1192,8 +1196,8 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const url = validateBrowserUrl(rawUrl)
         const boxId = validateOptionalBoxId(rawBoxId)
+        const url = this.validateTabNavigationUrl(projectId, boxId, rawUrl)
         // Main creates a tab on `browser:show`, so a tab the renderer already knows
         // can still be unknown here: a fresh tab whose page has not been shown yet
         // because an overlay (the address spotlight) covers its frame. Ensuring the
@@ -1447,6 +1451,18 @@ export class BrowserService {
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       return showBrowserAgentTabMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:extensionMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserExtensionMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserExtensionMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:openExtensionPage', async (_event, rawExtensionId, rawBoxId) => {
+      const extensionId = validateExtensionId(rawExtensionId)
+      const boxId = validateOptionalBoxId(rawBoxId)
+      await this.extensions.whenReady()
+      return this.extensions.optionsUrlFor(extensionId, GLOBAL_BROWSER_PROJECT_ID, boxId)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -3319,11 +3335,7 @@ export class BrowserService {
       })
     })
     view.webContents.on('will-navigate', (event, url) => {
-      try {
-        validateBrowserUrl(url)
-      } catch {
-        event.preventDefault()
-      }
+      if (!this.isAllowedTabNavigation(projectId, tab.boxId, url)) event.preventDefault()
     })
     this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
     return tab
@@ -3358,7 +3370,10 @@ export class BrowserService {
       owner.projectId === GLOBAL_BROWSER_PROJECT_ID
     ) {
       try {
-        this.openPeekFromWindowRequest(owner, validateBrowserUrl(details.url))
+        this.openPeekFromWindowRequest(
+          owner,
+          this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+        )
       } catch (error: unknown) {
         Logger.error('Browser Peek rejected unsafe URL:', error)
       }
@@ -3369,7 +3384,10 @@ export class BrowserService {
       if (popup) return popup
     }
     try {
-      this.openNewTabFor(owner, validateBrowserUrl(details.url))
+      this.openNewTabFor(
+        owner,
+        this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
+      )
     } catch (error: unknown) {
       Logger.error('Browser popup rejected unsafe URL:', error)
     }
@@ -5141,6 +5159,12 @@ export class BrowserService {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
+          const reason = error instanceof Error && error.message ? error.message : String(error)
+          this.setTabLoadError(tabId, {
+            kind: 'network',
+            code: 0,
+            description: reason || 'The page could not be opened'
+          })
           this.publishState(tabId)
         })
       })
@@ -5151,6 +5175,49 @@ export class BrowserService {
       })
     this.pendingNavigationStarts.set(tabId, navigationStart)
     return navigationStart
+  }
+
+  /**
+   * Whether a tab may navigate to an address. HTTP and HTTPS always may. A
+   * `chrome-extension://` address may only when it names an enabled extension
+   * that runs in that tab's own jar, so one box can never open another jar's
+   * extension files.
+   */
+  private isAllowedTabNavigation(projectId: string, boxId: string | null, url: string): boolean {
+    try {
+      validateBrowserUrl(url)
+      return true
+    } catch {
+      // Not http(s). Only an installed extension page in this jar passes.
+    }
+    try {
+      return this.extensions.isExtensionPageAllowed(url, projectId, boxId)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Validate an address a tab is about to load. Accepts http(s) plus an
+   * extension page allowed in that jar. Throws when neither passes, so callers
+   * keep the same refusal shape as before.
+   */
+  private validateTabNavigationUrl(
+    projectId: string,
+    boxId: string | null,
+    value: unknown
+  ): string {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new TypeError('Browser URL must be a string of at most 8192 characters')
+    }
+    const candidate = value
+    try {
+      return validateBrowserUrl(candidate)
+    } catch {
+      // Fall through to the extension-page check below.
+    }
+    if (this.extensions.isExtensionPageAllowed(candidate, projectId, boxId)) return candidate
+    throw new TypeError('Browser URL must use http or https')
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page

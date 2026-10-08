@@ -5,6 +5,7 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { openBrowserExtensionMenu } from '$lib/components/browser/browser-extension-menus'
 
   /**
    * The extensions the user pinned, worn by the header while the browser view is
@@ -145,6 +146,10 @@
         aria-label={pinLabel(extension)}
         aria-pressed={openPopupFor(extension.id) !== null}
         onclick={() => void toggle(extension.id)}
+        oncontextmenu={(event) => {
+          event.preventDefault()
+          void openBrowserExtensionMenu(extension, event.clientX, event.clientY)
+        }}
       >
         {#if icon}
           <img

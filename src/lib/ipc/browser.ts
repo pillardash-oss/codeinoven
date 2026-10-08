@@ -652,6 +652,12 @@ export interface BrowserExtension {
   boxes: string[]
   /** The popup document the extension declares, or null when it has none. */
   popupPath: string | null
+  /** The options document the extension declares, or null when it has none. */
+  optionsPath: string | null
+  /** Hosts where this extension never runs. Empty means no per-site block. */
+  blockedHosts: string[]
+  /** When non-empty, the only hosts where this extension runs. */
+  allowedHosts: string[]
   /**
    * Whether the user pinned it into the browser view's header.
    *

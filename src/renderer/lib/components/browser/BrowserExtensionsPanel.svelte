@@ -4,10 +4,12 @@
     ChevronDown,
     Download,
     FolderOpen,
+    Globe,
     LoaderCircle,
     Pin,
     Plus,
     Puzzle,
+    Settings,
     Store,
     Trash2
   } from '@lucide/svelte'
@@ -33,6 +35,8 @@
   import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import { openBrowserExtensionMenu } from './browser-extension-menus'
+  import { hostOfUrl, runsOnHost } from '$shared/browser/browser-extension-site-rules'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
   import {
     DEFAULT_BOX_ID,
@@ -317,6 +321,13 @@
     void browserExtensions.setBoxes(extension.id, next)
   }
 
+  /** Open one extension's options/setup page in a new tab of the current jar. */
+  async function openExtensionOptions(extension: BrowserExtension): Promise<void> {
+    const tab = globalBrowser.activeTab
+    const url = await browserExtensions.openOptionsPage(extension.id, tab ? tab.boxId : null)
+    if (url) globalBrowser.open(url, null, tab ? (tab.boxId ?? '') : '')
+  }
+
   /** Open the store in the box this panel is on, which is where the install for
    *  any extension's page happens: the menu leaves first, so the tab behind it
    *  and the rail are what the user sees next. */
@@ -548,6 +559,10 @@
             dropExtension(extension.id)
           }}
           ondragend={() => (draggingId = null)}
+          oncontextmenu={(event) => {
+            event.preventDefault()
+            void openBrowserExtensionMenu(extension, event.clientX, event.clientY)
+          }}
           class:opacity-50={draggingId === extension.id}
         >
           <div
@@ -650,6 +665,14 @@
           </div>
 
           {#if expandedId === extension.id}
+            {@const currentHost = globalBrowser.activeTab
+              ? hostOfUrl(globalBrowser.activeTab.url)
+              : null}
+            {@const runsHere = runsOnHost(
+              extension.blockedHosts,
+              extension.allowedHosts,
+              currentHost
+            )}
             <div
               id="extension-settings-{extension.id}"
               class="mb-1 space-y-2.5 rounded-lg border px-3 py-2.5"
@@ -719,8 +742,98 @@
               </div>
 
               <p class="text-[0.625rem] leading-relaxed text-dimmed">
-                Version {extension.version} · {extension.popupPath ? 'Has a popup' : 'No popup'}
+                Version {extension.version} · {extension.popupPath
+                  ? 'Has a popup'
+                  : 'No popup'}{extension.optionsPath ? ' · Has a setup page' : ''}
               </p>
+
+              {#if extension.optionsPath}
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                  title={`Open the ${extension.name} setup page`}
+                  aria-label={`Open the ${extension.name} setup page`}
+                  onclick={() => void openExtensionOptions(extension)}
+                >
+                  <Settings size={13} />
+                  Open setup page
+                </button>
+              {/if}
+
+              <div class="space-y-1.5">
+                <p class="text-xs text-foreground">Site access</p>
+                <p class="text-[0.625rem] leading-relaxed text-dimmed">
+                  {#if currentHost}
+                    {runsHere
+                      ? `Runs on ${currentHost}. Block it to disable the extension for just this site.`
+                      : `Blocked on ${currentHost}. Allow it to enable the extension for just this site.`}
+                  {:else}
+                    Open a website to allow or block this extension for just that site.
+                  {/if}
+                  {#if extension.allowedHosts.length > 0}
+                    Allowed-only mode: runs solely on {extension.allowedHosts.join(', ')}.
+                  {/if}
+                </p>
+                {#if currentHost}
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                    disabled={updating}
+                    title={runsHere
+                      ? `Disable ${extension.name} on ${currentHost}`
+                      : `Enable ${extension.name} on ${currentHost}`}
+                    aria-label={runsHere
+                      ? `Disable ${extension.name} on ${currentHost}`
+                      : `Enable ${extension.name} on ${currentHost}`}
+                    onclick={() => {
+                      if (!currentHost) return
+                      if (runsHere) {
+                        void browserExtensions.setSiteRules(
+                          extension.id,
+                          [...extension.blockedHosts, currentHost],
+                          extension.allowedHosts
+                        )
+                      } else {
+                        void browserExtensions.setSiteRules(
+                          extension.id,
+                          extension.blockedHosts.filter((entry) => entry !== currentHost),
+                          extension.allowedHosts.length > 0 &&
+                            !extension.allowedHosts.includes(currentHost)
+                            ? [...extension.allowedHosts, currentHost]
+                            : extension.allowedHosts
+                        )
+                      }
+                    }}
+                  >
+                    <Globe size={13} />
+                    {runsHere ? `Disable on ${currentHost}` : `Enable on ${currentHost}`}
+                  </button>
+                {/if}
+                {#if extension.blockedHosts.length > 0 || extension.allowedHosts.length > 0}
+                  <div class="space-y-1 rounded-lg border p-2">
+                    {#if extension.blockedHosts.length > 0}
+                      <p class="text-[0.625rem] text-dimmed">
+                        Blocked: {extension.blockedHosts.join(', ')}
+                      </p>
+                    {/if}
+                    {#if extension.allowedHosts.length > 0}
+                      <p class="text-[0.625rem] text-dimmed">
+                        Allowed: {extension.allowedHosts.join(', ')}
+                      </p>
+                    {/if}
+                    <button
+                      type="button"
+                      class="text-[0.625rem] text-muted underline"
+                      disabled={updating}
+                      title="Clear per-site rules"
+                      aria-label="Clear per-site rules"
+                      onclick={() => void browserExtensions.setSiteRules(extension.id, [], [])}
+                    >
+                      Clear per-site rules
+                    </button>
+                  </div>
+                {/if}
+              </div>
 
               <p
                 class="rounded-lg border bg-elevated/50 px-2.5 py-2 text-[0.625rem] leading-relaxed text-dimmed"

@@ -57,6 +57,9 @@ const MAX_NAME_LENGTH = 200
 const MAX_VERSION_LENGTH = 40
 const MAX_DESCRIPTION_LENGTH = 500
 const MAX_POPUP_PATH_LENGTH = 2_048
+const MAX_OPTIONS_PATH_LENGTH = 2_048
+const MAX_SITE_HOSTS = 200
+const MAX_SITE_HOST_LENGTH = 260
 const MAX_PERMISSION_LENGTH = 80
 const MAX_PERMISSIONS = 200
 const MAX_RULE_RESOURCES = 500
@@ -88,6 +91,11 @@ export interface BrowserExtensionRecord {
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
   popupPath: string | null
+  optionsPath: string | null
+  /** Hosts where this extension never runs. Exact host or parent domain. */
+  blockedHosts: string[]
+  /** When non-empty, hosts where this extension runs. Empty means everywhere not blocked. */
+  allowedHosts: string[]
   /** Whether the user pinned it into the browser view's header. A pin is bounded
    *  and needs a popup to open, which is what the service enforces before it is
    *  written. */
@@ -194,6 +202,58 @@ function parseRuleResources(value: unknown): { id: string; enabled: boolean }[] 
   return out
 }
 
+function normalizeSiteHost(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim().toLowerCase()
+  if (trimmed.length === 0 || trimmed.length > MAX_SITE_HOST_LENGTH) return null
+  if (
+    trimmed.includes('\0') ||
+    trimmed.includes('/') ||
+    trimmed.includes(':') ||
+    trimmed.includes(' ')
+  ) {
+    return null
+  }
+  if (!/^[a-z0-9.*-]+(\.[a-z0-9-]+)*$/u.test(trimmed)) return null
+  const cleaned = trimmed.replace(/^\*\./u, '')
+  return cleaned.length > 0 ? cleaned : null
+}
+
+function parseSiteHosts(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const candidate of value) {
+    const host = normalizeSiteHost(candidate)
+    if (!host) continue
+    if (!out.includes(host)) out.push(host)
+    if (out.length >= MAX_SITE_HOSTS) break
+  }
+  return out
+}
+
+/** Whether a page host is covered by one site rule. A rule matches itself and subdomains. */
+export function siteHostMatches(rule: string, host: string): boolean {
+  const normalized = host.trim().toLowerCase()
+  if (normalized.length === 0) return false
+  if (normalized === rule) return true
+  return normalized.endsWith(`.${rule}`)
+}
+
+/** Whether an extension runs on a host. Blocked wins. Empty allowlist means everywhere not blocked. */
+export function extensionRunsOnHost(
+  record: Pick<BrowserExtensionRecord, 'blockedHosts' | 'allowedHosts'>,
+  host: string | null
+): boolean {
+  if (!host) return true
+  const normalized = host.trim().toLowerCase()
+  if (normalized.length === 0) return true
+  for (const blocked of record.blockedHosts) {
+    if (siteHostMatches(blocked, normalized)) return false
+  }
+  if (record.allowedHosts.length === 0) return true
+  return record.allowedHosts.some((allowed) => siteHostMatches(allowed, normalized))
+}
+
 function parseRecord(value: unknown): BrowserExtensionRecord | null {
   if (!isRecord(value)) return null
   const id = value['id']
@@ -218,6 +278,9 @@ function parseRecord(value: unknown): BrowserExtensionRecord | null {
     source,
     webstoreId: isExtensionId(value['webstoreId']) ? value['webstoreId'] : null,
     popupPath: optionalBoundedString(value['popupPath'], MAX_POPUP_PATH_LENGTH),
+    optionsPath: optionalBoundedString(value['optionsPath'], MAX_OPTIONS_PATH_LENGTH),
+    blockedHosts: parseSiteHosts(value['blockedHosts']),
+    allowedHosts: parseSiteHosts(value['allowedHosts']),
     pinned: value['pinned'] === true,
     iconDataUrl: iconDataUrl && iconDataUrl.startsWith('data:image/') ? iconDataUrl : null,
     declaredPermissions: boundedStringList(
@@ -277,6 +340,9 @@ export function toExtensionView(
     enabled: record.enabled,
     boxes: record.boxes,
     popupPath: record.popupPath,
+    optionsPath: record.optionsPath,
+    blockedHosts: [...record.blockedHosts],
+    allowedHosts: [...record.allowedHosts],
     pinned: record.pinned,
     missingCapabilities: [...record.missingCapabilities],
     warnings,
@@ -359,6 +425,9 @@ export class BrowserExtensionRegistry {
       enabled?: boolean
       boxes?: string[]
       pinned?: boolean
+      optionsPath?: string | null
+      blockedHosts?: string[]
+      allowedHosts?: string[]
       /** Recomputed when the app's own surface changes, which is why it is
        *  patchable: a namespace the preamble learns to implement is a capability
        *  an installed extension gets back without being reinstalled. */
@@ -370,6 +439,14 @@ export class BrowserExtensionRegistry {
     if (patch.enabled !== undefined) record.enabled = patch.enabled
     if (patch.boxes !== undefined) record.boxes = parseJars(patch.boxes)
     if (patch.pinned !== undefined) record.pinned = patch.pinned
+    if (patch.optionsPath !== undefined) {
+      record.optionsPath =
+        patch.optionsPath === null
+          ? null
+          : optionalBoundedString(patch.optionsPath, MAX_OPTIONS_PATH_LENGTH)
+    }
+    if (patch.blockedHosts !== undefined) record.blockedHosts = parseSiteHosts(patch.blockedHosts)
+    if (patch.allowedHosts !== undefined) record.allowedHosts = parseSiteHosts(patch.allowedHosts)
     if (patch.missingCapabilities !== undefined) {
       record.missingCapabilities = [...patch.missingCapabilities]
     }
