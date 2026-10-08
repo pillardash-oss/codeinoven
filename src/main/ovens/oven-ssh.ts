@@ -4,7 +4,12 @@ import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
-import { isWindowsShell, powershellLiteral, remoteShell, windowsEncodedCommand } from './oven-remote-shell'
+import {
+  isWindowsShell,
+  powershellLiteral,
+  remoteShell,
+  windowsEncodedCommand
+} from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
 import { validateIdentityPath } from './oven-validation'
 
@@ -26,8 +31,36 @@ export function sshQuote(value: string): string {
   return `'${value.replace(/'/gu, `'"'"'`)}'`
 }
 
+/**
+ * Lines that could name a credential, an identity file, or a host path this app
+ * must never echo back to the renderer.
+ */
+const UNREPORTABLE_DETAIL =
+  /password|passphrase|identity file|private key|authorized_keys|known_hosts|Permanently added|Warning:|secret|token/iu
+
+/**
+ * The trailing lines of remote stderr, scrubbed of credential-shaped content and
+ * home paths, so an unclassified failure names its own reason.
+ */
+function remoteFailureDetail(stderr: string): string {
+  return stderr
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !UNREPORTABLE_DETAIL.test(line))
+    .slice(-3)
+    .map((line) => line.replace(/\/(?:home|Users)\/[A-Za-z0-9._-]+/gu, '~').slice(0, 240))
+    .join(' · ')
+}
+
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
 function remoteCommandIssue(stderr: string): string {
+  const nodeVersion = /Node\.js 22 or later is required on this Oven \(found (v[\d.]+)\)/u.exec(
+    stderr
+  )
+  if (nodeVersion)
+    return `The Oven runs Node.js ${nodeVersion[1]}, but version 22 or later is required. Install or select a newer Node.js on the Oven, then retry this step.`
+  if (/Node\.js 22 or later is required on this Oven/u.test(stderr))
+    return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
   if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
     return 'Permission denied: npm cannot write to its installation prefix or cache. The Oven needs a writable user-owned npm directory.'
   if (
@@ -60,6 +93,8 @@ function remoteCommandIssue(stderr: string): string {
     /could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr)
   )
     return 'The remote command could not reach its package source. Check the Oven network and repositories.'
+  const detail = remoteFailureDetail(stderr)
+  if (detail) return `The remote command failed after connecting: ${detail}`
   return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
 }
 
@@ -529,7 +564,7 @@ export class OvenSsh {
             sshIssue = 'The SSH hostname or config alias could not be resolved.'
           } else if (/Operation timed out|Connection timed out/u.test(text)) {
             sshIssue = 'The SSH connection timed out.'
-          } else if (/Node.js is required/u.test(text)) {
+          } else if (/Node\.js(?: 22 or later)? is required/u.test(text)) {
             sshIssue = 'Install Node.js 22 or later on this Oven before setting up its service.'
           }
         })
