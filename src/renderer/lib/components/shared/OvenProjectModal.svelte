@@ -149,7 +149,7 @@
   }
 </script>
 
-<Modal open size="lg" title="Add Oven Project" {onClose}>
+<Modal {open} size="lg" title="Add Oven Project" {onClose}>
   {#if loadError}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{loadError}</p>
   {:else if loadingOvens || !ovenState}
