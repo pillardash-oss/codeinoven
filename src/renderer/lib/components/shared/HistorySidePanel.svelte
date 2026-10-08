@@ -134,16 +134,16 @@
         >
           <Search size={14} />
         </button>
+        <button
+          type="button"
+          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Close history panel"
+          title="Close history panel"
+          onclick={onClose}
+        >
+          <X size={14} />
+        </button>
       {/if}
-      <button
-        type="button"
-        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Close history panel"
-        title="Close history panel"
-        onclick={onClose}
-      >
-        <X size={14} />
-      </button>
     </div>
   </header>
   <div class="min-h-0 flex-1 overflow-y-auto p-1" role="list" aria-label="Your messages">
