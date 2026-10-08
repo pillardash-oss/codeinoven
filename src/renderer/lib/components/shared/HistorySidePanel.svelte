@@ -82,7 +82,9 @@
         <input
           bind:this={searchInput}
           bind:value={query}
-          type="search"
+          type="text"
+          autocomplete="off"
+          spellcheck={false}
           class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
           placeholder="Search messages..."
           aria-label="Search messages"
