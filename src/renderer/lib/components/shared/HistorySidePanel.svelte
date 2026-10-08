@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { GitFork, Loader2, Shredder, Trash2, X } from '@lucide/svelte'
+  import { GitFork, Loader2, Search, Shredder, Trash2, X } from '@lucide/svelte'
+  import { tick } from 'svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
 
   export type DeleteMode = 'down' | 'single' | 'up'
@@ -32,6 +33,35 @@
     onDelete,
     onClose
   }: Props = $props()
+
+  let searching = $state(false)
+  let query = $state('')
+  let searchInput = $state<HTMLInputElement | undefined>()
+
+  let normalizedQuery = $derived(query.trim().toLowerCase())
+  let visibleMessages = $derived(
+    !normalizedQuery
+      ? messages.map((message, originalIndex) => ({ message, originalIndex }))
+      : messages
+          .map((message, originalIndex) => ({ message, originalIndex }))
+          .filter(({ message }) => {
+            if (message.content.toLowerCase().includes(normalizedQuery)) return true
+            return message.tracePreview?.some((snippet) =>
+              snippet.toLowerCase().includes(normalizedQuery)
+            )
+          })
+  )
+
+  async function openSearch(): Promise<void> {
+    searching = true
+    await tick()
+    searchInput?.focus()
+  }
+
+  function closeSearch(): void {
+    searching = false
+    query = ''
+  }
 </script>
 
 <!--
@@ -45,25 +75,77 @@
   {@attach trackBrowserOcclusion}
   aria-label="Message history"
 >
-  <header class="flex items-center justify-between border-b px-3 py-2">
-    <p class="text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed">
-      Your messages
-      {#if messages.length > 0}
-        <span class="ml-1 tabular-nums tracking-normal normal-case">({messages.length})</span>
+  <header class="flex items-center gap-2 border-b px-3 py-2">
+    {#if searching}
+      <div class="flex min-w-0 flex-1 items-center gap-1.5">
+        <Search size={14} class="shrink-0 text-dimmed" />
+        <input
+          bind:this={searchInput}
+          bind:value={query}
+          type="search"
+          class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
+          placeholder="Search messages..."
+          aria-label="Search messages"
+          onkeydown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              if (query) query = ''
+              else closeSearch()
+            }
+          }}
+        />
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={query ? 'Clear message search' : 'Close message search'}
+          title={query ? 'Clear message search' : 'Close message search'}
+          onclick={() => {
+            if (query) {
+              query = ''
+              searchInput?.focus()
+            } else {
+              closeSearch()
+            }
+          }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    {:else}
+      <p
+        class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
+      >
+        Your messages
+        {#if messages.length > 0}
+          <span class="ml-1 tabular-nums tracking-normal normal-case">({messages.length})</span>
+        {/if}
+      </p>
+    {/if}
+    <div class="flex shrink-0 items-center">
+      {#if !searching}
+        <button
+          type="button"
+          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Search messages"
+          title="Search messages"
+          onclick={() => void openSearch()}
+        >
+          <Search size={14} />
+        </button>
       {/if}
-    </p>
-    <button
-      type="button"
-      class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="Close history panel"
-      title="Close history panel"
-      onclick={onClose}
-    >
-      <X size={14} />
-    </button>
+      <button
+        type="button"
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Close history panel"
+        title="Close history panel"
+        onclick={onClose}
+      >
+        <X size={14} />
+      </button>
+    </div>
   </header>
   <div class="min-h-0 flex-1 overflow-y-auto p-1" role="list" aria-label="Your messages">
-    {#each messages as message, index (message.id)}
+    {#each visibleMessages as { message, originalIndex } (message.id)}
       <div role="listitem" class="group/msg">
         <div
           class="flex items-center gap-0.5 rounded-lg pr-1 transition-colors group-hover/msg:bg-elevated"
@@ -74,7 +156,7 @@
             title={message.content}
             onclick={() => onSelect(message.id)}
           >
-            <span class="mr-1.5 tabular-nums text-dimmed">{index + 1}.</span>
+            <span class="mr-1.5 tabular-nums text-dimmed">{originalIndex + 1}.</span>
             {message.content}
           </button>
           <button
@@ -91,7 +173,7 @@
               <GitFork size={13} />
             {/if}
           </button>
-          {#if index > 0}
+          {#if originalIndex > 0}
             <button
               type="button"
               class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
@@ -113,7 +195,7 @@
           >
             <Trash2 size={13} />
           </button>
-          {#if index < messages.length - 1}
+          {#if originalIndex < messages.length - 1}
             <button
               type="button"
               class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
@@ -135,7 +217,13 @@
         {/if}
       </div>
     {:else}
-      <p class="px-3 py-8 text-center text-sm text-dimmed">No messages yet</p>
+      {#if normalizedQuery}
+        <p class="px-3 py-8 text-center text-sm text-dimmed">
+          No messages match "{query.trim()}"
+        </p>
+      {:else}
+        <p class="px-3 py-8 text-center text-sm text-dimmed">No messages yet</p>
+      {/if}
     {/each}
   </div>
 </section>
