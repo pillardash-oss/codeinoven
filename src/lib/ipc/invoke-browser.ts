@@ -461,10 +461,22 @@ export const invokeBrowserContract = {
    * A boxed tab clears its own box, so the jar the padlock was opened from comes
    * with it: `boxId` names the jar to clear and `boxName` is what the confirmation
    * says, because only the renderer knows a box's name and the copy has to say
-   * which jar is about to lose its cookies.
+   * which jar is about to lose its cookies. `origin` is the normalized
+   * `https://host` origin of the page on screen (empty when the address is not
+   * a site) and drives the manual permission section: camera, microphone,
+   * location and notifications can be allowed, blocked, or reset to ask every
+   * time without waiting for the page to request them.
    */
   'browser:siteMenu': {} as Contract<
-    [projectId: string, host: string, boxId: string | null, boxName: string, x: number, y: number],
+    [
+      projectId: string,
+      host: string,
+      origin: string,
+      boxId: string | null,
+      boxName: string,
+      x: number,
+      y: number
+    ],
     void
   >,
   /** Open the native page context menu (soft and hard reload) anchored at the

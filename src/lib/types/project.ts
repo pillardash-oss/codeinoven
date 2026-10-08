@@ -84,11 +84,12 @@ export function conversationScopeId(
 /**
  * Whether a conversation browses its own app-owned workspace directory instead
  * of a project root: standalone chats mount `chats-cwd/<threadId>` and
- * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`. Every file
+ * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`, and browser
+ * conversations mount `browser-cwd/<threadId>`. Every file
  * surface keys the mount off the open thread for exactly these containers.
  */
 export function usesThreadWorkspaceMount(projectId: string): boolean {
-  return isConversationContainer(projectId)
+  return isConversationContainer(projectId) || projectId === GLOBAL_BROWSER_PROJECT_ID
 }
 
 export type ChangeTrackingMode = 'git' | 'manual'

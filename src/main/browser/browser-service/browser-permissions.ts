@@ -80,7 +80,6 @@ export function permissionCheckKey(origin: string, permission: string, mediaType
 
 /** What a request needs from the browser's remembered decisions. */
 export type RememberedPermissionOutcome = 'grant' | 'deny' | 'ask'
-
 /**
  * How a request resolves against what the user already decided.
  *
@@ -97,5 +96,55 @@ export function rememberedPermissionOutcome(
 ): RememberedPermissionOutcome {
   if (keys.some((key) => denies?.has(key) === true)) return 'deny'
   if (keys.length > 0 && keys.every((key) => grants?.has(key) === true)) return 'grant'
+  return 'ask'
+}
+
+/** One site permission the padlock menu can set manually, without waiting for
+ *  the page to ask. The keys are exactly the ledger keys the prompt path reads
+ *  and writes, so a manual decision and a prompt decision are the same thing. */
+export interface SitePermissionDescriptor {
+  id: 'camera' | 'microphone' | 'location' | 'notifications'
+  /** Menu label for the submenu, e.g. "Camera". */
+  label: string
+  /** Ledger keys one origin's decision covers. */
+  keysFor: (origin: string) => string[]
+}
+
+export const SITE_PERMISSION_DESCRIPTORS: readonly SitePermissionDescriptor[] = [
+  {
+    id: 'camera',
+    label: 'Camera',
+    keysFor: (origin) => [permissionKey(origin, 'media', 'video')]
+  },
+  {
+    id: 'microphone',
+    label: 'Microphone',
+    keysFor: (origin) => [permissionKey(origin, 'media', 'audio')]
+  },
+  {
+    id: 'location',
+    label: 'Location',
+    keysFor: (origin) => [permissionKey(origin, 'geolocation', '')]
+  },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    keysFor: (origin) => [permissionKey(origin, 'notifications', '')]
+  }
+]
+
+/** The padlock menu's reading of one descriptor for one origin. */
+export type SitePermissionState = 'allowed' | 'blocked' | 'ask'
+
+/** Read one descriptor's state from the live ledgers. A remembered refusal
+ *  wins over a grant, mirroring {@link rememberedPermissionOutcome}. */
+export function sitePermissionState(
+  keys: readonly string[],
+  grants: ReadonlySet<string> | undefined,
+  denies: ReadonlySet<string> | undefined
+): SitePermissionState {
+  const outcome = rememberedPermissionOutcome(keys, grants, denies)
+  if (outcome === 'grant') return 'allowed'
+  if (outcome === 'deny') return 'blocked'
   return 'ask'
 }

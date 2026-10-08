@@ -270,20 +270,16 @@
   }
 
   /**
-   * Expand the folder that owns a thread and raise its row budget, so the row
-   * exists in the DOM by the time the reveal measures it. In Projects mode the
-   * target thread may sit in a collapsed folder and/or past the per-folder "show
-   * more" cutoff; in Threads mode the flat list renders every row already, so
-   * this costs nothing but a map lookup and a set insert.
+   * Expand the folder that owns a thread so the row exists in the DOM by the
+   * time the reveal measures it. The folder renders the active thread as an
+   * artificial last row when it sits past the "show more" budget, so the
+   * budget itself stays collapsed: the row is in focus without growing the
+   * list to its natural position. In Threads mode the flat list renders every
+   * row already, so this costs nothing but a set insert.
    */
   function prepareThreadRow(thread: Thread): void {
     if (thread.projectId === INBOX_PROJECT_ID) return
     sidebar.expandedFolders.add(thread.projectId)
-    const folderThreads = threadsByProject.get(thread.projectId) ?? []
-    const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
-    if (threadIndex >= 0) {
-      sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
-    }
   }
 
   async function revealThreadInSidebar(thread: Thread): Promise<void> {
@@ -292,8 +288,7 @@
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
     // scroll   the first attempt lands before the next paint. Retry over a few
     // frames because the folder's rows can mount a tick later than expected
-    // in Projects mode the row only appears once the folder has expanded and the
-    // per-folder row budget has grown to include it.
+    // in Projects mode the row only appears once the folder has expanded.
     await tick()
     for (let attempt = 0; attempt < 12; attempt++) {
       // The first attempt runs in the same task as the DOM update, before the

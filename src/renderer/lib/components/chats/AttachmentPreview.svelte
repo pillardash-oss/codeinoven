@@ -30,6 +30,13 @@
     /** Sibling navigation when the caller opened this preview over more than
      *  one previewable attachment. Absent for a lone file. */
     pager?: PreviewPagerState
+    /**
+     * Reveal hook for attachments with no `file://` URL of their own, such as
+     * an inline thread artifact served over `appfile://`. Mirrors MediaPreview:
+     * when present the reveal button shows and runs this instead of the
+     * attachment-file reveal.
+     */
+    onReveal?: () => void
     onClose: () => void
   }
 
@@ -41,6 +48,7 @@
     documentLoading = false,
     onSaveText,
     pager,
+    onReveal,
     onClose
   }: Props = $props()
 
@@ -82,8 +90,9 @@
     draft = text ?? ''
   })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
-  /** Only an attachment that is a real file on disk has a path to reveal. */
-  const revealable = $derived(attachment.url.startsWith('file://'))
+  /** Only an attachment that is a real file on disk has a path to reveal,
+   *  unless the caller supplied its own reveal mapping (inline artifacts). */
+  const revealable = $derived(attachment.url.startsWith('file://') || onReveal !== undefined)
 
   /** Set while a pager step waits on the unsaved-changes prompt, so confirming
    *  it moves to the sibling attachment instead of closing the preview. */
@@ -159,7 +168,8 @@
     // result and reads as a button that did nothing. Closing still routes
     // through requestClose, so an editable attachment with a live draft asks
     // before the edits are dropped.
-    void revealAttachmentFile(attachment.url)
+    if (onReveal) onReveal()
+    else void revealAttachmentFile(attachment.url)
     requestClose()
   }
 

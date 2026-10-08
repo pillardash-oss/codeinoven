@@ -9,6 +9,7 @@
     LogIn,
     RotateCcw,
     Square,
+    TimerReset,
     X
   } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
@@ -98,21 +99,10 @@
   })
   const issue = $derived(status.issue)
   const now = $derived.by(() => {
-    if (issue.retryAt) subscribeToClock()
+    if (issue.retryAt !== undefined || issue.autoResumeAt !== undefined) subscribeToClock()
     return Date.now()
   })
-  /**
-   * A reset far in the future (e.g. a multi-day weekly usage cap) is not
-   * something the app should present as an imminent, live-ticking
-   * auto-resume   that reads as broken when the countdown says "in 6 days".
-   * It also isn't something the harness's own short-interval retry hint
-   * (meant for transient errors) should drive. Once the reset falls inside
-   * this window, switch to the live auto-resume countdown.
-   */
-  const AUTO_SCHEDULE_WINDOW_MS = 30 * 60 * 1000
-  const withinAutoScheduleWindow = $derived(
-    issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
-  )
+  const resumeAt = $derived(issue.autoResumeAt)
   const settling = $derived(
     autoRetryEnabled &&
       issue.retryAt !== undefined &&
@@ -187,8 +177,8 @@
   function relativeRetryTime(retryAt: number): string {
     const remainingSeconds = Math.max(0, Math.ceil((retryAt - now) / 1_000))
     if (remainingSeconds < 60) return `${remainingSeconds}s`
-    const minutes = Math.ceil(remainingSeconds / 60)
-    if (minutes < 60) return `${minutes}m`
+    const minutes = Math.floor(remainingSeconds / 60)
+    if (minutes < 60) return `${minutes}m ${remainingSeconds % 60}s`
     const hours = Math.floor(minutes / 60)
     const remainingMinutes = minutes % 60
     if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
@@ -377,45 +367,21 @@
         <p class="mt-2 text-xs font-medium text-foreground">
           Waiting for connection. Will resume automatically when the device reconnects.
         </p>
-      {:else if settling && issue.autoResumeAt}
-        <p class="mt-2 text-xs font-medium text-info tabular-nums">
-          Reset buffer · auto-resume in {Math.max(
-            0,
-            Math.ceil((issue.autoResumeAt - now) / 1_000)
-          )}s
-        </p>
-      {:else if queued}
-        <p class="mt-2 text-xs font-medium text-info">Queued for auto-resume</p>
-      {:else if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
-        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          <span aria-live="polite">
-            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
-              issue.retryAt
-            )}
-          </span>
+      {:else if autoRetryEnabled && resumeAt !== undefined}
+        <p class="mt-2 flex items-center gap-1.5 text-xs font-medium text-info tabular-nums">
+          <TimerReset size={13} class="shrink-0" aria-hidden="true" />
+          {#if queued}
+            Queued for auto-resume
+          {:else}
+            Auto-resume {formatDateTimeWithWeekday(resumeAt)} · in {relativeRetryTime(resumeAt)}
+          {/if}
           {#if issue.attempt}
             · attempt {issue.attempt}
           {/if}
         </p>
-      {:else if waiting && issue.retryAt}
-        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
-        </p>
-      {:else if autoResume && issue.retryAt && withinAutoScheduleWindow}
-        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          {#if autoRetryEnabled}
-            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
-              issue.retryAt
-            )}
-          {:else}
-            Available again {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
-              issue.retryAt
-            )}
-          {/if}
-        </p>
       {:else if issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
+          Available again {formatDateTimeWithWeekday(issue.retryAt)}
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">

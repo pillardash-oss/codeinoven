@@ -985,6 +985,16 @@
                         {@const filteredThreads = isSearching
                           ? []
                           : filterThreadsByQuery(folderThreads, '')}
+                        {@const visibleFolderThreads = sidebar.visibleThreads(
+                          project.id,
+                          filteredThreads,
+                          activeThreadId
+                        )}
+                        {@const hiddenFolderCount = sidebar.hiddenThreadCount(
+                          project.id,
+                          filteredThreads,
+                          visibleFolderThreads
+                        )}
                         <div class="ml-2">
                           {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                             <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
@@ -1007,7 +1017,7 @@
                             </div>
                           {:else}
                             <div class="space-y-px py-0.5" role="list">
-                              {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
+                              {#each visibleFolderThreads as thread (thread.id)}
                                 <ThreadRow
                                   {thread}
                                   detailed
@@ -1032,13 +1042,13 @@
                                 />
                               {/each}
                             </div>
-                            {#if filteredThreads.length > sidebar.getVisibleCount(project.id)}
+                            {#if hiddenFolderCount > 0}
                               <button
                                 class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                                 onclick={() =>
                                   sidebar.showMoreThreads(project.id, filteredThreads.length)}
                               >
-                                Show {filteredThreads.length - sidebar.getVisibleCount(project.id)} more
+                                Show {hiddenFolderCount} more
                               </button>
                             {:else if sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                               <button
@@ -1215,6 +1225,16 @@
                     {@const filteredThreads = isSearching
                       ? []
                       : filterThreadsByQuery(folderThreads, '')}
+                    {@const visibleFolderThreads = sidebar.visibleThreads(
+                      project.id,
+                      filteredThreads,
+                      activeThreadId
+                    )}
+                    {@const hiddenFolderCount = sidebar.hiddenThreadCount(
+                      project.id,
+                      filteredThreads,
+                      visibleFolderThreads
+                    )}
                     <div class="ml-2">
                       {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                         <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
@@ -1237,7 +1257,7 @@
                         </div>
                       {:else}
                         <div class="space-y-px py-0.5" role="list">
-                          {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
+                          {#each visibleFolderThreads as thread (thread.id)}
                             <ThreadRow
                               {thread}
                               detailed
@@ -1262,13 +1282,13 @@
                             />
                           {/each}
                         </div>
-                        {#if filteredThreads.length > sidebar.getVisibleCount(project.id)}
+                        {#if hiddenFolderCount > 0}
                           <button
                             class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                             onclick={() =>
                               sidebar.showMoreThreads(project.id, filteredThreads.length)}
                           >
-                            Show {filteredThreads.length - sidebar.getVisibleCount(project.id)} more
+                            Show {hiddenFolderCount} more
                           </button>
                         {:else if sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                           <button

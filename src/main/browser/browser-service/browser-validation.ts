@@ -688,6 +688,25 @@ export function validateBoundedHost(value: unknown): string {
   return value
 }
 
+/** Validate the normalized origin the padlock's permission section acts on.
+ *  Empty means the address is not a site (blank tab, error card): the menu
+ *  still opens, but without the permission section. A well-formed http(s)
+ *  origin is returned as-is; anything else parses to null and is treated the
+ *  same as empty. */
+export function validateSiteMenuOrigin(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 1_024 || value.includes('\0')) {
+    throw new TypeError('Browser site menu origin is invalid')
+  }
+  if (value === '') return null
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.origin
+  } catch {
+    return null
+  }
+}
+
 /**
  * Validate the whole input of the thread browser's box menu.
  *

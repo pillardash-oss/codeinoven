@@ -26,6 +26,7 @@
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import {
     browserSiteHost,
+    browserSiteOrigin,
     openBrowserDownloadsMenu,
     openBrowserPageMenu,
     openBrowserPageMenuAt,
@@ -199,18 +200,23 @@
   }
 
   let siteHost = $derived(browserSiteHost(pageState.url))
+  let siteOrigin = $derived(browserSiteOrigin(pageState.url))
 
   /** Open the native site-settings menu anchored at the lock button. The main
-   *  process builds an OS context menu (with native destructive-action
-   *  confirmation dialogs) that composites above the page view, so the view
-   *  never detaches for this interaction. */
+   *  process builds an OS context menu (manual per-site permissions, with
+   *  native destructive-action confirmation dialogs) that composites above
+   *  the page view, so the view never detaches for this interaction. The
+   *  tab's box travels with it so both halves act on the jar the page
+   *  actually runs in rather than the scope's own jar. */
   function openSiteMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
     siteMenuOpen = true
-    void openBrowserSiteMenu(tabProjectId, siteHost, button).then((opened) => {
-      if (!opened) siteMenuOpen = false
-    })
+    void openBrowserSiteMenu(tabProjectId, siteHost, siteOrigin, button, tabBoxId, '').then(
+      (opened) => {
+        if (!opened) siteMenuOpen = false
+      }
+    )
   }
 
   /**
