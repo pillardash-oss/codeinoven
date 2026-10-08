@@ -20,6 +20,7 @@ const MAX_PLUGIN_BYTES = 8 * 1024 * 1024
 const MAX_PLUGIN_FILE_BYTES = 2 * 1024 * 1024
 const MAX_GITHUB_JSON_BYTES = 16 * 1024 * 1024
 const MAX_README_BYTES = 256 * 1024
+const ICON_CACHE_LIMIT = 400
 const REQUEST_TIMEOUT_MS = 20_000
 const DEFAULT_MARKETPLACES: Array<{ url: string; platform: Platform }> = [
   { url: 'openai/community-plugins', platform: 'codex' },
@@ -303,6 +304,9 @@ export class AgentPluginService {
     { raw: string; candidates: PluginCandidate[] }
   >()
 
+  /** Data URLs by plugin id, including the plugins that have no icon at all. */
+  private readonly iconCache = new Map<string, string | null>()
+
   constructor(private readonly storage: StorageEngine) {}
 
   private async marketplaces(): Promise<AgentPluginMarketplace[]> {
@@ -549,6 +553,20 @@ export class AgentPluginService {
   }
 
   async getIcon(id: string): Promise<string | null> {
+    const cached = this.iconCache.get(id)
+    if (cached !== undefined) return cached
+    const icon = await this.readIcon(id)
+    // A plugin without a usable icon is remembered as such: the marketplace asks
+    // once per plugin rather than on every page it paints.
+    if (!this.iconCache.has(id) && this.iconCache.size >= ICON_CACHE_LIMIT) {
+      const oldest = this.iconCache.keys().next().value
+      if (oldest !== undefined) this.iconCache.delete(oldest)
+    }
+    this.iconCache.set(id, icon)
+    return icon
+  }
+
+  private async readIcon(id: string): Promise<string | null> {
     const entry = (await this.listEntries(id)).find((candidate) => candidate.id === id)
     if (!entry?.iconUrl) return null
     let iconUrl: string
@@ -789,9 +807,13 @@ export class AgentPluginService {
       availableVersion: null,
       unsupportedComponents
     }
+    // The plugin's capabilities join the tool gateway exactly the way a managed
+    // skill does: one entry per identity, updated in place on reinstall, bound to
+    // every harness, and reachable from the Utilities catalog. `createMany` would
+    // append a second copy of every skill and server each time.
     const registry = new UtilityRegistryService(this.storage)
-    const created = await registry.createMany(utilities)
-    installedPlugin.utilityIds = created.map((utility) => utility.id)
+    const installedUtilities = await registry.installMany(utilities, { consolidate: true })
+    installedPlugin.utilityIds = installedUtilities.map((outcome) => outcome.utility.id)
     await this.updateInstalled((current) => [
       ...current.filter((plugin) => plugin.id !== id),
       installedPlugin
@@ -816,7 +838,12 @@ export class AgentPluginService {
     if (!previous) throw new Error('Plugin is not installed')
     const next = await this.install(id)
     const registry = new UtilityRegistryService(this.storage)
-    for (const utilityId of previous.utilityIds) await registry.delete(utilityId)
+    // An update keeps the utility entries it just rewrote, so only the ids this
+    // plugin no longer owns (a skill or server dropped by the new version) go.
+    const kept = new Set(next.utilityIds)
+    for (const utilityId of previous.utilityIds) {
+      if (!kept.has(utilityId)) await registry.delete(utilityId)
+    }
     if (previous.installPath !== next.installPath) {
       const packageName = previous.installPath.split(/[\\/]/u).pop()
       if (packageName && /^[a-f0-9]{20}$/u.test(packageName))

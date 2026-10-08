@@ -1,6 +1,13 @@
 <script lang="ts">
+  import {
+    invalidateAgentPluginMarket,
+    loadAgentPluginDetail,
+    loadAgentPluginIcon,
+    refreshInstalledAgentPlugins
+  } from '$lib/agent-plugin-cache'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { pluginInitials } from '$lib/plugin-identity'
   import type {
     AgentPluginDetail,
     AgentPluginMarketEntry,
@@ -70,15 +77,15 @@
     loading = true
     error = ''
     try {
+      // The listing already warmed these while the card was hovered, so a
+      // prefetched plugin opens with its facts and logo on screen.
       const [nextDetail, installedPlugins] = await Promise.all([
-        invoke('plugins:getDetail', pluginId),
-        invoke('plugins:listInstalled')
+        loadAgentPluginDetail(pluginId),
+        refreshInstalledAgentPlugins()
       ])
       detail = nextDetail
       installed = installedPlugins.find((plugin) => plugin.id === pluginId) ?? null
-      if (nextDetail.entry.iconUrl) {
-        icon = await invoke('plugins:getIcon', pluginId).catch(() => null)
-      }
+      if (nextDetail.entry.iconUrl) icon = await loadAgentPluginIcon(pluginId)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not load this plugin.'
     } finally {
@@ -89,6 +96,7 @@
   async function toggleBookmark(): Promise<void> {
     if (!entry) return
     await invoke('plugins:setBookmarked', entry.id, !entry.bookmarked)
+    await invalidateAgentPluginMarket(entry.id)
     await load()
   }
 
@@ -101,7 +109,8 @@
       const result = update
         ? await invoke('plugins:update', entry.id)
         : await invoke('plugins:install', entry.id)
-      success = `${result.displayName} ${update ? 'updated' : 'installed'}. Its supported tools are available to agents.`
+      success = `${result.displayName} ${update ? 'updated' : 'installed'}. Its skills and tools are in the tool gateway for every harness.`
+      await invalidateAgentPluginMarket(entry.id)
       await load()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not install this plugin.'
@@ -118,6 +127,7 @@
       await invoke('plugins:uninstall', entry.id)
       confirmingUninstall = false
       success = `${entry.displayName} was uninstalled.`
+      await invalidateAgentPluginMarket(entry.id)
       await load()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not uninstall this plugin.'
@@ -149,11 +159,9 @@
         <div
           class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border bg-elevated text-xl font-semibold text-muted"
         >
-          {#if icon}<img
-              src={icon}
-              alt=""
-              class="size-full object-cover"
-            />{:else}{entry.displayName.slice(0, 1).toUpperCase()}{/if}
+          {#if icon}<img src={icon} alt="" class="size-full object-cover" />{:else}{pluginInitials(
+              entry.displayName
+            )}{/if}
         </div>
         <div class="min-w-0 flex-1">
           <h1 class="truncate text-xl font-bold tracking-tight">{entry.displayName}</h1>
@@ -255,6 +263,9 @@
       {#if entry}
         <section aria-labelledby="plugin-contents-title" class="rounded-xl border bg-surface p-4">
           <h2 id="plugin-contents-title" class="mb-3 text-sm font-semibold">What it adds</h2>
+          <p class="mb-3 text-xs text-muted">
+            Everything below installs into the tool gateway, so every harness you use can reach it.
+          </p>
           <ul class="space-y-3">
             {#if detail && detail.skills.length > 0}
               <li class="flex gap-2.5 text-sm">

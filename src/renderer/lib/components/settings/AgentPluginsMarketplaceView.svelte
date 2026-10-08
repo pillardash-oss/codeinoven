@@ -1,7 +1,21 @@
 <script lang="ts">
-  import { invoke } from '$lib/ipc.svelte'
   import {
-    ArrowLeft,
+    cachedAgentPluginIcon,
+    cachedAgentPluginMarketplaces,
+    cachedAgentPluginPage,
+    invalidateAgentPluginMarket,
+    loadAgentPluginDetail,
+    loadAgentPluginIcon,
+    preloadAgentPluginIcons,
+    refreshAgentPluginMarketplaces,
+    refreshAgentPluginPage,
+    shouldRefreshSourcesOnOpen,
+    type PluginMarketView
+  } from '$lib/agent-plugin-cache'
+  import { invoke } from '$lib/ipc.svelte'
+  import { pluginInitials } from '$lib/plugin-identity'
+  import type { AgentPluginMarketEntry, AgentPluginMarketplace } from '$shared/types'
+  import {
     Bookmark,
     ChevronDown,
     Download,
@@ -9,100 +23,151 @@
     PackagePlus,
     RefreshCw,
     Search,
-    Trash2
+    Trash2,
+    X
   } from '@lucide/svelte'
-  import type { AgentPluginMarketEntry, AgentPluginMarketplace } from '$shared/types'
+  import { Popover } from 'bits-ui'
   import { onMount } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
 
   interface Props {
-    onBack: () => void
-    /** Names the back control after the page it returns to. */
-    backLabel: string
     onOpenPlugin: (pluginId: string) => void
   }
-  let { onBack, backLabel, onOpenPlugin }: Props = $props()
+  let { onOpenPlugin }: Props = $props()
 
-  type View = 'discover' | 'bookmarks' | 'installed'
-  const VIEWS: Array<{ id: View; label: string }> = [
+  const VIEWS: Array<{ id: PluginMarketView; label: string }> = [
     { id: 'discover', label: 'Discover' },
     { id: 'bookmarks', label: 'Bookmarks' },
     { id: 'installed', label: 'Installed' }
   ]
-  const PAGE_SIZE = 40
 
-  let view = $state<View>('discover')
-  let entries = $state.raw<AgentPluginMarketEntry[]>([])
-  let marketplaces = $state.raw<AgentPluginMarketplace[]>([])
-  let icons = $state.raw<Record<string, string>>({})
+  /** The page the user was last on paints from cache before anything is fetched. */
+  const firstCachedPage = cachedAgentPluginPage('discover')
+  let view = $state<PluginMarketView>('discover')
+  let entries = $state.raw<AgentPluginMarketEntry[]>(firstCachedPage?.entries ?? [])
+  let hasMore = $state(firstCachedPage?.hasMore ?? false)
+  let marketplaces = $state.raw<AgentPluginMarketplace[]>(cachedAgentPluginMarketplaces() ?? [])
+  let marketplacesOpen = $state(false)
   let query = $state('')
-  let sourcesOpen = $state(false)
+  let searchQuery = $state('')
   let marketUrl = $state('')
   let platform = $state<'codex' | 'claude'>('codex')
-  let busy = $state(false)
+  let loading = $state(firstCachedPage === null)
+  let loadingMore = $state(false)
   let busyId = $state('')
   let error = $state('')
   let marketplaceRemoveTarget = $state<AgentPluginMarketplace | null>(null)
-  let hasMore = $state(false)
+  /** Every request carries a sequence so a slow response cannot replace newer results. */
+  let requestSequence = 0
 
-  async function loadEntries(reset: boolean): Promise<void> {
-    const offset = reset ? 0 : entries.length
-    const nextEntries = await invoke('plugins:list', query.trim(), offset, PAGE_SIZE, view)
-    entries = reset ? nextEntries : [...entries, ...nextEntries]
-    hasMore = nextEntries.length === PAGE_SIZE
-    const iconsToLoad = nextEntries.filter((entry) => entry.iconUrl && !icons[entry.id]).slice(0, 8)
-    const pairs = await Promise.all(
-      iconsToLoad.map(async (entry) => {
-        try {
-          return [entry.id, await invoke('plugins:getIcon', entry.id)] as const
-        } catch {
-          return [entry.id, null] as const
-        }
-      })
+  function iconFor(pluginId: string): string | null | undefined {
+    return cachedAgentPluginIcon(pluginId)
+  }
+
+  /** Warm the logos a page is about to show, in the cache's own small batches. */
+  function warmPageIcons(pageEntries: readonly AgentPluginMarketEntry[]): void {
+    void preloadAgentPluginIcons(
+      pageEntries.filter((entry) => entry.iconUrl).map((entry) => entry.id)
     )
-    icons = {
-      ...icons,
-      ...Object.fromEntries(
-        pairs.filter((pair): pair is readonly [string, string] => typeof pair[1] === 'string')
-      )
+  }
+
+  function warmDetail(pluginId: string): void {
+    void loadAgentPluginDetail(pluginId).catch(() => undefined)
+    void loadAgentPluginIcon(pluginId).catch(() => undefined)
+  }
+
+  function applyPage(pageEntries: AgentPluginMarketEntry[], nextHasMore: boolean): void {
+    entries = pageEntries
+    hasMore = nextHasMore
+    warmPageIcons(pageEntries)
+  }
+
+  async function loadView(nextView: PluginMarketView, resetQuery = false): Promise<void> {
+    const sequence = ++requestSequence
+    view = nextView
+    if (resetQuery) {
+      query = ''
+      searchQuery = ''
+    }
+    error = ''
+    const cached = cachedAgentPluginPage(nextView)
+    if (cached) {
+      applyPage(cached.entries, cached.hasMore)
+      loading = false
+    } else {
+      entries = []
+      hasMore = false
+      loading = true
+    }
+    try {
+      const refreshed = await refreshAgentPluginPage(nextView)
+      if (sequence !== requestSequence || view !== nextView) return
+      applyPage(refreshed.entries, refreshed.hasMore)
+    } catch (cause) {
+      if (sequence !== requestSequence) return
+      error = cause instanceof Error ? cause.message : 'Could not load plugins.'
+    } finally {
+      if (sequence === requestSequence) loading = false
     }
   }
 
-  /** Runs one catalog read, keeping the busy and error state in one place. */
-  async function run(action: () => Promise<void>, failure: string): Promise<void> {
-    busy = true
+  async function searchPlugins(event: SubmitEvent): Promise<void> {
+    event.preventDefault()
+    const nextQuery = query.trim()
+    if (nextQuery.length < 2) return
+    const sequence = ++requestSequence
+    searchQuery = nextQuery
+    loading = true
     error = ''
     try {
-      await action()
+      const found = await invoke('plugins:list', nextQuery, 0, 40, view)
+      if (sequence !== requestSequence) return
+      applyPage(found, found.length === 40)
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : failure
+      if (sequence !== requestSequence) return
+      error = cause instanceof Error ? cause.message : 'Plugin search failed.'
     } finally {
-      busy = false
+      if (sequence === requestSequence) loading = false
     }
   }
 
-  async function refresh(): Promise<void> {
-    await run(async () => {
-      const existingMarkets = await invoke('plugins:listMarketplaces')
-      await Promise.allSettled(
-        existingMarkets.map((marketplace) =>
-          invoke('plugins:addMarketplace', { url: marketplace.url, platform: marketplace.platform })
-        )
-      )
-      marketplaces = await invoke('plugins:listMarketplaces')
-      await loadEntries(true)
-    }, 'Could not load agent plugins.')
+  async function clearSearch(): Promise<void> {
+    if (!searchQuery) return
+    await loadView(view, true)
+  }
+
+  async function loadMore(): Promise<void> {
+    loadingMore = true
+    error = ''
+    try {
+      const nextPage = await invoke('plugins:list', searchQuery, entries.length, 40, view)
+      const combined = [...entries, ...nextPage]
+      entries = combined
+      hasMore = nextPage.length === 40
+      warmPageIcons(nextPage)
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not load more plugins.'
+    } finally {
+      loadingMore = false
+    }
   }
 
   async function addMarketplace(event: SubmitEvent): Promise<void> {
     event.preventDefault()
     if (!marketUrl.trim()) return
-    await run(async () => {
+    busyId = 'add-source'
+    error = ''
+    try {
       await invoke('plugins:addMarketplace', { url: marketUrl.trim(), platform })
       marketUrl = ''
-      marketplaces = await invoke('plugins:listMarketplaces')
-      await loadEntries(true)
-    }, 'Could not add this source.')
+      marketplaces = await refreshAgentPluginMarketplaces()
+      await invalidateAgentPluginMarket()
+      await loadView(view)
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not add this source.'
+    } finally {
+      busyId = ''
+    }
   }
 
   async function removeMarketplace(): Promise<void> {
@@ -113,8 +178,9 @@
     try {
       await invoke('plugins:removeMarketplace', marketplace.id)
       marketplaceRemoveTarget = null
-      marketplaces = await invoke('plugins:listMarketplaces')
-      await loadEntries(true)
+      marketplaces = await refreshAgentPluginMarketplaces()
+      await invalidateAgentPluginMarket()
+      await loadView(view)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not remove this source.'
     } finally {
@@ -122,22 +188,33 @@
     }
   }
 
+  async function refreshSources(options: { silent?: boolean } = {}): Promise<void> {
+    if (!options.silent) busyId = 'refresh'
+    error = ''
+    try {
+      const sources = await refreshAgentPluginMarketplaces()
+      await Promise.allSettled(
+        sources.map((source) =>
+          invoke('plugins:addMarketplace', { url: source.url, platform: source.platform })
+        )
+      )
+      marketplaces = await refreshAgentPluginMarketplaces()
+      await invalidateAgentPluginMarket()
+      await loadView(view)
+    } catch (cause) {
+      // A silent open-time refresh only speaks up when it leaves the page empty.
+      if (!options.silent || entries.length === 0) {
+        error = cause instanceof Error ? cause.message : 'Could not refresh sources.'
+      }
+    } finally {
+      if (!options.silent) busyId = ''
+    }
+  }
+
   async function toggleBookmark(entry: AgentPluginMarketEntry): Promise<void> {
     await invoke('plugins:setBookmarked', entry.id, !entry.bookmarked)
-    await loadEntries(true)
-  }
-
-  async function selectView(nextView: View): Promise<void> {
-    view = nextView
-    await run(() => loadEntries(true), 'Could not load plugins.')
-  }
-
-  async function search(): Promise<void> {
-    await run(() => loadEntries(true), 'Plugin search failed.')
-  }
-
-  async function loadMore(): Promise<void> {
-    await run(() => loadEntries(false), 'Could not load more plugins.')
+    await invalidateAgentPluginMarket()
+    await loadView(view)
   }
 
   async function install(entry: AgentPluginMarketEntry): Promise<void> {
@@ -145,7 +222,8 @@
     error = ''
     try {
       await invoke('plugins:install', entry.id)
-      await loadEntries(true)
+      await invalidateAgentPluginMarket(entry.id)
+      await loadView(view)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not install this plugin.'
     } finally {
@@ -157,204 +235,271 @@
     return value === 'claude' ? 'Claude Code' : 'Codex'
   }
 
+  function statusLabel(entry: AgentPluginMarketEntry): string {
+    if (!entry.supported) return entry.unsupportedReason ?? 'Unsupported source'
+    if (entry.updateAvailable) return 'Update available'
+    if (entry.installed) return 'Installed'
+    return entry.components.length ? entry.components.join(', ') : 'Tools for agents'
+  }
+
   onMount(() => {
-    void refresh()
+    void loadView('discover')
+    if (shouldRefreshSourcesOnOpen()) {
+      // A source whose catalog was never fetched would list nothing, so the first
+      // open of the run re-reads them; the stored catalogs serve every open after.
+      void refreshSources({ silent: true })
+    } else {
+      void refreshAgentPluginMarketplaces()
+        .then((sources) => {
+          marketplaces = sources
+        })
+        .catch(() => undefined)
+    }
+    // A page of the other views is warmed so switching tabs is instant.
+    for (const item of VIEWS) {
+      if (item.id !== 'discover') void refreshAgentPluginPage(item.id).catch(() => undefined)
+    }
   })
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
-  <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
-    <div class="flex min-w-0 items-center gap-3">
-      <button
-        type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-        onclick={onBack}
-        title={backLabel}
-        aria-label={backLabel}
-      >
-        <ArrowLeft size={13} />
-        {backLabel}
-      </button>
-      <div class="min-w-0">
-        <h1 class="text-lg font-semibold">Plugin marketplace</h1>
-        <p class="text-sm text-muted">
-          Give agents tools and workflows from Codex and Claude Code plugins.
-        </p>
-      </div>
-    </div>
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs hover:bg-overlay disabled:opacity-50"
-      onclick={() => void refresh()}
-      disabled={busy}
-      title="Refresh plugin marketplace"
-      aria-label="Refresh plugin marketplace"
-    >
-      {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<RefreshCw size={13} />{/if}
-      Refresh
-    </button>
-  </header>
-
-  <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
-    <div class="flex flex-wrap items-center gap-2">
-      <div class="flex rounded-lg border bg-surface p-1" role="group" aria-label="Plugin views">
-        {#each VIEWS as item (item.id)}
-          <button
-            type="button"
-            class="rounded-md px-3 py-1.5 text-sm {view === item.id
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:text-foreground'}"
-            aria-pressed={view === item.id}
-            onclick={() => void selectView(item.id)}>{item.label}</button
-          >
-        {/each}
-      </div>
-      <form
-        class="ml-auto flex h-9 min-w-56 flex-1 items-center gap-2 rounded-lg border bg-surface px-3 sm:flex-none"
-        role="search"
-        onsubmit={(event) => {
-          event.preventDefault()
-          void search()
-        }}
-      >
-        <Search size={15} class="shrink-0 text-muted" />
-        <input
-          class="min-w-0 flex-1 bg-transparent text-sm outline-none"
-          bind:value={query}
-          placeholder="Search plugins"
-          aria-label="Search plugins"
-        />
-      </form>
-    </div>
-
-    <section class="rounded-xl border bg-surface">
-      <button
-        type="button"
-        class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm"
-        aria-expanded={sourcesOpen}
-        aria-controls="plugin-sources-panel"
-        onclick={() => (sourcesOpen = !sourcesOpen)}
-      >
-        <span class="text-muted">
-          Sources:
-          {marketplaces.length === 0
-            ? 'none added'
-            : marketplaces.map((marketplace) => marketplace.name).join(', ')}
-        </span>
-        <span class="flex items-center gap-1 text-xs font-medium text-muted">
-          {sourcesOpen ? 'Hide' : 'Manage'}
-          <ChevronDown size={14} class={sourcesOpen ? 'rotate-180' : ''} />
-        </span>
-      </button>
-      {#if sourcesOpen}
-        <div id="plugin-sources-panel" class="space-y-3 border-t px-4 py-3">
-          {#each marketplaces as marketplace (marketplace.id)}
-            <div class="flex items-center justify-between gap-3 text-sm">
-              <div class="min-w-0">
-                <p class="truncate">{marketplace.name}</p>
-                <p class="text-xs text-muted">
-                  {platformLabel(marketplace.platform)} · {marketplace.pluginCount} plugins
-                </p>
-              </div>
-              <button
-                type="button"
-                class="flex size-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-elevated hover:text-red-500"
-                onclick={() => (marketplaceRemoveTarget = marketplace)}
-                title={`Remove ${marketplace.name} source`}
-                aria-label={`Remove ${marketplace.name} source`}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          {/each}
-          <form class="flex flex-wrap items-end gap-2 pt-1" onsubmit={addMarketplace}>
-            <label class="min-w-40 flex-1 text-xs font-medium text-muted">
-              Add a GitHub source
-              <input
-                class="mt-1 h-9 w-full rounded-md border bg-app px-3 text-sm text-foreground"
-                bind:value={marketUrl}
-                placeholder="owner/repository"
-                autocomplete="off"
-              />
-            </label>
-            <label class="text-xs font-medium text-muted">
-              Format
-              <select
-                class="mt-1 h-9 rounded-md border bg-app px-3 text-sm text-foreground"
-                bind:value={platform}
-              >
-                <option value="codex">Codex</option>
-                <option value="claude">Claude Code</option>
-              </select>
-            </label>
-            <button
-              class="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-on-primary disabled:opacity-50"
-              type="submit"
-              disabled={busy || !marketUrl.trim()}
-            >
-              <PackagePlus size={15} /> Add source
-            </button>
-          </form>
+<div class="h-full min-h-0 overflow-hidden">
+  <div class="flex h-full min-h-0 flex-col px-6 pt-6">
+    <div class="shrink-0 pb-3">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">Plugin marketplace</h1>
+          <p class="mt-1 text-sm text-muted">
+            Installed capabilities join the tool gateway, so every harness you use can reach them.
+          </p>
         </div>
-      {/if}
-    </section>
-
-    {#if error}
-      <p
-        class="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-500"
-        role="alert"
-      >
-        {error}
-      </p>
-    {/if}
-
-    {#if busy && entries.length === 0}
-      <div class="flex items-center justify-center gap-2 py-16 text-sm text-muted">
-        <Loader2 size={17} class="animate-spin" /> Loading plugins
+        <div class="flex items-center gap-2">
+          <Popover.Root bind:open={marketplacesOpen}>
+            <Popover.Trigger
+              class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              title="Manage plugin sources"
+              aria-label="Manage plugin sources"
+            >
+              Sources
+              <span class="tabular-nums text-dimmed">{marketplaces.length}</span>
+              <ChevronDown size={13} />
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                sideOffset={8}
+                collisionPadding={16}
+                align="end"
+                class="z-50 w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-surface shadow-lg"
+                aria-label="Plugin sources"
+              >
+                <div class="max-h-64 overflow-y-auto px-3 py-2">
+                  {#if marketplaces.length === 0}
+                    <p class="px-1 py-2 text-xs text-dimmed">No sources added yet.</p>
+                  {:else}
+                    {#each marketplaces as marketplace (marketplace.id)}
+                      <div class="flex items-center justify-between gap-3 py-1.5">
+                        <div class="min-w-0">
+                          <p class="truncate text-xs font-medium">{marketplace.name}</p>
+                          <p class="text-[0.6875rem] text-dimmed">
+                            {platformLabel(marketplace.platform)} catalog ·
+                            {marketplace.pluginCount} plugins
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          class="flex size-7 shrink-0 items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-danger"
+                          onclick={() => {
+                            marketplacesOpen = false
+                            marketplaceRemoveTarget = marketplace
+                          }}
+                          title={`Remove ${marketplace.name} source`}
+                          aria-label={`Remove ${marketplace.name} source`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    {/each}
+                  {/if}
+                </div>
+                <form class="space-y-2 border-t px-3 py-3" onsubmit={addMarketplace}>
+                  <label class="block text-[0.6875rem] font-medium text-muted">
+                    Add a GitHub source
+                    <input
+                      class="mt-1 h-8 w-full rounded-md border bg-app px-2.5 text-xs text-foreground"
+                      bind:value={marketUrl}
+                      placeholder="owner/repository"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label class="block text-[0.6875rem] font-medium text-muted">
+                    Catalog format
+                    <select
+                      class="mt-1 h-8 w-full rounded-md border bg-app px-2.5 text-xs text-foreground"
+                      bind:value={platform}
+                    >
+                      <option value="codex">Codex catalog</option>
+                      <option value="claude">Claude Code catalog</option>
+                    </select>
+                  </label>
+                  <button
+                    class="flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
+                    type="submit"
+                    disabled={busyId === 'add-source' || !marketUrl.trim()}
+                  >
+                    {#if busyId === 'add-source'}<Loader2
+                        size={12}
+                        class="animate-spin"
+                      />{:else}<PackagePlus size={12} />{/if}
+                    Add source
+                  </button>
+                </form>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+          <button
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            type="button"
+            title="Refresh every plugin source"
+            aria-label="Refresh every plugin source"
+            onclick={() => void refreshSources()}
+            disabled={busyId === 'refresh'}
+          >
+            {#if busyId === 'refresh'}<Loader2 size={13} class="animate-spin" />{:else}<RefreshCw
+                size={13}
+              />{/if}
+            Refresh
+          </button>
+        </div>
       </div>
-    {:else if entries.length === 0}
-      <div class="rounded-xl border border-dashed px-6 py-12 text-center">
-        <p class="font-medium">
-          {view === 'bookmarks'
-            ? 'No bookmarked plugins'
-            : view === 'installed'
-              ? 'No plugins installed'
-              : marketplaces.length
-                ? 'No plugins match this search'
-                : 'Add a source to browse plugins'}
+
+      <form class="mt-4 flex gap-2" onsubmit={searchPlugins}>
+        <label class="relative min-w-0 flex-1">
+          <span class="sr-only">Search plugins</span>
+          <Search
+            size={15}
+            class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
+          />
+          <input
+            class="h-10 w-full rounded-xl border bg-surface pl-9 pr-9 text-sm outline-none transition-colors focus:border-primary"
+            type="search"
+            minlength="2"
+            placeholder="Search by plugin, publisher, or repository"
+            bind:value={query}
+          />
+          {#if searchQuery}
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground"
+              title="Clear search"
+              aria-label="Clear search"
+              onclick={() => void clearSearch()}
+            >
+              <X size={13} />
+            </button>
+          {/if}
+        </label>
+        <button
+          class="flex h-10 items-center gap-1.5 rounded-xl bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          type="submit"
+          disabled={loading || query.trim().length < 2}
+        >
+          {#if loading && searchQuery}<Loader2 size={13} class="animate-spin" />{/if}
+          Search
+        </button>
+      </form>
+
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+        <div class="flex items-center gap-1 rounded-lg bg-elevated p-0.5" role="tablist">
+          {#each VIEWS as item (item.id)}
+            <button
+              class="flex h-8 items-center rounded-md px-3 text-xs font-medium transition-colors {view ===
+                item.id && !searchQuery
+                ? 'bg-surface text-foreground shadow-sm'
+                : 'text-muted hover:text-foreground'}"
+              type="button"
+              role="tab"
+              aria-selected={view === item.id && !searchQuery}
+              onclick={() => void loadView(item.id, true)}
+            >
+              {item.label}
+            </button>
+          {/each}
+        </div>
+        <p class="text-xs tabular-nums text-muted">
+          {searchQuery
+            ? `${entries.length} search ${entries.length === 1 ? 'result' : 'results'}`
+            : `${entries.length} ${entries.length === 1 ? 'plugin' : 'plugins'}`}
         </p>
       </div>
-    {:else}
-      <ul class="grid grid-cols-1 gap-3 xl:grid-cols-2" aria-label="Plugins">
-        {#each entries as entry (entry.id)}
-          <li class="flex min-w-0 flex-col rounded-xl border bg-surface p-4">
-            <div class="flex min-w-0 gap-3">
-              <div
-                class="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-elevated text-sm font-semibold text-muted"
+
+      {#if error}
+        <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          {error}
+        </p>
+      {/if}
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto pb-24">
+      {#if loading}
+        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
+          <Loader2 size={20} class="mx-auto animate-spin text-dimmed" />
+          <p class="mt-2 text-xs text-dimmed">Loading plugins…</p>
+        </div>
+      {:else if entries.length === 0}
+        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
+          <Search size={20} class="mx-auto text-dimmed" />
+          <p class="mt-2 text-sm font-medium">
+            {view === 'bookmarks'
+              ? 'No bookmarked plugins'
+              : view === 'installed'
+                ? 'No plugins installed'
+                : searchQuery
+                  ? 'No plugins match this search'
+                  : 'No sources to browse'}
+          </p>
+        </div>
+      {:else}
+        <ul class="divide-y rounded-xl border bg-surface" aria-label="Plugins">
+          {#each entries as entry (entry.id)}
+            <li class="flex items-center gap-1 pr-2 transition-colors hover:bg-elevated">
+              <button
+                class="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                type="button"
+                title={`Open ${entry.displayName}`}
+                onpointerenter={() => warmDetail(entry.id)}
+                onfocus={() => warmDetail(entry.id)}
+                onclick={() => onOpenPlugin(entry.id)}
               >
-                {#if icons[entry.id]}<img
-                    src={icons[entry.id]}
-                    alt=""
-                    class="size-full object-cover"
-                  />{:else}{entry.displayName.slice(0, 1).toUpperCase()}{/if}
-              </div>
-              <div class="min-w-0 flex-1">
-                <button
-                  type="button"
-                  class="block max-w-full truncate text-left font-semibold hover:underline"
-                  onclick={() => onOpenPlugin(entry.id)}
-                  title={`Open ${entry.displayName}`}
-                  aria-label={`Open ${entry.displayName}`}
+                <span
+                  class="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-elevated text-[0.6875rem] font-semibold uppercase text-muted"
                 >
-                  {entry.displayName}
-                </button>
-                <p class="truncate text-xs text-muted">
-                  {entry.publisher ?? entry.source.repository} · {platformLabel(entry.platform)}
-                </p>
-              </div>
+                  {#if iconFor(entry.id)}<img
+                      src={iconFor(entry.id)}
+                      alt=""
+                      class="size-full object-cover"
+                    />{:else}{pluginInitials(entry.displayName)}{/if}
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-2">
+                    <span class="truncate text-sm font-semibold">{entry.displayName}</span>
+                    {#if entry.installed}
+                      <span
+                        class="shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-emerald-600"
+                      >
+                        {entry.updateAvailable ? 'Update' : 'Installed'}
+                      </span>
+                    {/if}
+                  </span>
+                  <span class="mt-0.5 block truncate text-xs text-muted">
+                    {entry.publisher ?? entry.source.repository}
+                  </span>
+                  <span class="mt-0.5 block truncate text-xs text-dimmed">
+                    {statusLabel(entry)}
+                  </span>
+                </span>
+              </button>
               <button
                 type="button"
-                class="size-8 shrink-0 rounded-md text-muted hover:bg-elevated hover:text-foreground"
+                class="flex size-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
                 onclick={() => void toggleBookmark(entry)}
                 title={entry.bookmarked
                   ? `Remove bookmark for ${entry.displayName}`
@@ -364,38 +509,17 @@
                   : `Bookmark ${entry.displayName}`}
                 aria-pressed={entry.bookmarked}
               >
-                <Bookmark
-                  size={15}
-                  class="mx-auto"
-                  fill={entry.bookmarked ? 'currentColor' : 'none'}
-                />
+                <Bookmark size={15} fill={entry.bookmarked ? 'currentColor' : 'none'} />
               </button>
-            </div>
-
-            <p class="mt-3 line-clamp-2 text-sm text-muted">{entry.description}</p>
-
-            <div class="mt-auto flex items-center justify-between gap-3 pt-4">
-              <p class="min-w-0 truncate text-xs text-muted">
-                {#if !entry.supported}
-                  <span class="text-amber-600"
-                    >{entry.unsupportedReason ?? 'Unsupported source'}</span
-                  >
-                {:else if entry.installed}
-                  <span class="text-success"
-                    >{entry.updateAvailable ? 'Update available' : 'Installed'}</span
-                  >
-                {:else}
-                  {entry.components.join(', ')}
-                {/if}
-              </p>
               {#if entry.installed}
                 <button
                   type="button"
                   class="h-8 shrink-0 rounded-md border px-3 text-xs hover:bg-elevated"
                   onclick={() => onOpenPlugin(entry.id)}
-                  aria-label={`View ${entry.displayName}`}
+                  title={`Open ${entry.displayName}`}
+                  aria-label={`Open ${entry.displayName}`}
                 >
-                  View
+                  Manage
                 </button>
               {:else}
                 <button
@@ -403,7 +527,9 @@
                   class="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
                   onclick={() => void install(entry)}
                   disabled={busyId === entry.id || !entry.supported}
-                  title={`Install ${entry.displayName}`}
+                  title={entry.supported
+                    ? `Install ${entry.displayName}`
+                    : (entry.unsupportedReason ?? 'This plugin cannot be installed')}
                   aria-label={`Install ${entry.displayName}`}
                 >
                   {#if busyId === entry.id}<Loader2
@@ -413,24 +539,23 @@
                   Install
                 </button>
               {/if}
-            </div>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-
-    {#if hasMore}
-      <div class="flex justify-center py-2">
-        <button
-          type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-4 text-sm hover:bg-overlay disabled:opacity-50"
-          onclick={() => void loadMore()}
-          disabled={busy}
-        >
-          {#if busy}<Loader2 size={14} class="animate-spin" />{/if} Load more plugins
-        </button>
-      </div>
-    {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if hasMore}
+          <div class="flex justify-center py-4">
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-4 text-sm hover:bg-overlay disabled:opacity-50"
+              onclick={() => void loadMore()}
+              disabled={loadingMore}
+            >
+              {#if loadingMore}<Loader2 size={14} class="animate-spin" />{/if} Load more plugins
+            </button>
+          </div>
+        {/if}
+      {/if}
+    </div>
   </div>
 </div>
 

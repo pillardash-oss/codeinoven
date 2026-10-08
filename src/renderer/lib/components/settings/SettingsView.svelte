@@ -166,8 +166,11 @@
 
   /** Where a sub-page's back control returns to, and what it is called. */
   function subPageBackLabel(): string {
-    const previous = navigationHistoryState.backStack.at(-1)
-    return previous?.utilities?.page === 'marketplace' ? 'Back to results' : 'Back to utilities'
+    const previous = navigationHistoryState.backStack.at(-1)?.utilities?.page
+    // Opening a card leaves a results page behind, and that is what the label names.
+    return previous === 'marketplace' || previous === 'plugins-marketplace' || previous === 'plugin'
+      ? 'Back to results'
+      : 'Back to utilities'
   }
 
   /** The header label for a Utilities sub-page; null on the catalog. */
@@ -1401,8 +1404,6 @@
         {#if settingsRouteState.utilities.page === 'plugins-marketplace'}
           <div class="absolute inset-0 overflow-hidden bg-app">
             <AgentPluginsMarketplaceView
-              onBack={goBack}
-              backLabel={subPageBackLabel()}
               onOpenPlugin={(pluginId) => navigateUtilities({ page: 'plugin', pluginId })}
             />
           </div>
