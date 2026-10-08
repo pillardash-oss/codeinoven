@@ -8897,7 +8897,10 @@ export class ChatEngine {
       this.touchUserActivity()
       // A real user prompt re-arms automatic resumes: the stop latch only ever
       // vetoes resuming until the user themselves come back to the thread.
-      void this.threadManager.clearStoppedByUser(projectId, threadId)
+      await this.threadManager.clearStoppedByUser(projectId, threadId)
+      // Renderer settings may still contain the Stop flag cleared above.
+      const { stoppedByUserAt: _stoppedByUserAt, ...resumedSettings } = settings
+      settings = resumedSettings
     }
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')

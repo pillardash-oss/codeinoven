@@ -144,6 +144,7 @@ import {
   permissionResolutions,
   permissionSilentGrant,
   rememberedPermissionOutcome,
+  sitePermissionState,
   type PermissionResolution
 } from './browser-service/browser-permissions'
 import {
@@ -231,6 +232,7 @@ import {
   validateProjectId,
   validateScrollbarTheme,
   validateSiteDataScopes,
+  validateSiteMenuOrigin,
   validateSiteMenuPoint,
   validateTabDestroyReason,
   validateTabId,
@@ -743,7 +745,17 @@ export class BrowserService {
       },
       dismissPermissions: (projectId) => this.dismissProjectPermissions(projectId),
       clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
-      cancelProjectDownloads: (projectId) => this.downloads.cancelProject(projectId)
+      cancelProjectDownloads: (projectId) => this.downloads.cancelProject(projectId),
+      partitionFor: (projectId, boxId) => browserPartitionFor(projectId, boxId),
+      sitePermissionState: (partition, keys) =>
+        sitePermissionState(
+          keys,
+          this.permissionGrants.get(partition),
+          this.permissionDenies.get(partition)
+        ),
+      applySitePermission: (partition, keys, action) =>
+        this.applySitePermission(partition, keys, action),
+      reloadOriginTabs: (partition, origin) => this.reloadOriginTabs(partition, origin)
     })
     this.extensions = new BrowserExtensionService(getConfigRoot(), permissionPersistence, {
       window: () => (this.window.isDestroyed() ? null : this.window),
@@ -1412,9 +1424,13 @@ export class BrowserService {
     })
     replaceHandler(
       'browser:siteMenu',
-      (_event, rawProjectId, rawHost, rawBoxId, rawBoxName, rawX, rawY) => {
+      (_event, rawProjectId, rawHost, rawOrigin, rawBoxId, rawBoxName, rawX, rawY) => {
         const projectId = validateProjectId(rawProjectId)
         const host = validateBoundedHost(rawHost)
+        // The normalized origin the permission section acts on; null when the
+        // address is not a site, in which case the menu still offers its
+        // clearing actions without the permission section.
+        const origin = validateSiteMenuOrigin(rawOrigin)
         // The padlock clears the jar it was opened from, so the jar comes with it.
         const boxId = validateOptionalBoxId(rawBoxId)
         // Only used to name the jar in the confirmation, so it is bounded here and
@@ -1424,7 +1440,7 @@ export class BrowserService {
         const y = validateSiteMenuPoint(rawY, 'y coordinate')
         // Native popup menus run a nested run loop; detach from the invoke reply
         // so the renderer's call resolves immediately.
-        setImmediate(() => this.siteData.showSiteMenu(projectId, host, boxId, boxName, x, y))
+        setImmediate(() => this.siteData.showSiteMenu(projectId, host, origin, boxId, boxName, x, y))
       }
     )
     replaceHandler('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
@@ -4941,6 +4957,48 @@ export class BrowserService {
     ).catch((error: unknown) => {
       Logger.error('Browser permission memory could not be saved:', error)
     })
+  }
+
+  /** Apply a manual site-permission decision from the padlock menu. Writes the
+   *  same ledger keys the prompt path reads, so the next request from the page
+   *  is answered silently: a manual Allow behaves exactly like answering Allow
+   *  on the prompt, a Block like Don't allow, and Ask every time forgets only
+   *  this origin's keys instead of the whole jar. */
+  private applySitePermission(
+    partition: string,
+    keys: readonly string[],
+    action: 'allow' | 'block' | 'reset'
+  ): void {
+    const grants = permissionLedgerForPartition(this.permissionGrants, partition)
+    const denies = permissionLedgerForPartition(this.permissionDenies, partition)
+    for (const key of new Set(keys)) {
+      if (action === 'allow') {
+        denies.delete(key)
+        grants.add(key)
+      } else if (action === 'block') {
+        grants.delete(key)
+        denies.add(key)
+      } else {
+        grants.delete(key)
+        denies.delete(key)
+      }
+    }
+    this.persistPermissionMemory()
+  }
+
+  /** Reload the tabs in one jar currently showing one origin. A page that
+   *  already decided the camera is blocked (Meet's "camera off" state) only
+   *  re-queries on navigation, so a manual decision reloads it into the new
+   *  answer instead of leaving the stale one on screen. */
+  private reloadOriginTabs(partition: string, origin: string): void {
+    for (const tab of this.tabs.values()) {
+      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
+      if (!tab.initialNavigationStarted) continue
+      const contents = tab.view.webContents
+      if (contents.isDestroyed()) continue
+      if (permissionOrigin(contents.getURL()) !== origin) continue
+      contents.reload()
+    }
   }
 
   private resolvePermission(requestId: string, resolution: PermissionResolution): void {

@@ -11,6 +11,13 @@ import { Logger } from '../../system/logger'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { SCOPE_STORAGE_TYPES, browserPartitionFor } from './browser-validation'
 import { SITE_MENU_ACTIONS, type BrowserTab, type SiteMenuAction } from './browser-types'
+import {
+  SITE_PERMISSION_DESCRIPTORS,
+  type SitePermissionState
+} from './browser-permissions'
+
+/** A manual site-permission decision from the padlock menu. */
+export type SitePermissionAction = 'allow' | 'block' | 'reset'
 
 export interface BrowserSiteDataDeps {
   window: BrowserWindow
@@ -26,6 +33,20 @@ export interface BrowserSiteDataDeps {
   /** Forget every remembered grant or denial for a project's session. */
   clearPermissionMemory: (projectId: string) => void
   cancelProjectDownloads: (projectId: string) => void
+  /** The session partition for one jar: the context's own jar when `boxId` is
+   *  null, that box's shared jar otherwise. */
+  partitionFor: (projectId: string, boxId: string | null) => string
+  /** Read one origin's manual-decision state for one ledger key set. */
+  sitePermissionState: (partition: string, keys: readonly string[]) => SitePermissionState
+  /** Apply one origin's manual decision and persist it. */
+  applySitePermission: (
+    partition: string,
+    keys: readonly string[],
+    action: SitePermissionAction
+  ) => void
+  /** Reload the tabs in one jar currently on one origin, so a manual decision
+   *  takes effect without the user hunting for the reload button. */
+  reloadOriginTabs: (partition: string, origin: string) => void
 }
 
 export class BrowserSiteDataService {
@@ -33,10 +54,14 @@ export class BrowserSiteDataService {
 
   /** Open the OS-native site-settings context menu. Runs in a nested run loop
    *  and composites above the WebContentsView, so the page never has to be
-   *  detached for the menu. */
+   *  detached for the menu. `origin` is the normalized `https://host` origin
+   *  the padlock was opened on, or null when the address is not a site (blank
+   *  tab, error card): the permission section is then omitted while the
+   *  clearing actions stay available. */
   showSiteMenu(
     projectId: string,
     host: string,
+    origin: string | null,
     boxId: string | null,
     boxName: string,
     x: number,
@@ -46,6 +71,7 @@ export class BrowserSiteDataService {
     const menu = new Menu()
     if (host) menu.append(new MenuItem({ label: host, enabled: false }))
     menu.append(new MenuItem({ type: 'separator' }))
+    if (origin) this.appendSitePermissions(menu, projectId, boxId, origin)
     for (const action of SITE_MENU_ACTIONS) {
       menu.append(
         new MenuItem({
@@ -64,6 +90,47 @@ export class BrowserSiteDataService {
         }
       }
     })
+  }
+
+  /** The manual permission section: one submenu per capability, each offering
+   *  Allow, Block, and Ask every time with the current decision checked. A
+   *  manual decision writes the same ledger keys the prompt writes, so the
+   *  next request from the page is answered silently and consistently. */
+  private appendSitePermissions(
+    menu: Menu,
+    projectId: string,
+    boxId: string | null,
+    origin: string
+  ): void {
+    const partition = this.deps.partitionFor(projectId, boxId)
+    for (const descriptor of SITE_PERMISSION_DESCRIPTORS) {
+      const keys = descriptor.keysFor(origin)
+      const state = this.deps.sitePermissionState(partition, keys)
+      const submenu = new Menu()
+      for (const [action, label] of [
+        ['allow', 'Allow'],
+        ['block', 'Block'],
+        ['reset', 'Ask every time']
+      ] as const) {
+        const checked =
+          (action === 'allow' && state === 'allowed') ||
+          (action === 'block' && state === 'blocked') ||
+          (action === 'reset' && state === 'ask')
+        submenu.append(
+          new MenuItem({
+            label,
+            type: 'checkbox',
+            checked,
+            click: () => {
+              this.deps.applySitePermission(partition, keys, action)
+              this.deps.reloadOriginTabs(partition, origin)
+            }
+          })
+        )
+      }
+      menu.append(new MenuItem({ label: descriptor.label, submenu }))
+    }
+    menu.append(new MenuItem({ type: 'separator' }))
   }
 
   /** Confirm the destructive site-data action with a parented native dialog
