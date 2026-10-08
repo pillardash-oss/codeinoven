@@ -32,24 +32,56 @@ export function sshQuote(value: string): string {
 }
 
 /**
- * Lines that could name a credential, an identity file, or a host path this app
- * must never echo back to the renderer.
+ * Credential-shaped content this app must never echo back to the renderer: an
+ * assignment or header that carries a value, plus the SSH transport's own
+ * host-key chatter. A bare word such as `secret` or `token` inside a path is not
+ * a credential, so a line like that is kept and stays useful.
  */
 const UNREPORTABLE_DETAIL =
-  /password|passphrase|identity file|private key|authorized_keys|known_hosts|Permanently added|Warning:|secret|token/iu
+  /(?:authorization\s*[:=]|bearer\s+\S|\b(?:password|passphrase|api[-_]?key|access[-_]?token|secret[-_]?key|client[-_]?secret)\s*[:=]|Permanently added|known_hosts)/iu
 
 /**
- * The trailing lines of remote stderr, scrubbed of credential-shaped content and
- * home paths, so an unclassified failure names its own reason.
+ * Node's own runtime noise: the internal loader banner, stack frames, the error
+ * property dump, and the trailing version banner. It never names a cause, which
+ * is why the tail of a failed run is the least useful part of its stderr.
+ */
+const NODE_ERROR_NOISE =
+  /^(?:node:internal\/|throw err;?$|\^|at .+|code: |errno: |syscall: |path: |require\s?stack:|Node\.js v|\})/iu
+
+/** The lines that actually name what went wrong, ranked above the noise. */
+const REPORTABLE_ERROR =
+  /(?:error:|cannot find module|enoent|eacces|eperm|econnrefused|econnreset|syntaxerror|typeerror|referenceerror|is not a function|is not defined|command not found|no such file or directory)/iu
+
+/**
+ * A failed Oven command whose cause is the app-managed service bundle missing on
+ * the Oven. The app owns that file, so a caller repairs it instead of reporting it.
+ */
+export class OvenServiceMissingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OvenServiceMissingError'
+  }
+}
+
+function isMissingService(stderr: string): boolean {
+  return /MODULE_NOT_FOUND|Cannot find module/iu.test(stderr) && /service\.mjs/iu.test(stderr)
+}
+
+/**
+ * The line that names a remote failure, with home paths reduced and
+ * credential-shaped content dropped, so an unclassified exit code explains
+ * itself instead of reporting Node's error trailer.
  */
 function remoteFailureDetail(stderr: string): string {
-  return stderr
+  const lines = stderr
     .split(/\r?\n/u)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !UNREPORTABLE_DETAIL.test(line))
-    .slice(-3)
+    .filter(
+      (line) => line.length > 0 && !UNREPORTABLE_DETAIL.test(line) && !NODE_ERROR_NOISE.test(line)
+    )
     .map((line) => line.replace(/\/(?:home|Users)\/[A-Za-z0-9._-]+/gu, '~').slice(0, 240))
-    .join(' · ')
+  const reportable = lines.filter((line) => REPORTABLE_ERROR.test(line))
+  return (reportable.length > 0 ? reportable : lines).slice(-3).join(' · ')
 }
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
@@ -61,6 +93,8 @@ function remoteCommandIssue(stderr: string): string {
     return `The Oven runs Node.js ${nodeVersion[1]}, but version 22 or later is required. Install or select a newer Node.js on the Oven, then retry this step.`
   if (/Node\.js 22 or later is required on this Oven/u.test(stderr))
     return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
+  if (isMissingService(stderr))
+    return "The Oven's CodeInOven service file is missing, so no request can run. Reinstalling it repairs this Oven."
   if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
     return 'Permission denied: npm cannot write to its installation prefix or cache. The Oven needs a writable user-owned npm directory.'
   if (
@@ -94,8 +128,8 @@ function remoteCommandIssue(stderr: string): string {
   )
     return 'The remote command could not reach its package source. Check the Oven network and repositories.'
   const detail = remoteFailureDetail(stderr)
-  if (detail) return `The remote command failed after connecting: ${detail}`
-  return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
+  if (detail) return `The Oven reported: ${detail}`
+  return 'Check the package manager or command on the Oven, then retry this step.'
 }
 
 export class OvenSsh {
@@ -580,11 +614,14 @@ export class OvenSsh {
             reject(new Error('The Oven did not respond before the connection timeout.'))
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
-          else if (code !== 0)
+          else if (code !== 0) {
+            const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
             reject(
-              new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`)
+              isMissingService(remoteStderr)
+                ? new OvenServiceMissingError(message)
+                : new Error(message)
             )
-          else resolve(output)
+          } else resolve(output)
         })
         if (!channel) child.stdin.end(input)
       })
