@@ -189,6 +189,7 @@
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
@@ -5778,6 +5779,13 @@
       idleAttentionHandled = false
       return
     }
+    // A scope worktree still building for this thread holds the queue: the
+    // message must wait for the scope switch, not run in the old checkout.
+    // Reset the guard so the scope job settling retries automatically.
+    if (!hasController && scopeJobs.hasPendingScopeJob(projectId, id)) {
+      idleAttentionHandled = false
+      return
+    }
     const pending = queuedMessage
     const pendingAttachments = queuedAttachments
     const pendingPromptContext = queuedPromptContext
@@ -5826,6 +5834,21 @@
     idleAttentionHandled = true
     void handleIdleAttention()
   }
+
+  /**
+   * Flush a scope-parked send once its worktree run settles. The queue hold
+   * above resets its guard while the run is pending, so the settling job
+   * transitioning out of `running` must wake the dispatcher; otherwise the
+   * parked message waits until the next unrelated idle event.
+   */
+  $effect(() => {
+    if (hasController) return
+    const stillPending = scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (stillPending) return
+    if (!queuedMessage && !queuedHasContent) return
+    if (busy) return
+    scheduleIdleAttention()
+  })
 
   /** Clear the in-memory head entry and dequeue the persisted head message.
    *  Remaining queued messages stay in the FIFO for the next idle turn. */
@@ -6089,7 +6112,13 @@
     const dependencyThreads = startAfterThreads.filter(
       (reference) => reference.id !== thread.id && reference.id.length > 0
     )
-    if (dependencyThreads.length > 0 || (busy && !direct)) {
+    // A scope worktree still building for this thread owns the next send: park
+    // the message behind the scope switch so it runs in the new scope instead
+    // of the old one. Direct steers cannot bypass it because the checkout the
+    // message must run in does not exist yet.
+    const pendingScopeSwitch =
+      !hasController && scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
+    if (dependencyThreads.length > 0 || (busy && !direct) || pendingScopeSwitch) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext

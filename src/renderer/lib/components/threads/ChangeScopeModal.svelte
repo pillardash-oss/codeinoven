@@ -31,7 +31,7 @@
    * dialog and the props keep tracking whichever thread and project the user is
    * on by the time the job finishes.
    */
-  let creationTarget: { projectId: string; threadId: string } | null = null
+  let creationTarget: { projectId: string; threadId: string } | null = $state(null)
 
   let buckets = $derived(
     (scopeState.boards.get(projectId)?.buckets ?? [])
@@ -73,6 +73,9 @@
   /** Open the canonical new-scope flow (worktree option included) seeded with
    *  the typed query instead of creating a scope directly. */
   function openCreateModal(): void {
+    // Freeze here, not when the dock job starts: the form outlives this dialog
+    // and the props keep tracking the selected thread while it is open.
+    creationTarget = { projectId, threadId }
     createModalOpen = true
   }
 
@@ -111,11 +114,10 @@
    * Creating a scope is a dock job, so launching it dismisses this dialog along
    * with the form that started it: the run reports its stages in the scope dock
    * for as long as it needs, and the user is never parked on a search that cannot
-   * match anything until a worktree finishes. The target thread is frozen here,
-   * while the dialog still belongs to the thread being changed.
+   * match anything until a worktree finishes. The target thread was frozen when
+   * the form opened, while the dialog still belonged to the thread being changed.
    */
   function handleCreateStarted(): void {
-    creationTarget = { projectId, threadId }
     onClose()
   }
 </script>
@@ -222,6 +224,7 @@
   <ScopeCreateModal
     open={createModalOpen}
     {projectId}
+    targetThreadId={creationTarget?.threadId ?? threadId}
     initialName={query.trim()}
     onStarted={handleCreateStarted}
     onCreated={(bucketId) => void assignCreatedScope(bucketId)}
