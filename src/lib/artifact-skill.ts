@@ -1,18 +1,20 @@
-/** Shared generation and delivery contract for explicitly requested inline output. */
+/** Shared generation and delivery contract for requested media and inline output. */
 export const ARTIFACT_CAPABILITY_NAME = 'cio-artifact'
 export const ARTIFACT_CAPABILITY_SUMMARY =
-  'Generate and render inline artifacts only when the user explicitly requests them in the conversation. Images, audio, video, HTML and SVG use the app-owned render operation; ordinary production uses task-specific design or media capabilities.'
+  'Generate requested images, audio, video and explicit HTML/SVG artifacts, then render them in the conversation by default. Website, prototype and project implementation work use task-specific capabilities.'
 
 export const ARTIFACT_CAPABILITY_DOCS = `---
 name: cio-artifact
-description: Generate and render artifacts only when the user explicitly requests inline delivery in the conversation. Ordinary design and media production use task-specific capabilities.
+description: Generate requested media and render it inline by default, including images, graphics, audio and video. Also handles explicit HTML/SVG artifacts. Website and prototype implementation use task-specific capabilities.
 ---
 
 # Inline artifacts
 
 ## Trigger
 
-Use only when the user explicitly asks for an inline artifact, an image in the thread, a playable audio/video artifact, an HTML artifact or an SVG artifact. A follow-up editing that artifact stays in scope. A generic website, prototype, illustration, soundtrack or video request does not activate this skill. Use the tool best suited to that task, including cio:design for interface prototypes and cio:video for compositions.
+Use when the user asks to generate or edit a standalone image, graphic, illustration, audio clip, soundtrack or video, or explicitly requests an inline, HTML or SVG artifact. Inline delivery is the default for these requested assets; the user does not need to say "artifact" or "inline". For example, "Generate an image for me, I want a nice social media meta image for this app" activates this skill. Follow-up edits stay in scope. Honor an explicit destination or request not to display the output inline.
+
+A request to build a website, implement a project feature or design a prototype does not activate this skill merely because that work includes media. Use task-specific capabilities such as cio:design for interfaces and cio:video for compositions, then use the artifact render operation for a standalone media deliverable requested in the conversation.
 
 ## Generate, then render
 
