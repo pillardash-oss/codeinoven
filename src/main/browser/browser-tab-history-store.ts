@@ -27,7 +27,7 @@ import {
   parseBrowserTabHistorySnapshot,
   type BrowserTabHistoryRecord
 } from '../../lib/browser/browser-tab-history'
-import { ensureDir, getConfigRoot, readJson, writeJson } from '../../lib/utils'
+import { ensureDir, getConfigRoot, isUnpackagedElectronLaunch, readJson, writeJson } from '../../lib/utils'
 import { Logger } from '../system/logger'
 
 /**
@@ -39,6 +39,18 @@ import { Logger } from '../system/logger'
  * never lose a stack.
  */
 export const BROWSER_TAB_HISTORY_SAVE_COALESCE_MS = 500
+
+/**
+ * Where this launch reads and writes per-tab navigation stacks. Follows the
+ * tab list split: dev uses a `-dev` variant so restoring a dev tab never
+ * picks up a prod tab's back-stack. Prod keeps the established file.
+ */
+export function resolveBrowserTabHistoryStateRelativePath(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return BROWSER_TAB_HISTORY_STATE_RELATIVE_PATH.replace(/\.json$/, '-dev.json')
+  }
+  return BROWSER_TAB_HISTORY_STATE_RELATIVE_PATH
+}
 
 export class BrowserTabHistoryStore {
   private readonly records = new Map<string, BrowserTabHistoryRecord>()
@@ -63,7 +75,7 @@ export class BrowserTabHistoryStore {
   private flushTimer: ReturnType<typeof setTimeout> | null = null
 
   private get filePath(): string {
-    return join(getConfigRoot(), BROWSER_TAB_HISTORY_STATE_RELATIVE_PATH)
+    return join(getConfigRoot(), resolveBrowserTabHistoryStateRelativePath())
   }
 
   /** Read the stored stacks once. A corrupt file reads as none rather than
