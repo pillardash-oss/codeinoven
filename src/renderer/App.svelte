@@ -38,7 +38,11 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
-  import { viewShowsProject, viewShowsScopedSidebar } from '$lib/content-view-projects'
+  import {
+    viewShowsProject,
+    viewShowsScopedSidebar,
+    viewShowsWorkspaceShell
+  } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
@@ -300,14 +304,9 @@
   let lastContentView = $derived(rendererRecovery.lastContentView)
 
   /** True while the workspace shell renders the view (Projects, Chats, Threads
-   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it. */
-  let showsContentView = $derived(
-    activeView === 'projects' ||
-      activeView === 'projects-scope' ||
-      activeView === 'chats' ||
-      activeView === 'threads' ||
-      activeView === 'assistant'
-  )
+   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it.
+   *  Shared with the link pipeline, which routes by the same surface. */
+  let showsContentView = $derived(viewShowsWorkspaceShell(activeView))
 
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)

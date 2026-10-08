@@ -10,7 +10,7 @@
   import { artifactKindForLang, artifactNeedsCodeFallback } from './artifact'
   import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
   import { groupHtmlContainers, type MarkdownNode } from './html-containers'
-  import { openInBrowser } from '$lib/open-in-browser'
+  import { openInBrowser, type LinkDestination } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
   import { revealCitationFile, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
@@ -34,8 +34,9 @@
     /** Markdown source   may be an incomplete, still-streaming message. */
     text: string
     class?: string
-    /** Preferred app-browser surface, while respecting the user's link setting. */
-    browserDestination?: 'context' | 'global'
+    /** Preferred app-browser surface, while respecting the user's link setting.
+     *  Left at `auto`, the surface rendering the markdown decides. */
+    browserDestination?: LinkDestination
     /**
      * Render raw HTML tags in the source instead of showing them as text.
      * Only for content authored on a provider whose markdown dialect includes
@@ -69,7 +70,7 @@
   let {
     text,
     class: className = '',
-    browserDestination = 'context',
+    browserDestination = 'auto',
     allowHtml = false,
     repository = null,
     inlineFileTags = [],
