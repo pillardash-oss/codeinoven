@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckCircle2, KeyRound, Loader2, Plug, Search, Server, X } from '@lucide/svelte'
+  import { KeyRound, Loader2, Plug, Search, Server, X } from '@lucide/svelte'
   import type { OfferedProvider, ProviderConnectionInfo } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
 
@@ -52,7 +52,7 @@
     </p>
   {:else if antigravityConnected}
     <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Antigravity is already connected through the Google account in your system keyring.
+      Antigravity is connected. Each additional sign-in uses an isolated account container.
     </p>
   {:else if apiKeyEntry && canSignIn}
     <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
@@ -101,14 +101,6 @@
         onclick={onCancelConnection}
       >
         <X size={13} /> Cancel connection
-      </button>
-    {:else if antigravityConnected}
-      <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-muted"
-        type="button"
-        disabled
-      >
-        <CheckCircle2 size={13} /> Already connected
       </button>
     {:else if canSignIn}
       {#if apiKeyEntry}

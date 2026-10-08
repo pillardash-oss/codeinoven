@@ -1737,6 +1737,8 @@ export class ChatEngine {
         )
       case 'pi':
         return new PiDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      case 'antigravity':
+        return new AntigravityDriver(this.storage, environment)
       default:
         throw new Error(`${harnessId} does not support isolated account containers.`)
     }

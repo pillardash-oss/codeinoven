@@ -131,7 +131,10 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Antigravity reads AGENTS.md and GEMINI.md rule files natively.
     // `/compact` in print mode is treated as ordinary prompt text (verified live).
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false, multipleAccounts: false })
+    // Multiple accounts come from CodeInOven's per-account HOME containers:
+    // each managed account isolates `~/.gemini/antigravity-cli/`, which the
+    // CLI honors through the HOME override (verified with agy 1.3.1).
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false, multipleAccounts: true })
   },
   {
     id: 'muse',

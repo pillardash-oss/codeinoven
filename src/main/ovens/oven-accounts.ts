@@ -88,6 +88,13 @@ async function copyOvenAccount(
       names = ['settings/providers.json']
       environment = { CLINE_DATA_DIR: root }
       break
+    case 'antigravity': {
+      const containerHome = local['HOME'] ?? local['USERPROFILE'] ?? home
+      source = containerHome
+      names = ['.gemini/antigravity-cli/antigravity-oauth-token']
+      environment = { HOME: root, USERPROFILE: root }
+      break
+    }
     default:
       return {}
   }
@@ -97,7 +104,8 @@ async function copyOvenAccount(
       '.credentials.json',
       'muse/auth.json',
       'opencode/auth.json',
-      'settings/providers.json'
+      'settings/providers.json',
+      '.gemini/antigravity-cli/antigravity-oauth-token'
     ])
     names = names.filter((name) => credentials.has(name))
   }
