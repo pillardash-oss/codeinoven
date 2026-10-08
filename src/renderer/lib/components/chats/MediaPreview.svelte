@@ -24,21 +24,30 @@
     /** Sibling navigation when the caller opened this lightbox over more than
      *  one previewable attachment. Absent for a lone file. */
     pager?: PreviewPagerState
+    /**
+     * Reveal hook for media that has no `file://` URL of its own, such as an
+     * inline thread artifact served over `appfile://`. The caller maps the
+     * serve URL back to the file on disk; when present the reveal button shows
+     * even though `revealUrl` is not a real file path.
+     */
+    onReveal?: () => void
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl, pager }: Props = $props()
+  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal }: Props = $props()
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
   const downloadLabel = $derived(
     kind === 'image' ? 'Download image' : kind === 'video' ? 'Download video' : 'Download audio'
   )
-  /** Only media that is a real file on disk has a path to reveal. */
-  const revealable = $derived(revealUrl?.startsWith('file://') ?? false)
+  /** Only media that is a real file on disk has a path to reveal, unless the
+   *  caller supplied its own reveal mapping (inline thread artifacts). */
+  const revealable = $derived((revealUrl?.startsWith('file://') ?? false) || onReveal !== undefined)
 
   function revealFromButton(event: MouseEvent): void {
     event.stopPropagation()
-    if (revealUrl) void revealAttachmentFile(revealUrl)
+    if (onReveal) onReveal()
+    else if (revealUrl) void revealAttachmentFile(revealUrl)
     // The reveal lands behind this overlay (the file tree, or the OS file
     // manager), so the lightbox closes itself: staying open hides the result
     // and reads as a button that did nothing.

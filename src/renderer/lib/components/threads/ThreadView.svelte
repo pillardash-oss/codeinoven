@@ -115,6 +115,7 @@
     supportsFastInference
   } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
+  import { threadArtifactRelativePath } from '$lib/thread-artifact-url'
   import { isAtLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
@@ -7206,13 +7207,33 @@
    * neither can show is reported as gone.
    */
   function revealSentAttachment(part: Extract<AgentPart, { type: 'file' }>): void {
+    const artifactPath = threadArtifactRelativePath(part.url, thread.projectId, thread.id)
+    if (artifactPath) {
+      void revealCitationFile(thread.projectId, artifactPath)
+      return
+    }
     void revealAttachmentFile(part.url)
   }
 
   function citationForFilePart(
     part: Extract<AgentPart, { type: 'file' }>
   ): { path: string } | undefined {
-    return part.url.startsWith('file://') ? { path: fileUrlToPath(part.url) } : undefined
+    if (part.url.startsWith('file://')) return { path: fileUrlToPath(part.url) }
+    // Inline thread artifacts are served over `appfile://`, but the encoded
+    // path is the project-relative path of a file on disk, so it gets the
+    // same citation target (and context menu) as any other project file.
+    const artifactPath = threadArtifactRelativePath(part.url, thread.projectId, thread.id)
+    return artifactPath ? { path: artifactPath } : undefined
+  }
+
+  /** Project-relative path of the artifact the fullscreen viewer shows, when
+   *  the viewer item is an inline artifact of this thread. */
+  function viewerArtifactPath(url: string): string | null {
+    return threadArtifactRelativePath(url, thread.projectId, thread.id)
+  }
+
+  function revealViewerArtifact(path: string): void {
+    void revealCitationFile(thread.projectId, path)
   }
 
   function reviewCheckpoint(checkpointId: string): void {
@@ -11386,6 +11407,7 @@
 
 {#if messageViewer}
   {@const viewerItem = messageViewer.items[messageViewer.index]}
+  {@const viewerArtifact = viewerItem ? viewerArtifactPath(viewerItem.url) : null}
   {#if viewerItem.media}
     <MediaPreview
       src={imageUrls.getUrl(viewerItem.url)}
@@ -11394,6 +11416,7 @@
       mime={viewerItem.mime}
       pager={messageViewerPager}
       onClose={closeMessageViewer}
+      onReveal={viewerArtifact ? () => revealViewerArtifact(viewerArtifact) : undefined}
       onLoadError={(el) => {
         const viewer = messageViewer
         const target = viewer?.items[viewer.index]
@@ -11409,6 +11432,7 @@
       documentLoading={attachmentPreview.documentLoading[viewerItem.url] ?? false}
       pager={messageViewerPager}
       onClose={closeMessageViewer}
+      onReveal={viewerArtifact ? () => revealViewerArtifact(viewerArtifact) : undefined}
     />
   {/if}
 {/if}
