@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type {
+  AgentPluginDetail,
   AgentPluginMarketEntry,
   AgentPluginMarketplace,
   InstalledAgentPlugin,
@@ -18,6 +19,7 @@ const MAX_PLUGIN_FILES = 300
 const MAX_PLUGIN_BYTES = 8 * 1024 * 1024
 const MAX_PLUGIN_FILE_BYTES = 2 * 1024 * 1024
 const MAX_GITHUB_JSON_BYTES = 16 * 1024 * 1024
+const MAX_README_BYTES = 256 * 1024
 const REQUEST_TIMEOUT_MS = 20_000
 const DEFAULT_MARKETPLACES: Array<{ url: string; platform: Platform }> = [
   { url: 'openai/community-plugins', platform: 'codex' },
@@ -492,6 +494,58 @@ export class AgentPluginService {
     }
     output.sort((a, b) => a.displayName.localeCompare(b.displayName))
     return output.slice(Math.max(0, offset), Math.max(0, offset) + Math.min(60, Math.max(1, limit)))
+  }
+
+  /** The listing plus what the package bundles, read from its repository for the plugin page. */
+  async getDetail(id: string): Promise<AgentPluginDetail> {
+    const entry = (await this.listEntries(id)).find((candidate) => candidate.id === id)
+    if (!entry) throw new Error('Plugin is no longer in this marketplace')
+    const sourceRef =
+      entry.source.ref === 'HEAD'
+        ? await resolvedRef(entry.source.repository, 'HEAD')
+        : entry.source.ref
+    const prefix = entry.source.path.replace(/^\//u, '').replace(/\/$/u, '')
+    const under = (path: string) => (prefix ? `${prefix}/${path}` : path)
+    const readme = await githubText(
+      entry.source.repository,
+      sourceRef,
+      under('README.md'),
+      MAX_README_BYTES
+    ).catch(() => null)
+    const treePayload = await githubJson(
+      `/repos/${entry.source.repository}/git/trees/${encodeURIComponent(sourceRef)}?recursive=1`
+    ).catch(() => null)
+    const paths =
+      isRecord(treePayload) && Array.isArray(treePayload['tree'])
+        ? treePayload['tree'].flatMap((item): string[] => {
+            if (!isRecord(item) || item['type'] !== 'blob' || typeof item['path'] !== 'string')
+              return []
+            const path = item['path']
+            return prefix && !path.startsWith(`${prefix}/`)
+              ? []
+              : [path.slice(prefix ? prefix.length + 1 : 0)]
+          })
+        : []
+    const skills = paths.flatMap((path) => {
+      const match = path.match(/^skills\/([^/]+)\/SKILL\.md$/u)
+      return match?.[1] ? [match[1]] : []
+    })
+    let mcpServers: string[] = []
+    for (const configPath of ['mcp.json', '.mcp.json']) {
+      if (!paths.includes(configPath)) continue
+      const text = await githubText(
+        entry.source.repository,
+        sourceRef,
+        under(configPath),
+        MAX_PLUGIN_FILE_BYTES
+      ).catch(() => '')
+      const parsed: unknown = text ? JSON.parse(text) : null
+      if (isRecord(parsed) && isRecord(parsed['mcpServers'])) {
+        mcpServers = Object.keys(parsed['mcpServers'])
+      }
+      break
+    }
+    return { entry, readme, skills, mcpServers }
   }
 
   async getIcon(id: string): Promise<string | null> {

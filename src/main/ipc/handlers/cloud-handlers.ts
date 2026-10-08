@@ -1708,6 +1708,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('plugins:getIcon', (_, rawId: unknown) =>
     agentPlugins.getIcon(validateBoundedString(rawId, 'Plugin ID', 1, 300))
   )
+  ipcMain.handle('plugins:getDetail', (_, rawId: unknown) =>
+    agentPlugins.getDetail(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
   ipcMain.handle('plugins:setBookmarked', (_, rawId: unknown, rawBookmarked: unknown) =>
     agentPlugins.setBookmarked(
       validateBoundedString(rawId, 'Plugin ID', 1, 300),

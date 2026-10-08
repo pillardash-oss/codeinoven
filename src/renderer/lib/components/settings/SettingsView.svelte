@@ -16,6 +16,12 @@
   import { CIO_CLEANUP_CATEGORIES } from '$shared/cio-cleanup'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import {
+    settingsRouteState,
+    type UtilitiesRoute,
+    type UtilitiesTab
+  } from '$lib/stores/settings-route.svelte'
+  import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
@@ -36,7 +42,6 @@
     type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
-    type SkillMarketEntry,
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
@@ -86,8 +91,9 @@
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import AgentPluginsMarketplaceView from './AgentPluginsMarketplaceView.svelte'
+  import AgentPluginDetail from './AgentPluginDetail.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
-  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
+  import UtilitiesView from './UtilitiesView.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -102,6 +108,8 @@
     onNavigateSection: (section: SettingsSection) => void
     /** Returns to the content view that opened Settings. */
     onBack: () => void
+    /** Steps back through the app's navigation history, including settings pages. */
+    onHistoryBack: () => void
   }
 
   let {
@@ -112,7 +120,8 @@
     updateConfig,
     section,
     onNavigateSection,
-    onBack
+    onBack,
+    onHistoryBack
   }: Props = $props()
 
   let diagnosticsBusy = $state(false)
@@ -125,90 +134,61 @@
   let blockersModalOpen = $state(false)
   let channelBusy = $state(false)
 
-  type UtilitiesRoute =
-    | { page: 'catalog'; tab: UtilitiesTab }
-    | { page: 'marketplace' }
-    | { page: 'plugins-marketplace' }
-    | { page: 'skill'; entry: SkillMarketEntry }
-
-  interface SettingsHistoryEntry {
-    section: SettingsSection
-    utilitiesRoute: UtilitiesRoute
-  }
-
-  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog', tab: 'all' })
-  let settingsHistory = $state<SettingsHistoryEntry[]>([])
-
-  /**
-   * True from the moment the marketplace is opened until the utilities section is
-   * left again. It keeps the marketplace mounted (invisibly) behind the catalog and
-   * behind a skill page, so Back restores the results instead of rebuilding them.
-   */
-  let marketplaceVisited = $state(false)
-
   /** The mounted catalog, so returning to it can re-read what the marketplace
    *  may have installed or uninstalled while the catalog sat behind it. */
   let utilitiesCatalog: UtilitiesView | undefined = $state(undefined)
 
-  function currentSettingsLocation(): SettingsHistoryEntry {
-    return { section, utilitiesRoute }
-  }
-
   function navigateSection(nextSection: SettingsSection): void {
-    if (
-      nextSection === section &&
-      (nextSection !== 'utilities' || utilitiesRoute.page === 'catalog')
-    ) {
+    if (nextSection === section) {
+      // Re-selecting the Utilities section from one of its sub-pages returns to the catalog.
+      if (nextSection === 'utilities' && settingsRouteState.utilities.page !== 'catalog') {
+        settingsRouteState.showUtilities({ page: 'catalog', tab: 'all' })
+      }
       return
     }
-    settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    utilitiesRoute = { page: 'catalog', tab: 'all' }
-    marketplaceVisited = false
     onNavigateSection(nextSection)
   }
 
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
-    settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    if (nextRoute.page === 'marketplace') marketplaceVisited = true
-    applyUtilitiesRoute(nextRoute)
-  }
-
-  /** Moves the utilities route and re-reads the catalog when the route returns to
-   *  it, because the marketplace can change what belongs in the list. */
-  function applyUtilitiesRoute(nextRoute: UtilitiesRoute): void {
-    const returningToCatalog = utilitiesRoute.page !== 'catalog' && nextRoute.page === 'catalog'
-    utilitiesRoute = nextRoute
-    if (returningToCatalog) utilitiesCatalog?.reload()
+    settingsRouteState.showUtilities(nextRoute)
   }
 
   /** Section tabs are one page, so switching them replaces the route, never the history. */
   function selectUtilitiesTab(tab: UtilitiesTab): void {
-    if (utilitiesRoute.page !== 'catalog') return
-    utilitiesRoute = { page: 'catalog', tab }
+    if (settingsRouteState.utilities.page !== 'catalog') return
+    settingsRouteState.showUtilities({ page: 'catalog', tab })
   }
 
   /** Utilities section on screen. The catalog route owns it, so Back stays truthful. */
   let catalogTab = $derived<UtilitiesTab>(
-    utilitiesRoute.page === 'catalog' ? utilitiesRoute.tab : 'all'
+    settingsRouteState.utilities.page === 'catalog' ? settingsRouteState.utilities.tab : 'all'
   )
 
-  /** Where the skill page's back control returns to, and what it is called. */
-  function skillDetailBackLabel(): string {
-    return settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace'
-      ? 'Back to results'
-      : 'Back to utilities'
+  /** Where a sub-page's back control returns to, and what it is called. */
+  function subPageBackLabel(): string {
+    const previous = navigationHistoryState.backStack.at(-1)
+    return previous?.utilities?.page === 'marketplace' ? 'Back to results' : 'Back to utilities'
   }
 
+  /** The header label for a Utilities sub-page; null on the catalog. */
+  function utilitiesPageLabel(route: UtilitiesRoute): string | null {
+    if (route.page === 'catalog') return null
+    if (route.page === 'plugins-marketplace') return 'Plugin Marketplace'
+    if (route.page === 'plugin') return 'Plugin'
+    return 'Skills Marketplace'
+  }
+
+  // The catalog re-reads what the marketplaces may have changed whenever history
+  // or a sub-page brings it back on screen.
+  let utilitiesOnCatalog = $derived(settingsRouteState.utilities.page === 'catalog')
+  $effect(() => {
+    if (utilitiesOnCatalog) utilitiesCatalog?.reload()
+  })
+
+  /** Back goes one step through the app history; with no history it leaves Settings. */
   function goBack(): void {
-    const previous = settingsHistory.at(-1)
-    if (!previous) {
-      onBack()
-      return
-    }
-    settingsHistory = settingsHistory.slice(0, -1)
-    applyUtilitiesRoute(previous.utilitiesRoute)
-    if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
-    if (previous.section !== section) onNavigateSection(previous.section)
+    if (navigationHistoryState.canGoBack) onHistoryBack()
+    else onBack()
   }
 
   const escHandler = (e: KeyboardEvent) => {
@@ -281,8 +261,8 @@
       if (tab.id === section) activeLabel = tab.label
     }
     settingsUiState.activeTabLabel =
-      section === 'utilities' && utilitiesRoute.page !== 'catalog'
-        ? 'Skills Marketplace'
+      section === 'utilities'
+        ? (utilitiesPageLabel(settingsRouteState.utilities) ?? activeLabel)
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
@@ -1393,7 +1373,7 @@
       -->
       <div class="relative h-full min-h-0 overflow-hidden">
         <div
-          class="absolute inset-0 overflow-y-auto {utilitiesRoute.page === 'catalog'
+          class="absolute inset-0 overflow-y-auto {settingsRouteState.utilities.page === 'catalog'
             ? ''
             : 'invisible'}"
         >
@@ -1406,27 +1386,44 @@
             onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
           />
         </div>
-        {#if marketplaceVisited}
-          <div class="absolute inset-0 {utilitiesRoute.page === 'marketplace' ? '' : 'invisible'}">
+        {#if settingsRouteState.marketplaceMounted}
+          <div
+            class="absolute inset-0 {settingsRouteState.utilities.page === 'marketplace'
+              ? ''
+              : 'invisible'}"
+          >
             <SkillsMarketplaceView
               onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
               onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
             />
           </div>
         {/if}
-        {#if utilitiesRoute.page === 'plugins-marketplace'}
+        {#if settingsRouteState.utilities.page === 'plugins-marketplace'}
           <div class="absolute inset-0 overflow-hidden bg-app">
-            <AgentPluginsMarketplaceView onBack={goBack} />
+            <AgentPluginsMarketplaceView
+              onBack={goBack}
+              backLabel={subPageBackLabel()}
+              onOpenPlugin={(pluginId) => navigateUtilities({ page: 'plugin', pluginId })}
+            />
           </div>
         {/if}
-        {#if utilitiesRoute.page === 'skill'}
+        {#if settingsRouteState.utilities.page === 'plugin'}
+          {@const pluginId = settingsRouteState.utilities.pluginId}
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            {#key pluginId}
+              <AgentPluginDetail {pluginId} backLabel={subPageBackLabel()} onBack={goBack} />
+            {/key}
+          </div>
+        {/if}
+        {#if settingsRouteState.utilities.page === 'skill'}
+          {@const skillEntry = settingsRouteState.utilities.entry}
           <!-- The skill page owns its scrolling: a pinned identity header and a body
                pane that scrolls under it. -->
           <div class="absolute inset-0 overflow-hidden bg-app">
-            {#key utilitiesRoute.entry.id}
+            {#key skillEntry.id}
               <SkillMarketplaceDetail
-                entry={utilitiesRoute.entry}
-                backLabel={skillDetailBackLabel()}
+                entry={skillEntry}
+                backLabel={subPageBackLabel()}
                 onBack={goBack}
               />
             {/key}

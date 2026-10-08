@@ -447,6 +447,17 @@ export interface InstalledAgentPlugin {
   unsupportedComponents: string[]
 }
 
+/** What a plugin page shows before and after install: the listing plus its package contents. */
+export interface AgentPluginDetail {
+  entry: AgentPluginMarketEntry
+  /** The plugin's README, or null when its repository has none. */
+  readme: string | null
+  /** Skills the package teaches agents, by directory name. */
+  skills: string[]
+  /** MCP servers the package connects agents to, by configured name. */
+  mcpServers: string[]
+}
+
 /** Where a discovered MCP server or skill came from. */
 export type AgentCapabilityOrigin = 'application' | 'global' | 'harness'
 

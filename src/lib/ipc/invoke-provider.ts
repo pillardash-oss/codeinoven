@@ -1,5 +1,6 @@
 import type {
   AgentCapabilityCatalog,
+  AgentPluginDetail,
   AgentPluginMarketEntry,
   AgentPluginMarketplace,
   AgentCapabilitySource,
@@ -77,6 +78,7 @@ export const invokeProviderContract = {
     AgentPluginMarketEntry[]
   >,
   'plugins:getIcon': {} as Contract<[id: string], string | null>,
+  'plugins:getDetail': {} as Contract<[id: string], AgentPluginDetail>,
   'plugins:setBookmarked': {} as Contract<[id: string, bookmarked: boolean], void>,
   'plugins:listInstalled': {} as Contract<[], InstalledAgentPlugin[]>,
   'plugins:install': {} as Contract<[id: string], InstalledAgentPlugin>,

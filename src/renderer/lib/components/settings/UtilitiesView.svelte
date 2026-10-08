@@ -60,9 +60,9 @@
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
+  import type { UtilitiesTab } from '$lib/stores/settings-route.svelte'
 
   /** Sections of the Utilities page; the selected one lives in the settings route. */
-  export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
 
   interface Props {
     /** Section currently on screen. */
