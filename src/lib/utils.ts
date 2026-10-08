@@ -136,7 +136,7 @@ export async function removeDir(dirPath: string): Promise<void> {
  * therefore the one signal a shared utility can use to tell a development
  * launch from a shipped one without importing `electron`.
  */
-function isUnpackagedElectronLaunch(): boolean {
+export function isUnpackagedElectronLaunch(): boolean {
   const electronProcess = process as NodeJS.Process & { readonly defaultApp?: boolean }
   return electronProcess.defaultApp === true
 }
@@ -144,8 +144,12 @@ function isUnpackagedElectronLaunch(): boolean {
 /**
  * Get the app config root path.
  *
- * The standard location for persistent production data. Development data lives
- * inside the checkout's ignored `.cio/dev-data` folder instead.
+ * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.
+ * It is honored by unpackaged launches (so several worktrees can run `bun dev`
+ * against isolated data) and by the packaged-startup smoke harness that proves
+ * a first run from an empty root. A shipped app ignores it unless the smoke
+ * harness sets it, so a stray environment variable can never repoint a user's
+ * real data root.
  */
 export function getCanonicalConfigRoot(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? '~'
@@ -156,10 +160,11 @@ export function getCanonicalConfigRoot(): string {
  * Get the app config root path.
  *
  * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.
- * It is honored by unpackaged launches and by the packaged-startup smoke
- * harness. An unpackaged launch without an explicit override gets a checkout-
- * local root, so development never opens the packaged app's database or browser
- * profile. A shipped app ignores a stray environment variable.
+ * It is honored by unpackaged launches (so several worktrees can run `bun dev`
+ * against isolated data) and by the packaged-startup smoke harness that proves
+ * a first run from an empty root. A shipped app ignores it unless the smoke
+ * harness sets it, so a stray environment variable can never repoint a user's
+ * real data root.
  */
 export function getConfigRoot(): string {
   const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
@@ -170,9 +175,6 @@ export function getConfigRoot(): string {
     (isPackagedSmoke || isUnpackagedElectronLaunch())
   ) {
     return configuredRoot
-  }
-  if (isUnpackagedElectronLaunch()) {
-    return join(resolve(process.cwd()), '.cio', 'dev-data')
   }
   return getCanonicalConfigRoot()
 }

@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { mkdirSync } from 'fs'
 import { isAbsolute, join } from 'path'
-import { getConfigRoot } from '../../lib/utils'
+import { getConfigRoot, isUnpackagedElectronLaunch } from '../../lib/utils'
 import { Logger } from '../system/logger'
 
 /**
@@ -18,15 +18,19 @@ import { Logger } from '../system/logger'
  * root from browsing inside the user's profile.
  *
  * This path is selected before `ready`. Existing profile directories stay where
- * they are; startup never relocates or merges Chromium data. Development gets a
- * separate checkout-local config root from `getConfigRoot`.
+ * they are; startup never relocates or merges Chromium data. Only the Chromium
+ * profile is split: a packaged launch uses `<config-root>/electron` and an
+ * unpackaged development launch uses `<config-root>/dev-browser-profile`, so the
+ * two Electron instances never lock or corrupt each other's cookies. Every other
+ * app data (database, projects, threads) keeps sharing the same config root.
  *
  */
 export function configureElectronDataRoot(): void {
   // Windows production already uses Electron's established `%APPDATA%` location.
-  // Keep it in place while unpackaged development still receives its own root.
+  // Keep it in place while unpackaged development still receives its own profile.
   if (process.platform === 'win32' && app.isPackaged) return
-  const managedRoot = join(getConfigRoot(), 'electron')
+  const profileDir = isUnpackagedElectronLaunch() ? 'dev-browser-profile' : 'electron'
+  const managedRoot = join(getConfigRoot(), profileDir)
   try {
     mkdirSync(managedRoot, { recursive: true })
     app.setPath('userData', managedRoot)
