@@ -399,6 +399,53 @@ export interface SkillMarketInstallRequest {
   activation?: UtilityActivation
 }
 
+/** Agent plugins surfaced in the shared Codex and Claude Code marketplace. */
+export interface AgentPluginMarketEntry {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  publisher: string | null
+  iconUrl: string | null
+  homepage: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  components: Array<'skills' | 'mcp' | 'hooks' | 'agents' | 'commands' | 'apps' | 'lspServers'>
+  installed: boolean
+  updateAvailable: boolean
+  bookmarked: boolean
+  supported: boolean
+  unsupportedReason?: string
+}
+
+export interface AgentPluginMarketplace {
+  id: string
+  name: string
+  url: string
+  platform: 'codex' | 'claude'
+  pluginCount: number
+  refreshedAt: number | null
+}
+
+export interface InstalledAgentPlugin {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  installPath: string
+  utilityIds: string[]
+  installedAt: number
+  updatedAt: number | null
+  availableVersion: string | null
+  unsupportedComponents: string[]
+}
+
 /** Where a discovered MCP server or skill came from. */
 export type AgentCapabilityOrigin = 'application' | 'global' | 'harness'
 

@@ -85,6 +85,7 @@
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
+  import AgentPluginsMarketplaceView from './AgentPluginsMarketplaceView.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
   import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
 
@@ -127,6 +128,7 @@
   type UtilitiesRoute =
     | { page: 'catalog'; tab: UtilitiesTab }
     | { page: 'marketplace' }
+    | { page: 'plugins-marketplace' }
     | { page: 'skill'; entry: SkillMarketEntry }
 
   interface SettingsHistoryEntry {
@@ -1400,6 +1402,7 @@
             activeTab={catalogTab}
             onSelectTab={selectUtilitiesTab}
             onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
+            onOpenPluginMarketplace={() => navigateUtilities({ page: 'plugins-marketplace' })}
             onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
           />
         </div>
@@ -1409,6 +1412,11 @@
               onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
               onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
             />
+          </div>
+        {/if}
+        {#if utilitiesRoute.page === 'plugins-marketplace'}
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            <AgentPluginsMarketplaceView onBack={goBack} />
           </div>
         {/if}
         {#if utilitiesRoute.page === 'skill'}

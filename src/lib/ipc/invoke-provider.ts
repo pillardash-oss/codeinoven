@@ -1,5 +1,7 @@
 import type {
   AgentCapabilityCatalog,
+  AgentPluginMarketEntry,
+  AgentPluginMarketplace,
   AgentCapabilitySource,
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
@@ -35,6 +37,7 @@ import type {
   SkillMarketDetail,
   SkillMarketInstallRequest,
   InstalledSkillLocation,
+  InstalledAgentPlugin,
   SkillMarketLeaderboard,
   SkillMarketSearchResult,
   SkillMarketView,
@@ -58,6 +61,27 @@ import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
 import type { Contract } from './contract-helpers'
 
 export const invokeProviderContract = {
+  'plugins:listMarketplaces': {} as Contract<[], AgentPluginMarketplace[]>,
+  'plugins:addMarketplace': {} as Contract<
+    [{ url: string; platform: 'codex' | 'claude' }],
+    AgentPluginMarketplace
+  >,
+  'plugins:removeMarketplace': {} as Contract<[id: string], void>,
+  'plugins:list': {} as Contract<
+    [
+      query?: string,
+      offset?: number,
+      limit?: number,
+      view?: 'discover' | 'bookmarks' | 'installed'
+    ],
+    AgentPluginMarketEntry[]
+  >,
+  'plugins:getIcon': {} as Contract<[id: string], string | null>,
+  'plugins:setBookmarked': {} as Contract<[id: string, bookmarked: boolean], void>,
+  'plugins:listInstalled': {} as Contract<[], InstalledAgentPlugin[]>,
+  'plugins:install': {} as Contract<[id: string], InstalledAgentPlugin>,
+  'plugins:update': {} as Contract<[id: string], InstalledAgentPlugin>,
+  'plugins:uninstall': {} as Contract<[id: string], void>,
   'capabilities:readSkill': {} as Contract<
     [source: AgentCapabilitySource],
     NativeSkillContent | null
