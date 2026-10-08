@@ -82,11 +82,11 @@ import {
 import { stripInstalledManifestPermissions } from './browser-extension-manifest'
 import {
   BROWSER_EXTENSION_SOURCE_DIR,
-  BROWSER_EXTENSION_STORE_DIR,
   BrowserExtensionRegistry,
   extensionRunsInJar,
   extensionRunsOnHost,
   extensionSourceDirectory,
+  resolveBrowserExtensionStoreDir,
   toExtensionView,
   type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
@@ -2011,7 +2011,7 @@ export class BrowserExtensionService {
   // ─── Paths and progress ────────────────────────────────────────────────────
 
   private storeRoot(): string {
-    return join(this.configRoot, BROWSER_EXTENSION_STORE_DIR)
+    return join(this.configRoot, resolveBrowserExtensionStoreDir())
   }
 
   private downloadRoot(): string {

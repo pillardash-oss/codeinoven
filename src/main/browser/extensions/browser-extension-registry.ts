@@ -8,15 +8,17 @@
  * extensions the user enabled for it. The renderer reads this list; it never owns
  * it.
  *
- * The file is shared state between app instances, the same way the permission
- * memory is, so a write replaces it whole but only ever with what was loaded plus
- * this instance's change: a corrupt or truncated entry is dropped rather than
- * trusted, because everything in here names a folder the app will load code from.
+ * Each launch keeps its own registry file, the same way the permission
+ * memory does, so a write replaces it whole but only ever with what was
+ * loaded plus this instance's change: a corrupt or truncated entry is
+ * dropped rather than trusted, because everything in here names a folder
+ * the app will load code from.
  *
  * The source folder is never taken from the file. It is derived from the id, so a
  * tampered registry cannot point an extension at a directory of its choosing.
  */
 
+import { isUnpackagedElectronLaunch } from '../../../lib/utils'
 import { isExtensionId } from './browser-extension-crx'
 import type {
   BrowserExtension,
@@ -30,6 +32,30 @@ export const BROWSER_EXTENSION_REGISTRY_FILE = 'browser/extensions.json'
 /** Where every extension's own folder lives, relative to the config root. One
  *  directory per extension id, each holding the `source` tree the app loads. */
 export const BROWSER_EXTENSION_STORE_DIR = 'browser/extensions'
+
+/**
+ * Where this launch reads and writes the extension registry. Dev uses a
+ * `-dev` registry so installs, enabled jars, and per-site rules never mix
+ * with prod. Prod keeps the established file.
+ */
+export function resolveBrowserExtensionRegistryFile(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return BROWSER_EXTENSION_REGISTRY_FILE.replace(/\.json$/, '-dev.json')
+  }
+  return BROWSER_EXTENSION_REGISTRY_FILE
+}
+
+/**
+ * Where this launch keeps installed extension source trees. Dev uses a
+ * `-dev` directory so its unpacked code never shares folders with prod.
+ * Prod keeps the established directory.
+ */
+export function resolveBrowserExtensionStoreDir(): string {
+  if (isUnpackagedElectronLaunch()) {
+    return `${BROWSER_EXTENSION_STORE_DIR}-dev`
+  }
+  return BROWSER_EXTENSION_STORE_DIR
+}
 
 /** The subdirectory of the store that holds a prepared source tree. */
 export const BROWSER_EXTENSION_SOURCE_DIR = 'source'
@@ -306,7 +332,7 @@ function parseRecord(value: unknown): BrowserExtensionRecord | null {
 
 /** The absolute path of one extension's prepared source tree. */
 export function extensionSourceDirectory(configRoot: string, id: string): string {
-  return `${configRoot}/${BROWSER_EXTENSION_STORE_DIR}/${id}/${BROWSER_EXTENSION_SOURCE_DIR}`
+  return `${configRoot}/${resolveBrowserExtensionStoreDir()}/${id}/${BROWSER_EXTENSION_SOURCE_DIR}`
 }
 
 /** Whether an extension runs in a jar. The empty id is the context's own jar. */
@@ -362,7 +388,7 @@ export class BrowserExtensionRegistry {
   async load(): Promise<void> {
     let stored: unknown
     try {
-      stored = await this.persistence.read<unknown>(BROWSER_EXTENSION_REGISTRY_FILE)
+      stored = await this.persistence.read<unknown>(resolveBrowserExtensionRegistryFile())
     } catch {
       // A registry that cannot be read is treated as empty rather than fatal: the
       // app still starts, and the user can reinstall. Nothing is written until a
@@ -526,7 +552,7 @@ export class BrowserExtensionRegistry {
       extensions: this.list()
     }
     this.writeChain = this.writeChain
-      .then(() => this.persistence.write(BROWSER_EXTENSION_REGISTRY_FILE, payload))
+      .then(() => this.persistence.write(resolveBrowserExtensionRegistryFile(), payload))
       .catch(() => undefined)
     return this.writeChain
   }

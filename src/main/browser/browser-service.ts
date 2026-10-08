@@ -305,7 +305,7 @@ import {
   extensionPageTabsScript,
   type BrowserExtensionPageTab
 } from './extensions/browser-extension-page-tabs'
-import { BROWSER_EXTENSION_STORE_DIR } from './extensions/browser-extension-registry'
+import { resolveBrowserExtensionStoreDir } from './extensions/browser-extension-registry'
 import {
   BrowserFindSessions,
   browserFindResultFor,
@@ -4455,7 +4455,7 @@ export class BrowserService {
   private async writeExtensionPageTabsPreload(): Promise<string | null> {
     const file = join(
       getConfigRoot(),
-      BROWSER_EXTENSION_STORE_DIR,
+      resolveBrowserExtensionStoreDir(),
       EXTENSION_PAGE_TABS_PRELOAD_FILE
     )
     try {

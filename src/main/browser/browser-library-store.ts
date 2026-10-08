@@ -25,7 +25,7 @@ import {
   type BrowserBookmarksSnapshot,
   type BrowserHistorySnapshot
 } from '../../lib/browser/browser-library'
-import { ensureDir, getConfigRoot, readJson, writeJson } from '../../lib/utils'
+import { ensureDir, getConfigRoot, isUnpackagedElectronLaunch, readJson, writeJson } from '../../lib/utils'
 import { Logger } from '../system/logger'
 
 /**
@@ -58,7 +58,12 @@ export class BrowserLibraryFile<Snapshot> {
   }
 
   private get filePath(): string {
-    return join(getConfigRoot(), this.relativePath)
+    // Dev keeps its own history and bookmarks so test browsing never pollutes
+    // prod. Prod keeps the established filenames.
+    const relativePath = isUnpackagedElectronLaunch()
+      ? this.relativePath.replace(/\.json$/, '-dev.json')
+      : this.relativePath
+    return join(getConfigRoot(), relativePath)
   }
 
   /** The stored record, or the empty one when nothing was ever stored. */
