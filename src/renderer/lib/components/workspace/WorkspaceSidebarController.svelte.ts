@@ -1,7 +1,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { INBOX_PROJECT_ID, isOrchestrationChildThread, type Project } from '$shared/types'
+import { INBOX_PROJECT_ID, isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
 
 /**
@@ -63,6 +63,39 @@ export class WorkspaceSidebarController {
   ensureRowVisible(groupId: string, needed: number, pageSize: number = this.threadsPerPage): void {
     const current = this.threadShowCount.get(groupId) ?? pageSize
     if (needed > current) this.threadShowCount.set(groupId, needed)
+  }
+
+  /**
+   * Rows a project folder renders: the budgeted head slice, plus the active
+   * thread appended last when it sits beyond the budget. The active row is
+   * artificial   it leaves the list the moment selection moves elsewhere,
+   * so the collapsed budget always keeps the thread the user is on in focus
+   * without growing the list to its natural position.
+   */
+  visibleThreads(
+    groupId: string,
+    threads: readonly Thread[],
+    activeThreadId: string | null,
+    pageSize: number = this.threadsPerPage
+  ): Thread[] {
+    const count = this.getVisibleCount(groupId, pageSize)
+    const head = threads.slice(0, count)
+    if (!activeThreadId) return [...head]
+    if (head.some((thread) => thread.id === activeThreadId)) return [...head]
+    const active = threads.find((thread) => thread.id === activeThreadId)
+    return active ? [...head, active] : [...head]
+  }
+
+  /** Rows still hidden behind "Show more", excluding the artificial active row. */
+  hiddenThreadCount(
+    groupId: string,
+    threads: readonly Thread[],
+    visible: readonly Thread[],
+    pageSize: number = this.threadsPerPage
+  ): number {
+    void groupId
+    void pageSize
+    return Math.max(0, threads.length - visible.length)
   }
 
   /** Grow a group's row budget by freshly fetched rows, capped at the real total. */
