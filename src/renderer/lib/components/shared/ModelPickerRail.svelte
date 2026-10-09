@@ -86,7 +86,7 @@
   {#if showHarnesses}
     <div class="mx-1 my-1 w-6 shrink-0 border-t border-border"></div>
     <div
-      class="flex max-h-[8.25rem] min-h-0 shrink flex-col items-center gap-0.5 overflow-y-auto"
+      class="flex max-h-[14.75rem] min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto"
       role="group"
       aria-label="Show one harness"
     >
