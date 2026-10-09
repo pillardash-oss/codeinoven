@@ -301,6 +301,9 @@ export function registerOvenIpc(
     })
     return result
   })
+  ipcMain.handle('oven:harness:install', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.installHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
+  )
   ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) =>
     harnessService.updateHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
   )

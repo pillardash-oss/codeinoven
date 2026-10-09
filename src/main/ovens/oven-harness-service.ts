@@ -8,7 +8,10 @@ import {
 } from '../agents/harness-update-service'
 import type { HarnessInstallMethod } from '../../lib/types'
 import { compareVersions } from '../../lib/version-compare'
-import { harnessUninstallCommand } from '../agents/harness-install-service'
+import {
+  harnessUninstallCommand,
+  preferredHarnessInstallChannel
+} from '../agents/harness-install-service'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
 import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
 import { remoteArgvCommand } from './oven-remote-command'
@@ -361,6 +364,52 @@ export class OvenHarnessService {
   }
 
   /**
+   * Install one harness with the same documented channel oven setup would use.
+   *
+   * The user reaches for this when the Oven is already set up and they want one
+   * more harness, so it has to behave exactly like the setup step: the channel
+   * comes from the shared install registry, never a command invented here, and a
+   * harness with no unattended channel on the Oven's platform is reported as a
+   * handoff rather than a silent no-op. Returns the refreshed row, so the caller
+   * never has to re-probe.
+   */
+  async installHarness(ovenId: string, harnessId: string): Promise<OvenHarnessInventoryItem> {
+    return this.logMutation('install', ovenId, harnessId, () =>
+      this.withLock(`${ovenId}:${harnessId}`, async () => {
+        const descriptor = findHarness(harnessId)
+        if (!descriptor) throw new Error('That harness is not in the app registry.')
+        const platform =
+          this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
+        const channel = preferredHarnessInstallChannel(harnessId, platform as NodeJS.Platform)
+        const installCommand = channel?.command
+        const installArgs = channel?.args
+        if (!installCommand || !installArgs)
+          throw new Error(
+            `${descriptor.name} documents no one-command install on this platform. Install it on the Oven itself.`
+          )
+        return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+          await this.waitForHarnessIdle(ovenId, descriptor.command)
+          const shell = shellForPlatform(platform)
+          const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
+          Logger.info('Installing a harness on an oven', {
+            ovenId,
+            harnessId,
+            method: channel.method
+          })
+          await this.service.ssh.execute(
+            ovenId,
+            remoteArgvCommand(shell, [installCommand, ...installArgs], { prefix }),
+            '',
+            UPDATE_TIMEOUT_MS
+          )
+          this.inventories.delete(ovenId)
+          return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+        })
+      })
+    )
+  }
+
+  /**
    * Uninstall one harness using its documented removal command.
    *
    * This is genuinely destructive   the argument list can include the user's
@@ -403,7 +452,7 @@ export class OvenHarnessService {
   }
 
   private async logMutation(
-    action: 'update' | 'uninstall',
+    action: 'install' | 'update' | 'uninstall',
     ovenId: string,
     harnessId: string,
     task: () => Promise<OvenHarnessInventoryItem>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -12,6 +13,7 @@
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
   import {
     LOCAL_OVEN_ID,
+    OVEN_HARNESS_COMMANDS,
     ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
@@ -40,6 +42,7 @@
     Plug,
     Plus,
     RefreshCw,
+    Settings2,
     Star,
     Terminal,
     Trash2
@@ -151,6 +154,15 @@
   /** True while this Oven's check is running, wherever it was started from. */
   function checkingFor(oven: Oven): boolean {
     return oven.kind === 'local' ? checking === oven.id : ovenPeeks.running(oven.id)
+  }
+
+  /** The runtime phrase an Oven entry shows: its Node.js version, or none found. */
+  function nodeRuntimeLabel(
+    probe: OvenProbe | undefined,
+    status: OvenConnectionStatus | undefined
+  ): string {
+    const version = probe?.nodeVersion ?? status?.specs?.nodeVersion
+    return version ? `Node.js ${version.replace(/^v/, '')}` : 'Not installed'
   }
 
   /** The platform name an Oven reports, spelled the way a person reads it. */
@@ -354,38 +366,150 @@
     }
   }
 
-  /** One installed harness's occasional actions, behind the badge it belongs to.
+  /**
+   * One harness as an Oven entry lists it: every harness CodeInOven can drive,
+   * with whatever the Oven probe read for it, whether or not it is installed.
+   */
+  interface OvenHarnessRow {
+    harnessId: string
+    command: string
+    name: string
+    item: OvenHarnessInventoryItem | null
+    installed: boolean
+  }
+
+  /**
+   * Every harness an Oven entry shows, installed first in canonical order.
+   *
+   * The list is the app's canonical harness set, not the probe's: a harness the
+   * Oven does not have still belongs on screen, greyed, so the entry answers
+   * "what can I run here" rather than only "what happens to be installed". A row
+   * the probe reported that is not in the canonical set is kept anyway, so a
+   * harness the app gains over the Oven's service still appears.
+   */
+  function availableHarnesses(inventory: readonly OvenHarnessInventoryItem[]): OvenHarnessRow[] {
+    const canonicalIds = OVEN_HARNESS_COMMANDS.map(
+      (command) => ovenHarnessIdForCommand(command) ?? command
+    )
+    const rows: OvenHarnessRow[] = OVEN_HARNESS_COMMANDS.map((command, index) => {
+      const harnessId = canonicalIds[index]
+      const item = inventory.find((entry) => entry.harnessId === harnessId) ?? null
+      return {
+        harnessId,
+        command,
+        name: getAgentIcon(harnessId)?.name ?? command,
+        item,
+        installed: harnessIsInstalled(item)
+      }
+    })
+    for (const item of inventory) {
+      if (canonicalIds.includes(item.harnessId)) continue
+      rows.push({
+        harnessId: item.harnessId,
+        command: item.command,
+        name: getAgentIcon(item.harnessId)?.name ?? item.command,
+        item,
+        installed: harnessIsInstalled(item)
+      })
+    }
+    return rows
+  }
+
+  /** Whether an inventory row names a harness an Oven actually has. */
+  function harnessIsInstalled(item: OvenHarnessInventoryItem | null): boolean {
+    return item !== null && item.health !== 'missing' && item.health !== 'unsupported'
+  }
+
+  /** The harness rows an Oven entry draws, from the freshest read it has. */
+  function inventoryFor(oven: Oven, probe: OvenProbe | undefined): OvenHarnessInventoryItem[] {
+    if (oven.kind === 'local') return ovens.inventory(LOCAL_OVEN_ID) ?? []
+    return ovenPeeks.peek(oven.id)?.inventory ?? probe?.inventory ?? ovens.inventory(oven.id) ?? []
+  }
+
+  /**
+   * Whether an Oven is set up, as the entry's Configured badge reads it.
+   *
+   * A remote Oven reports it through its setup operation. Local has no setup
+   * step of its own, so its readiness is the harnesses it can actually run.
+   */
+  function configuredFor(oven: Oven, rows: readonly OvenHarnessRow[]): boolean {
+    if (oven.kind === 'local') return rows.some((row) => row.installed)
+    return ovenSetupStore.completed[oven.id] === true || setupComplete[oven.id] === true
+  }
+
+  /** One installed harness's actions, behind the badge it belongs to.
    *
    *  The menu leads with the version the Oven runs today, because it is the only
    *  place that answers what "Update" would move off. A harness the probe could
    *  not read a version for gets no caption rather than an empty one.
    */
-  function harnessMenuItems(ovenId: string, item: OvenHarnessInventoryItem): MenuItem[] {
+  function harnessMenuItems(ovenId: string, row: OvenHarnessRow): MenuItem[] {
     const busyNow = Boolean(harnessBusy)
+    const item = row.item
+    if (!row.installed)
+      return [
+        { label: 'Not installed', header: true },
+        {
+          label: 'Install harness',
+          icon: Plus,
+          disabled: busyNow,
+          onClick: () => void installHarness(ovenId, row)
+        }
+      ]
     return [
-      ...(item.installedVersion
+      ...(item?.installedVersion
         ? [{ label: `Version ${item.installedVersion}`, header: true }]
         : []),
       {
-        label: `Update ${item.command}`,
+        label:
+          item?.updateAvailable && item.latestVersion
+            ? `Update to ${item.latestVersion}`
+            : `Update ${row.command}`,
         icon: RefreshCw,
-        disabled: busyNow || item.health !== 'healthy',
-        onClick: () => void updateHarness(ovenId, item.harnessId)
+        disabled: busyNow || item?.health !== 'healthy',
+        onClick: () => void updateHarness(ovenId, row.harnessId)
       },
       { label: 'separator:harness', divider: true },
       {
-        label: `Uninstall ${item.command}`,
+        label: `Uninstall ${row.command}`,
         icon: Trash2,
         danger: true,
         disabled: busyNow,
         onClick: () =>
           (pendingHarnessRemoval = {
             ovenId,
-            harnessId: item.harnessId,
-            command: item.command
+            harnessId: row.harnessId,
+            command: row.command
           })
       }
     ]
+  }
+
+  /** Local harnesses are installed and removed on this machine, in Harnesses. */
+  function localHarnessMenuItems(): MenuItem[] {
+    return [
+      {
+        label: 'Manage harnesses',
+        icon: Plug,
+        onClick: onOpenHarnessSettings
+      }
+    ]
+  }
+
+  /** Install one missing harness on an Oven using its documented channel. */
+  async function installHarness(ovenId: string, row: OvenHarnessRow): Promise<void> {
+    if (harnessBusy) return
+    harnessBusy = `${ovenId}:${row.harnessId}`
+    error = ''
+    try {
+      await invoke('oven:harness:install', ovenId, row.harnessId)
+      await ovenPeeks.refresh(ovenId)
+      toast.success(`${row.name} installed on this Oven`)
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
+    }
   }
 
   /** Put an Oven's clock on this computer's zone, and say what the Oven did. */
@@ -795,6 +919,9 @@
         {@const status = statusFor(oven)}
         {@const checkingNow = checkingFor(oven)}
         {@const state = status?.state}
+        {@const harnessInventory = inventoryFor(oven, probe)}
+        {@const harnessRows = availableHarnesses(harnessInventory)}
+        {@const configured = configuredFor(oven, harnessRows)}
         <div
           class="relative rounded-xl"
           id={`oven-row-${oven.id}`}
@@ -861,6 +988,27 @@
                           class="shrink-0"
                         />{:else}<Circle size={12} class="shrink-0" />{/if}
                     </SettingsStatusBadge>
+                    <SettingsStatusBadge
+                      label={configured ? 'Configured' : 'Not configured'}
+                      classes={configured
+                        ? 'border-success/30 bg-success/10 text-success'
+                        : 'border-border bg-elevated text-dimmed'}
+                    >
+                      {#if configured}<Settings2 size={12} class="shrink-0" />{:else}<Circle
+                          size={12}
+                          class="shrink-0"
+                        />{/if}
+                    </SettingsStatusBadge>
+                    {#each harnessRows.filter((row) => row.installed) as row (row.harnessId)}
+                      <span
+                        class="flex items-center rounded-lg bg-elevated p-1"
+                        title={`${row.name}${
+                          row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
+                        }`}
+                      >
+                        <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                      </span>
+                    {/each}
                   </div>
                 </div>
               </div>
@@ -976,122 +1124,91 @@
                 {#if status?.error}<p class="text-xs text-danger" role="status">
                     {status.error}
                   </p>{/if}
-                {#if probe || status?.specs}
-                  {@const nodeVersion = probe?.nodeVersion ?? status?.specs?.nodeVersion ?? null}
-                  <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
-                    <div class="space-y-1.5">
-                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Terminal size={14} />Service runtime
-                      </dt>
-                      <dd class="text-sm font-medium text-foreground">
-                        {nodeVersion ? `Node.js ${nodeVersion.replace(/^v/, '')}` : 'Not installed'}
-                      </dd>
-                      <dd class="text-xs text-muted">
-                        {probe
-                          ? [
-                              ovenPlatformName(probe.platform),
-                              ovenArchitectureName(probe.architecture),
-                              `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')
-                          : oven.kind === 'local'
-                            ? `${ovenPlatformName(status?.specs?.platform)} · this computer`
-                            : 'No service has answered from this Oven yet.'}
-                      </dd>
-                      {#if probe?.timezone}
-                        <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
-                      {/if}
-                    </div>
-                    <div class="space-y-1.5">
-                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Boxes size={14} />Installed harnesses
-                      </dt>
-                      <dd class="flex flex-wrap items-center gap-1.5">
-                        {#if oven.kind === 'local'}
-                          {@const localItems = ovens.inventory(LOCAL_OVEN_ID) ?? []}
-                          {#each localItems.filter((item) => item.health === 'healthy') as item (item.harnessId)}
-                            <span
-                              class="flex items-center rounded-lg bg-elevated p-1"
-                              title={`${item.command}${
-                                item.installedVersion ? ` ${item.installedVersion}` : ''
-                              }`}
-                            >
-                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
-                            </span>
-                          {/each}
-                          {#if !localItems.some((item) => item.health === 'healthy')}
-                            <span class="text-xs text-muted">None found</span>
-                          {/if}
-                        {:else if probe?.inventory?.length}
-                          {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
-                            <span
-                              class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
-                              title={`${item.command}${
-                                item.installedVersion ? ` ${item.installedVersion}` : ''
-                              }${item.health === 'healthy' ? '' : ` · ${item.health}`}`}
-                            >
-                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
-                              {#if harnessBusy === `${oven.id}:${item.harnessId}`}
-                                <Loader2 size={11} class="animate-spin text-muted" />
-                              {:else}
-                                <ThreadDropdown
-                                  vertical
-                                  items={harnessMenuItems(oven.id, item)}
-                                  title={`${item.command} actions`}
-                                  ariaLabel={`${item.command} actions`}
-                                />
-                              {/if}
-                            </span>
-                          {/each}
-                          {#if !probe.inventory.some((item) => item.health !== 'missing')}
-                            <span class="text-xs text-muted">None found</span>
-                          {/if}
-                        {:else if probe?.harnesses.some((harness) => harness.path)}
-                          {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
-                            <span
-                              class="flex items-center rounded-lg bg-elevated p-1"
-                              title={harness.command}
-                            >
-                              <AgentIcon
-                                agentId={ovenHarnessIdForCommand(harness.command) ??
-                                  harness.command}
-                                label={harness.command}
-                                size={14}
-                              />
-                            </span>
-                          {/each}
-                        {:else if probe}
-                          <span class="text-xs text-muted">None found</span>
-                        {:else}
-                          <span class="text-xs text-muted"
-                            >Connect to read this Oven's harnesses.</span
+                <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Terminal size={14} />Service runtime
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">
+                      {nodeRuntimeLabel(probe, status)}
+                    </dd>
+                    <dd class="text-xs text-muted">
+                      {probe
+                        ? [
+                            ovenPlatformName(probe.platform),
+                            ovenArchitectureName(probe.architecture),
+                            `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : oven.kind === 'local'
+                          ? `${ovenPlatformName(status?.specs?.platform)} · this computer`
+                          : 'No service has answered from this Oven yet.'}
+                    </dd>
+                    {#if probe?.timezone}
+                      <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
+                    {/if}
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Boxes size={14} />Harnesses
+                    </dt>
+                    <dd class="flex flex-wrap items-center gap-1.5">
+                      {#if oven.kind !== 'local' && !probe && harnessInventory.length === 0}
+                        <span class="text-xs text-muted"
+                          >Connect to read this Oven's harnesses.</span
+                        >
+                      {:else}
+                        {#each harnessRows as row (row.harnessId)}
+                          <span
+                            class={row.installed
+                              ? 'flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5'
+                              : 'flex items-center gap-0.5 rounded-lg border border-border py-0.5 pr-0.5 pl-1.5 opacity-50'}
+                            title={`${row.name}${
+                              row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
+                            }${row.installed ? '' : ' · not installed'}`}
                           >
-                        {/if}
-                      </dd>
-                    </div>
-                    <div>
-                      <div class="space-y-1.5">
-                        <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                          <Cable size={14} />Connection Info
-                        </dt>
-                        <dd class="flex flex-col gap-1.5">
-                          <p class="mt-0.5 truncate text-xs text-muted">
-                            {#if oven.kind === 'local'}
-                              This computer
+                            <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                            {#if harnessBusy === `${oven.id}:${row.harnessId}`}
+                              <Loader2 size={11} class="animate-spin text-muted" />
                             {:else}
-                              {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
-                                .connection?.host}:{oven.connection?.port}
+                              <ThreadDropdown
+                                vertical
+                                items={oven.kind === 'local'
+                                  ? localHarnessMenuItems()
+                                  : harnessMenuItems(oven.id, row)}
+                                title={`${row.name} actions`}
+                                ariaLabel={`${row.name} actions`}
+                              />
                             {/if}
-                          </p>
+                          </span>
+                        {/each}
+                      {/if}
+                    </dd>
+                  </div>
+                  <div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Cable size={14} />Connection Info
+                      </dt>
+                      <dd class="flex flex-col gap-1.5">
+                        <p class="mt-0.5 truncate text-xs text-muted">
+                          {#if oven.kind === 'local'}
+                            This computer
+                          {:else}
+                            {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
+                              .connection?.host}:{oven.connection?.port}
+                          {/if}
+                        </p>
+                        {#if oven.createdAt > 0}
                           <p class="mt-0.5 truncate text-xs text-muted">
                             Added {formatDateTime(oven.createdAt)}
                           </p>
-                        </dd>
-                      </div>
+                        {/if}
+                      </dd>
                     </div>
-                  </dl>
-                {/if}
+                  </div>
+                </dl>
               </div>
             {/if}
           </SettingsEntry>

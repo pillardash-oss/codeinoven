@@ -75,6 +75,7 @@ export const invokeOvenContract = {
     OvenHarnessInventoryItem[]
   >,
   'oven:timezone:sync': {} as Contract<[id: string], OvenTimezoneSyncResult>,
+  'oven:harness:install': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:uninstall': {} as Contract<
     [id: string, harnessId: string],
