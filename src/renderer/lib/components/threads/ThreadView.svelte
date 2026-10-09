@@ -129,7 +129,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'

@@ -12,7 +12,7 @@
   import { Eye, Maximize2, Plus, Redo2, SquarePen, StickyNotes, Undo2, X } from '@lucide/svelte'
   import { tick } from 'svelte'
   import { cubicOut } from 'svelte/easing'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorTarget } from '../../speech/editor-target'
 

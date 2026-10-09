@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-import { getCustomSvgDataUrl } from '$shared/custom-svg'
+import { getCustomSvgDataUrl } from '$shared/custom-svg-tint'
 import type { ProviderConnectionInfo } from '$shared/types'
 import {
   LOCAL_OVEN_ID,

@@ -8,7 +8,7 @@
     getIconSvgDataUrl
   } from '$lib/project-svg-icons'
   import ColorSwatches from './ColorSwatches.svelte'
-  import { getCustomSvgDataUrl, sanitizeCustomSvg } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
 
   interface Props {
     name: string
@@ -72,8 +72,11 @@
   let previewSvgError = $state<string | null>(null)
   let saveIconError = $state<string | null>(null)
 
-  function previewCustomSvg(): void {
+  /** The parser only runs for this one gesture, so it stays a lazy import: pasting
+   *  an SVG is not first paint, and `lib/custom-svg` drags in ~236 KB of XML DOM. */
+  async function previewCustomSvg(): Promise<void> {
     try {
+      const { sanitizeCustomSvg } = await import('../../../../lib/custom-svg')
       previewSvg = sanitizeCustomSvg(pastedSvg)
       previewSvgError = null
       saveIconError = null
@@ -249,7 +252,7 @@
             type="button"
             class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Preview pasted SVG"
-            onclick={previewCustomSvg}>Preview</button
+            onclick={() => void previewCustomSvg()}>Preview</button
           >
           {#if previewSvg}
             <img

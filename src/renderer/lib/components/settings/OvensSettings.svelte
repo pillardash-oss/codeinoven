@@ -50,7 +50,7 @@
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
