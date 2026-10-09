@@ -25,6 +25,9 @@ import type {
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPopupWindow,
+  BrowserScreenSharePrompt,
+  BrowserSitePermissionState,
+  BrowserSitePermissionsPrompt,
   BrowserViewBounds
 } from '$shared/ipc-contract'
 import {
@@ -109,6 +112,11 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
+  /** The Site Permissions modal's opening payload, or null while it is closed. */
+  sitePermissionsPrompt = $state<BrowserSitePermissionsPrompt | null>(null)
+  /** The in-app screen-share picker's payload, for a page that asked to share and
+   *  found no native picker on this platform. Null while no picker is up. */
+  screenSharePrompt = $state<BrowserScreenSharePrompt | null>(null)
   private peeks = new SvelteMap<
     string,
     {
@@ -161,6 +169,47 @@ export class GlobalBrowserState {
 
   hasPeek(sourceTabId: string): boolean {
     return this.peeks.has(sourceTabId)
+  }
+
+  /**
+   * Set one site permission from the Site Permissions modal.
+   *
+   * The choice is shown immediately and main is told behind it; main writes the
+   * same ledger keys the page-initiated prompt writes and reloads the origin's
+   * tabs, so a decision here and a decision in the prompt are the same decision.
+   */
+  async setSitePermission(permissionId: string, action: BrowserSitePermissionState): Promise<void> {
+    const prompt = this.sitePermissionsPrompt
+    if (!prompt) return
+    this.sitePermissionsPrompt = {
+      ...prompt,
+      states: { ...prompt.states, [permissionId]: action }
+    }
+    try {
+      await invoke(
+        'browser:setSitePermission',
+        prompt.projectId,
+        prompt.boxId,
+        prompt.origin,
+        permissionId,
+        action
+      )
+    } catch (error: unknown) {
+      reportError(error, 'The site permission could not be saved.')
+    }
+  }
+
+  /** Close the Site Permissions modal. */
+  dismissSitePermissions(): void {
+    this.sitePermissionsPrompt = null
+  }
+
+  /** Answer the in-app screen-share picker: a source id, or null to cancel. */
+  async resolveScreenShare(sourceId: string | null): Promise<void> {
+    const prompt = this.screenSharePrompt
+    if (!prompt) return
+    this.screenSharePrompt = null
+    await invoke('browser:resolveScreenShare', prompt.requestId, sourceId).catch(() => {})
   }
 
   hasThreadPeek(projectId: string, threadId: string): boolean {
@@ -445,6 +494,11 @@ export class GlobalBrowserState {
     // and the other direction of the same rule closes the panel when the last one
     // ends.
     subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
+    // A page asking to share its screen, on a platform with no native picker, is
+    // offered the app's own source picker; a padlock's Site permissions entry
+    // opens the modal that lists every permission this browser exposes.
+    subscribe('browser:screenShareSources', (prompt) => (this.screenSharePrompt = prompt))
+    subscribe('browser:sitePermissions', (prompt) => (this.sitePermissionsPrompt = prompt))
     // An extension that asks to show its own side panel is asking for a place
     // beside the page, so the first panel for the tab on screen reveals the rail's
     // side panel tool, exactly as a popup window does, and the last one leaving

@@ -1748,6 +1748,16 @@
           {/await}
         {/key}
       {/if}
+      {#if browserStore()?.sitePermissionsPrompt}
+        {#await import('$lib/components/browser/BrowserSitePermissionsModal.svelte') then { default: BrowserSitePermissionsModal }}
+          <BrowserSitePermissionsModal />
+        {/await}
+      {/if}
+      {#if browserStore()?.screenSharePrompt}
+        {#await import('$lib/components/browser/BrowserScreenSharePicker.svelte') then { default: BrowserScreenSharePicker }}
+          <BrowserScreenSharePicker />
+        {/await}
+      {/if}
     </main>
   </div>
 

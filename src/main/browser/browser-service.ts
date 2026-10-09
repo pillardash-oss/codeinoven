@@ -24,6 +24,7 @@ import {
   screen,
   session,
   systemPreferences,
+  webContents,
   webFrameMain,
   WebContentsView,
   type MenuItemConstructorOptions,
@@ -151,6 +152,8 @@ import {
   permissionResolutions,
   permissionSilentGrant,
   rememberedPermissionOutcome,
+  screenCaptureDeniedInLedger,
+  sitePermissionDescriptor,
   sitePermissionState,
   type PermissionResolution
 } from './browser-service/browser-permissions'
@@ -158,6 +161,10 @@ import {
   BrowserPermissionMemory,
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
+import {
+  BrowserScreenShareService,
+  type BrowserScreenShareOwner
+} from './browser-service/browser-screen-share'
 import {
   type BrowserPageOwner,
   type BrowserTab,
@@ -241,6 +248,8 @@ import {
   validateSiteDataScopes,
   validateSiteMenuOrigin,
   validateSiteMenuPoint,
+  validateSitePermissionId,
+  validateSitePermissionState,
   validateTabDestroyReason,
   validateTabId,
   validateThreadId,
@@ -504,6 +513,9 @@ export class BrowserService {
    *  comments; the panel drives it through the browser IPC contract. */
   private readonly inspector: BrowserInspector
   private readonly siteData: BrowserSiteDataService
+  /** The screen-share source picker for platforms without a native one, and the
+   *  ledger gate that refuses a share the user remembered blocking. */
+  private readonly screenShare: BrowserScreenShareService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
   /**
@@ -759,9 +771,13 @@ export class BrowserService {
           this.permissionGrants.get(partition),
           this.permissionDenies.get(partition)
         ),
-      applySitePermission: (partition, keys, action) =>
-        this.applySitePermission(partition, keys, action),
       reloadOriginTabs: (partition, origin) => this.reloadOriginTabs(partition, origin)
+    })
+    this.screenShare = new BrowserScreenShareService({
+      window,
+      resolveFrameOwner: (frame) => this.resolveScreenShareOwner(frame),
+      isScreenShareDenied: (partition, origin) =>
+        screenCaptureDeniedInLedger(this.permissionDenies.get(partition), origin)
     })
     this.extensions = new BrowserExtensionService(getConfigRoot(), permissionPersistence, {
       window: () => (this.window.isDestroyed() ? null : this.window),
@@ -1449,7 +1465,9 @@ export class BrowserService {
         const y = validateSiteMenuPoint(rawY, 'y coordinate')
         // Native popup menus run a nested run loop; detach from the invoke reply
         // so the renderer's call resolves immediately.
-        setImmediate(() => this.siteData.showSiteMenu(projectId, host, origin, boxId, boxName, x, y))
+        setImmediate(() =>
+          this.siteData.showSiteMenu(projectId, host, origin, boxId, boxName, x, y)
+        )
       }
     )
     replaceHandler('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
@@ -1518,6 +1536,35 @@ export class BrowserService {
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
     })
+    replaceHandler('browser:resolveScreenShare', (_event, rawRequestId, rawSourceId) => {
+      const requestId = validatePermissionRequestId(rawRequestId)
+      const sourceId = typeof rawSourceId === 'string' ? rawSourceId : null
+      this.screenShare.resolveChoice(requestId, sourceId)
+    })
+    replaceHandler(
+      'browser:setSitePermission',
+      (_event, rawProjectId, rawBoxId, rawOrigin, rawPermissionId, rawAction) => {
+        const projectId = validateProjectId(rawProjectId)
+        const boxId = validateOptionalBoxId(rawBoxId)
+        const origin = validateSiteMenuOrigin(rawOrigin)
+        if (!origin) throw new Error('Site permissions require a site origin')
+        const descriptor = sitePermissionDescriptor(validateSitePermissionId(rawPermissionId))
+        if (!descriptor) throw new Error('Site permission is unknown')
+        const action = validateSitePermissionState(rawAction)
+        // The modal writes the same ledger keys the page-initiated prompt writes,
+        // so a manual decision and a prompt decision are the same decision.
+        const partition = browserPartitionFor(projectId, boxId)
+        this.applySitePermission(
+          partition,
+          descriptor.keysFor(origin),
+          action === 'ask' ? 'reset' : action
+        )
+        // A page that already read the old answer only re-queries on navigation,
+        // so the origin's tabs are reloaded into the new one, exactly as the old
+        // padlock submenus did.
+        this.reloadOriginTabs(partition, origin)
+      }
+    )
     replaceHandler('browser:popupReady', () => {
       // Pull model: the popup document requests the prompt on display once its
       // listener is bound. Invoke replies bypass the push-side load-state
@@ -1615,6 +1662,7 @@ export class BrowserService {
     this.stage.dispose()
     this.promptWindow.dispose()
     this.overlay.dispose()
+    this.screenShare.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
@@ -4879,8 +4927,33 @@ export class BrowserService {
       // stranded request.
       void this.promptFromDurableMemory(id)
     })
+    // Screen sharing needs its own handler on Electron: `getDisplayMedia`
+    // rejects with `NotSupportedError` when a session never answers it. The
+    // native system picker is preferred where the platform has one, and the
+    // permission request handler above has already gated the call, so a
+    // remembered refusal refuses the share before any picker can appear.
+    browserSession.setDisplayMediaRequestHandler(
+      (request, callback) => {
+        void this.screenShare.handle(request, callback)
+      },
+      { useSystemPicker: true }
+    )
     this.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /** The tab and jar a display-media request's frame belongs to, or null when
+   *  the frame is gone or belongs to no tab of this browser. */
+  private resolveScreenShareOwner(frame: WebFrameMain | null): BrowserScreenShareOwner | null {
+    const contents = frame ? webContents.fromFrame(frame) : undefined
+    if (!contents || contents.isDestroyed()) return null
+    const owner = this.tabForContents(contents.id)
+    if (!owner) return null
+    return {
+      tabId: owner.id,
+      projectId: owner.tab.projectId,
+      partition: browserPartitionFor(owner.tab.projectId, owner.tab.boxId)
+    }
   }
 
   /**

@@ -29,6 +29,7 @@ import type {
   BrowserScrollbarTheme,
   BrowserTabDestroyReason,
   BrowserTransportCommand,
+  BrowserSitePermissionState,
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
@@ -469,9 +470,8 @@ export const invokeBrowserContract = {
    * says, because only the renderer knows a box's name and the copy has to say
    * which jar is about to lose its cookies. `origin` is the normalized
    * `https://host` origin of the page on screen (empty when the address is not
-   * a site) and drives the manual permission section: camera, microphone,
-   * location and notifications can be allowed, blocked, or reset to ask every
-   * time without waiting for the page to request them.
+   * a site); the menu's single "Site permissions…" entry opens the modal that
+   * sets any of the browser's permissions for that origin.
    */
   'browser:siteMenu': {} as Contract<
     [
@@ -558,5 +558,21 @@ export const invokeBrowserContract = {
   /** Drop a finished, interrupted or cancelled download record from the list. */
   'browser:removeDownload': {} as Contract<[id: string], void>,
   'browser:openDownload': {} as Contract<[id: string], void>,
-  'browser:revealDownload': {} as Contract<[id: string], boolean>
+  'browser:revealDownload': {} as Contract<[id: string], boolean>,
+  /** Set one site permission from the Site Permissions modal. `permissionId` is a
+   *  catalog id and `action` is the state the user chose; main writes the same
+   *  ledger keys the page-initiated prompt writes, so the two agree. */
+  'browser:setSitePermission': {} as Contract<
+    [
+      projectId: string,
+      boxId: string | null,
+      origin: string,
+      permissionId: string,
+      action: BrowserSitePermissionState
+    ],
+    void
+  >,
+  /** Answer the in-app screen-share picker: a chosen source id, or null to
+   *  cancel. Main resolves the pending `getDisplayMedia` from it. */
+  'browser:resolveScreenShare': {} as Contract<[requestId: string, sourceId: string | null], void>
 }

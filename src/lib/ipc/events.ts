@@ -28,6 +28,8 @@ import type {
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserPopupWindow,
+  BrowserScreenSharePrompt,
+  BrowserSitePermissionsPrompt,
   BrowserSwitcherKey,
   BrowserShortcutChord
 } from './browser'
@@ -318,6 +320,12 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /** Open the Site Permissions modal for one origin, with every permission's
+   *  remembered state so the modal draws without a round trip. */
+  'browser:sitePermissions': [] as unknown as [prompt: BrowserSitePermissionsPrompt],
+  /** A page asked to share the screen and no system picker is available, so the
+   *  in-app source picker should be shown. */
+  'browser:screenShareSources': [] as unknown as [prompt: BrowserScreenSharePrompt],
   /**
    * The browser's installed extensions, whole, after any change to them: one
    * installed, removed, or its enablement edited. The list is short, so it is

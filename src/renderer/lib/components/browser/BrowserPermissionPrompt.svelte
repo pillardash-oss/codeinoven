@@ -5,6 +5,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { applyAppTypography } from '$lib/app-typography'
   import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
+  import { sitePermissionRequestSummary } from '$shared/browser/site-permissions'
   import type {
     BrowserPermissionDecision,
     BrowserPermissionPromptContext,
@@ -46,18 +47,11 @@
     }
   }
 
-  /** What the site is asking for, in the app's own words. */
+  /** What the site is asking for, in the app's own words. Screen capture arrives
+   *  as a `media` request with no media types, which the shared catalog names
+   *  "your screen" rather than the raw permission string. */
   function capability(request: BrowserPermissionRequest): string {
-    if (request.permission === 'media' && request.mediaTypes.length > 0) {
-      return request.mediaTypes
-        .map((mediaType) => {
-          if (mediaType === 'video') return 'the camera'
-          if (mediaType === 'audio') return 'the microphone'
-          return mediaType
-        })
-        .join(' and ')
-    }
-    return request.permission.replace(/-/g, ' ')
+    return sitePermissionRequestSummary(request.permission, request.mediaTypes)
   }
 
   /** The quiet line under the request: whose browsing this is, and how many
@@ -163,7 +157,8 @@
     {/if}
     {#if context.systemAccessDenied}
       <p class="text-xs text-danger">
-        macOS blocked access. Enable camera or microphone access for CodeInOven in System Settings, then retry.
+        macOS blocked access. Enable camera or microphone access for CodeInOven in System Settings,
+        then retry.
       </p>
     {/if}
     <div class="mt-0.5 flex gap-1.5" role="group" aria-label="Permission decision">

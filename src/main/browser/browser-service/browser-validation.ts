@@ -653,6 +653,23 @@ export function validatePermissionDecision(value: unknown): BrowserPermissionDec
   return value
 }
 
+/** Validate the state the Site Permissions modal set for one permission. */
+export function validateSitePermissionState(value: unknown): 'allow' | 'block' | 'ask' {
+  if (typeof value !== 'string' || (value !== 'allow' && value !== 'block' && value !== 'ask')) {
+    throw new TypeError('Browser site permission state is invalid')
+  }
+  return value
+}
+
+/** Validate a permission id from the Site Permissions modal. The id is looked up
+ *  in the catalog before use, so this only bounds the string. */
+export function validateSitePermissionId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 80) {
+    throw new TypeError('Browser site permission id is invalid')
+  }
+  return value
+}
+
 export function validateDownloadId(value: unknown): string {
   if (typeof value !== 'string' || !DOWNLOAD_ID_PATTERN.test(value)) {
     throw new TypeError('Browser download ID is invalid')
