@@ -44,6 +44,7 @@ import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
+  BrowserStatusOverlay,
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   ToastOverlayInteractionReport,
@@ -299,6 +300,12 @@ export const IPC_EVENT_CONTRACT = {
    * next surface that needs it.
    */
   'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
+  /**
+   * The link preview the native overlay should draw at the page's bottom-left,
+   * delivered to the overlay document. Null takes it down. It is paint-only, so
+   * unlike the stack and the strip it never carries a handler or a revision.
+   */
+  'browser:overlay:status': [] as unknown as [status: BrowserStatusOverlay | null],
   /**
    * One interaction with a toast the overlay drew, delivered back to the app
    * renderer, which runs the handler that toast holds (open the thread, copy the

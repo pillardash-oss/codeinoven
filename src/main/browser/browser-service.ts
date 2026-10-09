@@ -104,6 +104,7 @@ import {
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
+import { browserStatusOverlayPlacement, type BrowserStatusOverlay } from '../../lib/browser-overlay'
 import {
   BrowserDownloadManager,
   type BrowserDownloadOwner
@@ -553,6 +554,18 @@ export class BrowserService {
     { directory: string; time: number; playing: boolean }
   >()
   private activeTabId: string | null = null
+  /**
+   * The link target the pointer on the active page rests on, and the tab's page
+   * that reported it, or null while none is.
+   *
+   * Kept raw beside the bubble so a page that moves under a resting pointer can
+   * be re-placed from the same target rather than waiting for another hover.
+   */
+  private targetUrl: string | null = null
+  private targetUrlTabId: string | null = null
+  /** The link preview currently drawn by the overlay window, or null while none
+   *  is. Compared against the next placement so a repeat frame is not a repaint. */
+  private statusOverlay: BrowserStatusOverlay | null = null
   /** Chords the browser claims, resolved from the keymap by the renderer. Empty
    *  until that report arrives, which leaves every key to the rest of the app. */
   private shortcutBindings: BrowserShortcutBindings = {}
@@ -742,6 +755,9 @@ export class BrowserService {
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
     this.overlay = new BrowserOverlayWindow(window)
+    // Chromium drops its own status bubble when the window loses the pointer's
+    // context; so does this.
+    window.on('blur', () => this.dismissStatusOverlay())
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -1049,6 +1065,10 @@ export class BrowserService {
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
+        // A page that moved under a resting pointer keeps its preview where it is
+        // relative to the page; a switch to another tab drops the one the old
+        // page was showing, because the pointer is no longer over it.
+        if (this.targetUrl !== null) this.refreshStatusOverlay()
         if (previousActiveTabId !== tabId) this.notifyExtensionActivated(tabId)
         // Remember the frame the page is on screen at. Parking lays the page out at
         // this size from now on, so leaving a tab never resizes the page away from
@@ -3141,6 +3161,12 @@ export class BrowserService {
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
     view.webContents.on('audio-state-changed', publish)
+    // Chromium reports the resolved address under the pointer here, and an empty
+    // string once it leaves the link. That is the whole source of the bottom-left
+    // status bubble: an embedded page has no browser chrome to draw one itself.
+    view.webContents.on('update-target-url', (_event, url) => {
+      this.onTargetUrlReport(tabId, url)
+    })
     // The document is parsed at dom-ready, which is the earliest point at which
     // the capture observer can be installed before the page's own scripts ask
     // for the microphone.
@@ -6085,6 +6111,7 @@ export class BrowserService {
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
     this.stage.park(tab.view, viewport)
     this.markParked(tabId)
+    if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
     if (this.activeTabId === tabId && !options.keepActive) {
       this.activeTabId = null
       this.activeTabBounds = null
@@ -6319,6 +6346,9 @@ export class BrowserService {
    *  losing its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
+    // The DOM toast replaces the overlay window's own content, so the preview
+    // steps aside with it rather than drawing over the toast.
+    if (visible) this.dismissStatusOverlay()
     // A popup window's page is a native view too, so a DOM toast under it would be
     // invisible. It steps aside with the tab's page and comes back at the same
     // frame, which is what keeps a momentary toast from resizing a page.
@@ -6336,6 +6366,77 @@ export class BrowserService {
       return
     }
     this.showActiveView()
+  }
+
+  /**
+   * Show or drop the link preview for a report from a page's pointer.
+   *
+   * `update-target-url` carries the resolved address under the pointer and an
+   * empty string once it leaves the link, which is the one signal that takes the
+   * bubble down. Only the page actually on screen can be hovered, so a report
+   * from a parked or background tab is dropped rather than drawn over another.
+   */
+  private onTargetUrlReport(tabId: string, url: string): void {
+    const target = statusTextForTarget(url)
+    if (target === null) {
+      if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
+      return
+    }
+    if (this.window.isDestroyed()) return
+    if (this.activeTabId !== tabId || this.toastVisible) return
+    this.targetUrl = target
+    this.targetUrlTabId = tabId
+    this.refreshStatusOverlay()
+  }
+
+  /**
+   * Re-place the preview from the tab and frame that are current, or take it down
+   * when there is nothing it can be drawn against.
+   *
+   * Called on a hover, a tab switch, a frame change, and the page leaving the
+   * screen, so a bubble only ever belongs to the page the pointer is over and
+   * never lingers after it. A frame that produces the same placement is not a
+   * repaint, which matters because a surface animation re-reports its frame every
+   * frame it runs.
+   */
+  private refreshStatusOverlay(): void {
+    if (this.window.isDestroyed()) return
+    const bounds = this.activeTabBounds
+    const target = this.targetUrl
+    if (
+      target === null ||
+      this.targetUrlTabId !== this.activeTabId ||
+      this.toastVisible ||
+      bounds === null
+    ) {
+      this.setStatusOverlay(null)
+      return
+    }
+    const placement = browserStatusOverlayPlacement(bounds, this.window.getContentBounds().height)
+    const current = this.statusOverlay
+    if (
+      current !== null &&
+      current.url === target &&
+      current.left === placement.left &&
+      current.bottom === placement.bottom
+    ) {
+      return
+    }
+    this.setStatusOverlay({ url: target, left: placement.left, bottom: placement.bottom })
+  }
+
+  /** Send the preview to the overlay window, tracking what is on display. */
+  private setStatusOverlay(request: BrowserStatusOverlay | null): void {
+    this.statusOverlay = request
+    this.overlay.applyStatus(request)
+  }
+
+  /** Drop the preview, for the page that owns it leaving the screen. */
+  private dismissStatusOverlay(): void {
+    if (this.targetUrl === null && this.targetUrlTabId === null) return
+    this.targetUrl = null
+    this.targetUrlTabId = null
+    this.refreshStatusOverlay()
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
@@ -6386,6 +6487,7 @@ export class BrowserService {
       this.activeTabBounds = null
     }
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
+    if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
     // A destroyed tab can no longer hold the keyboard, so its toolbar must not
     // stay the tab the window-level interception routes to.
     if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
@@ -6475,6 +6577,23 @@ function safeOrigin(url: string): string {
     return new URL(url).origin
   } catch {
     return 'the current page'
+  }
+}
+
+/**
+ * What the link preview should show for a target the page reported, or null when
+ * there is nothing useful to say.
+ *
+ * A `javascript:` link navigates nowhere, so Chromium leaves its own status
+ * bubble empty for one and this does the same. An address that will not parse is
+ * dropped for the same reason: it is not a place the user is about to visit.
+ */
+function statusTextForTarget(url: string): string | null {
+  if (url.length === 0) return null
+  try {
+    return new URL(url).protocol === 'javascript:' ? null : url
+  } catch {
+    return null
   }
 }
 

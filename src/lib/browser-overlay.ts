@@ -69,6 +69,46 @@ export function browserOverlayWindowBounds(content: BrowserViewBounds): BrowserV
   }
 }
 
+/**
+ * The link a page's pointer is resting on, reduced to what the overlay draws.
+ *
+ * A browser shows where a link leads in a small bubble pinned to the bottom left
+ * of its viewport. A `WebContentsView` has no such chrome, so the page's resolved
+ * `update-target-url` is painted here instead. It is paint-only: the bubble never
+ * takes a press, so it is deliberately absent from the overlay's click-through
+ * decision and the page underneath stays live.
+ */
+export interface BrowserStatusOverlay {
+  /** The resolved address the page reported for the link, never empty. */
+  url: string
+  /** The bubble's left edge, in the overlay document's own client coordinates. */
+  left: number
+  /** The bubble's bottom edge, measured up from the document's own bottom edge. */
+  bottom: number
+}
+
+/** How far the bubble sits from the page's own bottom-left corner. */
+export const STATUS_BUBBLE_INSET = 4
+
+/**
+ * Where the status bubble belongs for a page laid out at `page`, given the
+ * height of the window content the overlay window spans.
+ *
+ * `page` is in window-content coordinates and the overlay document starts at the
+ * content top, so a point's distance from the document's bottom is the content
+ * height minus its y. Clamped at zero so a page flush with the bottom edge (the
+ * usual case) still leaves the bubble inside the window.
+ */
+export function browserStatusOverlayPlacement(
+  page: BrowserViewBounds,
+  contentHeight: number
+): { left: number; bottom: number } {
+  return {
+    left: Math.max(0, Math.round(page.x + STATUS_BUBBLE_INSET)),
+    bottom: Math.max(0, Math.round(contentHeight - (page.y + page.height) + STATUS_BUBBLE_INSET))
+  }
+}
+
 /** The status a projected toast carries, which is sonner's own set minus the two
  *  shapes only a component can render. */
 export type ToastOverlayKind = 'default' | 'success' | 'error' | 'warning' | 'info' | 'loading'
@@ -299,4 +339,5 @@ export interface BrowserOverlaySnapshot {
   docks: NativeDockRequest[]
   stack: ToastOverlayRequestStack | null
   strip: BrowserStripOverlayRequest | null
+  status: BrowserStatusOverlay | null
 }

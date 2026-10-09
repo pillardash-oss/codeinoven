@@ -7,6 +7,7 @@
   import { logRendererDev } from '$lib/system/renderer-logger'
   import {
     TOAST_OVERLAY_INNER_TOP,
+    type BrowserStatusOverlay,
     type BrowserStripOverlayInteraction,
     type BrowserStripOverlayRequest,
     type ToastOverlayInteraction,
@@ -18,6 +19,7 @@
   import TooltipHost from './TooltipHost.svelte'
   import ToastStack from './ToastStack.svelte'
   import BrowserOverlayStrip from './BrowserOverlayStrip.svelte'
+  import BrowserOverlayStatus from './BrowserOverlayStatus.svelte'
 
   /**
    * The browser overlay's document: the app's toaster, and the browser's floating
@@ -66,6 +68,9 @@
 
   /** The floating tab strip on display, or null while none is. */
   let strip = $state<BrowserStripOverlayRequest | null>(null)
+
+  /** The link preview on display, or null while none is. */
+  let status = $state<BrowserStatusOverlay | null>(null)
 
   /** What this document is drawing: the toast's own id, and a signature of the
    *  card as it was drawn, so an unchanged card is never re-applied. */
@@ -226,6 +231,10 @@
       draw(entry)
     }
     void tick().then(afterDraw)
+  }
+
+  function applyStatus(next: BrowserStatusOverlay | null): void {
+    status = next
   }
 
   function applyStrip(next: BrowserStripOverlayRequest | null): void {
@@ -393,6 +402,7 @@
     const unsubscribeDocks = subscribe('browser:overlay:docks', applyDocks)
     const unsubscribeStack = subscribe('browser:overlay:stack', (next) => applyStack(next))
     const unsubscribeStrip = subscribe('browser:overlay:strip', (next) => applyStrip(next))
+    const unsubscribeStatus = subscribe('browser:overlay:status', (next) => applyStatus(next))
     // First delivery is a pull, exactly as the permission popup does it: a push
     // straight after `loadURL` loses the race against these subscriptions.
     void invoke('browser:overlayReady')
@@ -400,6 +410,7 @@
         applyDocks(snapshot.docks)
         if (snapshot.stack) applyStack(snapshot.stack)
         if (snapshot.strip) applyStrip(snapshot.strip)
+        applyStatus(snapshot.status)
       })
       .catch(() => {})
     window.addEventListener('mousemove', trackPointer)
@@ -409,6 +420,7 @@
       unsubscribeDocks()
       unsubscribeStack()
       unsubscribeStrip()
+      unsubscribeStatus()
       window.removeEventListener('mousemove', trackPointer)
       document.removeEventListener('mouseout', leaveDocument)
     }
@@ -416,6 +428,10 @@
 </script>
 
 <ToastStack {theme} offsetTop={TOAST_OVERLAY_INNER_TOP} />
+
+{#if status}
+  <BrowserOverlayStatus {status} />
+{/if}
 
 {#if strip}
   <BrowserOverlayStrip

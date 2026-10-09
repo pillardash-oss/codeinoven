@@ -5,6 +5,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   browserOverlayWindowBounds,
   type BrowserOverlaySnapshot,
+  type BrowserStatusOverlay,
   type BrowserStripOverlayRequest,
   type ToastOverlayCursor,
   type ToastOverlayRequestStack
@@ -58,6 +59,9 @@ export class BrowserOverlayWindow {
   private stack: ToastOverlayRequestStack | null = null
   /** The floating tab strip on display, or null while none is. */
   private strip: BrowserStripOverlayRequest | null = null
+  /** The link preview on display, or null while none is. Paint-only, so it is
+   *  never part of the click-through decision. */
+  private status: BrowserStatusOverlay | null = null
   private docks = new Map<string, NativeDockRequest>()
   /** True while the document has finished loading and may be sent content. */
   private ready = false
@@ -119,6 +123,28 @@ export class BrowserOverlayWindow {
   }
 
   /**
+   * Draw the link preview at the page's bottom-left, or take it down with null.
+   *
+   * The bubble is not interactive: it is painted, never pressed, which is why it
+   * stays out of `applyClickThrough` and the page underneath stays live. Answers
+   * false only when the window could not be created, which the caller reads as
+   * "no preview" rather than parking the page.
+   */
+  applyStatus(request: BrowserStatusOverlay | null): boolean {
+    if (request !== null) {
+      const popup = this.ensure()
+      if (!popup) return false
+      this.status = request
+      this.reveal(popup)
+      this.publish(popup)
+      return true
+    }
+    this.status = null
+    this.settle()
+    return true
+  }
+
+  /**
    * The toaster's release: no page covers the stack's corner any more, so the
    * stack belongs back in the app's own DOM.
    *
@@ -153,7 +179,12 @@ export class BrowserOverlayWindow {
 
   /** Everything on display, resolved to the document's own pull on first load. */
   currentState(): BrowserOverlaySnapshot {
-    return { stack: this.stack, strip: this.strip, docks: [...this.docks.values()] }
+    return {
+      stack: this.stack,
+      strip: this.strip,
+      docks: [...this.docks.values()],
+      status: this.status
+    }
   }
 
   /** Settle selection in the window that actually saw the latest mouse move. */
@@ -195,6 +226,7 @@ export class BrowserOverlayWindow {
     this.popup = null
     this.stack = null
     this.strip = null
+    this.status = null
     this.docks.clear()
     this.ready = false
     this.pointerOverContent = false
@@ -264,6 +296,7 @@ export class BrowserOverlayWindow {
     return (
       (this.stack !== null && this.stack.toasts.length > 0) ||
       this.strip !== null ||
+      this.status !== null ||
       this.docks.size > 0
     )
   }
@@ -273,6 +306,7 @@ export class BrowserOverlayWindow {
     if (!this.ready) return
     sendToRenderer(popup.webContents, 'browser:overlay:stack', this.stack)
     sendToRenderer(popup.webContents, 'browser:overlay:strip', this.strip)
+    sendToRenderer(popup.webContents, 'browser:overlay:status', this.status)
     sendToRenderer(popup.webContents, 'browser:overlay:docks', [...this.docks.values()])
   }
 
