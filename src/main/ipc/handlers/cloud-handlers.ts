@@ -1907,7 +1907,11 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'checkpoint:rollback',
     async (_, projectId: string, threadId: string, checkpointId: string) => {
-      await checkpointManager.rollback(projectId, threadId, checkpointId)
+      const checkpoint = await checkpointManager.rollback(projectId, threadId, checkpointId)
+      // Undoing a turn's changes is the user rejecting that model's work: score
+      // it 0 without a judge instead of leaving the queue to grade a reverted
+      // answer (see markTurnRankingUndone).
+      chatEngine?.markTurnRankingUndone(threadId, checkpoint.sourceMessageId)
       return checkpointManager.listSummaries(projectId, threadId)
     }
   )
@@ -1916,12 +1920,13 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await checkpointManager.rollbackPaths(
+      const checkpoint = await checkpointManager.rollbackPaths(
         safeProjectId,
         safeThreadId,
         validateEntityId(checkpointId, 'Checkpoint ID'),
         validateStringArray(paths, 'Checkpoint paths')
       )
+      chatEngine?.markTurnRankingUndone(safeThreadId, checkpoint.sourceMessageId)
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )
@@ -1930,12 +1935,17 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await checkpointManager.redoPaths(
+      const checkpoint = await checkpointManager.redoPaths(
         safeProjectId,
         safeThreadId,
         validateEntityId(checkpointId, 'Checkpoint ID'),
         validateStringArray(paths, 'Checkpoint paths')
       )
+      // A redo that restores the whole turn undoes the rejection, so the
+      // window is graded normally again; a partial redo keeps the 0.
+      if (checkpoint.status !== 'rolled_back') {
+        chatEngine?.clearTurnRankingUndone(safeThreadId, checkpoint.sourceMessageId)
+      }
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )

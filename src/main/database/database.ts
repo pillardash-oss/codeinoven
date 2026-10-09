@@ -841,6 +841,7 @@ export class Database {
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateModelRankingSnapshotAnchorMessageId(connection)
+      this.migrateModelRankingSnapshotUndoneAt(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
@@ -1272,6 +1273,24 @@ export class Database {
          WHERE closed_at_ms IS NULL`
       )
       .run()
+  }
+
+  /**
+   * Databases created before the undo flag carry a snapshot queue with no
+   * `undone_at_ms` column. Add it in place; existing rows read as `null`, which
+   * is exactly "not undone". Idempotent and safe to re-run.
+   */
+  migrateModelRankingSnapshotUndoneAt(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0 || columns.has('undone_at_ms')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN undone_at_ms INTEGER')
   }
 
   /**

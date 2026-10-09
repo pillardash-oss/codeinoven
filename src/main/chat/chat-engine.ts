@@ -26572,6 +26572,42 @@ export class ChatEngine {
     await this.drainRankingQueue(true)
   }
 
+  /**
+   * The user undid a turn's file changes: that turn is a rejected answer, so
+   * the queued conversation window answering the same visible user message is
+   * recorded as 0 without a judge (see `drainRankingQueue`). Matching by the
+   * window's anchor   exactly the user message the turn answered   keeps an
+   * undo from reaching an unrelated conversation. Returns the number of queued
+   * windows caught, which is 0 once the score has already left the queue (an
+   * already-applied aggregate cannot be re-scored).
+   */
+  markTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
+    if (!sourceMessageId) return 0
+    const marked = this.rankingSnapshotRepo.markUndoneForAnchor(
+      threadId,
+      sourceMessageId,
+      Date.now()
+    )
+    // A row reset out of an in-flight claim is due immediately; arm the drain so
+    // its 0 is not left waiting on a timer that never fires.
+    if (marked > 0) this.scheduleRankingDrain()
+    Logger.dev('Turn file changes undone; queued ranking window scores 0', {
+      threadId,
+      marked
+    })
+    return marked
+  }
+
+  /**
+   * The user redid a previously undone turn's changes: clear the undo mark so
+   * the restored work is graded normally again. Only a still-queued window can
+   * be cleared; one already scored and deleted keeps its 0.
+   */
+  clearTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
+    if (!sourceMessageId) return 0
+    return this.rankingSnapshotRepo.clearUndoneForAnchor(threadId, sourceMessageId)
+  }
+
   /** Live progress of the user-requested run, or null when the queue is idle. */
   rankingGradeRunStatus(): LocalRankingGradeProgress | null {
     return this.rankingManualRun ? { ...this.rankingManualRun } : null
@@ -26814,9 +26850,14 @@ export class ChatEngine {
       heldBackDeferral = await this.deferHeldBackRankingRows(plan.heldBack, nowMs)
       const rows = this.rankingSnapshotRepo.claimRows(nowMs, plan.claimIds)
       for (const row of rows) {
+        // A window the user undid is a verdict no judge can improve on: the
+        // model's work was rejected wholesale, so it is recorded as 0 without
+        // spending a judge call. `outcome` is only consulted when a judge
+        // actually ran.
+        const undone = row.undone_at_ms !== null
         const candidate = toRankingCandidate(row)
-        const outcome = await this.gradeCandidateCore(candidate)
-        const score = outcome.score
+        const outcome = undone ? null : await this.gradeCandidateCore(candidate)
+        const score = outcome ? outcome.score : 0
         if (score !== null) {
           this.rankingJudgeFailures.delete(row.harness_id)
           const durationMs = Math.max(0, row.ended_at - row.started_at)
@@ -26845,7 +26886,9 @@ export class ChatEngine {
           }
           continue
         }
-        await this.deferJudgeFailure(row, outcome)
+        if (outcome) {
+          await this.deferJudgeFailure(row, outcome)
+        }
         processed += 1
         failed += 1
       }

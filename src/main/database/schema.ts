@@ -377,6 +377,10 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
  * only its contribution to `model_rankings` remains (agreed product decision,
  * not data loss). Timing is captured as started_at/ended_at timestamps; no
  * pre-rounded duration column is persisted.
+ *
+ * `undone_at_ms` records the user undoing the window's file changes: the turn
+ * was rejected, so the drain records a 0 without spending a judge call. A redo
+ * clears it, restoring a normal grade   see `markTurnRankingUndone`.
  */
 export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
@@ -401,6 +405,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   last_attempt_at_ms  INTEGER,
   claim_token         TEXT,
+  undone_at_ms        INTEGER,
   created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
