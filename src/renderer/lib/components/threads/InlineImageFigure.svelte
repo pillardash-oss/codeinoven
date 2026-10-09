@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { Expand } from '@lucide/svelte'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte.ts'
 
+  const APPFILE_RETRY_DELAYS = [250, 500, 1000, 2000] as const
+
   interface Props {
-    /** Original `file://` URL of the image part. */
+    /** Source URL of the image part, including appfile URLs for thread artifacts. */
     url: string
     mime: string
     filename: string
@@ -13,6 +16,36 @@
   }
 
   let { url, mime, filename, imageUrls, onExpand }: Props = $props()
+  let appfileRetryCount = 0
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearRetryTimer(): void {
+    if (!retryTimer) return
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+
+  function handleImageError(event: Event): void {
+    const image = event.currentTarget as HTMLImageElement
+    if (!url.startsWith('appfile://')) {
+      void imageUrls.bindImage(url, mime, image)
+      return
+    }
+
+    const delay = APPFILE_RETRY_DELAYS[appfileRetryCount]
+    if (delay === undefined) return
+    appfileRetryCount += 1
+    clearRetryTimer()
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      if (!image.isConnected) return
+      const retryUrl = new URL(url)
+      retryUrl.searchParams.set('cio-retry', String(appfileRetryCount))
+      image.src = retryUrl.toString()
+    }, delay)
+  }
+
+  onDestroy(clearRetryTimer)
 </script>
 
 <button
@@ -27,8 +60,8 @@
     alt={filename}
     class="block max-h-80 w-auto max-w-full object-contain"
     loading="lazy"
-    onerror={(e: Event) =>
-      void imageUrls.bindImage(url, mime, e.currentTarget as HTMLImageElement)}
+    onerror={handleImageError}
+    onload={clearRetryTimer}
   />
   <span
     class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-black/0 px-2 py-1 text-[0.6875rem] font-medium text-white opacity-0 transition-all group-hover:bg-black/50 group-hover:opacity-100"
