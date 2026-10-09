@@ -336,6 +336,7 @@ import type {
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
   ThinkingLevel,
+  UsageEventCost,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance,
@@ -663,6 +664,7 @@ import {
   assignmentAuditErrorsUnchanged,
   assignmentAuditRepairPrompt,
   assignmentWorkerRoutingReceipt,
+  aggregateTurnUsage,
   assistantTurnCostAccounting,
   auditCorrectionPrompt,
   auditRequiresRework,
@@ -25617,11 +25619,19 @@ export class ChatEngine {
         null
       memoryParentTurnId = parentTurnId
       if (turnAssistant) {
+        // The turn's model responses, in order. A harness answers one user turn
+        // with many requests (the tool loop), and each carries its own usage,
+        // so the ledger row has to fold them all instead of the terminal one.
+        const turnResponses =
+          latestUserIndex >= 0
+            ? messages.slice(latestUserIndex + 1).filter((message) => message.role === 'assistant')
+            : []
         this.recordMessageUsageEvent(
           info.threadId,
           thread,
           parentTurnId ?? turnAssistant.id,
           turnAssistant,
+          turnResponses.length > 0 ? turnResponses : [turnAssistant],
           failure
         )
       }
@@ -26307,6 +26317,7 @@ export class ChatEngine {
     thread: Thread | null,
     parentTurnId: string | null,
     message: AgentMessage,
+    responses: readonly UsageBearingMessage[],
     failure?: string
   ): void {
     const feature: UsageEventFeature =
@@ -26315,9 +26326,19 @@ export class ChatEngine {
         : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
           ? 'assignment'
           : 'main'
-    const normalizedUsage = message.normalizedUsage
+    // One row per user turn, carrying the whole turn's spend. The terminal
+    // response still supplies the attribution; the aggregate supplies the
+    // tokens, cost and timing of every response in the turn.
+    //
+    // The row is keyed by the turn, not by the terminal response, because a turn
+    // can finalize more than once (resume, continuation, per-response idle).
+    // Keying it by the response would append a second aggregate that re-counts
+    // the responses the first row already held.
+    const turnKey = parentTurnId ?? message.id
+    const aggregate = aggregateTurnUsage(responses)
+    const normalizedUsage = aggregate.normalizedUsage
     tokenUsageAttribution.recordTurnTotals({
-      key: parentTurnId ?? message.id,
+      key: turnKey,
       agent: null,
       driverId: message.harnessId ?? thread?.settings?.harnessId ?? null,
       harnessVersion: currentHarnessVersion(),
@@ -26330,10 +26351,24 @@ export class ChatEngine {
       idPrefix: 'message',
       threadId,
       projectId: null,
-      parentTurnId: parentTurnId ?? message.id,
+      parentTurnId: turnKey,
       feature,
-      featureCallId: message.id,
-      message,
+      featureCallId: turnKey,
+      replace: true,
+      message: {
+        id: turnKey,
+        role: 'assistant',
+        createdAt: aggregate.startedAt,
+        completedAt: aggregate.completedAt,
+        ...(message.error ? { error: message.error } : {}),
+        ...(message.harnessId ? { harnessId: message.harnessId } : {}),
+        ...(message.providerId ? { providerId: message.providerId } : {}),
+        ...(message.modelId ? { modelId: message.modelId } : {}),
+        ...(message.thinkingLevel ? { thinkingLevel: message.thinkingLevel } : {}),
+        ...(message.accountId ? { accountId: message.accountId } : {}),
+        ...(normalizedUsage ? { normalizedUsage } : {})
+      },
+      cost: aggregate.cost,
       thinkingLevelFallback: thread?.settings?.thinkingLevel ?? null,
       failure
     })
@@ -26357,13 +26392,18 @@ export class ChatEngine {
     feature: UsageEventFeature
     featureCallId: string
     message: UsageBearingMessage
+    /** Whole-turn cost when the caller folded several responses into one row. */
+    cost?: UsageEventCost
+    /**
+     * Rewrite this turn's row instead of appending. Set by the turn-scoped
+     * caller, whose aggregate already covers every response the row holds.
+     */
+    replace?: boolean
     thinkingLevelFallback: ThinkingLevel | null
     failure?: string
   }): void {
     const { message } = input
     const normalizedUsage = message.normalizedUsage
-    const { costUsd: knownCost, costStatus } = assistantTurnCostAccounting(message)
-    const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
       id: `${input.idPrefix}:${message.id}`,
       threadId: input.threadId,
@@ -26405,27 +26445,28 @@ export class ChatEngine {
       ),
       createdAt: message.completedAt ?? message.createdAt
     }
-    if (knownCost === null) {
-      this.usageRepo.recordEvent({
-        ...details,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
-      return
+    let cost: UsageEventCost
+    if (input.cost) {
+      cost = input.cost
+    } else {
+      const { costUsd, costStatus } = assistantTurnCostAccounting(message)
+      cost =
+        costUsd === null
+          ? { costStatus: 'unavailable', costUsd: null, pricingProvenance: null }
+          : {
+              costStatus: costStatus === 'estimated' ? 'estimated' : 'known',
+              costUsd,
+              pricingProvenance:
+                message.costProvenance ??
+                ({
+                  source: 'provider',
+                  currency: 'USD',
+                  capturedAt: message.completedAt ?? message.createdAt
+                } satisfies UsagePricingProvenance)
+            }
     }
-    this.usageRepo.recordEvent({
-      ...details,
-      costStatus: estimated ? 'estimated' : 'known',
-      costUsd: knownCost,
-      pricingProvenance:
-        message.costProvenance ??
-        ({
-          source: 'provider',
-          currency: 'USD',
-          capturedAt: message.completedAt ?? message.createdAt
-        } satisfies UsagePricingProvenance)
-    })
+    if (input.replace) this.usageRepo.recordReplacingEvent({ ...details, ...cost })
+    else this.usageRepo.recordEvent({ ...details, ...cost })
   }
 
   /**
