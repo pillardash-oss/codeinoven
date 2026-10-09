@@ -49,9 +49,9 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
     win32: 'https://www.npmjs.com/package/cline'
   },
   antigravity: {
-    darwin: 'https://github.com/google-antigravity/antigravity-cli',
-    linux: 'https://github.com/google-antigravity/antigravity-cli',
-    win32: 'https://github.com/google-antigravity/antigravity-cli'
+    darwin: 'https://antigravity.google/cli',
+    linux: 'https://antigravity.google/cli',
+    win32: 'https://antigravity.google/cli'
   },
   muse: {
     darwin: 'https://developer.meta.com/ai/products/muse-code/',
@@ -219,6 +219,45 @@ const INSTALL_COMMANDS: Record<
     darwin: { npm: { command: 'npm', args: ['install', '-g', 'cline'] } },
     linux: { npm: { command: 'npm', args: ['install', '-g', 'cline'] } },
     win32: { npm: { command: 'npm', args: ['install', '-g', 'cline'] } }
+  },
+  // Antigravity and Muse Code publish one-line installers as their only channel,
+  // so there is no npm or brew fallback to prefer. The Unix scripts write the
+  // binary into `~/.local/bin`, which the Oven's harness PATH now includes, and
+  // the PowerShell scripts write into the user's LocalAppData, which the Oven
+  // service adds to its own search path.
+  antigravity: {
+    darwin: {
+      native: {
+        command: 'sh',
+        args: ['-lc', 'curl -fsSL https://antigravity.google/cli/install.sh | bash']
+      }
+    },
+    linux: {
+      native: {
+        command: 'sh',
+        args: ['-lc', 'curl -fsSL https://antigravity.google/cli/install.sh | bash']
+      }
+    },
+    win32: {
+      native: {
+        command: 'powershell',
+        args: ['-NoProfile', '-Command', 'irm https://antigravity.google/cli/install.ps1 | iex']
+      }
+    }
+  },
+  muse: {
+    darwin: {
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://dev.meta.ai/install.sh | sh'] }
+    },
+    linux: {
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://dev.meta.ai/install.sh | sh'] }
+    },
+    win32: {
+      native: {
+        command: 'powershell',
+        args: ['-NoProfile', '-Command', 'irm https://dev.meta.ai/install.ps1 | iex']
+      }
+    }
   }
 }
 
@@ -266,7 +305,9 @@ export function harnessInstallChannels(
     .map((method) => ({
       method,
       pageUrl: page,
-      ...(commands[method] ? { command: commands[method].command, args: commands[method].args } : {})
+      ...(commands[method]
+        ? { command: commands[method].command, args: commands[method].args }
+        : {})
     }))
 }
 
@@ -292,7 +333,10 @@ export function harnessUninstallCommand(
 }
 
 /** True when this channel removes user data the oven must preserve. */
-export function harnessUninstallIsDestructive(harnessId: string, method: HarnessInstallMethod): boolean {
+export function harnessUninstallIsDestructive(
+  harnessId: string,
+  method: HarnessInstallMethod
+): boolean {
   return method === 'native'
 }
 
@@ -396,18 +440,18 @@ export class HarnessInstallService {
     const wslTarget =
       provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
     const platform: Platform = wslTarget ? 'linux' : process.platform
-    const platformCommands = INSTALL_COMMANDS[harnessId]?.[platform]
-    const method = (METHOD_PREFERENCE[platform] ?? ['npm']).find(
-      (candidate) => platformCommands?.[candidate]
+    // The shared resolver owns the ordering, so a harness whose only documented
+    // channel is a native installer is installable here too, not just on an Oven.
+    const channel = (harnessInstallChannels(harnessId, platform) ?? []).find(
+      (candidate) => candidate.command && candidate.args
     )
-    const command = method ? platformCommands?.[method] : undefined
-    if (!method || !command) {
+    if (!channel?.command || !channel.args) {
       throw new Error(
         `No one-click install is documented for ${definition.name} on this platform   use the install page instead.`
       )
     }
-
-    let resolved = { ...command, method }
+    const method = channel.method
+    let resolved = { command: channel.command, args: channel.args, method }
     if (method === 'npm' && !wslTarget && resolveExecutablePath('node') === undefined) {
       resolved = this.withNodeBootstrap(definition.name, resolved, platform)
     }

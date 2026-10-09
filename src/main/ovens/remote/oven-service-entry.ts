@@ -74,11 +74,30 @@ const versionCache = new Map<
 const root = process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), OVEN_DATA_DIRECTORY)
 /** Where earlier releases kept the same state, before it moved into the app namespace. */
 const legacyRoot = join(homedir(), OVEN_LEGACY_DATA_DIRECTORY)
-if (process.platform !== 'win32') {
-  const npmPrefix = join(homedir(), OVEN_NPM_PREFIX)
-  process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
-  process.env['npm_config_prefix'] = npmPrefix
+/**
+ * Directories harnesses install into that a non-interactive SSH PATH omits.
+ *
+ * The app's managed npm prefix is one. The native one-line installers are the
+ * other: Antigravity's and Muse Code's Unix scripts write to `~/.local/bin`, and
+ * their PowerShell scripts write under the user's LocalAppData, which is where
+ * Muse's `.cmd` shim and Antigravity's `agy.exe` end up.
+ */
+function harnessInstallDirs(): string[] {
+  if (process.platform === 'win32') {
+    const local = process.env['LOCALAPPDATA']
+    if (!local) return []
+    return [join(local, 'agy', 'bin'), join(local, 'Programs', 'muse')]
+  }
+  return [join(homedir(), OVEN_NPM_PREFIX, 'bin'), join(homedir(), '.local', 'bin')]
 }
+
+const installDirs = harnessInstallDirs()
+if (installDirs.length > 0) {
+  const separator = process.platform === 'win32' ? ';' : ':'
+  process.env['PATH'] = `${installDirs.join(separator)}${separator}${process.env['PATH'] ?? ''}`
+}
+if (process.platform !== 'win32')
+  process.env['npm_config_prefix'] = join(homedir(), OVEN_NPM_PREFIX)
 /**
  * Where clients reach the running service.
  *
