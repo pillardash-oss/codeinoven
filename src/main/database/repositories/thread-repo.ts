@@ -4,6 +4,7 @@ import { DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
   type AgentTokenUsage,
@@ -255,9 +256,23 @@ function buildSnippet(rawText: string, rawQuery: string): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
 }
 
+/**
+ * Which thread family a search is scoped to.
+ *
+ * `projects` searches every engineering project thread, `chats` the standalone
+ * conversations in the inbox, and `assistant` the assistant space (optionally
+ * narrowed to one routine). Omitted, a search spans every family except the
+ * hidden browser-chat container, which is how the in-view thread searches have
+ * always behaved.
+ */
+export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant'
+
 export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
+  family?: ThreadSearchFamily
+  /** Narrow an assistant search to one routine. Ignored for other families. */
+  routineId?: string
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -1213,18 +1228,19 @@ export function buildThreadSearchSql(
   useSearchMeta = false
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
-  const projectId = options.projectId ?? null
   const trimmed = raw.trim()
+  const titleScope = threadSearchScopeClause('t', options)
   const title = {
     sql: `SELECT t.* FROM threads t
-      WHERE (? IS NULL OR t.project_id = ?)
-        AND t.project_id != ?
+      WHERE ${titleScope.sql}
         AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, `%${escapeLike(trimmed)}%`, trimmed]
+    params: [...titleScope.params, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
+  const metaScope = threadSearchScopeClause('st', options)
+  const legacyScope = threadSearchScopeClause('t', options)
   const fts = ftsQuery
     ? useSearchMeta
       ? {
@@ -1240,15 +1256,14 @@ export function buildThreadSearchSql(
           WHERE agent_messages_fts MATCH ?
             AND m.session_id IS NULL
             AND m.visibility = 'conversation'
-            AND (? IS NULL OR st.project_id = ?)
-            AND st.project_id != ?
+            AND ${metaScope.sql}
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
         JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, messageLimit]
+          params: [ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
@@ -1259,13 +1274,67 @@ export function buildThreadSearchSql(
         WHERE agent_messages_fts MATCH ?
           AND am.session_id IS NULL
           AND am.visibility = 'conversation'
-          AND (? IS NULL OR t.project_id = ?)
-          AND t.project_id != ?
+          AND ${legacyScope.sql}
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID]
+          params: [ftsQuery, ...legacyScope.params]
         }
     : null
   return { title, fts, limit }
+}
+
+/**
+ * The WHERE fragment that scopes a thread search to its family.
+ *
+ * The table alias is a parameter because the FTS query joins `threads` twice
+ * (`st` inside the ranking subquery, `t` outside it) and both need the same
+ * restriction. Params are positional and must be spread in the same order the
+ * fragment declares them.
+ */
+function threadSearchScopeClause(
+  alias: string,
+  options: ThreadSearchOptions
+): { sql: string; params: unknown[] } {
+  const projectId = options.projectId ?? null
+  const routineId = options.routineId ?? null
+  switch (options.family) {
+    case 'chats':
+      return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
+    case 'assistant': {
+      const clauses = [`${alias}.project_id = ?`]
+      const params: unknown[] = [ASSISTANT_SPACE_ID]
+      if (routineId) {
+        clauses.push(`${alias}.routine_id = ?`)
+        params.push(routineId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+    case 'projects': {
+      // Every engineering project, never the hidden inbox/assistant/browser
+      // containers that share the same table.
+      const clauses = [
+        `${alias}.project_id != ?`,
+        `${alias}.project_id != ?`,
+        `${alias}.project_id != ?`
+      ]
+      const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID]
+      if (projectId) {
+        clauses.push(`${alias}.project_id = ?`)
+        params.push(projectId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+    default: {
+      // Unscoped/global: every family except the hidden browser-chat container,
+      // optionally narrowed to one project.
+      const clauses = [`${alias}.project_id != ?`]
+      const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
+      if (projectId) {
+        clauses.push(`${alias}.project_id = ?`)
+        params.push(projectId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+  }
 }
 
 /**

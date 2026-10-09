@@ -1,5 +1,6 @@
 import type { Component } from 'svelte'
 import {
+  AppWindow,
   Bell,
   Blocks,
   BookOpen,
@@ -16,12 +17,14 @@ import {
   Keyboard,
   LayoutDashboard,
   ListTree,
+  MessageCircle,
   MessageSquarePlus,
   MessagesSquare,
   SlidersHorizontal,
   SquarePen,
   Terminal,
   Users,
+  Workflow,
   Wrench
 } from '@lucide/svelte'
 import { APP_NAME } from '$shared/brand'
@@ -354,18 +357,55 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
     )
   }
 
-  if (hasLocalProjects) {
-    // Unshifted last so it always lands first in the palette.
-    actions.unshift({
-      id: 'app:thread-search',
-      title: 'Search threads across projects',
-      description: 'Find a conversation by title or message content in any project',
+  // The search entries are one block at the top of the palette, in family order:
+  // project threads first (only with a local project to search), then the
+  // standalone chats, the assistant tasks/routines, and the browser's open tabs.
+  // Each opens its own screen with its own sub-container filter.
+  const familySearchActions: ActionDefinition[] = [
+    {
+      id: 'app:chat-search',
+      title: 'Search chats',
+      description: 'Find a standalone conversation by title or message content',
       category: 'thread',
       source: applicationSource,
-      icon: MessagesSquare,
-      keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
-    })
-  }
+      icon: MessageCircle,
+      keywords: ['quick open', 'find', 'conversation', 'messages', 'chats', 'inbox']
+    },
+    {
+      id: 'app:assistant-search',
+      title: 'Search assistant tasks',
+      description: 'Find an assistant task or routine by name, title, or message content',
+      category: 'routine',
+      source: applicationSource,
+      icon: Workflow,
+      keywords: ['quick open', 'find', 'routine', 'assistant', 'task', 'schedule']
+    },
+    {
+      id: 'app:browser-tab-search',
+      title: 'Search browser tabs',
+      description: 'Find an open tab by title, address, or group',
+      category: 'browser',
+      source: applicationSource,
+      icon: AppWindow,
+      keywords: ['quick open', 'find', 'tab', 'browser', 'group', 'url']
+    }
+  ]
+  actions.unshift(
+    ...(hasLocalProjects
+      ? [
+          {
+            id: 'app:thread-search',
+            title: 'Search threads across projects',
+            description: 'Find an engineering thread by title or message content in any project',
+            category: 'thread',
+            source: applicationSource,
+            icon: MessagesSquare,
+            keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline', 'project']
+          } satisfies ActionDefinition
+        ]
+      : []),
+    ...familySearchActions
+  )
 
   return actions
 }

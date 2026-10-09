@@ -1,7 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
-  import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
+  import {
+    AppWindow,
+    FileSearch,
+    FolderKanban,
+    MessageCircle,
+    MessagesSquare,
+    Workflow
+  } from '@lucide/svelte'
+  import type {
+    CommandPaletteProps,
+    PaletteFooterFilter
+  } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import AppPanelHost from '$lib/components/layout/AppPanelHost.svelte'
   import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
@@ -75,6 +85,8 @@
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { getRoutineIcon } from '$lib/routine-icons'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
@@ -99,6 +111,7 @@
     type ElementSelectionBookmark
   } from '$lib/selection-bookmark'
   import {
+    ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
@@ -108,6 +121,7 @@
     type AppConfigPatch,
     type InstanceRole,
     type Project,
+    type Routine,
     type ThemePreference,
     type Thread
   } from '$shared/types'
@@ -124,6 +138,7 @@
   import { defaultConfig } from './app-defaults'
   import { FileSearchPaletteController } from './app-file-search.svelte'
   import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { BrowserTabPaletteController } from './app-browser-tab-search.svelte'
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
@@ -145,8 +160,23 @@
   /** The one-time start-at-login offer, raised once after the first routine how-to. */
   let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
-  const threadSearch = new ThreadSearchPaletteController({
-    openThread: (thread) => void openThreadFromSearch(thread)
+  const threadSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void openThreadFromSearch(thread) },
+    'projects'
+  )
+  const chatSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void openThreadFromSearch(thread) },
+    'chats'
+  )
+  const assistantSearch = new ThreadSearchPaletteController(
+    {
+      openThread: (thread) => void openThreadFromSearch(thread),
+      openRoutine: (routine) => void openRoutineFromSearch(routine)
+    },
+    'assistant'
+  )
+  const browserTabSearch = new BrowserTabPaletteController({
+    openTab: (tabId) => openBrowserTabFromSearch(tabId)
   })
   const projectSwitch = new ProjectSwitchPaletteController({
     focusProject: (project) => focusProjectFromSpotlight(project)
@@ -189,7 +219,8 @@
 
   /** The spotlight is one surface, not four. `actions` is its home screen; the
    *  other three open from it and only ever show inside the same shell. */
-  type SpotlightScreenId = 'actions' | 'files' | 'threads' | 'projects'
+  type SpotlightScreenId =
+    'actions' | 'files' | 'threads' | 'chats' | 'assistants' | 'browser' | 'projects'
 
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
@@ -201,16 +232,87 @@
     // That is what made the spotlight refuse to reopen after a screen hop.
     const files = fileSearch.paletteOpen
     const threads = threadSearch.paletteOpen
+    const chats = chatSearch.paletteOpen
+    const assistants = assistantSearch.paletteOpen
+    const browser = browserTabSearch.paletteOpen
     const projects = projectSwitch.paletteOpen
     const actions = commandPaletteOpen
     if (files) return 'files'
     if (threads) return 'threads'
+    if (chats) return 'chats'
+    if (assistants) return 'assistants'
+    if (browser) return 'browser'
     if (projects) return 'projects'
     if (actions) return 'actions'
     return null
   }
 
   let spotlightScreenId = $derived(resolveSpotlightScreen())
+
+  /** The footer filter for a project-scoped search: the local projects, driving
+   *  the same multi-select picker the routine and browser-group screens use. */
+  function projectFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    return {
+      options: scopeState.projects.map((project) => ({
+        id: project.id,
+        label: project.name,
+        ...(project.color ? { color: project.color } : {}),
+        iconUrl: project.iconUrl ?? null
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Projects',
+      ariaLabel: 'Scope search to projects',
+      searchPlaceholder: 'Search projects…',
+      emptyMessage: 'No matching projects'
+    }
+  }
+
+  /** The footer filter for assistant search: one row per routine. */
+  function routineFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    return {
+      options: assistantRoutines.routines.map((routine) => ({
+        id: routine.id,
+        label: routine.name,
+        ...(routine.color ? { color: routine.color } : {}),
+        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Routines',
+      ariaLabel: 'Scope search to routines',
+      searchPlaceholder: 'Search routines…',
+      emptyMessage: 'No matching routines'
+    }
+  }
+
+  /** The footer filter for browser tab search: one row per tab group. */
+  function groupFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    const store = browserStore()
+    return {
+      options: (store?.groups ?? []).map((group) => ({
+        id: group.id,
+        label: group.name,
+        ...(group.color ? { color: group.color } : {}),
+        iconUrl: store?.groupIconUrls.get(group.id) ?? null
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Groups',
+      ariaLabel: 'Scope search to browser groups',
+      searchPlaceholder: 'Search groups…',
+      emptyMessage: 'No matching groups'
+    }
+  }
 
   /**
    * The props for the single mounted palette, for whichever screen is on top.
@@ -242,9 +344,7 @@
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
-          projects: scopeState.projects,
-          selectedProjectIds: fileSearch.projectIds,
-          onSelectedProjectsChange: (projectIds) => fileSearch.setScope(projectIds),
+          filter: projectFooterFilter(fileSearch.projectIds, (ids) => fileSearch.setScope(ids)),
           onBack: backToSpotlightHome,
           onQueryChange: (query) => fileSearch.handleQuery(query),
           onSelect: (selection) => fileSearch.select(selection),
@@ -263,12 +363,68 @@
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
-          projects: scopeState.projects,
-          selectedProjectIds: threadSearch.projectIds,
-          onSelectedProjectsChange: (projectIds) => threadSearch.setScope(projectIds),
+          filter: projectFooterFilter(threadSearch.scopeIds, (ids) => threadSearch.setScope(ids)),
           onBack: backToSpotlightHome,
           onQueryChange: (query) => threadSearch.handleQuery(query),
           onSelect: (selection) => threadSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'chats':
+        return {
+          ...shell,
+          actions: chatSearch.actions,
+          title: 'Search chats',
+          placeholder: 'Search chat titles and messages…',
+          emptyLabel: chatSearch.loading
+            ? 'Searching chats…'
+            : 'Type at least two characters to search chats',
+          headerIcon: MessageCircle,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
+          serverFiltered: true,
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => chatSearch.handleQuery(query),
+          onSelect: (selection) => chatSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'assistants':
+        return {
+          ...shell,
+          actions: assistantSearch.actions,
+          title: 'Search assistant tasks',
+          placeholder: 'Search routines, tasks, and messages…',
+          emptyLabel: assistantSearch.loading
+            ? 'Searching assistant tasks…'
+            : 'Type at least two characters to search assistant tasks and routines',
+          headerIcon: Workflow,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
+          serverFiltered: true,
+          filter: routineFooterFilter(assistantSearch.scopeIds, (ids) =>
+            assistantSearch.setScope(ids)
+          ),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => assistantSearch.handleQuery(query),
+          onSelect: (selection) => assistantSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'browser':
+        return {
+          ...shell,
+          actions: browserTabSearch.actions,
+          title: 'Search browser tabs',
+          placeholder: 'Search open tabs by title, address, or group…',
+          emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
+          headerIcon: AppWindow,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
+          serverFiltered: true,
+          filter: groupFooterFilter(browserTabSearch.groupIds, (ids) =>
+            browserTabSearch.setScope(ids)
+          ),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => browserTabSearch.handleQuery(query),
+          onSelect: (selection) => browserTabSearch.select(selection),
           closeOnSelect: false
         }
       case 'projects':
@@ -677,6 +833,15 @@
       case 'app:thread-search':
         threadSearch.openPalette()
         return
+      case 'app:chat-search':
+        chatSearch.openPalette()
+        return
+      case 'app:assistant-search':
+        assistantSearch.openPalette()
+        return
+      case 'app:browser-tab-search':
+        browserTabSearch.openPalette()
+        return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
@@ -794,6 +959,9 @@
     commandPaletteOpen = false
     if (fileSearch.paletteOpen) fileSearch.close()
     if (threadSearch.paletteOpen) threadSearch.close()
+    if (chatSearch.paletteOpen) chatSearch.close()
+    if (assistantSearch.paletteOpen) assistantSearch.close()
+    if (browserTabSearch.paletteOpen) browserTabSearch.close()
     if (projectSwitch.paletteOpen) projectSwitch.close()
   }
 
@@ -810,6 +978,26 @@
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
     await openThreadFromNotification(thread, project)
+  }
+
+  /**
+   * Focus a routine picked in assistant search: land on the Assistant view, open
+   * the routine's seed thread so its context becomes the active one, then dock
+   * that routine's how-to panel on it.
+   */
+  async function openRoutineFromSearch(routine: Routine): Promise<void> {
+    navigate('assistant')
+    const anchor = await assistantRoutines.howToThread(routine.id).catch(() => null)
+    if (!anchor) return
+    await openThreadFromNotification(anchor, null)
+    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+  }
+
+  /** Focus a tab picked in browser search: land on the Browser view and switch
+   *  its strip to that tab. */
+  function openBrowserTabFromSearch(tabId: string): void {
+    navigate('browser')
+    void withBrowser((store) => store.switchTo(tabId))
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
