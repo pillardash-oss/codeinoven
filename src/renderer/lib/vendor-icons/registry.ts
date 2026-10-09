@@ -49,8 +49,6 @@ const vendorAliases: Record<string, string> = {
   googlevertex: 'gemini',
   huggingface: 'huggingface',
   llama: 'meta',
-  llamacpp: 'meta',
-  llamacppserver: 'meta',
   lmstudio: 'lmstudio',
   microsoftazure: 'azure',
   '01ai': 'zeroone',
