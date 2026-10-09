@@ -457,6 +457,11 @@ export function buildSetupPlan(
     })
   }
 
+  /* Phase: prerequisites. The clock is matched before any package work:
+     `apt` compares mirror release timestamps against the Oven's absolute clock,
+     so a clock running behind rejects the very repositories a refresh needs. */
+  steps.push(timezoneStep(assessment, deviceTimezone))
+
   /* Phase: prerequisites. Package upgrades are authorized only by Start setup. */
   const packages = packageCommands(assessment.packageManager, privilege)
   if (configuration.packageUpgrades) {
@@ -488,8 +493,8 @@ export function buildSetupPlan(
   }
   if (packages.notice) notices.push(packages.notice)
 
-  // Package registry refresh and package upgrades are the first mutations after
-  // preflight. Bootstrap Node only after that authorized package pass.
+  // Package registry refresh and package upgrades run after the clock is matched,
+  // so a skewed Oven clock cannot reject the repositories they depend on.
   for (const tool of ['git', 'curl'] as const) {
     const missing = assessment.issues.some((issue) => issue.code === `missing-${tool}`)
     const commands = missing
@@ -529,9 +534,6 @@ export function buildSetupPlan(
     if (commands.length === 0)
       blockers.push('npm is missing and cannot be installed with the detected package manager.')
   }
-
-  /* Phase: prerequisites. The Oven's clock follows this computer's zone. */
-  steps.push(timezoneStep(assessment, deviceTimezone))
 
   /* Phase: harnesses. One step per selection so a retry resumes exactly. */
   for (const selection of configuration.selectedHarnesses) {

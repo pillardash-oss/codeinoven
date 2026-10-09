@@ -119,6 +119,8 @@ function remoteCommandIssue(stderr: string): string {
     return 'Another package operation holds the package-manager lock. Wait for it to finish, then retry.'
   if (/dpkg was interrupted/iu.test(stderr))
     return 'The Oven has an interrupted package configuration. Repair it on the Oven before retrying setup.'
+  if (/is not valid yet|Release file .* not valid|not valid for another/iu.test(stderr))
+    return 'The Oven clock is behind the package mirrors, so their metadata was rejected as not yet valid. CodeInOven matches the Oven clock before upgrading packages; if this repeats, correct the Oven time source, then retry this step.'
   if (/command not found|is not recognized|No such file or directory/iu.test(stderr))
     return 'A command or file required by this step is missing on the Oven.'
   if (/no space left on device/iu.test(stderr))
