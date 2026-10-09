@@ -841,6 +841,7 @@ export class Database {
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateModelRankingSnapshotAnchorMessageId(connection)
+      this.migrateModelRankingSnapshotUndoneAt(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
@@ -864,6 +865,7 @@ export class Database {
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
       this.migrateCustomSvgIcons(connection)
+      this.migrateProjectOvenColumn(connection)
       this.migrateStickyNoteImagePath(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
@@ -883,6 +885,22 @@ export class Database {
       if (!columns.has('custom_svg')) {
         connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
       }
+    }
+  }
+
+  /**
+   * A project created for a remote Oven records that Oven's registry id, so its
+   * chats can seed their own Oven binding. Databases from before Oven projects
+   * have no such column and read back as unbound, which is the local default.
+   */
+  private migrateProjectOvenColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('oven_id')) {
+      connection.exec('ALTER TABLE projects ADD COLUMN oven_id TEXT')
     }
   }
 
@@ -1255,6 +1273,24 @@ export class Database {
          WHERE closed_at_ms IS NULL`
       )
       .run()
+  }
+
+  /**
+   * Databases created before the undo flag carry a snapshot queue with no
+   * `undone_at_ms` column. Add it in place; existing rows read as `null`, which
+   * is exactly "not undone". Idempotent and safe to re-run.
+   */
+  migrateModelRankingSnapshotUndoneAt(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0 || columns.has('undone_at_ms')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN undone_at_ms INTEGER')
   }
 
   /**

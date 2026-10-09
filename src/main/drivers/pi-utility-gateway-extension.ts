@@ -46,6 +46,11 @@ import {
   UTILITY_SUGGEST_TOOL_NAME,
   type GatewayToolDefinition
 } from '../../lib/gateway-tools'
+import {
+  ORCHESTRATION_DISPATCH_TOOL_NAME,
+  ORCHESTRATION_STATUS_TOOL_NAME,
+  ORCHESTRATION_TARGETS_TOOL_NAME
+} from '../../lib/orchestration-tools'
 
 /** The gateway tools the extension registers as first-class Pi tools. */
 export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
@@ -56,7 +61,10 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   ASK_SECRET_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
+  UTILITY_SUGGEST_TOOL_NAME,
+  ORCHESTRATION_TARGETS_TOOL_NAME,
+  ORCHESTRATION_DISPATCH_TOOL_NAME,
+  ORCHESTRATION_STATUS_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -73,6 +81,9 @@ const askSecretTool = gatewayTool(ASK_SECRET_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
 const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
+const orchestrationTargetsTool = gatewayTool(ORCHESTRATION_TARGETS_TOOL_NAME)
+const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
+const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -570,6 +581,83 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.sql !== undefined) body.sql = params.sql
       if (params.params !== undefined) body.params = params.params
       const result = await callGateway(${JSON.stringify(diagnosticsTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  // Workstation tools: registered without a promptSnippet so they stay out of
+  // the always-on system prompt, and callable only on a turn that carries the
+  // @cio-orchestrate contract, which is also what places their routes on the
+  // gateway. The gateway refuses a route the turn never received.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationTargetsTool.name)},
+    label: 'Read the CodeInOven workstation',
+    description: ${JSON.stringify(orchestrationTargetsTool.description)},
+    parameters: Type.Object({
+      harnessId: Type.Optional(Type.String({ description: 'Limit model, account and profile results to this harness id.' })),
+      ovenId: Type.Optional(Type.String({ description: 'Limit the Oven list and inventory to this Oven id.' })),
+      includeModels: Type.Optional(Type.Boolean({ description: 'Include the model catalogs. Defaults to true.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const body = {}
+      if (params.harnessId !== undefined) body.harnessId = params.harnessId
+      if (params.ovenId !== undefined) body.ovenId = params.ovenId
+      if (params.includeModels !== undefined) body.includeModels = params.includeModels
+      const result = await callGateway(${JSON.stringify(orchestrationTargetsTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationDispatchTool.name)},
+    label: 'Dispatch work onto a CodeInOven machine',
+    description: ${JSON.stringify(orchestrationDispatchTool.description)},
+    parameters: Type.Object({
+      title: Type.String({ description: 'Short thread title written for the user.' }),
+      prompt: Type.String({ description: 'The complete instruction the dispatched agent receives.' }),
+      projectId: Type.Optional(Type.String()),
+      ovenId: Type.Optional(Type.String({ description: 'Exact Oven id, or local for this computer.' })),
+      ovenPath: Type.Optional(Type.String()),
+      harnessId: Type.String({ description: 'Exact harness id.' }),
+      providerId: Type.String({ description: 'Exact provider id.' }),
+      modelId: Type.String({ description: 'Exact model id.' }),
+      accountId: Type.Optional(Type.String({ description: 'Exact account id.' })),
+      thinkingLevel: Type.Optional(Type.String()),
+      inferenceMode: Type.Optional(Type.String()),
+      permissionLevel: Type.Optional(Type.String())
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(orchestrationDispatchTool.route)}, {
+        title: params.title,
+        prompt: params.prompt,
+        harnessId: params.harnessId,
+        providerId: params.providerId,
+        modelId: params.modelId,
+        ...(params.projectId !== undefined ? { projectId: params.projectId } : {}),
+        ...(params.ovenId !== undefined ? { ovenId: params.ovenId } : {}),
+        ...(params.ovenPath !== undefined ? { ovenPath: params.ovenPath } : {}),
+        ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+        ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+        ...(params.inferenceMode !== undefined ? { inferenceMode: params.inferenceMode } : {}),
+        ...(params.permissionLevel !== undefined ? { permissionLevel: params.permissionLevel } : {})
+      })
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationStatusTool.name)},
+    label: 'Read a dispatched thread status',
+    description: ${JSON.stringify(orchestrationStatusTool.description)},
+    parameters: Type.Object({
+      threadId: Type.String({ description: 'Thread id returned by cio_orchestrate_dispatch.' }),
+      projectId: Type.Optional(Type.String())
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(orchestrationStatusTool.route)}, {
+        threadId: params.threadId,
+        ...(params.projectId !== undefined ? { projectId: params.projectId } : {})
+      })
       return textResult(result)
     }
   })

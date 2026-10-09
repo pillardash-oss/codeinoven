@@ -201,6 +201,9 @@
   let accounts = $derived(harnessAccountCache.cached(harnessId) ?? [])
   let accountLoading = $state(false)
   let accountLoadGeneration = 0
+  /** Identifies the last committed pick so a late account resolution cannot
+   *  overwrite a newer selection. */
+  let selectionToken = 0
   let selectedModelKeysSet = $derived(new Set(selectedModelKeys))
   /** Harness catalogs are app-wide. Keep the union available while a newly
    * opened project's time-budgeted refresh is still returning partial results. */
@@ -569,6 +572,30 @@
     })
   }
 
+  /**
+   * Best account id for a provider given whatever account list is already in
+   * hand. Kept separate from the harness read because selection must not wait
+   * on it: the picker commits a best guess and corrects it once the list lands.
+   */
+  function accountIdFor(
+    targetHarnessId: string,
+    targetProviderId: string,
+    availableAccounts: readonly HarnessAccount[]
+  ): string | undefined {
+    // Custom base URL providers run without accounts: omitting the id keeps the
+    // harness-level `${harness}.default` fallback from attaching a random
+    // account of the whole harness to the provider's turns.
+    if (isCodeInOvenCustomProviderId(targetProviderId)) return undefined
+    const matchingAccounts = availableAccounts.filter(
+      (account) => account.harnessId === targetHarnessId && account.providerId === targetProviderId
+    )
+    return (
+      matchingAccounts.find((account) => account.id === accountId)?.id ??
+      (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
+      `${targetHarnessId}.default`
+    )
+  }
+
   async function choose(
     nextProviderId: string,
     nextModelId: string,
@@ -586,32 +613,34 @@
       findModelEntry(displayProviders, nextProviderId, nextModelId, harnessId, nextHarnessId) ??
       findModelEntry(cachedProviders, nextProviderId, nextModelId, harnessId, nextHarnessId)
     close()
-    let availableAccounts = nextHarnessId === harnessId ? accounts : []
-    if (nextHarnessId !== harnessId) {
-      try {
-        availableAccounts = await harnessAccountCache.list(nextHarnessId)
-      } catch {
-        availableAccounts = []
-      }
-    }
-    const matchingAccounts = availableAccounts.filter(
-      (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
-    )
-    // Custom base URL providers run without accounts: omitting the id keeps the
-    // harness-level `${harness}.default` fallback from attaching a random
-    // account of the whole harness to the provider's turns.
-    const nextAccountId = isCodeInOvenCustomProviderId(nextProviderId)
-      ? undefined
-      : (matchingAccounts.find((account) => account.id === accountId)?.id ??
-        (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
-        `${nextHarnessId}.default`)
+    // Commit the pick now, from whatever account list is already cached.
+    // Resolving the target harness's accounts can mean a slow auth probe:
+    // Antigravity resolves auth by running `agy models`, a network CLI call.
+    // Waiting on it buys the user nothing but a delay before their own click
+    // registers, so the account is corrected below instead.
+    const sameHarness = nextHarnessId === harnessId
+    const knownAccounts = sameHarness ? accounts : (harnessAccountCache.cached(nextHarnessId) ?? [])
+    const nextAccountId = accountIdFor(nextHarnessId, nextProviderId, knownAccounts)
+    const token = ++selectionToken
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
-    if (nextHarnessId !== harnessId) {
+    if (!sameHarness) {
       // Invalidate any in-flight loadAccounts for the previous harness before
       // the parent applies the new harness prop. The shared reactive cache now
       // owns the list, so the prop change exposes the warmed accounts directly.
       accountLoadGeneration++
       accountLoading = false
+      // Resolve the real account list off the critical path and correct the
+      // selection only if the guess was wrong and this pick is still current.
+      void harnessAccountCache
+        .list(nextHarnessId)
+        .then((resolved) => {
+          if (token !== selectionToken) return
+          const resolvedAccountId = accountIdFor(nextHarnessId, nextProviderId, resolved)
+          if (resolvedAccountId !== nextAccountId) {
+            onSelect(nextProviderId, nextModelId, nextHarnessId, resolvedAccountId)
+          }
+        })
+        .catch(() => undefined)
     }
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents

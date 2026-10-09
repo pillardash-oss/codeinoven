@@ -7,6 +7,7 @@ interface ProjectRow {
   path: string
   source: string
   host: string | null
+  oven_id: string | null
   provider_id: string
   workflow_id: string
   thread_limit: number
@@ -30,6 +31,7 @@ function rowToProject(row: ProjectRow): Project {
     path: row.path,
     source: row.source as 'local' | 'ssh',
     host: row.host ?? undefined,
+    ovenId: row.oven_id ?? undefined,
     providerId: row.provider_id,
     workflowId: row.workflow_id,
     threadLimit: row.thread_limit,
@@ -53,15 +55,16 @@ export class ProjectRepo {
   upsert(project: Project): void {
     this.db.run(
       `INSERT INTO projects(
-        id, name, path, source, host, provider_id, workflow_id, thread_limit,
+        id, name, path, source, host, oven_id, provider_id, workflow_id, thread_limit,
         hidden, pinned, sort_order, icon, color, icon_type, custom_svg, change_tracking_mode,
         has_deployments, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         path = excluded.path,
         source = excluded.source,
         host = excluded.host,
+        oven_id = excluded.oven_id,
         provider_id = excluded.provider_id,
         workflow_id = excluded.workflow_id,
         thread_limit = excluded.thread_limit,
@@ -81,6 +84,7 @@ export class ProjectRepo {
       project.path,
       project.source,
       project.host ?? null,
+      project.ovenId ?? null,
       project.providerId,
       project.workflowId,
       project.threadLimit,
@@ -166,6 +170,23 @@ export class ProjectRepo {
 
   findByPath(path: string): Project | null {
     const row = this.db.get<ProjectRow>('SELECT * FROM projects WHERE path = ?', path)
+    return row ? rowToProject(row) : null
+  }
+
+  /**
+   * One project for a directory on a specific remote host, if it exists.
+   *
+   * Read on the database worker: this runs on the project-creation interaction
+   * path, where a synchronous read would hold the main thread.
+   */
+  async findByHostPath(host: string, path: string): Promise<Project | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM projects WHERE host = ? AND path = ?',
+      [host, path],
+      1
+    )
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ProjectRow[])[0]
     return row ? rowToProject(row) : null
   }
 

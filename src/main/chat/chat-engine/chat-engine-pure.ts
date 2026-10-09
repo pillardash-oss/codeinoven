@@ -27,7 +27,10 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentPart,
+  NormalizedUsage,
   UsageBearingMessage,
+  UsageEventCost,
+  UsagePricingProvenance,
   AgentQuestion,
   AgentQuestionResolution,
   AgentProviderIssue,
@@ -1031,9 +1034,7 @@ export function recommendedQuestionAnswer(question: AgentQuestion): string {
   )
 }
 
-export function turnStreamPath(projectId: string, threadId: string): string {
-  return `projects/${projectId}/threads/${threadId}/stream.jsonl`
-}
+export { turnStreamPath } from '../turn-stream'
 
 export function deliverBroadcast(event: AgentEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1072,6 +1073,120 @@ export function assistantTurnCostAccounting(message: UsageBearingMessage): {
   const estimated =
     message.costProvenance !== undefined && message.costProvenance.source !== 'provider'
   return { costUsd, costStatus: estimated ? 'estimated' : 'known' }
+}
+
+/** Whole-turn usage folded from every model response the turn produced. */
+export interface TurnUsageAggregate {
+  normalizedUsage: NormalizedUsage | undefined
+  cost: UsageEventCost
+  startedAt: number
+  completedAt: number
+}
+
+/**
+ * Fold every model response of one user turn into a single usage reading.
+ *
+ * A harness answers one user turn with many requests (the agentic tool loop),
+ * and each request reports its own usage on its own assistant message. The
+ * durable ledger keeps one row per turn, so that row has to carry the whole
+ * turn's spend. Recording only the terminal response dropped every earlier
+ * request: one live pi turn mirrored 36 responses while its ledger row held the
+ * last one alone, understating the turn by roughly 25x.
+ *
+ * Categories are summed where a response reported them. `rawTotal` is summed
+ * only when every usage-bearing response reported one, because a partial sum
+ * must never be presented as the provider's own total   a partial sum would win
+ * over the category sum and silently under-report. Cost is summed the same way
+ * and is `estimated` when any priced response was.
+ */
+export function aggregateTurnUsage(messages: readonly UsageBearingMessage[]): TurnUsageAggregate {
+  const responses = messages.filter((message) => message.role === 'assistant')
+
+  let startedAt = 0
+  let completedAt = 0
+  for (const response of responses) {
+    if (startedAt === 0 || response.createdAt < startedAt) startedAt = response.createdAt
+    const end = response.completedAt ?? response.createdAt
+    if (end > completedAt) completedAt = end
+  }
+
+  const usageResponses = responses.filter(
+    (response): response is UsageBearingMessage & { normalizedUsage: NormalizedUsage } =>
+      response.normalizedUsage !== undefined
+  )
+
+  let normalizedUsage: NormalizedUsage | undefined
+  if (usageResponses.length > 0) {
+    const categorySum = (pick: (usage: NormalizedUsage) => number | null): number | null => {
+      let total = 0
+      let reported = false
+      for (const response of usageResponses) {
+        const value = pick(response.normalizedUsage)
+        if (typeof value === 'number') {
+          total += value
+          reported = true
+        }
+      }
+      return reported ? total : null
+    }
+    const rawTotals = usageResponses.map((response) => response.normalizedUsage.rawTotal)
+    const completeRawTotal = rawTotals.every((value) => typeof value === 'number')
+    const semantics = new Set(
+      usageResponses.map((response) => response.normalizedUsage.totalSemantics)
+    )
+    const last = usageResponses[usageResponses.length - 1].normalizedUsage
+    normalizedUsage = {
+      uncachedInput: categorySum((usage) => usage.uncachedInput),
+      cachedInput: categorySum((usage) => usage.cachedInput),
+      cacheWrite: categorySum((usage) => usage.cacheWrite),
+      output: categorySum((usage) => usage.output),
+      reasoning: categorySum((usage) => usage.reasoning),
+      rawProviderUsage: last.rawProviderUsage,
+      rawTotal: completeRawTotal
+        ? rawTotals.reduce((total, value) => total + (value ?? 0), 0)
+        : null,
+      totalSemantics: !completeRawTotal
+        ? 'unavailable'
+        : semantics.size === 1
+          ? ([...semantics][0] ?? 'provider_defined')
+          : 'provider_defined'
+    }
+  }
+
+  let costUsd: number | null = null
+  let estimatedProvenance: UsagePricingProvenance | undefined
+  let knownProvenance: UsagePricingProvenance | undefined
+  for (const response of responses) {
+    const accounting = assistantTurnCostAccounting(response)
+    if (accounting.costUsd === null) continue
+    costUsd = (costUsd ?? 0) + accounting.costUsd
+    if (accounting.costStatus === 'estimated') {
+      if (!estimatedProvenance && response.costProvenance)
+        estimatedProvenance = response.costProvenance
+    } else if (response.costProvenance) {
+      knownProvenance = response.costProvenance
+    }
+  }
+  const cost: UsageEventCost =
+    costUsd === null
+      ? { costStatus: 'unavailable', costUsd: null, pricingProvenance: null }
+      : {
+          costStatus: estimatedProvenance ? 'estimated' : 'known',
+          costUsd,
+          pricingProvenance: estimatedProvenance ??
+            knownProvenance ?? {
+              source: 'provider',
+              currency: 'USD',
+              capturedAt: completedAt || startedAt || Date.now()
+            }
+        }
+
+  return {
+    normalizedUsage,
+    cost,
+    startedAt: startedAt || Date.now(),
+    completedAt: completedAt || startedAt || Date.now()
+  }
 }
 
 export function toRankingCandidate(row: ModelRankingSnapshotRow): RankingGradeCandidate {

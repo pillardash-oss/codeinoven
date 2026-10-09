@@ -129,7 +129,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -481,6 +481,11 @@
   // svelte-ignore state_referenced_locally
   const mountedThread = threadProp
   let thread = $derived(threadProp ?? mountedThread)
+  let citationThreadContext = $derived({
+    projectId: thread.projectId,
+    threadId: thread.id,
+    scopeBucketId: thread.scopeBucketId
+  })
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -1834,7 +1839,13 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
-    const contextEstimated = latestReportedContextUsed === undefined
+    // Only the explicit composed-request estimate is an estimate. Falling back
+    // to the harness's own reported token total is a provider reading   the
+    // last request's prompt plus completion is the occupancy the provider
+    // actually processed   so it must never wear the "this harness does not
+    // report context telemetry" caveat while the turn is still running.
+    const contextEstimated =
+      latestReportedContextUsed === undefined && latestEstimatedContextUsed !== undefined
     const contextUsed =
       latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
     if (
@@ -6385,14 +6396,17 @@
 
     try {
       await invoke('agent:abort', projectId, id)
-      clearLocalTurn()
-      agentRuns.setIdle(projectId, id)
-      providerStatus = null
-      void refreshMessages()
-      void refreshCheckpoints()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
+    // The user's stop has to be visible even when the abort itself failed: a
+    // remote run that vanished mid-turn used to leave this stuck as working,
+    // because the failure skipped the local settle below.
+    clearLocalTurn()
+    agentRuns.setIdle(projectId, id)
+    providerStatus = null
+    void refreshMessages()
+    void refreshCheckpoints()
   }
 
   let showBankedResetConfirm = $state(false)
@@ -11822,7 +11836,7 @@
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} />
+                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
                     <InlineImageFigure
                       url={part.url}
@@ -11951,6 +11965,7 @@
                         {#if explicitPresentation.body}
                           <MarkdownView
                             text={explicitPresentation.body}
+                            citationThread={citationThreadContext}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -11958,6 +11973,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          citationThread={citationThreadContext}
                           inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12299,6 +12315,7 @@
                           {:else}
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              citationThread={citationThreadContext}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />

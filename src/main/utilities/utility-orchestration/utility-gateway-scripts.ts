@@ -126,7 +126,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current page\u2019s title, URL, visible text, and interactive elements. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this reads that page until you open one of your own. Every other operation needs a page you opened.',
+      'Read the current page title, URL, visible text, and interactive elements. In a browser assistant conversation this reads the user tab until you open one of your own. You may navigate and interact with that tab to carry out the user request. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for routine steps within the user request; call the operation and let the app enforce approval.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {

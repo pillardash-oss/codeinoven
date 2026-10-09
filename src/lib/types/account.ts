@@ -193,6 +193,9 @@ export interface ModelRankingSnapshotRow {
   last_attempt_at_ms: number | null
   /** Unique tag of the current drain claim; NULL while not claimed. */
   claim_token: string | null
+  /** When the user undid this window's file changes: recorded as 0, never
+   *  judged. NULL while the turn stands. */
+  undone_at_ms: number | null
   created_at: number
 }
 

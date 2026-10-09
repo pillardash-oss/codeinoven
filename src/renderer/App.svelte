@@ -38,12 +38,17 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
-  import { viewShowsProject, viewShowsScopedSidebar } from '$lib/content-view-projects'
+  import {
+    viewShowsProject,
+    viewShowsScopedSidebar,
+    viewShowsWorkspaceShell
+  } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { settingsRouteState } from '$lib/stores/settings-route.svelte'
   import {
     browserStore,
     isBrowserLoaded,
@@ -299,14 +304,9 @@
   let lastContentView = $derived(rendererRecovery.lastContentView)
 
   /** True while the workspace shell renders the view (Projects, Chats, Threads
-   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it. */
-  let showsContentView = $derived(
-    activeView === 'projects' ||
-      activeView === 'projects-scope' ||
-      activeView === 'chats' ||
-      activeView === 'threads' ||
-      activeView === 'assistant'
-  )
+   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it.
+   *  Shared with the link pipeline, which routes by the same surface. */
+  let showsContentView = $derived(viewShowsWorkspaceShell(activeView))
 
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
@@ -406,11 +406,15 @@
     const thread = workspaceState.selectedThread
     return {
       view: activeView,
-      thread: thread ? { projectId: thread.projectId, threadId: thread.id } : null
+      thread: thread ? { projectId: thread.projectId, threadId: thread.id } : null,
+      utilities: activeView === 'settings-utilities' ? settingsRouteState.utilities : null
     }
   }
 
   function navigate(view: View): void {
+    // Entering another section starts its Utilities page fresh; history
+    // restores a recorded Utilities page after this navigation.
+    if (view !== activeView) settingsRouteState.resetUtilities()
     // Warm the lazy page chunks so the view swap resolves instantly   the
     // sidebar/header hover preloads cover the mouse path; this covers every
     // other entry point (shortcuts, palette, programmatic navigation). The
@@ -550,10 +554,16 @@
     navigationHistoryState.beginTraversal()
     try {
       navigate(entry.view)
+      restoreUtilitiesFromHistory(entry)
       await restoreThreadFromHistory(entry)
     } finally {
       navigationHistoryState.endTraversal()
     }
+  }
+
+  /** Re-show the Utilities page captured in a history entry. */
+  function restoreUtilitiesFromHistory(entry: NavigationLocation): void {
+    if (entry.utilities) settingsRouteState.showUtilities(entry.utilities)
   }
 
   /** Navigate to the location the user backed away from, if any. */
@@ -563,6 +573,7 @@
     navigationHistoryState.beginTraversal()
     try {
       navigate(entry.view)
+      restoreUtilitiesFromHistory(entry)
       await restoreThreadFromHistory(entry)
     } finally {
       navigationHistoryState.endTraversal()
@@ -1500,7 +1511,13 @@
     }
   }
 
-  navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
+  settingsRouteState.onUtilitiesChange = observeNavigationLocation
+  navigationHistoryState.init({
+    view: rendererRecovery.activeView,
+    thread: rendererRecovery.selectedThread,
+    utilities:
+      rendererRecovery.activeView === 'settings-utilities' ? settingsRouteState.utilities : null
+  })
 
   /** Windows/Linux may report both an app command and a renderer mouse event.
    *  macOS can report a raw mouse event or a native swipe. Collapse duplicate
@@ -1697,6 +1714,7 @@
               section={settingsSectionForView(activeView) ?? 'general'}
               onNavigateSection={(section) => navigate(settingsViewForSection(section))}
               onBack={() => navigate(lastViewBeforeSettings)}
+              onHistoryBack={() => void goBack()}
             />
           </div>
         {/await}

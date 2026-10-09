@@ -1,16 +1,19 @@
 <script lang="ts">
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { flashElement } from '$lib/reveal-flash'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { ovens } from '$lib/stores/ovens.svelte'
+  import { ovenPeeks } from '$lib/stores/oven-peeks.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
   import {
     LOCAL_OVEN_ID,
+    OVEN_HARNESS_COMMANDS,
     ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
@@ -39,14 +42,15 @@
     Plug,
     Plus,
     RefreshCw,
+    Settings2,
     Star,
     Terminal,
     Trash2
   } from '@lucide/svelte'
-  import { onDestroy, onMount } from 'svelte'
+  import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
@@ -68,9 +72,7 @@
   let health = $state<Record<string, OvenConnectionStatus>>({})
   let folded = $state<Record<string, boolean>>({})
   let checking = $state('')
-  let refreshGeneration = 0
   let connectionResult = $state<OvenConnectionStatus | null>(null)
-  let probes = $state<Record<string, OvenProbe>>({})
   let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
   let error = $state('')
@@ -103,6 +105,8 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  /** The Oven whose full screen SSH shell is open, or null when none is. */
+  let shellOven = $state<Oven | null>(null)
   let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(
     null
   )
@@ -120,6 +124,45 @@
 
   function message(value: unknown): string {
     return value instanceof Error ? value.message : 'The Oven operation failed.'
+  }
+
+  /** The live probe the unified check read for one remote Oven. */
+  function probeFor(oven: Oven): OvenProbe | undefined {
+    return oven.kind === 'local' ? undefined : (ovenPeeks.peek(oven.id)?.probe ?? undefined)
+  }
+
+  /**
+   * One Oven's connection status, drawn from the unified check.
+   *
+   * The last registry value is the fallback before a check lands, so a row the
+   * user opens immediately still shows what the previous session saw.
+   */
+  function statusFor(oven: Oven): OvenConnectionStatus | undefined {
+    if (oven.kind === 'local') return health[oven.id]
+    const peek = ovenPeeks.peek(oven.id)
+    if (!peek) return health[oven.id]
+    if (peek.probe)
+      return { state: 'connected', checkedAt: peek.checkedAt, specs: peek.probe.specs }
+    return {
+      state: 'disconnected',
+      checkedAt: peek.checkedAt,
+      error: peek.error ?? 'The Oven did not answer.',
+      specs: health[oven.id]?.specs
+    }
+  }
+
+  /** True while this Oven's check is running, wherever it was started from. */
+  function checkingFor(oven: Oven): boolean {
+    return oven.kind === 'local' ? checking === oven.id : ovenPeeks.running(oven.id)
+  }
+
+  /** The runtime phrase an Oven entry shows: its Node.js version, or none found. */
+  function nodeRuntimeLabel(
+    probe: OvenProbe | undefined,
+    status: OvenConnectionStatus | undefined
+  ): string {
+    const version = probe?.nodeVersion ?? status?.specs?.nodeVersion
+    return version ? `Node.js ${version.replace(/^v/, '')}` : 'Not installed'
   }
 
   /** The platform name an Oven reports, spelled the way a person reads it. */
@@ -148,9 +191,15 @@
   function ovenMenuItems(oven: Oven): MenuItem[] {
     const items: MenuItem[] = []
     items.push({
+      label: 'Open Oven',
+      icon: Terminal,
+      disabled: Boolean(busy),
+      onClick: () => (shellOven = oven)
+    })
+    items.push({
       label: 'Check Oven',
       icon: Activity,
-      disabled: Boolean(busy) || Boolean(checking) || Boolean(timezoneBusy),
+      disabled: Boolean(busy) || checkingFor(oven) || Boolean(timezoneBusy),
       onClick: () => void checkOven(oven)
     })
     if (ovenState?.defaultOvenId !== oven.id)
@@ -201,10 +250,10 @@
    * than only inside the setup flow.
    */
   async function checkOven(oven: Oven): Promise<void> {
-    if (busy || checking || timezoneBusy) return
-    checking = oven.id
-    try {
-      if (oven.kind === 'local') {
+    if (busy || checkingFor(oven) || timezoneBusy) return
+    if (oven.kind === 'local') {
+      checking = oven.id
+      try {
         const result = await invoke('oven:connectionHealth', oven.id)
         health = {
           ...health,
@@ -213,47 +262,50 @@
         toast.success('Local is ready', {
           description: `${ovenPlatformName(result.specs?.platform)} · ${result.specs?.cpuCount ?? '?'} logical cores`
         })
-        return
-      }
-      const probe = await invoke('oven:probe', oven.id)
-      probes = { ...probes, [oven.id]: probe }
-      health = {
-        ...health,
-        [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
-      }
-      const inventory = probe.inventory ?? []
-      const healthy = inventory.filter((item) => item.health === 'healthy').length
-      const attention = inventory.filter(
-        (item) => item.health === 'broken' || item.health === 'unknown'
-      ).length
-      toast.success(`${oven.name} answered`, {
-        description: [
-          ovenPlatformName(probe.platform) || probe.platform,
-          `Node ${probe.nodeVersion}`,
-          `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
-          attention > 0 ? `${attention} need attention` : '',
-          probe.activeRuns > 0
-            ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
-            : ''
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      })
-    } catch (failure) {
-      const detail = message(failure)
-      health = {
-        ...health,
-        [oven.id]: {
-          state: 'disconnected',
-          checkedAt: Date.now(),
-          error: detail,
-          specs: health[oven.id]?.specs
+      } catch (failure) {
+        const detail = message(failure)
+        health = {
+          ...health,
+          [oven.id]: {
+            state: 'disconnected',
+            checkedAt: Date.now(),
+            error: detail,
+            specs: health[oven.id]?.specs
+          }
         }
+        toast.error(`${oven.name} could not be checked`, { description: detail })
+      } finally {
+        checking = ''
       }
-      toast.error(`${oven.name} could not be checked`, { description: detail })
-    } finally {
-      checking = ''
+      return
     }
+    const peek = await ovenPeeks.refresh(oven.id)
+    const probe = peek?.probe
+    if (!peek || !probe) {
+      toast.error(`${oven.name} could not be checked`, {
+        description: peek?.error ?? 'The Oven did not answer.'
+      })
+      return
+    }
+    const healthy = peek.inventory.filter((item) => item.health === 'healthy').length
+    const updates = peek.inventory.filter((item) => item.updateAvailable).length
+    const attention = peek.inventory.filter(
+      (item) => item.health === 'broken' || item.health === 'unknown'
+    ).length
+    toast.success(`${oven.name} answered`, {
+      description: [
+        ovenPlatformName(probe.platform) || probe.platform,
+        `Node ${probe.nodeVersion}`,
+        `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
+        updates > 0 ? `${updates} update${updates === 1 ? '' : 's'} available` : '',
+        attention > 0 ? `${attention} need attention` : '',
+        probe.activeRuns > 0
+          ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    })
   }
 
   let dragOvenId = $state<string | null>(null)
@@ -314,30 +366,159 @@
     }
   }
 
-  /** One installed harness's occasional actions, behind the badge it belongs to. */
-  function harnessMenuItems(ovenId: string, item: OvenHarnessInventoryItem): MenuItem[] {
+  /**
+   * One harness as an Oven entry lists it: every harness CodeInOven can drive,
+   * with whatever the Oven probe read for it, whether or not it is installed.
+   */
+  interface OvenHarnessRow {
+    harnessId: string
+    command: string
+    name: string
+    item: OvenHarnessInventoryItem | null
+    installed: boolean
+  }
+
+  /**
+   * Every harness an Oven entry shows, installed first in canonical order.
+   *
+   * The list is the app's canonical harness set, not the probe's: a harness the
+   * Oven does not have still belongs on screen, greyed, so the entry answers
+   * "what can I run here" rather than only "what happens to be installed". A row
+   * the probe reported that is not in the canonical set is kept anyway, so a
+   * harness the app gains over the Oven's service still appears.
+   */
+  function availableHarnesses(inventory: readonly OvenHarnessInventoryItem[]): OvenHarnessRow[] {
+    const canonicalIds = OVEN_HARNESS_COMMANDS.map(
+      (command) => ovenHarnessIdForCommand(command) ?? command
+    )
+    const rows: OvenHarnessRow[] = OVEN_HARNESS_COMMANDS.map((command, index) => {
+      const harnessId = canonicalIds[index]
+      const item = inventory.find((entry) => entry.harnessId === harnessId) ?? null
+      return {
+        harnessId,
+        command,
+        name: getAgentIcon(harnessId)?.name ?? command,
+        item,
+        installed: harnessIsInstalled(item)
+      }
+    })
+    for (const item of inventory) {
+      if (canonicalIds.includes(item.harnessId)) continue
+      rows.push({
+        harnessId: item.harnessId,
+        command: item.command,
+        name: getAgentIcon(item.harnessId)?.name ?? item.command,
+        item,
+        installed: harnessIsInstalled(item)
+      })
+    }
+    return rows
+  }
+
+  /** Whether an inventory row names a harness an Oven actually has. */
+  function harnessIsInstalled(item: OvenHarnessInventoryItem | null): boolean {
+    return item !== null && item.health !== 'missing' && item.health !== 'unsupported'
+  }
+
+  /** The harness rows an Oven entry draws, from the freshest read it has. */
+  function inventoryFor(oven: Oven, probe: OvenProbe | undefined): OvenHarnessInventoryItem[] {
+    if (oven.kind === 'local') return ovens.inventory(LOCAL_OVEN_ID) ?? []
+    return ovenPeeks.peek(oven.id)?.inventory ?? probe?.inventory ?? ovens.inventory(oven.id) ?? []
+  }
+
+  /**
+   * Whether an Oven is set up, as the entry's Configured badge reads it.
+   *
+   * A remote Oven reports it through its setup operation. Local has no setup
+   * step of its own, so its readiness is the harnesses it can actually run.
+   */
+  function configuredFor(oven: Oven, rows: readonly OvenHarnessRow[]): boolean {
+    if (oven.kind === 'local') return rows.some((row) => row.installed)
+    return ovenSetupStore.completed[oven.id] === true || setupComplete[oven.id] === true
+  }
+
+  /** Where a harness lives, spelled for a caption or a badge. */
+  function harnessEnvironmentLabel(item: OvenHarnessInventoryItem | null): string {
+    if (item?.environment !== 'wsl') return ''
+    return item.wslDistribution ? `WSL: ${item.wslDistribution}` : 'WSL'
+  }
+
+  /** One installed harness's actions, behind the badge it belongs to.
+   *
+   *  The menu leads with where the harness lives and the version the Oven runs
+   *  today, because those are the only places that answer what "Update" would
+   *  move off. A harness the probe could not read a version for gets no version
+   *  caption rather than an empty one.
+   */
+  function harnessMenuItems(ovenId: string, row: OvenHarnessRow): MenuItem[] {
     const busyNow = Boolean(harnessBusy)
+    const item = row.item
+    if (!row.installed)
+      return [
+        { label: 'Not installed', header: true },
+        {
+          label: 'Install harness',
+          icon: Plus,
+          disabled: busyNow,
+          onClick: () => void installHarness(ovenId, row)
+        }
+      ]
+    const environment = harnessEnvironmentLabel(item)
     return [
+      ...(environment ? [{ label: environment, header: true }] : []),
+      ...(item?.installedVersion
+        ? [{ label: `Version ${item.installedVersion}`, header: true }]
+        : []),
       {
-        label: `Update ${item.command}`,
+        label:
+          item?.updateAvailable && item.latestVersion
+            ? `Update to ${item.latestVersion}`
+            : `Update ${row.command}`,
         icon: RefreshCw,
-        disabled: busyNow || item.health !== 'healthy',
-        onClick: () => void updateHarness(ovenId, item.harnessId)
+        disabled: busyNow || item?.health !== 'healthy',
+        onClick: () => void updateHarness(ovenId, row.harnessId)
       },
       { label: 'separator:harness', divider: true },
       {
-        label: `Uninstall ${item.command}`,
+        label: `Uninstall ${row.command}`,
         icon: Trash2,
         danger: true,
         disabled: busyNow,
         onClick: () =>
           (pendingHarnessRemoval = {
             ovenId,
-            harnessId: item.harnessId,
-            command: item.command
+            harnessId: row.harnessId,
+            command: row.command
           })
       }
     ]
+  }
+
+  /** Local harnesses are installed and removed on this machine, in Harnesses. */
+  function localHarnessMenuItems(): MenuItem[] {
+    return [
+      {
+        label: 'Manage harnesses',
+        icon: Plug,
+        onClick: onOpenHarnessSettings
+      }
+    ]
+  }
+
+  /** Install one missing harness on an Oven using its documented channel. */
+  async function installHarness(ovenId: string, row: OvenHarnessRow): Promise<void> {
+    if (harnessBusy) return
+    harnessBusy = `${ovenId}:${row.harnessId}`
+    error = ''
+    try {
+      await invoke('oven:harness:install', ovenId, row.harnessId)
+      await ovenPeeks.refresh(ovenId)
+      toast.success(`${row.name} installed on this Oven`)
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
+    }
   }
 
   /** Put an Oven's clock on this computer's zone, and say what the Oven did. */
@@ -348,6 +529,10 @@
       const result = await invoke('oven:timezone:sync', oven.id)
       if (result.status === 'updated') toast.success(result.message)
       else toast.info(result.message)
+      // A zone change rewrites one of the figures on the Oven entry. Refresh the
+      // cached check so the row shows the zone the Oven now runs on rather than
+      // the one it had when the page opened.
+      void ovenPeeks.refresh(oven.id)
     } catch (failure) {
       toast.error(message(failure))
     } finally {
@@ -370,7 +555,7 @@
           health = { ...health, [oven.id]: oven.connectionStatus }
       }
       void refreshSetupStatuses(ovenState)
-      void refreshHealth(ovenState)
+      ensureChecks(ovenState)
       void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
       error = message(failure)
@@ -378,6 +563,15 @@
   }
   onMount(() => {
     void load()
+  })
+
+  // Open the New Oven editor when another surface asked for it: the Add Project
+  // flow's "no Ovens yet" empty state sends this before navigating here, so the
+  // user lands in the creation form rather than an empty list. The request is
+  // claimed exactly once, so remounting this page never reopens an editor the
+  // user already dismissed.
+  $effect(() => {
+    if (settingsUiState.takeNewOvenRequest()) openEditor()
   })
 
   let lastOvenFocus = 0
@@ -424,55 +618,42 @@
     }
   }
 
-  onDestroy(() => {
-    refreshGeneration++
-  })
-  async function refreshHealth(state: OvenState): Promise<void> {
-    const generation = ++refreshGeneration
-    // Two entries per batch, one request at a time; no parallel SSH processes.
-    for (let offset = 0; offset < state.ovens.length; offset += 2) {
-      for (const oven of state.ovens.slice(offset, offset + 2)) {
-        if (generation !== refreshGeneration) return
-        checking = oven.id
-        try {
-          let result: OvenConnectionStatus
-          if (oven.kind === 'ssh') {
-            try {
-              const probe = await invoke('oven:probe', oven.id)
-              if (generation !== refreshGeneration) return
-              probes = { ...probes, [oven.id]: probe }
-              result = {
-                state: 'connected',
-                checkedAt: Date.now(),
-                specs: probe.specs ?? health[oven.id]?.specs
-              }
-            } catch {
-              result = await invoke('oven:connectionHealth', oven.id)
-            }
-          } else {
-            result = await invoke('oven:connectionHealth', oven.id)
-          }
-          if (generation !== refreshGeneration) return
-          health = {
-            ...health,
-            [oven.id]: { ...result, specs: result.specs ?? health[oven.id]?.specs }
-          }
-        } catch (failure) {
-          if (generation !== refreshGeneration) return
-          health = {
-            ...health,
-            [oven.id]: {
-              state: 'disconnected',
-              checkedAt: Date.now(),
-              error: message(failure),
-              specs: health[oven.id]?.specs
-            }
-          }
+  /**
+   * Start the unified check for every remote Oven.
+   *
+   * The work continues in the peek store after this page unmounts, so leaving
+   * Settings never abandons a check, and returning reads the cache while a
+   * fresh check updates it. Two Ovens are read at once, bounded in main.
+   */
+  function ensureChecks(state: OvenState): void {
+    for (const oven of state.ovens) if (oven.kind === 'ssh') void ovenPeeks.ensure(oven.id)
+    void refreshLocalHealth(state)
+  }
+
+  /** The Local Oven has no service to probe, so its own read stays separate. */
+  async function refreshLocalHealth(state: OvenState): Promise<void> {
+    const local = state.ovens.find((oven) => oven.kind === 'local')
+    if (!local) return
+    checking = local.id
+    try {
+      const result = await invoke('oven:connectionHealth', local.id)
+      health = {
+        ...health,
+        [local.id]: { ...result, specs: result.specs ?? health[local.id]?.specs }
+      }
+    } catch (failure) {
+      health = {
+        ...health,
+        [local.id]: {
+          state: 'disconnected',
+          checkedAt: Date.now(),
+          error: message(failure),
+          specs: health[local.id]?.specs
         }
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+    } finally {
+      checking = ''
     }
-    if (generation === refreshGeneration) checking = ''
   }
   function bytes(value: number): string {
     return (value / 1024 ** 3).toFixed(1) + ' GiB'
@@ -670,6 +851,7 @@
     try {
       ovenState = await invoke('oven:remove', pendingRemoval.id)
       ovens.adopt(ovenState)
+      ovenPeeks.forget(pendingRemoval.id)
       pendingRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -683,16 +865,8 @@
     harnessBusy = `${ovenId}:${harnessId}`
     error = ''
     try {
-      const item = await invoke('oven:harness:update', ovenId, harnessId)
-      const probe = probes[ovenId]
-      if (probe?.inventory)
-        probes = {
-          ...probes,
-          [ovenId]: {
-            ...probe,
-            inventory: probe.inventory.map((row) => (row.harnessId === harnessId ? item : row))
-          }
-        }
+      await invoke('oven:harness:update', ovenId, harnessId)
+      await ovenPeeks.refresh(ovenId)
     } catch (failure) {
       error = message(failure)
     } finally {
@@ -706,18 +880,8 @@
     harnessBusy = `${pending.ovenId}:${pending.harnessId}`
     error = ''
     try {
-      const item = await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
-      const probe = probes[pending.ovenId]
-      if (probe?.inventory)
-        probes = {
-          ...probes,
-          [pending.ovenId]: {
-            ...probe,
-            inventory: probe.inventory.map((row) =>
-              row.harnessId === pending.harnessId ? item : row
-            )
-          }
-        }
+      await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
+      await ovenPeeks.refresh(pending.ovenId)
       pendingHarnessRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -760,9 +924,13 @@
   {:else}
     <div class="space-y-3" role="list" {@attach revealOven(settingsUiState.ovenFocus, ovenState)}>
       {#each ovenState.ovens as oven (oven.id)}
-        {@const probe = probes[oven.id]}
-        {@const checkingNow = checking === oven.id}
-        {@const state = health[oven.id]?.state}
+        {@const probe = probeFor(oven)}
+        {@const status = statusFor(oven)}
+        {@const checkingNow = checkingFor(oven)}
+        {@const state = status?.state}
+        {@const harnessInventory = inventoryFor(oven, probe)}
+        {@const harnessRows = availableHarnesses(harnessInventory)}
+        {@const configured = configuredFor(oven, harnessRows)}
         <div
           class="relative rounded-xl"
           id={`oven-row-${oven.id}`}
@@ -829,6 +997,34 @@
                           class="shrink-0"
                         />{:else}<Circle size={12} class="shrink-0" />{/if}
                     </SettingsStatusBadge>
+                    <SettingsStatusBadge
+                      label={configured ? 'Configured' : 'Not configured'}
+                      classes={configured
+                        ? 'border-success/30 bg-success/10 text-success'
+                        : 'border-border bg-elevated text-dimmed'}
+                    >
+                      {#if configured}<Settings2 size={12} class="shrink-0" />{:else}<Circle
+                          size={12}
+                          class="shrink-0"
+                        />{/if}
+                    </SettingsStatusBadge>
+                    {#each harnessRows.filter((row) => row.installed) as row (row.harnessId)}
+                      <span
+                        class="flex items-center gap-1 rounded-lg bg-elevated p-1"
+                        title={`${row.name}${
+                          row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
+                        }${
+                          harnessEnvironmentLabel(row.item)
+                            ? ` · ${harnessEnvironmentLabel(row.item)}`
+                            : ''
+                        }`}
+                      >
+                        <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                        {#if row.item?.environment === 'wsl'}
+                          <span class="text-[0.625rem] font-medium text-info">WSL</span>
+                        {/if}
+                      </span>
+                    {/each}
                   </div>
                 </div>
               </div>
@@ -879,8 +1075,8 @@
             </div>
             {#if !folded[oven.id]}
               <div class="mt-3 space-y-3 border-t border-border pt-3">
-                {#if health[oven.id]?.specs}
-                  {@const specs = health[oven.id].specs!}
+                {#if status?.specs}
+                  {@const specs = status.specs!}
                   {@const usedPercent =
                     specs.diskBytes > 0
                       ? Math.max(
@@ -941,126 +1137,101 @@
                     </div>
                   </dl>
                 {/if}
-                {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
-                    {health[oven.id].error}
+                {#if status?.error}<p class="text-xs text-danger" role="status">
+                    {status.error}
                   </p>{/if}
-                {#if probe || health[oven.id]?.specs}
-                  {@const nodeVersion =
-                    probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
-                  <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
-                    <div class="space-y-1.5">
-                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Terminal size={14} />Service runtime
-                      </dt>
-                      <dd class="text-sm font-medium text-foreground">
-                        {nodeVersion ? `Node.js ${nodeVersion.replace(/^v/, '')}` : 'Not installed'}
-                      </dd>
-                      <dd class="text-xs text-muted">
-                        {probe
-                          ? [
-                              ovenPlatformName(probe.platform),
-                              ovenArchitectureName(probe.architecture),
-                              `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')
-                          : oven.kind === 'local'
-                            ? `${ovenPlatformName(health[oven.id]?.specs?.platform)} · this computer`
-                            : 'No service has answered from this Oven yet.'}
-                      </dd>
-                      {#if probe?.timezone}
-                        <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
-                      {/if}
-                    </div>
-                    <div class="space-y-1.5">
-                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Boxes size={14} />Installed harnesses
-                      </dt>
-                      <dd class="flex flex-wrap items-center gap-1.5">
-                        {#if oven.kind === 'local'}
-                          {@const localItems = ovens.inventory(LOCAL_OVEN_ID) ?? []}
-                          {#each localItems.filter((item) => item.health === 'healthy') as item (item.harnessId)}
-                            <span
-                              class="flex items-center rounded-lg bg-elevated p-1"
-                              title={`${item.command}${
-                                item.installedVersion ? ` ${item.installedVersion}` : ''
-                              }`}
-                            >
-                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
-                            </span>
-                          {/each}
-                          {#if !localItems.some((item) => item.health === 'healthy')}
-                            <span class="text-xs text-muted">None found</span>
-                          {/if}
-                        {:else if probe?.inventory?.length}
-                          {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
-                            <span
-                              class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
-                              title={`${item.command}${
-                                item.installedVersion ? ` ${item.installedVersion}` : ''
-                              }${item.health === 'healthy' ? '' : ` · ${item.health}`}`}
-                            >
-                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
-                              {#if harnessBusy === `${oven.id}:${item.harnessId}`}
-                                <Loader2 size={11} class="animate-spin text-muted" />
-                              {:else}
-                                <ThreadDropdown
-                                  vertical
-                                  items={harnessMenuItems(oven.id, item)}
-                                  title={`${item.command} actions`}
-                                  ariaLabel={`${item.command} actions`}
-                                />
-                              {/if}
-                            </span>
-                          {/each}
-                          {#if !probe.inventory.some((item) => item.health !== 'missing')}
-                            <span class="text-xs text-muted">None found</span>
-                          {/if}
-                        {:else if probe?.harnesses.some((harness) => harness.path)}
-                          {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
-                            <span
-                              class="flex items-center rounded-lg bg-elevated p-1"
-                              title={harness.command}
-                            >
-                              <AgentIcon
-                                agentId={ovenHarnessIdForCommand(harness.command) ??
-                                  harness.command}
-                                label={harness.command}
-                                size={14}
-                              />
-                            </span>
-                          {/each}
-                        {:else if probe}
-                          <span class="text-xs text-muted">None found</span>
-                        {:else}
-                          <span class="text-xs text-muted"
-                            >Connect to read this Oven's harnesses.</span
+                <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Terminal size={14} />Service runtime
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">
+                      {nodeRuntimeLabel(probe, status)}
+                    </dd>
+                    <dd class="text-xs text-muted">
+                      {probe
+                        ? [
+                            ovenPlatformName(probe.platform),
+                            ovenArchitectureName(probe.architecture),
+                            `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : oven.kind === 'local'
+                          ? `${ovenPlatformName(status?.specs?.platform)} · this computer`
+                          : 'No service has answered from this Oven yet.'}
+                    </dd>
+                    {#if probe?.timezone}
+                      <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
+                    {/if}
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Boxes size={14} />Harnesses
+                    </dt>
+                    <dd class="flex flex-wrap items-center gap-1.5">
+                      {#if oven.kind !== 'local' && !probe && harnessInventory.length === 0}
+                        <span class="text-xs text-muted"
+                          >Connect to read this Oven's harnesses.</span
+                        >
+                      {:else}
+                        {#each harnessRows as row (row.harnessId)}
+                          <span
+                            class={row.installed
+                              ? 'flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5'
+                              : 'flex items-center gap-0.5 rounded-lg border border-border py-0.5 pr-0.5 pl-1.5 opacity-50'}
+                            title={`${row.name}${
+                              row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
+                            }${row.installed ? '' : ' · not installed'}${
+                              harnessEnvironmentLabel(row.item)
+                                ? ` · ${harnessEnvironmentLabel(row.item)}`
+                                : ''
+                            }`}
                           >
-                        {/if}
-                      </dd>
-                    </div>
-                    <div>
-                      <div class="space-y-1.5">
-                        <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                          <Cable size={14} />Connection Info
-                        </dt>
-                        <dd class="flex flex-col gap-1.5">
-                          <p class="mt-0.5 truncate text-xs text-muted">
-                            {#if oven.kind === 'local'}
-                              This computer
-                            {:else}
-                              {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
-                                .connection?.host}:{oven.connection?.port}
+                            <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                            {#if row.item?.environment === 'wsl'}
+                              <span class="text-[0.625rem] font-medium text-info">WSL</span>
                             {/if}
-                          </p>
+                            {#if harnessBusy === `${oven.id}:${row.harnessId}`}
+                              <Loader2 size={11} class="animate-spin text-muted" />
+                            {:else}
+                              <ThreadDropdown
+                                vertical
+                                items={oven.kind === 'local'
+                                  ? localHarnessMenuItems()
+                                  : harnessMenuItems(oven.id, row)}
+                                title={`${row.name} actions`}
+                                ariaLabel={`${row.name} actions`}
+                              />
+                            {/if}
+                          </span>
+                        {/each}
+                      {/if}
+                    </dd>
+                  </div>
+                  <div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Cable size={14} />Connection Info
+                      </dt>
+                      <dd class="flex flex-col gap-1.5">
+                        <p class="mt-0.5 truncate text-xs text-muted">
+                          {#if oven.kind === 'local'}
+                            This computer
+                          {:else}
+                            {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
+                              .connection?.host}:{oven.connection?.port}
+                          {/if}
+                        </p>
+                        {#if oven.createdAt > 0}
                           <p class="mt-0.5 truncate text-xs text-muted">
                             Added {formatDateTime(oven.createdAt)}
                           </p>
-                        </dd>
-                      </div>
+                        {/if}
+                      </dd>
                     </div>
-                  </dl>
-                {/if}
+                  </div>
+                </dl>
               </div>
             {/if}
           </SettingsEntry>
@@ -1337,5 +1508,11 @@
       onClose={() => (agentOpen = false)}
       onRegistered={(ovenId) => void onAgentRegistered(ovenId)}
     />
+  {/await}
+{/if}
+
+{#if shellOven}
+  {#await import('./OvenShellModal.svelte') then { default: OvenShellModal }}
+    <OvenShellModal oven={shellOven} onClose={() => (shellOven = null)} />
   {/await}
 {/if}

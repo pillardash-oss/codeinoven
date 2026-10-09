@@ -183,6 +183,21 @@ import {
   isCioVideoRequest,
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
+import {
+  CIO_ORCHESTRATE_CONTINUE_PROMPT,
+  CIO_ORCHESTRATE_START_PROMPT,
+  isCioOrchestrateRequest
+} from '../orchestration/cio-orchestrate-prompt'
+import {
+  buildOrchestrationReportPrompt,
+  createOrchestrationRuntime,
+  type OrchestrationRuntime,
+  type PendingOrchestrationDispatch
+} from './chat-engine-orchestration'
+import { LOCAL_OVEN_ID } from '../../lib/ovens'
+import { OvenRegistry } from '../ovens/oven-registry'
+import { OvenService } from '../ovens/oven-service'
+import { OvenHarnessService } from '../ovens/oven-harness-service'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
@@ -336,6 +351,7 @@ import type {
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
   ThinkingLevel,
+  UsageEventCost,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance,
@@ -364,6 +380,7 @@ import {
 import { capPersistedPart } from './bounded-tool-output'
 import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
 import { readTurnStreamLog } from './turn-stream-log'
+import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
@@ -662,6 +679,7 @@ import {
   assignmentAuditErrorsUnchanged,
   assignmentAuditRepairPrompt,
   assignmentWorkerRoutingReceipt,
+  aggregateTurnUsage,
   assistantTurnCostAccounting,
   auditCorrectionPrompt,
   auditRequiresRework,
@@ -876,6 +894,11 @@ export class ChatEngine {
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
 
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
+
+  /** Root for every disposable working directory a local harness turn needs.
+   *  Such a turn never reads the project's files, and a remote (Oven) project's
+   *  path exists only on the Oven, so it can never use that path as its cwd. */
+  private static readonly EPH_CWD_DIR = 'eph-cwd'
 
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
@@ -1521,6 +1544,15 @@ export class ChatEngine {
    *  keeps the video capability active until the user leaves the thread. */
   private cioVideoThreads = new Map<string, true>()
 
+  /** Threads whose user has opened an orchestration session with
+   *  @cio-orchestrate (current turn or history). The session is what grants the
+   *  workstation tools, so it stays active for every later turn of the thread
+   *  rather than for one message. */
+  private cioOrchestrateThreads = new Map<string, true>()
+
+  /** The workstation tools' implementation and the dispatches awaiting a report. */
+  private orchestration: OrchestrationRuntime | null = null
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -1648,6 +1680,10 @@ export class ChatEngine {
     this.utilityOrchestration.setUtilitySuggestionExecutor((entry, context) =>
       this.requestUtilitySuggestion(entry, context)
     )
+    // The workstation tools: reading the Ovens, harnesses, models and accounts,
+    // and dispatching real work onto a chosen machine. The engine owns every
+    // piece a dispatch needs, so it supplies the executor to the same gateway.
+    this.attachOrchestrationRuntime()
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -1879,7 +1915,8 @@ export class ChatEngine {
         info.driverId,
         { type: 'permission.asked', sessionId: info.sessionId, permission },
         undefined,
-        settle
+        settle,
+        request.review
       )
     } catch (error) {
       this.pendingPermissions.delete(permission.id)
@@ -3703,6 +3740,25 @@ export class ChatEngine {
   }
 
   /**
+   * Whether an orchestration session was opened in this thread, now or earlier,
+   * and whether this turn is the one that opened it. The same memo-and-rescan
+   * shape as the design tag, so an edit or rollback that removes the tag takes
+   * the session, and with it the workstation tools, away.
+   */
+  private async orchestrationSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<'off' | 'start' | 'continue'> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioOrchestrateThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioOrchestrateRequest(message.content))
+    if (opened) this.cioOrchestrateThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
    * Whether a video session was opened in this thread, now or earlier, and
    * whether this turn is the one that opened it. The same memo-and-rescan shape
    * as the design tag, so an edit or rollback that removes the tag takes the
@@ -3891,7 +3947,14 @@ export class ChatEngine {
      * later turn of the same thread. Both promote the video capability to an
      * active capability for the turn and add the matching session contract.
      */
-    videoSession: VideoSessionMode = 'off'
+    videoSession: VideoSessionMode = 'off',
+    /**
+     * Whether this turn belongs to an orchestration session the user opened
+     * with `@cio-orchestrate`. `start` is the turn that typed the tag,
+     * `continue` is every later turn of the same thread. Both grant the
+     * workstation tools and add the matching dispatch contract.
+     */
+    orchestrationSession: 'off' | 'start' | 'continue' = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3954,6 +4017,7 @@ export class ChatEngine {
         allowManagement,
         designSession,
         videoSession,
+        orchestrationSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -4008,6 +4072,15 @@ export class ChatEngine {
           : videoSession === 'continue'
             ? CIO_VIDEO_CONTINUE_PROMPT
             : ''
+      // The orchestration contract is the gate for the workstation tools: it is
+      // what tells the agent the tools exist and how to resolve a request to a
+      // machine, a model and an account before dispatching real work.
+      const orchestrationContract =
+        orchestrationSession === 'start'
+          ? CIO_ORCHESTRATE_START_PROMPT
+          : orchestrationSession === 'continue'
+            ? CIO_ORCHESTRATE_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -4021,6 +4094,7 @@ export class ChatEngine {
           utilityContract,
           designContract,
           videoContract,
+          orchestrationContract,
           ...skillInstructions
         ]
           .filter(Boolean)
@@ -4044,7 +4118,13 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, designContract, videoContract, ...skillInstructions]
+        return [
+          utilityContract,
+          designContract,
+          videoContract,
+          orchestrationContract,
+          ...skillInstructions
+        ]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -4087,6 +4167,7 @@ export class ChatEngine {
         utilityContract,
         designContract,
         videoContract,
+        orchestrationContract,
         ...skillInstructions
       ]
         .filter(Boolean)
@@ -4871,9 +4952,25 @@ export class ChatEngine {
     )
   }
 
+  /**
+   * A local working directory for an app-wide harness discovery pass.
+   *
+   * Discovery only needs a writable cwd for the harness CLI: the models a
+   * harness reports do not depend on the project's files. A remote (Oven)
+   * project's path exists only on the Oven, so resolving it here pointed every
+   * harness at a directory this machine cannot create and forced the bundled
+   * fallback catalog on the whole app.
+   */
+  private async discoveryWorkingDirectory(projectId: string): Promise<string> {
+    const project = await this.projectManager.getProject(projectId)
+    if (!project || (project.source === 'local' && project.path))
+      return this.resolveProjectPath(projectId)
+    return this.ephemeralWorkingDirectory()
+  }
+
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
-    const projectPath = await this.resolveProjectPath(projectId)
+    const projectPath = await this.discoveryWorkingDirectory(projectId)
     const drivers = await this.catalogDrivers()
     const results: DriverDiscovery[] = []
     for (let offset = 0; offset < drivers.length; offset += 4) {
@@ -8967,10 +9064,23 @@ export class ChatEngine {
         userMessageId,
         remoteContext
       )
-      if (shouldAutoTitle && settings.titleMode !== 'deterministic')
+      if (shouldAutoTitle && settings.titleMode !== 'deterministic') {
+        // The project's path lives on the Oven, so a disposable title turn on
+        // this machine needs a local working directory of its own.
+        const titleProjectPath = await this.ephemeralWorkingDirectory(threadId)
         void createAutoTitleLauncher(true, () =>
-          this.autoTitleThread(projectId, threadId, settings.harnessId, settings, text, sent.id)
+          this.autoTitleThread(
+            projectId,
+            threadId,
+            settings.harnessId,
+            settings,
+            text,
+            sent.id,
+            undefined,
+            titleProjectPath
+          )
         )()
+      }
       return sent
     }
 
@@ -9613,6 +9723,17 @@ export class ChatEngine {
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
     const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    // An orchestration session is user-started on the same terms. It is what
+    // grants the workstation tools, so the turn that types @cio-orchestrate
+    // gets the dispatch contract and every later turn of the thread keeps the
+    // tools reachable.
+    const orchestrationRequested = origin === 'user' && isCioOrchestrateRequest(text)
+    if (orchestrationRequested) this.cioOrchestrateThreads.set(threadId, true)
+    const orchestrationSession = await this.orchestrationSessionFor(
+      projectId,
+      threadId,
+      orchestrationRequested
+    )
     // The thread row carries the session, so the sidebar draws its marker from
     // the persisted field instead of a message scan. A thread that opened the
     // session in an earlier turn (detected as `continue` above) records it here
@@ -9674,7 +9795,8 @@ export class ChatEngine {
       assistantTaskTurn ? 'run' : routineHowToUpdateTurn ? 'edit' : 'none',
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
       designSession,
-      videoSession
+      videoSession,
+      orchestrationSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -12086,6 +12208,21 @@ export class ChatEngine {
   // ─── Thread auto-titling ──────────────────────────────────────────────────
 
   /**
+   * A local working directory for one disposable harness turn.
+   *
+   * An Oven project's path lives on the Oven, so resolving it on this machine
+   * points at a directory that does not exist here (and that `/home` famously
+   * refuses to create on macOS). A turn that never reads the project's files
+   * (one-shot titles, app-wide discovery) runs under `eph-cwd`, in a per-thread
+   * subdirectory when a thread owns it.
+   */
+  private async ephemeralWorkingDirectory(threadId?: string): Promise<string> {
+    const relative = threadId ? join(ChatEngine.EPH_CWD_DIR, threadId) : ChatEngine.EPH_CWD_DIR
+    await this.storage.ensureDirectory(relative)
+    return this.storage.resolve(relative)
+  }
+
+  /**
    * Request a one-shot model-generated title for a fresh thread. The fallback
    * title is applied in `sendPrompt()` before the main prompt is dispatched so
    * the sidebar updates instantly. This method only replaces the fallback when
@@ -12102,7 +12239,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     parentTurnId: string,
-    parentSessionId?: string
+    parentSessionId?: string,
+    projectPathOverride?: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
@@ -12117,7 +12255,8 @@ export class ChatEngine {
         settings,
         text,
         parentTurnId,
-        parentSessionId
+        parentSessionId,
+        projectPathOverride
       )
     } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
@@ -12412,7 +12551,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     parentTurnId: string,
-    parentSessionId?: string
+    parentSessionId?: string,
+    projectPathOverride?: string
   ): Promise<string | null> {
     // A user-assigned auxiliary model wins over the harness's own cheap-model
     // preference and may belong to a different harness, so titling a thread no
@@ -12421,7 +12561,8 @@ export class ChatEngine {
     const auxiliary = await this.resolveAuxiliaryRoute({
       projectId,
       threadId,
-      threadHarnessId: driverId
+      threadHarnessId: driverId,
+      ...(projectPathOverride ? { projectPath: projectPathOverride } : {})
     })
     if (auxiliary) {
       const auxiliaryTitle = await this.generateTitleOnAuxiliaryRoute(
@@ -12432,12 +12573,12 @@ export class ChatEngine {
       )
       if (auxiliaryTitle) return auxiliaryTitle
     }
-    const { driver, projectPath } = await this.resolve(
-      projectId,
-      driverId,
-      threadId,
-      settings.accountId
-    )
+    const { driver, projectPath } = projectPathOverride
+      ? {
+          driver: await this.driverForAccount(driverId, settings.accountId),
+          projectPath: projectPathOverride
+        }
+      : await this.resolve(projectId, driverId, threadId, settings.accountId)
     let generated: string | null = null
     let failure: string | null = null
     try {
@@ -13002,6 +13143,10 @@ export class ChatEngine {
     // sidebar indicator never stays stuck on "working". A deliberate stop is
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      await this.storage.drainRaw(turnStreamPath(projectId, threadId))
+      await this.threadManager.loadMessagePage(projectId, threadId, undefined, 1)
+    }
     clearNotificationAborting(projectId, threadId)
     if (abortFailure) throw abortFailure
   }
@@ -23627,6 +23772,11 @@ export class ChatEngine {
     threadId: string,
     query: TurnStreamPartsQuery = {}
   ): Promise<TurnStreamPartsPage | TurnStreamPartsChange> {
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      // Repair settled browser history before the trace loader can compact old
+      // turns out of the only record that still holds their assistant messages.
+      await this.threadManager.loadMessagePage(projectId, threadId, undefined, 1)
+    }
     const streamPath = turnStreamPath(projectId, threadId)
     const entry = this.turnStreamCache.get(streamPath) ?? {
       consumedBytes: 0,
@@ -24146,6 +24296,143 @@ export class ChatEngine {
     // reach every renderer the moment the row exists.
     broadcastThreadUpdate(thread)
     return thread
+  }
+
+  /**
+   * Build the workstation tools' executor and hand it to the utility gateway.
+   *
+   * The engine owns everything a dispatch needs: the Oven registry and its
+   * harness inventory, the account registry, the provider catalogs, and the
+   * thread lifecycle a run has to enter so it appears in the sidebar and streams
+   * its status like any other thread. The dispatch book the runtime returns is
+   * what the turn finalizer reads to report an outcome back into the thread that
+   * asked for it.
+   */
+  private attachOrchestrationRuntime(): void {
+    const ovenRegistry = new OvenRegistry(this.storage, this.secretVault)
+    const ovenHarness = new OvenHarnessService(new OvenService(ovenRegistry), this.storage)
+    this.orchestration = createOrchestrationRuntime({
+      listProviderCatalogs: (projectId) => this.listProviderSnapshot(projectId),
+      listAccounts: () => this.accountRegistry.list(),
+      listOvens: () => ovenRegistry.state(),
+      harnessInventory: async (ovenId) => {
+        // This computer is never probed the way a remote Oven is, and the
+        // composer treats its harnesses as selectable without one.
+        if (ovenId === LOCAL_OVEN_ID) return []
+        try {
+          return await ovenHarness.getInventory(ovenId)
+        } catch {
+          // An unreachable Oven still answers with its last known scan.
+          return ovenHarness.cachedInventory(ovenId)
+        }
+      },
+      listModelProfiles: async () => (await this.storage.getConfig()).modelProfiles ?? [],
+      getThread: (projectId, threadId) => this.threadManager.getThread(projectId, threadId),
+      latestAssistantText: async (projectId, threadId) => {
+        const messages = await this.threadManager.loadMessages(projectId, threadId)
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (message.role !== 'assistant') continue
+          const text = assistantText(message).trim()
+          if (text) return text
+        }
+        return null
+      },
+      createThread: (input) => this.createOrchestrationThread(input),
+      sendPrompt: async (input) => {
+        await this.sendPrompt(
+          input.projectId,
+          input.threadId,
+          input.settings,
+          input.text,
+          [],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          // Internal with a visible turn, the same shape the Assignment worker
+          // dispatch uses, so the first message reads as the user's own.
+          'internal',
+          undefined,
+          undefined,
+          true
+        )
+      }
+    })
+    this.utilityOrchestration.setOrchestrationExecutor(this.orchestration.executor)
+  }
+
+  /**
+   * Create the real, user-visible thread a dispatch runs on.
+   *
+   * The thread takes the same path a user-created one takes: `prepareCreateThread`
+   * persists it with the resolved settings, so the row carries the Oven, the
+   * harness and the model, and the broadcast that follows is what makes it
+   * appear in every renderer's sidebar the moment it exists.
+   */
+  private async createOrchestrationThread(input: {
+    projectId: string
+    title: string
+    settings: ThreadSettings
+  }): Promise<Thread> {
+    const { thread, finalize } = this.threadManager.prepareCreateThread(
+      {
+        projectId: input.projectId,
+        providerId: input.settings.providerId,
+        title: input.title,
+        titleSource: 'manual',
+        settings: input.settings
+      },
+      {
+        onEviction: (outcome) => {
+          if (outcome.failedIds.length === 0) return
+          Logger.error('Orchestration thread eviction failed', {
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
+          })
+        }
+      }
+    )
+    await finalize()
+    broadcastThreadUpdate(thread)
+    return thread
+  }
+
+  /**
+   * Report a settled dispatch back into the thread that asked for it.
+   *
+   * Best-effort by design: the run thread's own row and its notification are
+   * the durable record, so a report that cannot land (the requesting thread is
+   * mid-turn, or has been closed) must never fail the run's finalization.
+   */
+  private async reportOrchestrationDispatch(
+    dispatch: PendingOrchestrationDispatch,
+    status: string
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(
+        dispatch.requestingProjectId,
+        dispatch.requestingThreadId
+      )
+      if (!thread?.settings) return
+      await this.sendPrompt(
+        dispatch.requestingProjectId,
+        dispatch.requestingThreadId,
+        thread.settings,
+        buildOrchestrationReportPrompt(dispatch, status),
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal'
+      )
+    } catch (error) {
+      Logger.dev('Orchestration dispatch report skipped:', error)
+    }
   }
 
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
@@ -24955,7 +25242,8 @@ export class ChatEngine {
     driverId: string,
     event: Extract<AgentEvent, { type: 'permission.asked' }>,
     sourceDriver?: HarnessDriver,
-    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction']
+    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction'],
+    browserReview?: BrowserActionReview
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.sessionRegistry.get(sessionId)
@@ -24983,6 +25271,25 @@ export class ChatEngine {
         ? { unclassifiedTool: unclassifiedTool.trim() }
         : {})
     })
+    // Only an app-owned browser call may supply this decision. Harness metadata
+    // cannot turn an unclassified tool into an automatically approved action.
+    if (settleBrowserAction && browserReview && level === 'auto_review') {
+      const decision = browserReview.approved ? 'auto_review' : 'ask'
+      policy = {
+        ...policy,
+        approved: browserReview.approved,
+        decision,
+        risk: browserReview.risk,
+        reason: browserReview.reason,
+        approval: { required: !browserReview.approved },
+        ledger: {
+          ...policy.ledger,
+          decision,
+          risk: browserReview.risk,
+          reason: browserReview.reason
+        }
+      }
+    }
     if (!policy.approved) {
       policy = {
         ...policy,
@@ -25533,11 +25840,19 @@ export class ChatEngine {
         null
       memoryParentTurnId = parentTurnId
       if (turnAssistant) {
+        // The turn's model responses, in order. A harness answers one user turn
+        // with many requests (the tool loop), and each carries its own usage,
+        // so the ledger row has to fold them all instead of the terminal one.
+        const turnResponses =
+          latestUserIndex >= 0
+            ? messages.slice(latestUserIndex + 1).filter((message) => message.role === 'assistant')
+            : []
         this.recordMessageUsageEvent(
           info.threadId,
           thread,
           parentTurnId ?? turnAssistant.id,
           turnAssistant,
+          turnResponses.length > 0 ? turnResponses : [turnAssistant],
           failure
         )
       }
@@ -25990,6 +26305,15 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      // A settled run this app dispatched on an agent's behalf is reported back
+      // into the thread that asked for it, so the outcome lands where the user
+      // asked for it instead of only on a row they have to go find.
+      const settledDispatch = finishedThread
+        ? this.orchestration?.dispatches.settle(finishedThread.id)
+        : undefined
+      if (settledDispatch) {
+        void this.reportOrchestrationDispatch(settledDispatch, finalStatus)
+      }
       // A settled turn on an assistant task is reported to the routine scheduler,
       // which knows whether it dispatched a run on that task and stamps its last
       // successful run. Harmless for a user's own chat: the scheduler ignores a
@@ -26223,6 +26547,7 @@ export class ChatEngine {
     thread: Thread | null,
     parentTurnId: string | null,
     message: AgentMessage,
+    responses: readonly UsageBearingMessage[],
     failure?: string
   ): void {
     const feature: UsageEventFeature =
@@ -26231,9 +26556,19 @@ export class ChatEngine {
         : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
           ? 'assignment'
           : 'main'
-    const normalizedUsage = message.normalizedUsage
+    // One row per user turn, carrying the whole turn's spend. The terminal
+    // response still supplies the attribution; the aggregate supplies the
+    // tokens, cost and timing of every response in the turn.
+    //
+    // The row is keyed by the turn, not by the terminal response, because a turn
+    // can finalize more than once (resume, continuation, per-response idle).
+    // Keying it by the response would append a second aggregate that re-counts
+    // the responses the first row already held.
+    const turnKey = parentTurnId ?? message.id
+    const aggregate = aggregateTurnUsage(responses)
+    const normalizedUsage = aggregate.normalizedUsage
     tokenUsageAttribution.recordTurnTotals({
-      key: parentTurnId ?? message.id,
+      key: turnKey,
       agent: null,
       driverId: message.harnessId ?? thread?.settings?.harnessId ?? null,
       harnessVersion: currentHarnessVersion(),
@@ -26246,10 +26581,24 @@ export class ChatEngine {
       idPrefix: 'message',
       threadId,
       projectId: null,
-      parentTurnId: parentTurnId ?? message.id,
+      parentTurnId: turnKey,
       feature,
-      featureCallId: message.id,
-      message,
+      featureCallId: turnKey,
+      replace: true,
+      message: {
+        id: turnKey,
+        role: 'assistant',
+        createdAt: aggregate.startedAt,
+        completedAt: aggregate.completedAt,
+        ...(message.error ? { error: message.error } : {}),
+        ...(message.harnessId ? { harnessId: message.harnessId } : {}),
+        ...(message.providerId ? { providerId: message.providerId } : {}),
+        ...(message.modelId ? { modelId: message.modelId } : {}),
+        ...(message.thinkingLevel ? { thinkingLevel: message.thinkingLevel } : {}),
+        ...(message.accountId ? { accountId: message.accountId } : {}),
+        ...(normalizedUsage ? { normalizedUsage } : {})
+      },
+      cost: aggregate.cost,
       thinkingLevelFallback: thread?.settings?.thinkingLevel ?? null,
       failure
     })
@@ -26273,13 +26622,18 @@ export class ChatEngine {
     feature: UsageEventFeature
     featureCallId: string
     message: UsageBearingMessage
+    /** Whole-turn cost when the caller folded several responses into one row. */
+    cost?: UsageEventCost
+    /**
+     * Rewrite this turn's row instead of appending. Set by the turn-scoped
+     * caller, whose aggregate already covers every response the row holds.
+     */
+    replace?: boolean
     thinkingLevelFallback: ThinkingLevel | null
     failure?: string
   }): void {
     const { message } = input
     const normalizedUsage = message.normalizedUsage
-    const { costUsd: knownCost, costStatus } = assistantTurnCostAccounting(message)
-    const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
       id: `${input.idPrefix}:${message.id}`,
       threadId: input.threadId,
@@ -26321,27 +26675,28 @@ export class ChatEngine {
       ),
       createdAt: message.completedAt ?? message.createdAt
     }
-    if (knownCost === null) {
-      this.usageRepo.recordEvent({
-        ...details,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
-      return
+    let cost: UsageEventCost
+    if (input.cost) {
+      cost = input.cost
+    } else {
+      const { costUsd, costStatus } = assistantTurnCostAccounting(message)
+      cost =
+        costUsd === null
+          ? { costStatus: 'unavailable', costUsd: null, pricingProvenance: null }
+          : {
+              costStatus: costStatus === 'estimated' ? 'estimated' : 'known',
+              costUsd,
+              pricingProvenance:
+                message.costProvenance ??
+                ({
+                  source: 'provider',
+                  currency: 'USD',
+                  capturedAt: message.completedAt ?? message.createdAt
+                } satisfies UsagePricingProvenance)
+            }
     }
-    this.usageRepo.recordEvent({
-      ...details,
-      costStatus: estimated ? 'estimated' : 'known',
-      costUsd: knownCost,
-      pricingProvenance:
-        message.costProvenance ??
-        ({
-          source: 'provider',
-          currency: 'USD',
-          capturedAt: message.completedAt ?? message.createdAt
-        } satisfies UsagePricingProvenance)
-    })
+    if (input.replace) this.usageRepo.recordReplacingEvent({ ...details, ...cost })
+    else this.usageRepo.recordEvent({ ...details, ...cost })
   }
 
   /**
@@ -26486,6 +26841,42 @@ export class ChatEngine {
    */
   async recoverPendingRankingGrades(): Promise<void> {
     await this.drainRankingQueue(true)
+  }
+
+  /**
+   * The user undid a turn's file changes: that turn is a rejected answer, so
+   * the queued conversation window answering the same visible user message is
+   * recorded as 0 without a judge (see `drainRankingQueue`). Matching by the
+   * window's anchor   exactly the user message the turn answered   keeps an
+   * undo from reaching an unrelated conversation. Returns the number of queued
+   * windows caught, which is 0 once the score has already left the queue (an
+   * already-applied aggregate cannot be re-scored).
+   */
+  markTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
+    if (!sourceMessageId) return 0
+    const marked = this.rankingSnapshotRepo.markUndoneForAnchor(
+      threadId,
+      sourceMessageId,
+      Date.now()
+    )
+    // A row reset out of an in-flight claim is due immediately; arm the drain so
+    // its 0 is not left waiting on a timer that never fires.
+    if (marked > 0) this.scheduleRankingDrain()
+    Logger.dev('Turn file changes undone; queued ranking window scores 0', {
+      threadId,
+      marked
+    })
+    return marked
+  }
+
+  /**
+   * The user redid a previously undone turn's changes: clear the undo mark so
+   * the restored work is graded normally again. Only a still-queued window can
+   * be cleared; one already scored and deleted keeps its 0.
+   */
+  clearTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
+    if (!sourceMessageId) return 0
+    return this.rankingSnapshotRepo.clearUndoneForAnchor(threadId, sourceMessageId)
   }
 
   /** Live progress of the user-requested run, or null when the queue is idle. */
@@ -26730,9 +27121,14 @@ export class ChatEngine {
       heldBackDeferral = await this.deferHeldBackRankingRows(plan.heldBack, nowMs)
       const rows = this.rankingSnapshotRepo.claimRows(nowMs, plan.claimIds)
       for (const row of rows) {
+        // A window the user undid is a verdict no judge can improve on: the
+        // model's work was rejected wholesale, so it is recorded as 0 without
+        // spending a judge call. `outcome` is only consulted when a judge
+        // actually ran.
+        const undone = row.undone_at_ms !== null
         const candidate = toRankingCandidate(row)
-        const outcome = await this.gradeCandidateCore(candidate)
-        const score = outcome.score
+        const outcome = undone ? null : await this.gradeCandidateCore(candidate)
+        const score = outcome ? outcome.score : 0
         if (score !== null) {
           this.rankingJudgeFailures.delete(row.harness_id)
           const durationMs = Math.max(0, row.ended_at - row.started_at)
@@ -26761,7 +27157,9 @@ export class ChatEngine {
           }
           continue
         }
-        await this.deferJudgeFailure(row, outcome)
+        if (outcome) {
+          await this.deferJudgeFailure(row, outcome)
+        }
         processed += 1
         failed += 1
       }

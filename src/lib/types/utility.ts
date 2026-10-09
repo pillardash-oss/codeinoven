@@ -399,6 +399,65 @@ export interface SkillMarketInstallRequest {
   activation?: UtilityActivation
 }
 
+/** Agent plugins surfaced in the shared Codex and Claude Code marketplace. */
+export interface AgentPluginMarketEntry {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  publisher: string | null
+  iconUrl: string | null
+  homepage: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  components: Array<'skills' | 'mcp' | 'hooks' | 'agents' | 'commands' | 'apps' | 'lspServers'>
+  installed: boolean
+  updateAvailable: boolean
+  bookmarked: boolean
+  supported: boolean
+  unsupportedReason?: string
+}
+
+export interface AgentPluginMarketplace {
+  id: string
+  name: string
+  url: string
+  platform: 'codex' | 'claude'
+  pluginCount: number
+  refreshedAt: number | null
+}
+
+export interface InstalledAgentPlugin {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  installPath: string
+  utilityIds: string[]
+  requiredCredentialVariables: string[]
+  installedAt: number
+  updatedAt: number | null
+  availableVersion: string | null
+  unsupportedComponents: string[]
+}
+
+/** What a plugin page shows before and after install: the listing plus its package contents. */
+export interface AgentPluginDetail {
+  entry: AgentPluginMarketEntry
+  /** The plugin's README, or null when its repository has none. */
+  readme: string | null
+  /** Skills the package teaches agents, by directory name. */
+  skills: string[]
+  /** MCP servers the package connects agents to, by configured name. */
+  mcpServers: string[]
+}
+
 /** Where a discovered MCP server or skill came from. */
 export type AgentCapabilityOrigin = 'application' | 'global' | 'harness'
 

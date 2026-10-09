@@ -56,8 +56,9 @@
     harnessFilter?: string | null
     /**
      * Harnesses the current execution target does not have installed (a remote
-     * Oven without them). Their chips and model rows are disabled, because a
-     * model can only run where its harness exists.
+     * Oven without them). A model can only run where its harness exists, so
+     * those harnesses are omitted from the picker entirely: no chip, no model
+     * row, and no favorite or recent entry pointing at one.
      */
     unavailableHarnessIds?: ReadonlySet<string> | null
     /** Why those harnesses are unavailable, shown as the chip's and row's title. */
@@ -148,6 +149,7 @@
     new Set(
       [...displayProviders, ...cachedProviders]
         .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+        .filter((provider) => !isUnavailableHarness(provider.harnessId))
         .flatMap((provider) =>
           provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
         )
@@ -162,6 +164,7 @@
         return { modelKey: key, ...parsed }
       })
       .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
+      .filter((favorite) => !isUnavailableHarness(favorite.harnessId))
   )
   const favoriteModelsList = $derived(
     filterEntries(
@@ -182,6 +185,7 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
+              !isUnavailableHarness(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -208,6 +212,7 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
+              !isUnavailableHarness(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -221,6 +226,7 @@
     const words = searchWords(search)
     return displayProviders
       .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+      .filter((provider) => !isUnavailableHarness(provider.harnessId))
       .filter((provider) => passesRailHarness(provider.harnessId))
       .map((provider) => ({
         ...provider,
@@ -249,6 +255,7 @@
       new Map(
         displayProviders
           .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+          .filter((provider) => !isUnavailableHarness(provider.harnessId))
           .map((provider) => provider.harnessId)
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
@@ -269,17 +276,33 @@
   const hasFavorites = $derived(favoriteModels.length > 0)
   /** True while this picker can apply profiles, which decides the profiles rail item. */
   const showProfilesRail = $derived(profiles !== null)
-  /** Harness icons are worth a rail section only when there is a choice to make. */
-  const showHarnessesRail = $derived(harnessOptions.length > 1)
+  /**
+   * The harness section shows as soon as there is one harness to name.
+   *
+   * A lone harness is still worth the icon: the Oven reports what it has
+   * installed, and hiding the section when only one survives meant a remote
+   * thread showed no harness icon at all even though its Oven plainly has one.
+   */
+  const showHarnessesRail = $derived(harnessOptions.length > 0)
   // Match the rail's buttons, gaps, padding, and separator; the model list
   // fills this height instead of forcing the dropdown to its maximum.
+  //
+  // Without a floor the height follows the rail item count alone, so a picker
+  // whose rail only has the always-on sections (all + profiles/star) collapses
+  // to about 5.1rem and shows barely one row cut in half. Flooring at the
+  // four-harness height keeps the picker comfortably browseable (search bar
+  // plus several rows) and, being the compact height, still lets it grow past
+  // four harnesses toward the popover cap. Its height must never shrink below
+  // this, so do not remove the floor.
+  const PICKER_MIN_HEIGHT_REM = 16
   const railHeight = $derived.by(() => {
     const fixed = 1 + Number(hasFavorites) + Number(showProfilesRail)
     const harnesses = showHarnessesRail ? Math.min(harnessOptions.length, 7) : 0
     const outerGaps = harnesses ? fixed + 1 : fixed - 1
     const harnessGaps = Math.max(0, harnesses - 1)
-    const rem =
+    const naturalRem =
       (fixed + harnesses) * 2 + (outerGaps + harnessGaps) * 0.125 + 1 + (harnesses ? 0.5 : 0)
+    const rem = Math.max(PICKER_MIN_HEIGHT_REM, naturalRem)
     return `calc(${rem}rem + ${harnesses ? 1 : 0}px)`
   })
   /**

@@ -30,13 +30,20 @@ export async function askText(question: string, offered: string): Promise<string
   return answer || offered
 }
 
+/** A port answer, and whether the user named it or accepted the offer. */
+export interface PortAnswer {
+  port: number
+  /** True when a port was typed, false when the offered one was accepted. */
+  explicit: boolean
+}
+
 /** Ask for a TCP port, re-asking until the answer is one a client could dial. */
-export async function askPort(question: string, offered: number): Promise<number> {
+export async function askPort(question: string, offered: number): Promise<PortAnswer> {
   while (true) {
     const answer = (await prompt().question(`${question} [${offered}]: `)).trim()
-    if (!answer) return offered
+    if (!answer) return { port: offered, explicit: false }
     const port = Number(answer)
-    if (Number.isSafeInteger(port) && port >= 1 && port <= 65535) return port
+    if (Number.isSafeInteger(port) && port >= 1 && port <= 65535) return { port, explicit: true }
     process.stdout.write('Enter a port between 1 and 65535.\n')
   }
 }

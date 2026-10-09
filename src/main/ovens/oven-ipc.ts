@@ -17,6 +17,8 @@ import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { OvenSetupService } from './oven-setup-service'
 import { OvenHarnessService } from './oven-harness-service'
+import { OvenPeekService } from './oven-peek-service'
+import { collectPreflight } from './oven-setup-bootstrap'
 import { createOvenSetupPorts } from './oven-setup-ports'
 import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
@@ -49,13 +51,32 @@ export function registerOvenIpc(
     authorizePath: resolveImagePath
   })
 
+  const harnessService = new OvenHarnessService(service, storage)
+  // One unified read per Oven serves the Ovens page, the setup dialog, and every
+  // later harness read. It records its own successful probe so `oven:state` agrees.
+  const peekService = new OvenPeekService(
+    service,
+    harnessService,
+    storage,
+    (id) => collectPreflight(service.ssh, id),
+    (id, probe) => {
+      if (probe.specs)
+        void registry
+          .recordConnectionHealth(id, {
+            state: 'connected',
+            checkedAt: Date.now(),
+            specs: probe.specs
+          })
+          .catch(() => undefined)
+    }
+  )
   const setupRuntime = createOvenSetupPorts({
     service,
     accounts: new HarnessAccountRegistry(storage),
-    vault
+    vault,
+    recentReport: (id) => peekService.recentPreflight(id)
   })
   const setupService = new OvenSetupService(storage, setupRuntime)
-  const harnessService = new OvenHarnessService(service, storage)
   const agentService = new OvenAgentService(registry)
   harnessService.startAutoUpdates()
   app.once('before-quit', () => harnessService.stopAutoUpdates())
@@ -79,6 +100,22 @@ export function registerOvenIpc(
     return result
   })
   app.once('before-quit', () => previews.dispose())
+  // One shared SSH connection per Oven backs every command in the app; release
+  // it on quit instead of leaving the background master to time out on its own.
+  app.once('before-quit', () => {
+    void registry
+      .state()
+      .then((state) =>
+        Promise.all(
+          state.ovens
+            .filter((oven) => oven.kind !== 'local')
+            .map((oven) => service.ssh.closeShared(oven.id).catch(() => undefined))
+        )
+      )
+      .catch((error: unknown) =>
+        Logger.dev('Closing shared Oven connections failed on quit:', error)
+      )
+  })
   ipcMain.handle('oven:state', () => registry.state())
   ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))
   ipcMain.handle('oven:save', async (_event, raw: unknown) => {
@@ -92,10 +129,27 @@ export function registerOvenIpc(
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
   ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
-  ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
+  ipcMain.handle('oven:probe', async (_event, raw: unknown, refresh: unknown) => {
     const id = ovenId(raw)
+    const forceRefresh = refresh === true
     try {
-      return await service.probe(id)
+      const probe = await service.probe(id, forceRefresh)
+      // A forced read re-scans harness versions, so the desktop's own copy of
+      // this Oven's inventory is stale from that instant on: any surface that
+      // reads it (thread model pickers, the Oven picker) must re-probe rather
+      // than keep showing the version the user just moved past.
+      if (forceRefresh) harnessService.invalidate(id)
+      // Record what the probe read on the Oven entry itself. The renderer draws
+      // its live copy from the probe, but the entry is what a later Settings
+      // open reads back, so a check that never wrote it left the entry showing
+      // figures from the last connection-health call.
+      if (probe.specs)
+        await registry.recordConnectionHealth(id, {
+          state: 'connected',
+          checkedAt: Date.now(),
+          specs: probe.specs
+        })
+      return probe
     } catch (error) {
       // Deliver probe failures to the UI without Electron logging a rejected handler.
       return {
@@ -104,6 +158,9 @@ export function registerOvenIpc(
     }
   })
   ipcMain.handle('oven:runs', (_event, raw: unknown) => service.runs(ovenId(raw)))
+  ipcMain.handle('oven:peek', (_event, raw: unknown, refresh: unknown) =>
+    peekService.peek(ovenId(raw), refresh === true)
+  )
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
       throw new Error('Invalid workspace request.')
@@ -203,8 +260,8 @@ export function registerOvenIpc(
     const report = await setupRuntime.preflight(id)
     return setupRuntime.gitIdentity.verify(id, report)
   })
-  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
-    harnessService.getInventory(ovenId(rawId))
+  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown, rawRefresh?: unknown) =>
+    harnessService.getInventory(ovenId(rawId), rawRefresh === true)
   )
   ipcMain.handle('oven:agent:script', (_event, raw: unknown) =>
     agentService.script(validateOvenAgentScriptRequest(raw))
@@ -217,6 +274,9 @@ export function registerOvenIpc(
     if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
     return agentService.reachableEndpoint(raw)
   })
+  ipcMain.handle('oven:agent:test', (_event, raw: unknown) =>
+    agentService.test(validateOvenAgentRegistration(raw))
+  )
   ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
     agentService.register(validateOvenAgentRegistration(raw))
   )
@@ -241,6 +301,9 @@ export function registerOvenIpc(
     })
     return result
   })
+  ipcMain.handle('oven:harness:install', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.installHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
+  )
   ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) =>
     harnessService.updateHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
   )

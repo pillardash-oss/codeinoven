@@ -60,20 +60,22 @@
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
+  import type { UtilitiesTab } from '$lib/stores/settings-route.svelte'
 
   /** Sections of the Utilities page; the selected one lives in the settings route. */
-  export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
 
   interface Props {
     /** Section currently on screen. */
     activeTab: UtilitiesTab
     onSelectTab: (tab: UtilitiesTab) => void
     onOpenMarketplace: () => void
+    onOpenPluginMarketplace: () => void
     /** Opens one marketplace skill from the bookmarks list. */
     onOpenSkill: (entry: SkillMarketEntry) => void
   }
 
-  let { activeTab, onSelectTab, onOpenMarketplace, onOpenSkill }: Props = $props()
+  let { activeTab, onSelectTab, onOpenMarketplace, onOpenPluginMarketplace, onOpenSkill }: Props =
+    $props()
 
   const cioIconUrl = publicAssetUrl('icon.svg')
 
@@ -854,6 +856,13 @@
           onclick={onOpenMarketplace}
         >
           <Search size={13} /> Skills marketplace
+        </button>
+        <button
+          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          title="Open the agent plugin marketplace"
+          onclick={onOpenPluginMarketplace}
+        >
+          <Package size={13} /> Agent plugins
         </button>
       {/if}
     </div>

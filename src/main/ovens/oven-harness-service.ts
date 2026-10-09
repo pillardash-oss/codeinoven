@@ -8,10 +8,14 @@ import {
 } from '../agents/harness-update-service'
 import type { HarnessInstallMethod } from '../../lib/types'
 import { compareVersions } from '../../lib/version-compare'
-import { harnessUninstallCommand } from '../agents/harness-install-service'
+import {
+  harnessUninstallCommand,
+  preferredHarnessInstallChannel
+} from '../agents/harness-install-service'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
-import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
+import { isWindowsShell, shellForPlatform, type RemoteShell } from './oven-remote-shell'
 import { remoteArgvCommand } from './oven-remote-command'
+import { wslChannelScript, wslScriptArgv } from './oven-wsl'
 import type { OvenService } from './oven-service'
 import { Logger } from '../system/logger'
 import { withOvenHarnessMutation } from './oven-operation-lock'
@@ -193,11 +197,7 @@ export class OvenHarnessService {
     if (!refresh && cached && Date.now() - cached.checkedAt < INVENTORY_TTL_MS) return cached.items
     try {
       const probe = await this.service.probe(ovenId, refresh)
-      const items = await this.mergeLatest(this.probeItems(probe))
-      const entry: CachedInventory = { items, checkedAt: Date.now(), platform: probe.platform }
-      this.inventories.set(ovenId, entry)
-      await this.persistInventory(ovenId, entry)
-      return items
+      return await this.inventoryFromProbe(ovenId, probe)
     } catch (error) {
       // A refresh that fails must stay a failure: the caller forced it to
       // verify a mutation that just ran, and a stale row would misreport it.
@@ -211,6 +211,39 @@ export class OvenHarnessService {
       })
       return stored.items
     }
+  }
+
+  /**
+   * Enrich one already-taken probe into inventory rows and cache them.
+   *
+   * The unified Oven check owns the probe, so this is the seam that keeps a
+   * single SSH read shared: the check hands its probe here, and every later
+   * `oven:harness:inventory` read answers from the cache this fills instead of
+   * probing the Oven again.
+   */
+  async inventoryFromProbe(ovenId: string, probe: OvenProbe): Promise<OvenHarnessInventoryItem[]> {
+    const items = await this.mergeLatest(this.probeItems(probe))
+    const entry: CachedInventory = { items, checkedAt: Date.now(), platform: probe.platform }
+    this.inventories.set(ovenId, entry)
+    await this.persistInventory(ovenId, entry)
+    return items
+  }
+
+  /** The already-scanned rows for one Oven, or an empty list before any scan. */
+  cachedInventory(ovenId: string): OvenHarnessInventoryItem[] {
+    return this.inventories.get(ovenId)?.items ?? []
+  }
+
+  /**
+   * Forget one Oven's cached inventory.
+   *
+   * A forced probe (an explicit Check Oven) has just re-scanned versions on the
+   * Oven, so the desktop's own 30-second copy is out of date the moment that
+   * read lands. Dropping it makes the next `oven:harness:inventory` re-probe
+   * instead of answering every other surface with the pre-check list.
+   */
+  invalidate(ovenId: string): void {
+    this.inventories.delete(ovenId)
   }
 
   /** The persisted inventory table, read once and then kept in memory. */
@@ -311,16 +344,85 @@ export class OvenHarnessService {
           throw new Error(
             `${descriptor.name} does not document an unattended update command. Update it on the Oven itself.`
           )
+        // An update has to run where the harness lives, so a WSL install is
+        // updated inside its distribution rather than beside the Windows PATH.
+        // The inventory is read when this process has not scanned the Oven yet,
+        // so a freshly started app still updates in the right environment.
+        const current =
+          this.cachedInventory(ovenId).find((item) => item.harnessId === harnessId) ??
+          (await this.getInventory(ovenId)).find((item) => item.harnessId === harnessId)
+        const distribution = current?.environment === 'wsl' ? current.wslDistribution : undefined
         return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
           const platform =
             this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
           const shell = shellForPlatform(platform)
           const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
-          Logger.info('Updating a harness on an oven', { ovenId, harnessId })
+          Logger.info('Updating a harness on an oven', {
+            ovenId,
+            harnessId,
+            environment: distribution ? 'wsl' : 'host'
+          })
           await this.service.ssh.execute(
             ovenId,
-            remoteArgvCommand(shell, [descriptor.command, ...args], { prefix }),
+            distribution
+              ? wslScriptCommand(shell, distribution, descriptor.command, args)
+              : remoteArgvCommand(shell, [descriptor.command, ...args], { prefix }),
+            '',
+            UPDATE_TIMEOUT_MS
+          )
+          this.inventories.delete(ovenId)
+          return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+        })
+      })
+    )
+  }
+
+  /**
+   * Install one harness with the same documented channel oven setup would use.
+   *
+   * The user reaches for this when the Oven is already set up and they want one
+   * more harness, so it has to behave exactly like the setup step: the channel
+   * comes from the shared install registry, never a command invented here, and a
+   * harness with no unattended channel on the Oven's platform is reported as a
+   * handoff rather than a silent no-op. Returns the refreshed row, so the caller
+   * never has to re-probe.
+   */
+  async installHarness(ovenId: string, harnessId: string): Promise<OvenHarnessInventoryItem> {
+    return this.logMutation('install', ovenId, harnessId, () =>
+      this.withLock(`${ovenId}:${harnessId}`, async () => {
+        const descriptor = findHarness(harnessId)
+        if (!descriptor) throw new Error('That harness is not in the app registry.')
+        const probe = await this.service.probe(ovenId)
+        // A Windows Oven that can run Linux installs there: the native one-line
+        // installers are Linux-first, and that is the environment the vendors
+        // support. An Oven without WSL installs on the host as before.
+        const distribution = probe.platform === 'win32' ? probe.wslDistributions?.[0] : undefined
+        const channel = preferredHarnessInstallChannel(
+          harnessId,
+          (distribution ? 'linux' : probe.platform) as NodeJS.Platform
+        )
+        const installCommand = channel?.command
+        const installArgs = channel?.args
+        if (!installCommand || !installArgs)
+          throw new Error(
+            `${descriptor.name} documents no one-command install on this platform. Install it on the Oven itself.`
+          )
+        return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+          await this.waitForHarnessIdle(ovenId, descriptor.command)
+          const shell = shellForPlatform(probe.platform)
+          const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
+          Logger.info('Installing a harness on an oven', {
+            ovenId,
+            harnessId,
+            method: channel.method,
+            environment: distribution ? 'wsl' : 'host'
+          })
+          await this.service.ssh.execute(
+            ovenId,
+            distribution
+              ? wslScriptCommand(shell, distribution, installCommand, installArgs)
+              : remoteArgvCommand(shell, [installCommand, ...installArgs], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -359,10 +461,20 @@ export class OvenHarnessService {
           const managedNpm = current.executablePath?.includes('/harnesses/npm/') === true
           const prefix =
             managedNpm && !isWindowsShell(shell) ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ` : ''
-          Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
+          // A removal runs where the harness lives, so a WSL install is removed
+          // inside its own distribution with the Linux path it was found at.
+          const distribution = current.environment === 'wsl' ? current.wslDistribution : undefined
+          Logger.info('Uninstalling a harness on an oven', {
+            ovenId,
+            harnessId,
+            method,
+            environment: distribution ? 'wsl' : 'host'
+          })
           await this.service.ssh.execute(
             ovenId,
-            remoteArgvCommand(shell, [removal.command, ...removal.args], { prefix }),
+            distribution
+              ? wslScriptCommand(shell, distribution, removal.command, removal.args)
+              : remoteArgvCommand(shell, [removal.command, ...removal.args], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -374,7 +486,7 @@ export class OvenHarnessService {
   }
 
   private async logMutation(
-    action: 'update' | 'uninstall',
+    action: 'install' | 'update' | 'uninstall',
     ovenId: string,
     harnessId: string,
     task: () => Promise<OvenHarnessInventoryItem>
@@ -409,6 +521,22 @@ export class OvenHarnessService {
     if (!row) throw new Error('The Oven did not report that harness.')
     return row
   }
+}
+
+/**
+ * Run one documented channel inside a WSL distribution, addressed over SSH.
+ *
+ * The channel is the Linux one, because that is the platform a distribution
+ * presents, and it is handed to `bash` there as a script so an installer that is
+ * itself a pipeline survives intact.
+ */
+function wslScriptCommand(
+  shell: RemoteShell,
+  distribution: string,
+  command: string,
+  args: string[]
+): string {
+  return remoteArgvCommand(shell, wslScriptArgv(distribution, wslChannelScript(command, args)))
 }
 
 /** Infer the install method from the resolved binary path so removal matches it. */
