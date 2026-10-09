@@ -878,6 +878,10 @@ export class ChatEngine {
 
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
 
+  /** Local working directory for app-wide harness discovery, which never needs
+   *  a project's own files and cannot use a remote (Oven) project's path. */
+  private static readonly DISCOVERY_CWD_DIR = 'harness-cwd'
+
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
 
@@ -4873,9 +4877,26 @@ export class ChatEngine {
     )
   }
 
+  /**
+   * A local working directory for an app-wide harness discovery pass.
+   *
+   * Discovery only needs a writable cwd for the harness CLI: the models a
+   * harness reports do not depend on the project's files. A remote (Oven)
+   * project's path exists only on the Oven, so resolving it here pointed every
+   * harness at a directory this machine cannot create and forced the bundled
+   * fallback catalog on the whole app.
+   */
+  private async discoveryWorkingDirectory(projectId: string): Promise<string> {
+    const project = await this.projectManager.getProject(projectId)
+    if (!project || (project.source === 'local' && project.path))
+      return this.resolveProjectPath(projectId)
+    await this.storage.ensureDirectory(ChatEngine.DISCOVERY_CWD_DIR)
+    return this.storage.resolve(ChatEngine.DISCOVERY_CWD_DIR)
+  }
+
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
-    const projectPath = await this.resolveProjectPath(projectId)
+    const projectPath = await this.discoveryWorkingDirectory(projectId)
     const drivers = await this.catalogDrivers()
     const results: DriverDiscovery[] = []
     for (let offset = 0; offset < drivers.length; offset += 4) {
@@ -8969,10 +8990,23 @@ export class ChatEngine {
         userMessageId,
         remoteContext
       )
-      if (shouldAutoTitle && settings.titleMode !== 'deterministic')
+      if (shouldAutoTitle && settings.titleMode !== 'deterministic') {
+        // The project's path lives on the Oven, so a disposable title turn on
+        // this machine needs a local working directory of its own.
+        const titleProjectPath = await this.localTitleWorkspace(threadId)
         void createAutoTitleLauncher(true, () =>
-          this.autoTitleThread(projectId, threadId, settings.harnessId, settings, text, sent.id)
+          this.autoTitleThread(
+            projectId,
+            threadId,
+            settings.harnessId,
+            settings,
+            text,
+            sent.id,
+            undefined,
+            titleProjectPath
+          )
         )()
+      }
       return sent
     }
 
@@ -12088,6 +12122,20 @@ export class ChatEngine {
   // ─── Thread auto-titling ──────────────────────────────────────────────────
 
   /**
+   * A local working directory a disposable title turn can run in.
+   *
+   * An Oven project's path lives on the Oven, so resolving it on this machine
+   * points at a directory that does not exist here (and that `/home` famously
+   * refuses to create on macOS). A one-shot title turn needs a writable working
+   * directory and nothing else, so it gets its own under the app's data root.
+   */
+  private async localTitleWorkspace(threadId: string): Promise<string> {
+    const relative = join('title-cwd', threadId)
+    await this.storage.ensureDirectory(relative)
+    return this.storage.resolve(relative)
+  }
+
+  /**
    * Request a one-shot model-generated title for a fresh thread. The fallback
    * title is applied in `sendPrompt()` before the main prompt is dispatched so
    * the sidebar updates instantly. This method only replaces the fallback when
@@ -12104,7 +12152,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     parentTurnId: string,
-    parentSessionId?: string
+    parentSessionId?: string,
+    projectPathOverride?: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
@@ -12119,7 +12168,8 @@ export class ChatEngine {
         settings,
         text,
         parentTurnId,
-        parentSessionId
+        parentSessionId,
+        projectPathOverride
       )
     } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
@@ -12414,7 +12464,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     parentTurnId: string,
-    parentSessionId?: string
+    parentSessionId?: string,
+    projectPathOverride?: string
   ): Promise<string | null> {
     // A user-assigned auxiliary model wins over the harness's own cheap-model
     // preference and may belong to a different harness, so titling a thread no
@@ -12423,7 +12474,8 @@ export class ChatEngine {
     const auxiliary = await this.resolveAuxiliaryRoute({
       projectId,
       threadId,
-      threadHarnessId: driverId
+      threadHarnessId: driverId,
+      ...(projectPathOverride ? { projectPath: projectPathOverride } : {})
     })
     if (auxiliary) {
       const auxiliaryTitle = await this.generateTitleOnAuxiliaryRoute(
@@ -12434,12 +12486,12 @@ export class ChatEngine {
       )
       if (auxiliaryTitle) return auxiliaryTitle
     }
-    const { driver, projectPath } = await this.resolve(
-      projectId,
-      driverId,
-      threadId,
-      settings.accountId
-    )
+    const { driver, projectPath } = projectPathOverride
+      ? {
+          driver: await this.driverForAccount(driverId, settings.accountId),
+          projectPath: projectPathOverride
+        }
+      : await this.resolve(projectId, driverId, threadId, settings.accountId)
     let generated: string | null = null
     let failure: string | null = null
     try {
