@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { ShieldAlert } from '@lucide/svelte'
+  import { ExternalLink, ShieldAlert } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { applyAppTypography } from '$lib/app-typography'
   import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
   import { sitePermissionRequestSummary } from '$shared/browser/site-permissions'
+  import {
+    EXTERNAL_PROTOCOL_PERMISSION,
+    externalProtocolTarget
+  } from '$shared/browser/external-protocol'
   import type {
     BrowserPermissionDecision,
     BrowserPermissionPromptContext,
@@ -53,6 +57,15 @@
   function capability(request: BrowserPermissionRequest): string {
     return sitePermissionRequestSummary(request.permission, request.mediaTypes)
   }
+
+  /** The external address on display, when the request is a handoff rather than a
+   *  permission: the app it names is the whole decision, and "Open" hands it to
+   *  the OS instead of granting the page anything. Null for a permission. */
+  const external = $derived(
+    context && context.request.permission === EXTERNAL_PROTOCOL_PERMISSION
+      ? externalProtocolTarget(context.request.externalUrl ?? '')
+      : null
+  )
 
   /** The quiet line under the request: whose browsing this is, and how many
    *  requests are queued behind the one on display. */
@@ -138,18 +151,28 @@
   >
     <div class="flex min-w-0 items-start gap-2">
       <span
-        class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-warning/20 text-warning"
+        class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full {external
+          ? 'bg-primary/20 text-primary'
+          : 'bg-warning/20 text-warning'}"
         aria-hidden="true"
       >
-        <ShieldAlert size={15} stroke-width={2.25} />
+        {#if external}
+          <ExternalLink size={15} stroke-width={2.25} />
+        {:else}
+          <ShieldAlert size={15} stroke-width={2.25} />
+        {/if}
       </span>
       <p
         id="browser-permission-title"
         class="line-clamp-3 min-w-0 flex-1 text-[0.8125rem] font-medium leading-normal text-foreground"
       >
-        <span class="break-all">{context.request.origin}</span> wants to use {capability(
-          context.request
-        )}
+        {#if external}
+          <span class="break-all">{context.request.origin}</span> wants to open {external.label}
+        {:else}
+          <span class="break-all">{context.request.origin}</span> wants to use {capability(
+            context.request
+          )}
+        {/if}
       </p>
     </div>
     {#if noteFor(context)}
@@ -161,34 +184,58 @@
         then retry.
       </p>
     {/if}
-    <div class="mt-0.5 flex gap-1.5" role="group" aria-label="Permission decision">
-      <button
-        type="button"
-        class="h-6 min-w-0 flex-1 whitespace-nowrap bg-elevated px-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-        title="Refuse and remember: this permission will not be asked for again on this site"
-        onclick={() => decide('deny')}
-      >
-        Don't allow
-      </button>
-      <button
-        type="button"
-        class="h-6 min-w-0 flex-1 whitespace-nowrap bg-elevated px-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-        title="Allow only this one request; ask again next time"
-        onclick={() => decide('allow-once')}
-      >
-        Allow once
-      </button>
-      <button
-        type="button"
-        {@attach trackAllowButton}
-        class="h-6 min-w-0 flex-1 whitespace-nowrap bg-primary px-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title={context.systemAccessDenied
-          ? 'Retry macOS camera or microphone access for this request'
-          : 'Allow and remember for this site until you reset permissions'}
-        onclick={() => decide('allow')}
-      >
-        {context.systemAccessDenied ? 'Retry' : 'Allow'}
-      </button>
+    <div
+      class="mt-0.5 flex gap-1.5"
+      role="group"
+      aria-label={external ? 'Open confirmation' : 'Permission decision'}
+    >
+      {#if external}
+        <button
+          type="button"
+          class="h-6 min-w-0 flex-1 whitespace-nowrap bg-elevated px-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+          title="Leave this website where it is; nothing is opened"
+          onclick={() => decide('dismiss')}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          {@attach trackAllowButton}
+          class="h-6 min-w-0 flex-1 whitespace-nowrap bg-primary px-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          title="Open this address in the app that handles it"
+          onclick={() => decide('allow-once')}
+        >
+          Open
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="h-6 min-w-0 flex-1 whitespace-nowrap bg-elevated px-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+          title="Refuse and remember: this permission will not be asked for again on this site"
+          onclick={() => decide('deny')}
+        >
+          Don't allow
+        </button>
+        <button
+          type="button"
+          class="h-6 min-w-0 flex-1 whitespace-nowrap bg-elevated px-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+          title="Allow only this one request; ask again next time"
+          onclick={() => decide('allow-once')}
+        >
+          Allow once
+        </button>
+        <button
+          type="button"
+          {@attach trackAllowButton}
+          class="h-6 min-w-0 flex-1 whitespace-nowrap bg-primary px-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          title={context.systemAccessDenied
+            ? 'Retry macOS camera or microphone access for this request'
+            : 'Allow and remember for this site until you reset permissions'}
+          onclick={() => decide('allow')}
+        >
+          {context.systemAccessDenied ? 'Retry' : 'Allow'}
+        </button>
+      {/if}
     </div>
   </div>
 {/if}

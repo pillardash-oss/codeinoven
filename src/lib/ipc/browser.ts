@@ -565,6 +565,13 @@ export interface BrowserPermissionRequest {
   origin: string
   permission: string
   mediaTypes: string[]
+  /**
+   * The external address the page asked the operating system to open, present
+   * only for a handoff (`permission` is `external-protocol`). A request that
+   * carries it is confirmed by the same prompt card as a permission and, when
+   * allowed, opens through the OS instead of granting anything to the page.
+   */
+  externalUrl?: string
 }
 
 /**

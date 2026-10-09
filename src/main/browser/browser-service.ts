@@ -23,6 +23,7 @@ import {
   Menu,
   screen,
   session,
+  shell,
   systemPreferences,
   webContents,
   webFrameMain,
@@ -166,6 +167,11 @@ import {
   BrowserScreenShareService,
   type BrowserScreenShareOwner
 } from './browser-service/browser-screen-share'
+import {
+  EXTERNAL_PROTOCOL_PERMISSION,
+  externalProtocolTarget,
+  type ExternalProtocolTarget
+} from '../../lib/browser/external-protocol'
 import {
   type BrowserPageOwner,
   type BrowserTab,
@@ -3466,10 +3472,20 @@ export class BrowserService {
         frameUrl: null
       })
     })
+    const owner: BrowserPageOwner = { tabId, projectId, threadId, boxId: tab.boxId }
     view.webContents.on('will-navigate', (event, url) => {
+      // An external address (the App Store, mail, a native app) is offered to
+      // the OS behind a confirmation; the page itself never navigates to it.
+      if (this.offerExternalNavigation(owner, url)) {
+        event.preventDefault()
+        return
+      }
       if (!this.isAllowedTabNavigation(projectId, tab.boxId, url)) event.preventDefault()
     })
-    this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
+    view.webContents.on('will-redirect', (event, url) => {
+      if (this.offerExternalNavigation(owner, url)) event.preventDefault()
+    })
+    this.installWindowOpenPolicy(view, owner)
     return tab
   }
   /**
@@ -3495,6 +3511,9 @@ export class BrowserService {
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
+    // A `window.open` aimed at an external scheme is the same handoff a link
+    // click is, and never becomes a tab: the address is not a page.
+    if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
     if (
       details.disposition === 'new-window' &&
       !details.features &&
@@ -4039,7 +4058,14 @@ export class BrowserService {
       this.showPopupWindowContextMenu(record, params)
     })
     contents.on('will-navigate', (event, url) => {
+      if (this.offerExternalNavigation(popupPageOwner(record), url)) {
+        event.preventDefault()
+        return
+      }
       if (!this.isAllowedPopupNavigation(record, url)) event.preventDefault()
+    })
+    contents.on('will-redirect', (event, url) => {
+      if (this.offerExternalNavigation(popupPageOwner(record), url)) event.preventDefault()
     })
     contents.setWindowOpenHandler((details) =>
       this.windowOpenResponse(popupPageOwner(record), details)
@@ -5017,16 +5043,81 @@ export class BrowserService {
     }
     // Native OS popup composites above the WebContentsView: the page stays
     // live and interactive while the prompt is on screen.
-    const tab = this.tabs.get(remaining.request.tabId)
+    this.showPendingPermission(remaining)
+  }
+
+  /** Put one pending request on the prompt card, labelled with its tab. Every
+   *  path that raises a prompt shares this, so a permission request and an
+   *  external-address handoff draw the same card and cannot drift apart. */
+  private showPendingPermission(pending: PendingBrowserPermission): void {
+    const tab = this.tabs.get(pending.request.tabId)
     this.promptWindow.show(
       {
-        request: remaining.request,
+        request: pending.request,
         queueSize: this.pendingPermissions.size,
         projectLabel: tab ? this.permissionLabel(tab) : null,
-        systemAccessDenied: remaining.systemAccessDenied
+        systemAccessDenied: pending.systemAccessDenied
       },
       this.promptAnchor()
     )
+  }
+
+  /**
+   * Offer a page's external address to the operating system, and answer whether
+   * it was one.
+   *
+   * The address is not opened here: a page must not be able to launch an app on
+   * the machine just by pointing a link at it. It goes on the same prompt card a
+   * permission request uses, and the OS open happens only after the user
+   * confirms it ({@link openExternalUrl}). A caller that gets true must refuse
+   * the in-app navigation, because the destination is not a page.
+   */
+  private offerExternalNavigation(owner: BrowserPageOwner, url: string): boolean {
+    const target = externalProtocolTarget(url)
+    if (!target) return false
+    const tab = this.tabs.get(owner.tabId)
+    if (!tab || this.window.webContents.isDestroyed()) return false
+    const origin = permissionOrigin(tab.view.webContents.getURL())
+    // Only an http(s) page can ask for a handoff; a page with no origin of its
+    // own (a blank document, a dead renderer) has no site to name or remember.
+    if (!origin) return false
+    const id = crypto.randomUUID()
+    const request: BrowserPermissionRequest = {
+      id,
+      tabId: owner.tabId,
+      projectId: owner.projectId,
+      origin,
+      permission: EXTERNAL_PROTOCOL_PERMISSION,
+      mediaTypes: [],
+      externalUrl: target.url
+    }
+    const timer = setTimeout(
+      () => this.resolvePermission(id, permissionResolutions.dismiss),
+      PERMISSION_TIMEOUT_MS
+    )
+    const pending: PendingBrowserPermission = {
+      request,
+      // An external address has no Chromium callback waiting on it: the page's
+      // navigation was already refused, and the OS open is the whole outcome.
+      callback: () => {},
+      timer,
+      systemAccessDenied: false,
+      partition: browserPartitionFor(owner.projectId, owner.boxId)
+    }
+    this.pendingPermissions.set(id, pending)
+    this.showPendingPermission(pending)
+    return true
+  }
+
+  /** Hand a confirmed external address to the operating system. Only an address
+   *  that passed {@link externalProtocolTarget} reaches here, and only after the
+   *  user asked for it, so the value handed out is validated twice. */
+  private openExternalUrl(url: string): void {
+    const target: ExternalProtocolTarget | null = externalProtocolTarget(url)
+    if (!target) return
+    void shell.openExternal(target.url).catch((error: unknown) => {
+      Logger.error('Browser external address could not be opened:', error)
+    })
   }
 
   /** The live grant/deny ledgers the permission handlers read and write. */
@@ -5133,7 +5224,11 @@ export class BrowserService {
       this.persistPermissionMemory()
     }
     if (resolution.granted) {
-      void this.grantBrowserPermission(pending, resolution.rememberGrant)
+      if (pending.request.externalUrl) {
+        this.openExternalUrl(pending.request.externalUrl)
+      } else {
+        void this.grantBrowserPermission(pending, resolution.rememberGrant)
+      }
     } else {
       pending.callback(false)
     }
@@ -5147,16 +5242,7 @@ export class BrowserService {
       this.promptWindow.hide()
       return
     }
-    const nextTab = this.tabs.get(next.value.request.tabId)
-    this.promptWindow.show(
-      {
-        request: next.value.request,
-        queueSize: this.pendingPermissions.size,
-        projectLabel: nextTab ? this.permissionLabel(nextTab) : null,
-        systemAccessDenied: next.value.systemAccessDenied
-      },
-      this.promptAnchor()
-    )
+    this.showPendingPermission(next.value)
   }
 
   /** Ask macOS for capture access only after the user allows the site. The
@@ -5199,16 +5285,7 @@ export class BrowserService {
 
   /** Keep the denied request visible until the user dismisses it or retries. */
   private promptSystemAccessDenied(pending: PendingBrowserPermission): void {
-    const tab = this.tabs.get(pending.request.tabId)
-    this.promptWindow.show(
-      {
-        request: pending.request,
-        queueSize: this.pendingPermissions.size,
-        projectLabel: tab ? this.permissionLabel(tab) : null,
-        systemAccessDenied: true
-      },
-      this.promptAnchor()
-    )
+    this.showPendingPermission(pending)
   }
 
   /** Content-anchored placement data for the permission popup: the active tab's
