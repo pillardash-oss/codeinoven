@@ -417,7 +417,7 @@ export function buildSetupPlan(
     requiresElevation: false,
     commands: [],
     detail:
-      'Re-reads the Oven right before setup changes it, so a check that has gone stale cannot authorize an install.',
+      'Confirms the Oven state this setup was authorized against, re-reading it only when the check is no longer fresh.',
     handledByApp: true
   })
 

@@ -13,6 +13,12 @@ export interface OvenSetupPortDependencies {
   service: OvenService
   accounts: HarnessAccountRegistry
   vault: SecretVault
+  /**
+   * The most recent completed check for one Oven, when it is young enough to
+   * authorize a setup. Setup reuses it instead of opening its own read, so a
+   * dialog the user just watched check does not check again on Start.
+   */
+  recentReport?: (ovenId: string) => OvenPreflightReport | null
 }
 
 export type OvenSetupRuntime = OvenSetupPorts & { gitIdentity: OvenGitIdentityService }
@@ -35,6 +41,7 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
   return {
     gitIdentity,
     ssh: dependencies.service.ssh,
+    ...(dependencies.recentReport ? { recentReport: dependencies.recentReport } : {}),
     waitForHarnessIdle: async (ovenId, command) => {
       while (
         (await dependencies.service.runs(ovenId)).some(

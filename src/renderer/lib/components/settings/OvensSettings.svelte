@@ -6,6 +6,7 @@
   import { flashElement } from '$lib/reveal-flash'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { ovens } from '$lib/stores/ovens.svelte'
+  import { ovenPeeks } from '$lib/stores/oven-peeks.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
@@ -43,7 +44,7 @@
     Terminal,
     Trash2
   } from '@lucide/svelte'
-  import { onDestroy, onMount } from 'svelte'
+  import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
@@ -68,9 +69,7 @@
   let health = $state<Record<string, OvenConnectionStatus>>({})
   let folded = $state<Record<string, boolean>>({})
   let checking = $state('')
-  let refreshGeneration = 0
   let connectionResult = $state<OvenConnectionStatus | null>(null)
-  let probes = $state<Record<string, OvenProbe>>({})
   let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
   let error = $state('')
@@ -124,6 +123,36 @@
     return value instanceof Error ? value.message : 'The Oven operation failed.'
   }
 
+  /** The live probe the unified check read for one remote Oven. */
+  function probeFor(oven: Oven): OvenProbe | undefined {
+    return oven.kind === 'local' ? undefined : (ovenPeeks.peek(oven.id)?.probe ?? undefined)
+  }
+
+  /**
+   * One Oven's connection status, drawn from the unified check.
+   *
+   * The last registry value is the fallback before a check lands, so a row the
+   * user opens immediately still shows what the previous session saw.
+   */
+  function statusFor(oven: Oven): OvenConnectionStatus | undefined {
+    if (oven.kind === 'local') return health[oven.id]
+    const peek = ovenPeeks.peek(oven.id)
+    if (!peek) return health[oven.id]
+    if (peek.probe)
+      return { state: 'connected', checkedAt: peek.checkedAt, specs: peek.probe.specs }
+    return {
+      state: 'disconnected',
+      checkedAt: peek.checkedAt,
+      error: peek.error ?? 'The Oven did not answer.',
+      specs: health[oven.id]?.specs
+    }
+  }
+
+  /** True while this Oven's check is running, wherever it was started from. */
+  function checkingFor(oven: Oven): boolean {
+    return oven.kind === 'local' ? checking === oven.id : ovenPeeks.running(oven.id)
+  }
+
   /** The platform name an Oven reports, spelled the way a person reads it. */
   function ovenPlatformName(platform: string | undefined): string {
     if (platform === 'darwin') return 'macOS'
@@ -158,7 +187,7 @@
     items.push({
       label: 'Check Oven',
       icon: Activity,
-      disabled: Boolean(busy) || Boolean(checking) || Boolean(timezoneBusy),
+      disabled: Boolean(busy) || checkingFor(oven) || Boolean(timezoneBusy),
       onClick: () => void checkOven(oven)
     })
     if (ovenState?.defaultOvenId !== oven.id)
@@ -209,10 +238,10 @@
    * than only inside the setup flow.
    */
   async function checkOven(oven: Oven): Promise<void> {
-    if (busy || checking || timezoneBusy) return
-    checking = oven.id
-    try {
-      if (oven.kind === 'local') {
+    if (busy || checkingFor(oven) || timezoneBusy) return
+    if (oven.kind === 'local') {
+      checking = oven.id
+      try {
         const result = await invoke('oven:connectionHealth', oven.id)
         health = {
           ...health,
@@ -221,51 +250,50 @@
         toast.success('Local is ready', {
           description: `${ovenPlatformName(result.specs?.platform)} · ${result.specs?.cpuCount ?? '?'} logical cores`
         })
-        return
-      }
-      const probe = await invoke('oven:probe', oven.id, true)
-      probes = { ...probes, [oven.id]: probe }
-      // The desktop caches this Oven's harness inventory for a short window; a
-      // forced check has just replaced it on the Oven, so drop the copy every
-      // other surface reads and let the next read pick up the new versions.
-      void ovens.ensureInventory(oven.id)
-      health = {
-        ...health,
-        [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
-      }
-      const inventory = probe.inventory ?? []
-      const healthy = inventory.filter((item) => item.health === 'healthy').length
-      const attention = inventory.filter(
-        (item) => item.health === 'broken' || item.health === 'unknown'
-      ).length
-      toast.success(`${oven.name} answered`, {
-        description: [
-          ovenPlatformName(probe.platform) || probe.platform,
-          `Node ${probe.nodeVersion}`,
-          `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
-          attention > 0 ? `${attention} need attention` : '',
-          probe.activeRuns > 0
-            ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
-            : ''
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      })
-    } catch (failure) {
-      const detail = message(failure)
-      health = {
-        ...health,
-        [oven.id]: {
-          state: 'disconnected',
-          checkedAt: Date.now(),
-          error: detail,
-          specs: health[oven.id]?.specs
+      } catch (failure) {
+        const detail = message(failure)
+        health = {
+          ...health,
+          [oven.id]: {
+            state: 'disconnected',
+            checkedAt: Date.now(),
+            error: detail,
+            specs: health[oven.id]?.specs
+          }
         }
+        toast.error(`${oven.name} could not be checked`, { description: detail })
+      } finally {
+        checking = ''
       }
-      toast.error(`${oven.name} could not be checked`, { description: detail })
-    } finally {
-      checking = ''
+      return
     }
+    const peek = await ovenPeeks.refresh(oven.id)
+    const probe = peek?.probe
+    if (!peek || !probe) {
+      toast.error(`${oven.name} could not be checked`, {
+        description: peek?.error ?? 'The Oven did not answer.'
+      })
+      return
+    }
+    const healthy = peek.inventory.filter((item) => item.health === 'healthy').length
+    const updates = peek.inventory.filter((item) => item.updateAvailable).length
+    const attention = peek.inventory.filter(
+      (item) => item.health === 'broken' || item.health === 'unknown'
+    ).length
+    toast.success(`${oven.name} answered`, {
+      description: [
+        ovenPlatformName(probe.platform) || probe.platform,
+        `Node ${probe.nodeVersion}`,
+        `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
+        updates > 0 ? `${updates} update${updates === 1 ? '' : 's'} available` : '',
+        attention > 0 ? `${attention} need attention` : '',
+        probe.activeRuns > 0
+          ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    })
   }
 
   let dragOvenId = $state<string | null>(null)
@@ -368,19 +396,10 @@
       const result = await invoke('oven:timezone:sync', oven.id)
       if (result.status === 'updated') toast.success(result.message)
       else toast.info(result.message)
-      // A zone change rewrites one of the figures on the Oven entry. Re-read
-      // them so the row shows the zone the Oven now runs on rather than the
-      // one it had when the page opened.
-      try {
-        const probe = await invoke('oven:probe', oven.id, true)
-        probes = { ...probes, [oven.id]: probe }
-        health = {
-          ...health,
-          [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
-        }
-      } catch {
-        // The clock moved; a row that could not be re-read keeps its last figures.
-      }
+      // A zone change rewrites one of the figures on the Oven entry. Refresh the
+      // cached check so the row shows the zone the Oven now runs on rather than
+      // the one it had when the page opened.
+      void ovenPeeks.refresh(oven.id)
     } catch (failure) {
       toast.error(message(failure))
     } finally {
@@ -403,7 +422,7 @@
           health = { ...health, [oven.id]: oven.connectionStatus }
       }
       void refreshSetupStatuses(ovenState)
-      void refreshHealth(ovenState)
+      ensureChecks(ovenState)
       void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
       error = message(failure)
@@ -466,55 +485,42 @@
     }
   }
 
-  onDestroy(() => {
-    refreshGeneration++
-  })
-  async function refreshHealth(state: OvenState): Promise<void> {
-    const generation = ++refreshGeneration
-    // Two entries per batch, one request at a time; no parallel SSH processes.
-    for (let offset = 0; offset < state.ovens.length; offset += 2) {
-      for (const oven of state.ovens.slice(offset, offset + 2)) {
-        if (generation !== refreshGeneration) return
-        checking = oven.id
-        try {
-          let result: OvenConnectionStatus
-          if (oven.kind === 'ssh') {
-            try {
-              const probe = await invoke('oven:probe', oven.id)
-              if (generation !== refreshGeneration) return
-              probes = { ...probes, [oven.id]: probe }
-              result = {
-                state: 'connected',
-                checkedAt: Date.now(),
-                specs: probe.specs ?? health[oven.id]?.specs
-              }
-            } catch {
-              result = await invoke('oven:connectionHealth', oven.id)
-            }
-          } else {
-            result = await invoke('oven:connectionHealth', oven.id)
-          }
-          if (generation !== refreshGeneration) return
-          health = {
-            ...health,
-            [oven.id]: { ...result, specs: result.specs ?? health[oven.id]?.specs }
-          }
-        } catch (failure) {
-          if (generation !== refreshGeneration) return
-          health = {
-            ...health,
-            [oven.id]: {
-              state: 'disconnected',
-              checkedAt: Date.now(),
-              error: message(failure),
-              specs: health[oven.id]?.specs
-            }
-          }
+  /**
+   * Start the unified check for every remote Oven.
+   *
+   * The work continues in the peek store after this page unmounts, so leaving
+   * Settings never abandons a check, and returning reads the cache while a
+   * fresh check updates it. Two Ovens are read at once, bounded in main.
+   */
+  function ensureChecks(state: OvenState): void {
+    for (const oven of state.ovens) if (oven.kind === 'ssh') void ovenPeeks.ensure(oven.id)
+    void refreshLocalHealth(state)
+  }
+
+  /** The Local Oven has no service to probe, so its own read stays separate. */
+  async function refreshLocalHealth(state: OvenState): Promise<void> {
+    const local = state.ovens.find((oven) => oven.kind === 'local')
+    if (!local) return
+    checking = local.id
+    try {
+      const result = await invoke('oven:connectionHealth', local.id)
+      health = {
+        ...health,
+        [local.id]: { ...result, specs: result.specs ?? health[local.id]?.specs }
+      }
+    } catch (failure) {
+      health = {
+        ...health,
+        [local.id]: {
+          state: 'disconnected',
+          checkedAt: Date.now(),
+          error: message(failure),
+          specs: health[local.id]?.specs
         }
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+    } finally {
+      checking = ''
     }
-    if (generation === refreshGeneration) checking = ''
   }
   function bytes(value: number): string {
     return (value / 1024 ** 3).toFixed(1) + ' GiB'
@@ -712,6 +718,7 @@
     try {
       ovenState = await invoke('oven:remove', pendingRemoval.id)
       ovens.adopt(ovenState)
+      ovenPeeks.forget(pendingRemoval.id)
       pendingRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -725,16 +732,8 @@
     harnessBusy = `${ovenId}:${harnessId}`
     error = ''
     try {
-      const item = await invoke('oven:harness:update', ovenId, harnessId)
-      const probe = probes[ovenId]
-      if (probe?.inventory)
-        probes = {
-          ...probes,
-          [ovenId]: {
-            ...probe,
-            inventory: probe.inventory.map((row) => (row.harnessId === harnessId ? item : row))
-          }
-        }
+      await invoke('oven:harness:update', ovenId, harnessId)
+      await ovenPeeks.refresh(ovenId)
     } catch (failure) {
       error = message(failure)
     } finally {
@@ -748,18 +747,8 @@
     harnessBusy = `${pending.ovenId}:${pending.harnessId}`
     error = ''
     try {
-      const item = await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
-      const probe = probes[pending.ovenId]
-      if (probe?.inventory)
-        probes = {
-          ...probes,
-          [pending.ovenId]: {
-            ...probe,
-            inventory: probe.inventory.map((row) =>
-              row.harnessId === pending.harnessId ? item : row
-            )
-          }
-        }
+      await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
+      await ovenPeeks.refresh(pending.ovenId)
       pendingHarnessRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -802,9 +791,10 @@
   {:else}
     <div class="space-y-3" role="list" {@attach revealOven(settingsUiState.ovenFocus, ovenState)}>
       {#each ovenState.ovens as oven (oven.id)}
-        {@const probe = probes[oven.id]}
-        {@const checkingNow = checking === oven.id}
-        {@const state = health[oven.id]?.state}
+        {@const probe = probeFor(oven)}
+        {@const status = statusFor(oven)}
+        {@const checkingNow = checkingFor(oven)}
+        {@const state = status?.state}
         <div
           class="relative rounded-xl"
           id={`oven-row-${oven.id}`}
@@ -921,8 +911,8 @@
             </div>
             {#if !folded[oven.id]}
               <div class="mt-3 space-y-3 border-t border-border pt-3">
-                {#if health[oven.id]?.specs}
-                  {@const specs = health[oven.id].specs!}
+                {#if status?.specs}
+                  {@const specs = status.specs!}
                   {@const usedPercent =
                     specs.diskBytes > 0
                       ? Math.max(
@@ -983,12 +973,11 @@
                     </div>
                   </dl>
                 {/if}
-                {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
-                    {health[oven.id].error}
+                {#if status?.error}<p class="text-xs text-danger" role="status">
+                    {status.error}
                   </p>{/if}
-                {#if probe || health[oven.id]?.specs}
-                  {@const nodeVersion =
-                    probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
+                {#if probe || status?.specs}
+                  {@const nodeVersion = probe?.nodeVersion ?? status?.specs?.nodeVersion ?? null}
                   <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
@@ -1007,7 +996,7 @@
                               .filter(Boolean)
                               .join(' · ')
                           : oven.kind === 'local'
-                            ? `${ovenPlatformName(health[oven.id]?.specs?.platform)} · this computer`
+                            ? `${ovenPlatformName(status?.specs?.platform)} · this computer`
                             : 'No service has answered from this Oven yet.'}
                       </dd>
                       {#if probe?.timezone}

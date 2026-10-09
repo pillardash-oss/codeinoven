@@ -17,6 +17,8 @@ import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { OvenSetupService } from './oven-setup-service'
 import { OvenHarnessService } from './oven-harness-service'
+import { OvenPeekService } from './oven-peek-service'
+import { collectPreflight } from './oven-setup-bootstrap'
 import { createOvenSetupPorts } from './oven-setup-ports'
 import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
@@ -49,13 +51,32 @@ export function registerOvenIpc(
     authorizePath: resolveImagePath
   })
 
+  const harnessService = new OvenHarnessService(service, storage)
+  // One unified read per Oven serves the Ovens page, the setup dialog, and every
+  // later harness read. It records its own successful probe so `oven:state` agrees.
+  const peekService = new OvenPeekService(
+    service,
+    harnessService,
+    storage,
+    (id) => collectPreflight(service.ssh, id),
+    (id, probe) => {
+      if (probe.specs)
+        void registry
+          .recordConnectionHealth(id, {
+            state: 'connected',
+            checkedAt: Date.now(),
+            specs: probe.specs
+          })
+          .catch(() => undefined)
+    }
+  )
   const setupRuntime = createOvenSetupPorts({
     service,
     accounts: new HarnessAccountRegistry(storage),
-    vault
+    vault,
+    recentReport: (id) => peekService.recentPreflight(id)
   })
   const setupService = new OvenSetupService(storage, setupRuntime)
-  const harnessService = new OvenHarnessService(service, storage)
   const agentService = new OvenAgentService(registry)
   harnessService.startAutoUpdates()
   app.once('before-quit', () => harnessService.stopAutoUpdates())
@@ -121,6 +142,9 @@ export function registerOvenIpc(
     }
   })
   ipcMain.handle('oven:runs', (_event, raw: unknown) => service.runs(ovenId(raw)))
+  ipcMain.handle('oven:peek', (_event, raw: unknown, refresh: unknown) =>
+    peekService.peek(ovenId(raw), refresh === true)
+  )
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
       throw new Error('Invalid workspace request.')

@@ -2,6 +2,7 @@ import type {
   Oven,
   OvenState,
   OvenProbe,
+  OvenPeek,
   SaveOvenInput,
   OvenRun,
   OvenWorkspaceRequest,
@@ -48,6 +49,8 @@ export const invokeOvenContract = {
   /** `refresh` forces the Oven to re-scan harness versions instead of
    *  answering from its own short-lived cache; ordinary probes stay cheap. */
   'oven:probe': {} as Contract<[id: string, refresh?: boolean], OvenProbe>,
+  /** The unified, cached check for one Oven: device, harnesses, and packages. */
+  'oven:peek': {} as Contract<[id: string, refresh?: boolean], OvenPeek>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,

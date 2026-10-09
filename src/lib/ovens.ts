@@ -118,6 +118,31 @@ export interface OvenProbe {
   inventory?: OvenHarnessInventoryItem[]
 }
 
+/**
+ * One cached, unified read of a remote Oven.
+ *
+ * A single check answers the three questions every Oven surface asks: what the
+ * machine is (`probe`), which harnesses it runs and whether they can update
+ * (`inventory`), and whether its packages are behind (`preflight`). The Ovens
+ * page, the Oven picker, and the setup dialog all read this instead of each
+ * running their own probe.
+ */
+export interface OvenPeek {
+  ovenId: string
+  checkedAt: number
+  durationMs: number
+  /** Live service probe: specs, service revision, and active runs. Null when the Oven did not answer. */
+  probe: OvenProbe | null
+  /** Enriched harness rows: installed version plus update availability. */
+  inventory: OvenHarnessInventoryItem[]
+  /** The read-only setup observation the setup dialog consumes. Null when it did not complete. */
+  preflight: OvenSetupPreflightResult | null
+  /** Why the check failed, when part or all of it did. */
+  error?: string
+  /** True when this is the cached copy, so the caller refreshes instead of trusting it. */
+  stale: boolean
+}
+
 export interface OvenRun {
   id: string
   command: string

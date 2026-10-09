@@ -193,11 +193,7 @@ export class OvenHarnessService {
     if (!refresh && cached && Date.now() - cached.checkedAt < INVENTORY_TTL_MS) return cached.items
     try {
       const probe = await this.service.probe(ovenId, refresh)
-      const items = await this.mergeLatest(this.probeItems(probe))
-      const entry: CachedInventory = { items, checkedAt: Date.now(), platform: probe.platform }
-      this.inventories.set(ovenId, entry)
-      await this.persistInventory(ovenId, entry)
-      return items
+      return await this.inventoryFromProbe(ovenId, probe)
     } catch (error) {
       // A refresh that fails must stay a failure: the caller forced it to
       // verify a mutation that just ran, and a stale row would misreport it.
@@ -211,6 +207,27 @@ export class OvenHarnessService {
       })
       return stored.items
     }
+  }
+
+  /**
+   * Enrich one already-taken probe into inventory rows and cache them.
+   *
+   * The unified Oven check owns the probe, so this is the seam that keeps a
+   * single SSH read shared: the check hands its probe here, and every later
+   * `oven:harness:inventory` read answers from the cache this fills instead of
+   * probing the Oven again.
+   */
+  async inventoryFromProbe(ovenId: string, probe: OvenProbe): Promise<OvenHarnessInventoryItem[]> {
+    const items = await this.mergeLatest(this.probeItems(probe))
+    const entry: CachedInventory = { items, checkedAt: Date.now(), platform: probe.platform }
+    this.inventories.set(ovenId, entry)
+    await this.persistInventory(ovenId, entry)
+    return items
+  }
+
+  /** The already-scanned rows for one Oven, or an empty list before any scan. */
+  cachedInventory(ovenId: string): OvenHarnessInventoryItem[] {
+    return this.inventories.get(ovenId)?.items ?? []
   }
 
   /**
