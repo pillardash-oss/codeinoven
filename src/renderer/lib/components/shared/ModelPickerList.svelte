@@ -280,19 +280,24 @@
   const showHarnessesRail = $derived(harnessOptions.length > 1)
   // Match the rail's buttons, gaps, padding, and separator; the model list
   // fills this height instead of forcing the dropdown to its maximum.
+  //
+  // Without a floor the height follows the rail item count alone, so a picker
+  // whose rail only has the always-on sections (all + profiles/star) collapses
+  // to about 5.1rem and shows barely one row cut in half. Flooring at the
+  // four-harness height keeps the picker comfortably browseable (search bar
+  // plus several rows) and, being the compact height, still lets it grow past
+  // four harnesses toward the popover cap. Its height must never shrink below
+  // this, so do not remove the floor.
+  const PICKER_MIN_HEIGHT_REM = 16
   const railHeight = $derived.by(() => {
     const fixed = 1 + Number(hasFavorites) + Number(showProfilesRail)
-    // Keep the natural height compact through four harnesses. Beyond that,
-    // let the dropdown grow until the seven-icon cap; the rail then scrolls.
     const harnesses = showHarnessesRail ? Math.min(harnessOptions.length, 7) : 0
-    const visibleHarnesses = Math.min(harnesses, 4)
-    const outerGaps = visibleHarnesses ? fixed + 1 : fixed - 1
-    const compactRem =
-      (fixed + visibleHarnesses) * 2 +
-      (outerGaps + Math.max(0, visibleHarnesses - 1)) * 0.125 +
-      1 +
-      (visibleHarnesses ? 0.5 : 0)
-    return `calc(${compactRem}rem + ${visibleHarnesses ? 1 : 0}px)`
+    const outerGaps = harnesses ? fixed + 1 : fixed - 1
+    const harnessGaps = Math.max(0, harnesses - 1)
+    const naturalRem =
+      (fixed + harnesses) * 2 + (outerGaps + harnessGaps) * 0.125 + 1 + (harnesses ? 0.5 : 0)
+    const rem = Math.max(PICKER_MIN_HEIGHT_REM, naturalRem)
+    return `calc(${rem}rem + ${harnesses ? 1 : 0}px)`
   })
   /**
    * The rail section actually driving the list. A view whose content vanished
