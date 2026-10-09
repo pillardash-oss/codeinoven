@@ -104,6 +104,16 @@
   })
   /** Id of the current entry's alternative editor, unique per entry. */
   const alternativeTargetId = $derived(`secret-alternative-${request.requestId}-${currentIndex}`)
+  /**
+   * Plain-text form of the reuse note that sits under the alternative field.
+   * The note is clamped to two lines to keep the card compact, so this is the
+   * full wording exposed through its tooltip.
+   */
+  let alternativeNote = $derived(
+    `No value is stored for this secret. Whatever the device already holds for ${
+      question.secretEnvironmentVariable ? `$${question.secretEnvironmentVariable}` : 'this secret'
+    } is reused from your encrypted vault and handed to the agent, and your instruction reaches it as written.`
+  )
 
   function alternativeSpeechTarget() {
     return alternativeEditor?.speechEditorTarget(alternativeTargetId) ?? null
@@ -322,7 +332,7 @@
                   disabled={working}
                   placeholder="Say what the agent should use instead, or name the variable you already provided…"
                   onValueChange={pauseCountdown}
-                  class="w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                  class="min-h-20 w-full resize-y overflow-y-auto rounded-lg border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   containerClass="min-w-0 flex-1"
                   ariaLabel="Alternative instruction"
                   onSubmit={advance}
@@ -334,7 +344,7 @@
                   disabled={working}
                 />
               </div>
-              <p class="text-xs text-dimmed">
+              <p class="line-clamp-2 text-xs text-dimmed" title={alternativeNote}>
                 No value is stored for this secret. Whatever the device already holds for
                 {#if question.secretEnvironmentVariable}
                   <span class="font-mono text-foreground"
