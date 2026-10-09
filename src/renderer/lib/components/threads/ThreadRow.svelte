@@ -31,6 +31,7 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
@@ -427,6 +428,9 @@
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
   let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
+  /** When a browser tab owned by this thread started playing sound, or null while
+   *  the thread's browser is silent. Shares the recorder's indicator slot. */
+  let browserAudioAt = $derived(browserAudio.threadAudioStartedAt(thread.id))
   /** TTS playing on this thread   shares the recorder's indicator slot. */
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
   /** The mic has closed but the transcript has not landed yet   same indicator
@@ -465,6 +469,9 @@
     }
     if (isUsingComputerUse) {
       candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
+    }
+    if (browserAudioAt !== null) {
+      candidates.push({ indicator: 'browser-audio', at: browserAudioAt })
     }
     return resolveThreadIndicator(candidates)
   })

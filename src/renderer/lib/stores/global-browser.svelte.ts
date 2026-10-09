@@ -47,6 +47,7 @@ import { browserExtensionSidePanels } from './browser-extension-side-panels.svel
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { browserVisibility } from './browser-visibility.svelte'
+import { browserAudio } from './browser-audio.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
@@ -343,6 +344,7 @@ export class GlobalBrowserState {
   private destroyPeekTab(tab: GlobalBrowserTab): void {
     this.forgetPeek()
     this.runtime.delete(tab.id)
+    browserAudio.forget(tab.id)
     void invoke('browser:destroy', tab.id, 'closed').catch((error: unknown) =>
       reportError(error, 'Peek Window could not be closed.')
     )
@@ -361,6 +363,7 @@ export class GlobalBrowserState {
     if (!peek) return
     this.peeks.delete(sourceId)
     this.runtime.delete(peek.tab.id)
+    browserAudio.forget(peek.tab.id)
     void invoke('browser:destroy', peek.tab.id, 'closed').catch(() => {})
   }
   /**
@@ -1440,7 +1443,10 @@ export class GlobalBrowserState {
       if (!sourceTabId) return
       const previous = this.peeks.get(sourceTabId)
       if (previous?.tab.id === tabId) return
-      if (previous) this.runtime.delete(previous.tab.id)
+      if (previous) {
+        this.runtime.delete(previous.tab.id)
+        browserAudio.forget(previous.tab.id)
+      }
       const peek = $state({
         tab: newTab,
         projectId: context.projectId,
@@ -1625,6 +1631,7 @@ export class GlobalBrowserState {
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
+    browserAudio.forget(tabId)
     this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
@@ -2128,6 +2135,7 @@ export class GlobalBrowserState {
     const peek = [...this.peeks.values()].find((entry) => entry.tab.id === state.tabId)
     if (peek && (state.loading || state.url !== '')) peek.documentSeen = true
     if (changed && !peek) this.persist()
+    browserAudio.reportGlobalTab(state.tabId, state.audible && !state.muted)
     const current = this.runtime.get(state.tabId)
     if (
       current &&
@@ -2158,6 +2166,10 @@ export class GlobalBrowserState {
     const current = this.runtimeFor(tabId)
     const muted = !current.muted
     this.runtime.set(tabId, { ...current, muted })
+    // Mirror the optimistic mute here too, so the Browser rail item stops saying
+    // the profile is playing the moment the user silences the tab, without
+    // waiting for main to publish the same state back.
+    browserAudio.reportGlobalTab(tabId, current.audible && !muted)
     void invoke('browser:setMuted', tabId, muted).catch((error: unknown) => {
       const latest = this.runtime.get(tabId)
       if (latest?.muted === muted) this.runtime.set(tabId, { ...latest, muted: current.muted })
@@ -2197,6 +2209,7 @@ export class GlobalBrowserState {
       tab.hibernated = true
       changed = true
       this.runtime.delete(tab.id)
+      browserAudio.forget(tab.id)
       // Only the page is released: the row stays in the strip, so main writes the
       // tab's stack down before the view goes and the next visit restores it.
       void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
