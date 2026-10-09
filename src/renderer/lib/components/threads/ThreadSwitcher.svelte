@@ -32,6 +32,12 @@
   let nativeFailed = $state(false)
   let keyboardAt = 0
   /**
+   * Bumped by every close path, and by a commit attempt before it arms its
+   * fallback. A fallback can then tell whether its own selection is still the
+   * one in flight rather than one that already resolved.
+   */
+  let commitToken = 0
+  /**
    * The highlighted row, held by entry key rather than by index.
    *
    * The durable tab-list read can land while the switcher is open and insert
@@ -179,11 +185,13 @@
 
   function cancel(): void {
     if (!open) return
+    commitToken += 1
     restoreFocusOnClose = true
     open = false
   }
 
   async function selectEntry(entry: ThreadSwitcherEntry): Promise<void> {
+    commitToken += 1
     restoreFocusOnClose = false
     open = false
     await onSelect(entry)
@@ -192,6 +200,13 @@
     // closed   the mount-time autofocus alone loses the race with the closing
     // focus scope. Focuses directly; it never remounts the composer.
     workspaceState.requestFocusComposerEditor()
+  }
+
+  /** Resolve the highlighted row. Every close path ends here. */
+  function resolveHighlighted(): void {
+    const entry = highlightedIndex >= 0 ? entries[highlightedIndex] : undefined
+    if (entry) void selectEntry(entry)
+    else cancel()
   }
 
   /** The entry a key release would open: the highlighted one. */
@@ -204,11 +219,22 @@
         selectedKey: highlightedKey,
         keyboardAt
       }).catch(() => false)
-      if (accepted || !open) return
+      if (accepted) {
+        // The overlay answers the commit through its own renderer. A lost answer
+        // must not leave the switcher covering the window, so a fallback resolves
+        // the highlighted row once the answer is overdue. Whichever lands first
+        // closes the switcher and bumps the token, and the other becomes a no-op.
+        const token = ++commitToken
+        setTimeout(() => {
+          if (token !== commitToken || !open) return
+          commitToken += 1
+          resolveHighlighted()
+        }, 300)
+        return
+      }
+      if (!open) return
     }
-    const entry = highlightedIndex >= 0 ? entries[highlightedIndex] : undefined
-    if (entry) void selectEntry(entry)
-    else cancel()
+    resolveHighlighted()
   }
 
   /** Warm the highlighted thread's message cache so releasing Ctrl (or
@@ -290,6 +316,10 @@
     if (entry) highlightedKey = threadSwitcherEntryKey(entry)
   }}
   onNativeCommit={(key) => {
+    // The overlay's answer to a commit. Ignore one that arrives after the
+    // fallback already closed the switcher, so the gesture never selects twice.
+    commitToken += 1
+    if (!open) return
     const entry = entries.find((candidate) => threadSwitcherEntryKey(candidate) === key)
     if (entry) void selectEntry(entry)
     else cancel()

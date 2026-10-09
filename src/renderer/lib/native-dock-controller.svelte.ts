@@ -95,7 +95,15 @@ export class NativeDockController {
         return
       }
       const button = this.actions.get(report.action)
-      if (button && root.contains(button) && !button.disabled) button.click()
+      if (button && root.contains(button) && !button.disabled) {
+        button.click()
+        return
+      }
+      // A press the source can no longer resolve   the row left the list, or the
+      // action map moved between the overlay's paint and the press   must still
+      // come down. Swallowing it leaves a modal covering the window with no way
+      // to close it.
+      this.modalOptions?.onDismiss()
     })
     const scrolled = (): void => this.schedule()
     root.addEventListener('scroll', scrolled, true)
