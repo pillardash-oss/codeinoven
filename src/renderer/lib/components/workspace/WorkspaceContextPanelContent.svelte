@@ -4,6 +4,7 @@
   import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
+  import { appPanelSlot } from '$lib/app-panel-portal'
   // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
   // two heaviest residents, and the browser one drags the browser's whole model
   // with it. A browser panel can only appear once a browser tab exists, which is
@@ -287,15 +288,13 @@
           {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
             <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
           {/await}
-        {:else if activeContextTab.kind === 'notifications'}
-          {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-            <NotificationPanel />
-          {/await}
-        {:else if activeContextTab.kind === 'sticky-notes'}
+        {:else if activeContextTab.kind === 'notifications' || activeContextTab.kind === 'sticky-notes'}
+          <!-- The app's global panels are mounted once by `AppPanelHost`; this
+               rail only offers the body slot it fills. The slot is dropped
+               while the workspace is not the view on screen, so the panel can
+               never be parked in a hidden rail behind Scope or Settings. -->
           {#if active}
-            {#await import('../notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
-              <StickyNotesPanel />
-            {/await}
+            <div class="h-full" {@attach appPanelSlot}></div>
           {/if}
         {:else if activeContextTab.kind === 'assistant-how-to'}
           {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
