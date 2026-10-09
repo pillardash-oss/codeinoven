@@ -3485,6 +3485,16 @@ export class BrowserService {
     view.webContents.on('will-redirect', (event, url) => {
       if (this.offerExternalNavigation(owner, url)) event.preventDefault()
     })
+    // `will-navigate` is the main frame only. A companion-app button often
+    // lives in a page's own embedded frame (an embedded widget, a booking
+    // panel), whose navigation fires this event and nothing else, so it is
+    // handled here rather than left to be dropped in silence.
+    view.webContents.on('will-frame-navigate', (details) => {
+      if (details.isMainFrame) return
+      if (this.offerExternalNavigation(owner, details.url, details.frame?.url)) {
+        details.preventDefault()
+      }
+    })
     this.installWindowOpenPolicy(view, owner)
     return tab
   }
@@ -4066,6 +4076,12 @@ export class BrowserService {
     })
     contents.on('will-redirect', (event, url) => {
       if (this.offerExternalNavigation(popupPageOwner(record), url)) event.preventDefault()
+    })
+    contents.on('will-frame-navigate', (details) => {
+      if (details.isMainFrame) return
+      if (this.offerExternalNavigation(popupPageOwner(record), details.url, details.frame?.url)) {
+        details.preventDefault()
+      }
     })
     contents.setWindowOpenHandler((details) =>
       this.windowOpenResponse(popupPageOwner(record), details)
@@ -5072,14 +5088,21 @@ export class BrowserService {
    * confirms it ({@link openExternalUrl}). A caller that gets true must refuse
    * the in-app navigation, because the destination is not a page.
    */
-  private offerExternalNavigation(owner: BrowserPageOwner, url: string): boolean {
+  private offerExternalNavigation(
+    owner: BrowserPageOwner,
+    url: string,
+    requestingFrameUrl?: string | null
+  ): boolean {
     const target = externalProtocolTarget(url)
     if (!target) return false
     const tab = this.tabs.get(owner.tabId)
     if (!tab || this.window.webContents.isDestroyed()) return false
-    const origin = permissionOrigin(tab.view.webContents.getURL())
-    // Only an http(s) page can ask for a handoff; a page with no origin of its
-    // own (a blank document, a dead renderer) has no site to name or remember.
+    // An embedded frame that asked for the handoff names itself on the card; a
+    // main-frame navigation names the page it is on. Only an http(s) requester
+    // can ask at all: a page with no origin of its own (a blank document, a
+    // dead renderer) has no site to name.
+    const origin =
+      permissionOrigin(requestingFrameUrl ?? '') ?? permissionOrigin(tab.view.webContents.getURL())
     if (!origin) return false
     const id = crypto.randomUUID()
     const request: BrowserPermissionRequest = {

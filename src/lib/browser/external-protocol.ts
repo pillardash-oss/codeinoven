@@ -63,16 +63,19 @@ const MAX_EXTERNAL_URL_LENGTH = 8192
 const SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*$/
 
 /**
- * True when an address carries a control character or a space.
+ * True when an address carries a control character.
  *
- * Neither has a place in a scheme-qualified address, and both are a known way
- * to smuggle a second instruction past an OS URL handler, so any address
- * carrying one is refused outright.
+ * A newline or a NUL has no place in a scheme-qualified address and is a known
+ * way to smuggle a second instruction past an OS URL handler, so any address
+ * carrying one is refused outright. A plain space is not refused: the URL
+ * parser percent-encodes it (`mailto:?subject=Hello World` becomes
+ * `%20`) before the address is handed out, which is the normal form of an
+ * everyday mail link.
  */
-function hasControlOrSpace(value: string): boolean {
+function hasControlCharacter(value: string): boolean {
   for (const char of value) {
     const code = char.charCodeAt(0)
-    if (code <= 0x20 || code === 0x7f) return true
+    if (code < 0x20 || code === 0x7f) return true
   }
   return false
 }
@@ -133,7 +136,7 @@ export function externalProtocolTarget(rawUrl: string): ExternalProtocolTarget |
   ) {
     return null
   }
-  if (hasControlOrSpace(rawUrl)) return null
+  if (hasControlCharacter(rawUrl)) return null
   let parsed: URL
   try {
     parsed = new URL(rawUrl)

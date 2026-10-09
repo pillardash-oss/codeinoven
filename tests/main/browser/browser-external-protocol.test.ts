@@ -69,10 +69,38 @@ describe('external protocol handoff', () => {
     expect(externalProtocolTarget(`myapp://${'a'.repeat(9000)}`)).toBeNull()
   })
 
-  it('refuses an address carrying control characters or spaces', () => {
+  it('refuses an address carrying control characters', () => {
     expect(externalProtocolTarget('myapp://open\nnext')).toBeNull()
-    expect(externalProtocolTarget('myapp://open next')).toBeNull()
     expect(externalProtocolTarget('myapp://open\u0000next')).toBeNull()
+  })
+
+  it('accepts a space, encoding it the way the URL parser does', () => {
+    const mail = externalProtocolTarget('mailto:hello@example.com?subject=Hello World')
+    expect(mail).not.toBeNull()
+    expect(mail?.url).toBe('mailto:hello@example.com?subject=Hello%20World')
+    expect(externalProtocolTarget('zoommtg://zoom.us/join?uname=Jane Doe')?.url).toBe(
+      'zoommtg://zoom.us/join?uname=Jane%20Doe'
+    )
+    // A space in the host is a genuinely malformed address, not a link.
+    expect(externalProtocolTarget('myapp://open next')).toBeNull()
+  })
+
+  it('opens the companion apps a link hands off to', () => {
+    const cases: [string, string, string][] = [
+      ['zoommtg://zoom.us/join?action=join&confno=91234567890', 'Zoom', 'zoommtg'],
+      ['slack://channel?team=T012345&id=C0678', 'Slack', 'slack'],
+      ['discord://-/channels/@me', 'Discord', 'discord'],
+      ['msteams://teams.microsoft.com/l/meetup-join/19%3ameeting', 'Microsoft Teams', 'msteams'],
+      ['spotify:track:4cOdK2wGLETKBW3PvgPWqT', 'Spotify', 'spotify'],
+      // Not every companion app is named; the scheme it uses still opens.
+      ['zoomus://zoom.us/join?confno=91234567890', 'an external app', 'zoomus']
+    ]
+    for (const [url, label, scheme] of cases) {
+      const target = externalProtocolTarget(url)
+      expect(target, url).not.toBeNull()
+      expect(target?.label, url).toBe(label)
+      expect(target?.scheme, url).toBe(scheme)
+    }
   })
 
   it('falls back to a generic name for an unknown scheme label', () => {
