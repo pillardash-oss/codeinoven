@@ -122,6 +122,35 @@
    *  Dropped as soon as the caret works in another block. */
   let revertedRuleHold: { block: HTMLElement; kind: MarkdownRuleKind } | null = null
 
+  /** Set by `beforeinput` when the delete about to run spans this editor's
+   *  entire contents. A code block is a `contenteditable="false"` wrapper whose
+   *  inner `<code>` is its own editing host, so the browser's delete stops at a
+   *  trailing one and leaves it behind   select-all + delete wiped every other
+   *  block and kept the code block, and because a code block is only removable
+   *  through its own close button the note could never be cleared. A
+   *  whole-document delete clears the editor by hand instead. */
+  let pendingWholeDocumentDelete = false
+
+  /** True when the live selection covers every character of this editor. */
+  function selectionSpansWholeDocument(): boolean {
+    if (!editor) return false
+    const length = nodeLength(editor)
+    if (length === 0) return false
+    const selection = window.getSelection()
+    if (
+      !selection?.anchorNode ||
+      !selection.focusNode ||
+      !editor.contains(selection.anchorNode) ||
+      !editor.contains(selection.focusNode)
+    ) {
+      return false
+    }
+    const anchor = pointOffset(editor, selection.anchorNode, selection.anchorOffset)
+    const focus = pointOffset(editor, selection.focusNode, selection.focusOffset)
+    if (anchor === null || focus === null) return false
+    return Math.min(anchor, focus) === 0 && Math.max(anchor, focus) === length
+  }
+
   function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
     const hold = revertedRuleHold
     if (!block || !hold) return false
@@ -352,9 +381,21 @@
     // undo restores when a rule fired.
     const pending = history.consumePending()
     const typed = history.captureEntry()
+    const deletable = inputEvent.inputType.startsWith('delete')
+    const wholeDocumentDelete = deletable && pendingWholeDocumentDelete
+    pendingWholeDocumentDelete = false
     const revertedRule = applyMarkdownInputRule(editor, { isRuleSuppressed })
     syncCodeBlockLanguages(editor)
-    emitEditorValue(inputEvent.inputType.startsWith('delete'))
+    if (wholeDocumentDelete) {
+      // The browser refuses to remove a trailing code block, so it is cleared
+      // here: nothing may survive a delete that spanned the whole document.
+      // eslint-disable-next-line svelte/no-dom-manipulating
+      editor.innerHTML = renderRichMarkdown('')
+      placeCaretAtEnd(editor)
+      emitEditorValue()
+    } else {
+      emitEditorValue(deletable)
+    }
     if (revertedRule) {
       if (typed) typed.revertedRule = revertedRule
       history.commit(typed, inputEvent.inputType, true)
@@ -366,6 +407,9 @@
 
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
+    // Recomputed for every input so a delete that never reaches `input` cannot
+    // leave the flag armed for the next keystroke.
+    pendingWholeDocumentDelete = false
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
       inputEvent.preventDefault()
       if (inputEvent.inputType === 'historyUndo') history.undo()
@@ -391,6 +435,7 @@
         return
       }
     }
+    pendingWholeDocumentDelete = selectionSpansWholeDocument()
     history.setPending(history.captureEntry())
   }
 
