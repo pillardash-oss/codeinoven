@@ -282,12 +282,17 @@
   // fills this height instead of forcing the dropdown to its maximum.
   const railHeight = $derived.by(() => {
     const fixed = 1 + Number(hasFavorites) + Number(showProfilesRail)
+    // Keep the natural height compact through four harnesses. Beyond that,
+    // let the dropdown grow until the seven-icon cap; the rail then scrolls.
     const harnesses = showHarnessesRail ? Math.min(harnessOptions.length, 7) : 0
-    const outerGaps = harnesses ? fixed + 1 : fixed - 1
-    const harnessGaps = Math.max(0, harnesses - 1)
-    const rem =
-      (fixed + harnesses) * 2 + (outerGaps + harnessGaps) * 0.125 + 1 + (harnesses ? 0.5 : 0)
-    return `calc(${rem}rem + ${harnesses ? 1 : 0}px)`
+    const visibleHarnesses = Math.min(harnesses, 4)
+    const outerGaps = visibleHarnesses ? fixed + 1 : fixed - 1
+    const compactRem =
+      (fixed + visibleHarnesses) * 2 +
+      (outerGaps + Math.max(0, visibleHarnesses - 1)) * 0.125 +
+      1 +
+      (visibleHarnesses ? 0.5 : 0)
+    return `calc(${compactRem}rem + ${visibleHarnesses ? 1 : 0}px)`
   })
   /**
    * The rail section actually driving the list. A view whose content vanished
