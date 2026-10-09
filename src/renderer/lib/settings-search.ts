@@ -484,9 +484,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'about-privacy',
     section: 'about',
     blockId: 'about-privacy',
-    title: 'Privacy',
-    description: 'Anonymous usage statistics sent with a random installation ID.',
-    keywords: ['analytics', 'telemetry', 'posthog', 'usage statistics'],
+    title: 'Share anonymous daily active ping',
+    description: 'Share one anonymous daily active ping.',
+    keywords: ['privacy', 'analytics', 'telemetry', 'posthog', 'usage statistics'],
     icon: ShieldCheck
   }
 ]

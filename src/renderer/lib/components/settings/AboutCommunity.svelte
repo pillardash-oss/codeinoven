@@ -81,25 +81,13 @@
 </div>
 
 <div id="settings-block-about-privacy" class="mt-4 rounded-xl border bg-surface p-4">
-  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Privacy</h3>
-  <div class="flex flex-wrap items-start justify-between gap-4">
-    <div class="min-w-0">
-      <p class="text-sm font-medium">Share anonymous usage statistics</p>
-      <p
-        id="usage-statistics-description"
-        class="mt-0.5 max-w-xl text-xs leading-relaxed text-dimmed"
-      >
-        Sends the app version, operating system, CPU architecture, and daily activity to PostHog
-        under a random installation ID. Prompts, code, project paths, and conversations are never
-        sent.
-      </p>
-    </div>
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <p class="text-sm font-medium">Share anonymous daily active ping</p>
     <Switch
       checked={config.shareAnonymousUsage === true}
       disabled={!settingsReady || saving}
-      title="Share anonymous usage statistics"
-      aria-label="Share anonymous usage statistics"
-      aria-describedby="usage-statistics-description"
+      title="Share anonymous daily active ping"
+      aria-label="Share anonymous daily active ping"
       onchange={(enabled) => void setConsent(enabled)}
     />
   </div>
