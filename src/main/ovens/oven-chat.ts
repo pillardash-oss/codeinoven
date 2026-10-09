@@ -10,7 +10,7 @@ import type {
   PermissionRequest,
   PendingAgentQuestionRequest
 } from '../../lib/types'
-import { LOCAL_OVEN_ID } from '../../lib/ovens'
+import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
 import type { OvenAppearance, OvenFile } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -120,7 +120,7 @@ export class OvenChat {
   }
 
   remote(thread: Thread, settings = thread.settings): boolean {
-    return !!settings?.ovenId && settings.ovenId !== LOCAL_OVEN_ID
+    return isRemoteOvenId(settings?.ovenId)
   }
 
   private path(thread: Pick<Thread, 'projectId' | 'id'>): string {

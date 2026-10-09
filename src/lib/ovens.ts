@@ -3,6 +3,17 @@ export const LOCAL_OVEN_ID = 'local'
 export const OVEN_PROTOCOL_VERSION = 1
 export type OvenIcon = string
 
+/**
+ * Whether an Oven id names a remote Oven rather than this device.
+ *
+ * Remote work keeps running on its Oven while the app is closed, so every
+ * surface that tears work down, blocks a close, or reconciles interrupted turns
+ * uses this to leave a remote turn alone. A missing id is this device.
+ */
+export function isRemoteOvenId(ovenId: string | undefined | null): boolean {
+  return typeof ovenId === 'string' && ovenId.length > 0 && ovenId !== LOCAL_OVEN_ID
+}
+
 export interface OvenAppearance {
   icon: OvenIcon
   color: string
