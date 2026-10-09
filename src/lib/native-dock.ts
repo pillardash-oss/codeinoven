@@ -16,6 +16,8 @@ export interface NativeDockRequest {
   /** The source row selected by keyboard navigation. */
   selectedAction?: string | null
   typography?: { fontFamily: string; fontSize: number; fontWeight: number }
+  /** Newly introduced image resources. Nodes reference them by identity. */
+  images?: Record<string, string>
   bounds: BrowserViewBounds
   theme: 'light' | 'dark'
   nodes: Array<NativeDockNode | string>
@@ -101,10 +103,49 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'aria-modal',
   'data-native-dock-scroll',
   'data-native-dock-scroll-top',
-  'data-native-dock-key'
+  'data-native-dock-key',
+  'data-native-dock-image'
 ])
 export const MAX_NATIVE_DOCK_NODES = 4096
 const MAX_TEXT = 48_000
+export const MAX_NATIVE_DOCK_IMAGE_CHARS = 4_000_000
+const NATIVE_DOCK_IMAGE_ID = /^image-[0-9]{1,8}$/
+
+/** Images have their own bounded budget, independent of the markup text. */
+export function validateNativeDockImages(value: unknown): Record<string, string> {
+  const images = record(value)
+  const entries = Object.entries(images)
+  if (entries.length > 64) throw new TypeError('Too many native dock images')
+  let size = 0
+  const result: Record<string, string> = {}
+  for (const [id, source] of entries) {
+    if (
+      !NATIVE_DOCK_IMAGE_ID.test(id) ||
+      typeof source !== 'string' ||
+      !source.startsWith('data:image/')
+    )
+      throw new TypeError('Invalid native dock image')
+    size += source.length
+    if (size > MAX_NATIVE_DOCK_IMAGE_CHARS) throw new TypeError('Native dock images are too large')
+    result[id] = source
+  }
+  return result
+}
+
+/** References currently painted, so source and native caches can drop old icons. */
+export function nativeDockImageIds(nodes: readonly (NativeDockNode | string)[]): Set<string> {
+  const ids = new Set<string>()
+  function visit(children: readonly (NativeDockNode | string)[]): void {
+    for (const node of children) {
+      if (typeof node === 'string') continue
+      const id = node.attributes['data-native-dock-image']
+      if (id) ids.add(id)
+      visit(node.children)
+    }
+  }
+  visit(nodes)
+  return ids
+}
 
 /** Copy only inert sizing and badge colours, never arbitrary CSS or URLs. */
 export function nativeDockStyleAllowed(style: string): boolean {
@@ -173,6 +214,8 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
       for (const [key, value] of Object.entries(record(node.attributes))) {
         if (!NATIVE_DOCK_ATTRIBUTES.has(key) || typeof value !== 'string')
           throw new TypeError('Invalid native dock attribute')
+        if (key === 'data-native-dock-image' && !NATIVE_DOCK_IMAGE_ID.test(value))
+          throw new TypeError('Invalid native dock image reference')
         text += value.length
         if (text > textLimit) throw new TypeError('Native dock text is too large')
         if (
@@ -221,7 +264,8 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
     passive: input.passive === true,
     modal: input.modal === true,
     selectedAction,
-    typography
+    typography,
+    images: validateNativeDockImages(input.images ?? {})
   }
 }
 export function validateNativeDockInteraction(value: unknown): NativeDockInteraction {

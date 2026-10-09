@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
@@ -6,6 +6,7 @@ import {
   NATIVE_DOCK_ATTRIBUTES,
   MAX_NATIVE_DOCK_NODES,
   nativeDockStyleAllowed,
+  validateNativeDockImages,
   validateNativeDockRequest,
   type NativeDockNode,
   type NativeDockInteraction
@@ -27,6 +28,10 @@ export class NativeDockController {
   private scrollTargets = new SvelteMap<string, HTMLElement>()
   private scrollIds = new WeakMap<Element, string>()
   private actionCounter = 0
+  private imageCounter = 0
+  private imageSources = new SvelteMap<string, string>()
+  private deliveredImages = new SvelteSet<string>()
+  private frameImages: Record<string, string> = {}
   private signature = ''
   private active = false
   constructor(
@@ -107,6 +112,9 @@ export class NativeDockController {
       this.active = false
       this.actions.clear()
       this.scrollTargets.clear()
+      this.imageSources.clear()
+      this.deliveredImages.clear()
+      this.frameImages = {}
       void invoke('browser:setDockOverlay', this.id, null).catch(() => {})
     }
   }
@@ -144,6 +152,16 @@ export class NativeDockController {
     if (this.modalOptions && node.classList.contains('hidden')) return null
     const attributes: Record<string, string> = {}
     for (const attribute of node.attributes) {
+      if (attribute.name === 'src' && attribute.value.startsWith('data:image/')) {
+        let id = this.imageSources.get(attribute.value)
+        if (!id) {
+          id = `image-${++this.imageCounter}`
+          this.imageSources.set(attribute.value, id)
+        }
+        this.frameImages[id] = attribute.value
+        attributes['data-native-dock-image'] = id
+        continue
+      }
       if (attribute.name !== 'style' && NATIVE_DOCK_ATTRIBUTES.has(attribute.name))
         attributes[attribute.name] = attribute.value
     }
@@ -211,6 +229,7 @@ export class NativeDockController {
       this.actions.clear()
       this.scrollTargets.clear()
       this.nodeCount = 0
+      this.frameImages = {}
       const nodes = (this.modalOptions ? [this.root] : [...this.root.childNodes])
         .map((child) => this.project(child))
         .filter((child) => child !== null)
@@ -228,9 +247,21 @@ export class NativeDockController {
       }
       const signature = JSON.stringify(content)
       if (signature === this.signature) return
+      validateNativeDockImages(this.frameImages)
+      const liveIds = new SvelteSet(Object.keys(this.frameImages))
+      for (const [source, id] of this.imageSources) {
+        if (!liveIds.has(id)) {
+          this.imageSources.delete(source)
+          this.deliveredImages.delete(id)
+        }
+      }
+      const images = Object.fromEntries(
+        Object.entries(this.frameImages).filter(([id]) => !this.deliveredImages.has(id))
+      )
       this.signature = signature
       const request = validateNativeDockRequest({
         ...content,
+        images,
         id: this.id,
         revision: ++this.revision
       })
@@ -239,6 +270,11 @@ export class NativeDockController {
       void invoke('browser:setDockOverlay', this.id, request)
         .then((accepted) => {
           if (!accepted && this.active) this.refuse()
+          if (accepted && this.active) {
+            for (const id of Object.keys(images)) {
+              if (id in this.frameImages) this.deliveredImages.add(id)
+            }
+          }
         })
         .catch(() => {
           if (this.active) this.refuse()

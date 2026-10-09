@@ -1,4 +1,9 @@
-import type { NativeDockCommit, NativeDockRequest } from '../../lib/native-dock'
+import {
+  nativeDockImageIds,
+  validateNativeDockImages,
+  type NativeDockCommit,
+  type NativeDockRequest
+} from '../../lib/native-dock'
 import { BrowserWindow, screen } from 'electron'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -63,6 +68,7 @@ export class BrowserOverlayWindow {
    *  never part of the click-through decision. */
   private status: BrowserStatusOverlay | null = null
   private docks = new Map<string, NativeDockRequest>()
+  private deliveredDockImages = new Map<string, Set<string>>()
   /** True while the document has finished loading and may be sent content. */
   private ready = false
   /** Tracked rather than read back, because the toggle is only ever a change. */
@@ -162,6 +168,7 @@ export class BrowserOverlayWindow {
   applyDock(id: string, request: NativeDockRequest | null): boolean {
     if (request === null) {
       this.docks.delete(id)
+      this.deliveredDockImages.delete(id)
       this.settle()
       // Keep the one tooltip overlay warm between hovers instead of creating
       // and destroying a renderer for every title. It stays hidden and inert.
@@ -171,7 +178,14 @@ export class BrowserOverlayWindow {
     if (!this.docks.has(id) && this.docks.size >= 32) return false
     const popup = this.ensure()
     if (!popup) return false
-    this.docks.set(id, request)
+    const previous = this.docks.get(id)?.images ?? {}
+    const images: Record<string, string> = {}
+    for (const imageId of nativeDockImageIds(request.nodes)) {
+      const source = request.images?.[imageId] ?? previous[imageId]
+      if (!source) throw new TypeError('Native dock image is missing')
+      images[imageId] = source
+    }
+    this.docks.set(id, { ...request, images: validateNativeDockImages(images) })
     this.reveal(popup)
     this.publish(popup)
     return true
@@ -228,6 +242,7 @@ export class BrowserOverlayWindow {
     this.strip = null
     this.status = null
     this.docks.clear()
+    this.deliveredDockImages.clear()
     this.ready = false
     this.pointerOverContent = false
     this.ignoringMouse = true
@@ -307,7 +322,19 @@ export class BrowserOverlayWindow {
     sendToRenderer(popup.webContents, 'browser:overlay:stack', this.stack)
     sendToRenderer(popup.webContents, 'browser:overlay:strip', this.strip)
     sendToRenderer(popup.webContents, 'browser:overlay:status', this.status)
-    sendToRenderer(popup.webContents, 'browser:overlay:docks', [...this.docks.values()])
+    const docks = [...this.docks.values()].map((dock) => {
+      const delivered = this.deliveredDockImages.get(dock.id) ?? new Set<string>()
+      const images: Record<string, string> = {}
+      const currentIds = new Set(Object.keys(dock.images ?? {}))
+      for (const id of delivered) if (!currentIds.has(id)) delivered.delete(id)
+      for (const [id, source] of Object.entries(dock.images ?? {})) {
+        if (!delivered.has(id)) images[id] = source
+        delivered.add(id)
+      }
+      this.deliveredDockImages.set(dock.id, delivered)
+      return { ...dock, images }
+    })
+    sendToRenderer(popup.webContents, 'browser:overlay:docks', docks)
   }
 
   private ensure(): BrowserWindow | null {
@@ -369,6 +396,8 @@ export class BrowserOverlayWindow {
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
     popup.webContents.on('did-finish-load', () => {
+      // A new overlay document has no resource cache yet, including after HMR.
+      this.deliveredDockImages.clear()
       this.ready = true
       this.publish(popup)
     })

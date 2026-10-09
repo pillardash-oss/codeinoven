@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import type {
-    NativeDockNode,
-    NativeDockRequest,
-    NativeDockInteraction
+  import {
+    nativeDockImageIds,
+    type NativeDockNode,
+    type NativeDockRequest,
+    type NativeDockInteraction
   } from '$shared/native-dock'
   import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -19,6 +20,7 @@
   let selectedAction: string | null = null
   let modalRoot: HTMLDivElement | null = null
   let lastScroll: { target: string; top: number } | null = null
+  let images: Record<string, string> = {}
   function report(report: NativeDockInteraction): void {
     void invoke('browser:overlayDockInteract', report).catch(() => {})
   }
@@ -29,6 +31,8 @@
       ? document.createElementNS('http://www.w3.org/2000/svg', node.tag)
       : document.createElement(node.tag)
     for (const [name, value] of Object.entries(node.attributes)) element.setAttribute(name, value)
+    const imageId = node.attributes['data-native-dock-image']
+    if (imageId && images[imageId]) element.setAttribute('src', images[imageId])
     for (const child of node.children) element.appendChild(create(child, inSvg))
     return element
   }
@@ -36,6 +40,12 @@
     modalRoot = element
     $effect(() => {
       const current = dock
+      const nextImages: Record<string, string> = {}
+      for (const id of nativeDockImageIds(current.nodes)) {
+        const source = current.images?.[id] ?? images[id]
+        if (source) nextImages[id] = source
+      }
+      images = nextImages
       if (selectedAction !== (current.selectedAction ?? null)) {
         if (hoveredAction !== current.selectedAction) hoveredAction = null
         selectedAction = current.selectedAction ?? null
