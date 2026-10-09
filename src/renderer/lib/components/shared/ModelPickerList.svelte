@@ -276,8 +276,14 @@
   const hasFavorites = $derived(favoriteModels.length > 0)
   /** True while this picker can apply profiles, which decides the profiles rail item. */
   const showProfilesRail = $derived(profiles !== null)
-  /** Harness icons are worth a rail section only when there is a choice to make. */
-  const showHarnessesRail = $derived(harnessOptions.length > 1)
+  /**
+   * The harness section shows as soon as there is one harness to name.
+   *
+   * A lone harness is still worth the icon: the Oven reports what it has
+   * installed, and hiding the section when only one survives meant a remote
+   * thread showed no harness icon at all even though its Oven plainly has one.
+   */
+  const showHarnessesRail = $derived(harnessOptions.length > 0)
   // Match the rail's buttons, gaps, padding, and separator; the model list
   // fills this height instead of forcing the dropdown to its maximum.
   //
