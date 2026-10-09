@@ -92,10 +92,27 @@ export function registerOvenIpc(
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
   ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
-  ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
+  ipcMain.handle('oven:probe', async (_event, raw: unknown, refresh: unknown) => {
     const id = ovenId(raw)
+    const forceRefresh = refresh === true
     try {
-      return await service.probe(id)
+      const probe = await service.probe(id, forceRefresh)
+      // A forced read re-scans harness versions, so the desktop's own copy of
+      // this Oven's inventory is stale from that instant on: any surface that
+      // reads it (thread model pickers, the Oven picker) must re-probe rather
+      // than keep showing the version the user just moved past.
+      if (forceRefresh) harnessService.invalidate(id)
+      // Record what the probe read on the Oven entry itself. The renderer draws
+      // its live copy from the probe, but the entry is what a later Settings
+      // open reads back, so a check that never wrote it left the entry showing
+      // figures from the last connection-health call.
+      if (probe.specs)
+        await registry.recordConnectionHealth(id, {
+          state: 'connected',
+          checkedAt: Date.now(),
+          specs: probe.specs
+        })
+      return probe
     } catch (error) {
       // Deliver probe failures to the UI without Electron logging a rejected handler.
       return {

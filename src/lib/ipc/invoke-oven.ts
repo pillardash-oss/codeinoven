@@ -45,7 +45,9 @@ export const invokeOvenContract = {
   'oven:setDefault': {} as Contract<[id: string], OvenState>,
   'oven:reorder': {} as Contract<[ids: string[]], OvenState>,
   'oven:install': {} as Contract<[id: string], OvenProbe>,
-  'oven:probe': {} as Contract<[id: string], OvenProbe>,
+  /** `refresh` forces the Oven to re-scan harness versions instead of
+   *  answering from its own short-lived cache; ordinary probes stay cheap. */
+  'oven:probe': {} as Contract<[id: string, refresh?: boolean], OvenProbe>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,

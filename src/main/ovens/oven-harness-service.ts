@@ -213,6 +213,18 @@ export class OvenHarnessService {
     }
   }
 
+  /**
+   * Forget one Oven's cached inventory.
+   *
+   * A forced probe (an explicit Check Oven) has just re-scanned versions on the
+   * Oven, so the desktop's own 30-second copy is out of date the moment that
+   * read lands. Dropping it makes the next `oven:harness:inventory` re-probe
+   * instead of answering every other surface with the pre-check list.
+   */
+  invalidate(ovenId: string): void {
+    this.inventories.delete(ovenId)
+  }
+
   /** The persisted inventory table, read once and then kept in memory. */
   private inventoryStore(): Promise<StoredInventories> {
     if (this.stored) return Promise.resolve(this.stored)

@@ -103,6 +103,8 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  /** The Oven whose full screen SSH shell is open, or null when none is. */
+  let shellOven = $state<Oven | null>(null)
   let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(
     null
   )
@@ -147,6 +149,12 @@
    */
   function ovenMenuItems(oven: Oven): MenuItem[] {
     const items: MenuItem[] = []
+    items.push({
+      label: 'Open Oven',
+      icon: Terminal,
+      disabled: Boolean(busy),
+      onClick: () => (shellOven = oven)
+    })
     items.push({
       label: 'Check Oven',
       icon: Activity,
@@ -215,8 +223,12 @@
         })
         return
       }
-      const probe = await invoke('oven:probe', oven.id)
+      const probe = await invoke('oven:probe', oven.id, true)
       probes = { ...probes, [oven.id]: probe }
+      // The desktop caches this Oven's harness inventory for a short window; a
+      // forced check has just replaced it on the Oven, so drop the copy every
+      // other surface reads and let the next read pick up the new versions.
+      void ovens.ensureInventory(oven.id)
       health = {
         ...health,
         [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
@@ -348,6 +360,19 @@
       const result = await invoke('oven:timezone:sync', oven.id)
       if (result.status === 'updated') toast.success(result.message)
       else toast.info(result.message)
+      // A zone change rewrites one of the figures on the Oven entry. Re-read
+      // them so the row shows the zone the Oven now runs on rather than the
+      // one it had when the page opened.
+      try {
+        const probe = await invoke('oven:probe', oven.id, true)
+        probes = { ...probes, [oven.id]: probe }
+        health = {
+          ...health,
+          [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
+        }
+      } catch {
+        // The clock moved; a row that could not be re-read keeps its last figures.
+      }
     } catch (failure) {
       toast.error(message(failure))
     } finally {
@@ -1346,5 +1371,11 @@
       onClose={() => (agentOpen = false)}
       onRegistered={(ovenId) => void onAgentRegistered(ovenId)}
     />
+  {/await}
+{/if}
+
+{#if shellOven}
+  {#await import('./OvenShellModal.svelte') then { default: OvenShellModal }}
+    <OvenShellModal oven={shellOven} onClose={() => (shellOven = null)} />
   {/await}
 {/if}
