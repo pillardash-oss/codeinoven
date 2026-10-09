@@ -183,6 +183,21 @@ import {
   isCioVideoRequest,
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
+import {
+  CIO_ORCHESTRATE_CONTINUE_PROMPT,
+  CIO_ORCHESTRATE_START_PROMPT,
+  isCioOrchestrateRequest
+} from '../orchestration/cio-orchestrate-prompt'
+import {
+  buildOrchestrationReportPrompt,
+  createOrchestrationRuntime,
+  type OrchestrationRuntime,
+  type PendingOrchestrationDispatch
+} from './chat-engine-orchestration'
+import { LOCAL_OVEN_ID } from '../../lib/ovens'
+import { OvenRegistry } from '../ovens/oven-registry'
+import { OvenService } from '../ovens/oven-service'
+import { OvenHarnessService } from '../ovens/oven-harness-service'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
@@ -1529,6 +1544,15 @@ export class ChatEngine {
    *  keeps the video capability active until the user leaves the thread. */
   private cioVideoThreads = new Map<string, true>()
 
+  /** Threads whose user has opened an orchestration session with
+   *  @cio-orchestrate (current turn or history). The session is what grants the
+   *  workstation tools, so it stays active for every later turn of the thread
+   *  rather than for one message. */
+  private cioOrchestrateThreads = new Map<string, true>()
+
+  /** The workstation tools' implementation and the dispatches awaiting a report. */
+  private orchestration: OrchestrationRuntime | null = null
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -1656,6 +1680,10 @@ export class ChatEngine {
     this.utilityOrchestration.setUtilitySuggestionExecutor((entry, context) =>
       this.requestUtilitySuggestion(entry, context)
     )
+    // The workstation tools: reading the Ovens, harnesses, models and accounts,
+    // and dispatching real work onto a chosen machine. The engine owns every
+    // piece a dispatch needs, so it supplies the executor to the same gateway.
+    this.attachOrchestrationRuntime()
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -3712,6 +3740,25 @@ export class ChatEngine {
   }
 
   /**
+   * Whether an orchestration session was opened in this thread, now or earlier,
+   * and whether this turn is the one that opened it. The same memo-and-rescan
+   * shape as the design tag, so an edit or rollback that removes the tag takes
+   * the session, and with it the workstation tools, away.
+   */
+  private async orchestrationSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<'off' | 'start' | 'continue'> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioOrchestrateThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioOrchestrateRequest(message.content))
+    if (opened) this.cioOrchestrateThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
    * Whether a video session was opened in this thread, now or earlier, and
    * whether this turn is the one that opened it. The same memo-and-rescan shape
    * as the design tag, so an edit or rollback that removes the tag takes the
@@ -3900,7 +3947,14 @@ export class ChatEngine {
      * later turn of the same thread. Both promote the video capability to an
      * active capability for the turn and add the matching session contract.
      */
-    videoSession: VideoSessionMode = 'off'
+    videoSession: VideoSessionMode = 'off',
+    /**
+     * Whether this turn belongs to an orchestration session the user opened
+     * with `@cio-orchestrate`. `start` is the turn that typed the tag,
+     * `continue` is every later turn of the same thread. Both grant the
+     * workstation tools and add the matching dispatch contract.
+     */
+    orchestrationSession: 'off' | 'start' | 'continue' = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3963,6 +4017,7 @@ export class ChatEngine {
         allowManagement,
         designSession,
         videoSession,
+        orchestrationSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -4017,6 +4072,15 @@ export class ChatEngine {
           : videoSession === 'continue'
             ? CIO_VIDEO_CONTINUE_PROMPT
             : ''
+      // The orchestration contract is the gate for the workstation tools: it is
+      // what tells the agent the tools exist and how to resolve a request to a
+      // machine, a model and an account before dispatching real work.
+      const orchestrationContract =
+        orchestrationSession === 'start'
+          ? CIO_ORCHESTRATE_START_PROMPT
+          : orchestrationSession === 'continue'
+            ? CIO_ORCHESTRATE_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -4030,6 +4094,7 @@ export class ChatEngine {
           utilityContract,
           designContract,
           videoContract,
+          orchestrationContract,
           ...skillInstructions
         ]
           .filter(Boolean)
@@ -4053,7 +4118,13 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, designContract, videoContract, ...skillInstructions]
+        return [
+          utilityContract,
+          designContract,
+          videoContract,
+          orchestrationContract,
+          ...skillInstructions
+        ]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -4096,6 +4167,7 @@ export class ChatEngine {
         utilityContract,
         designContract,
         videoContract,
+        orchestrationContract,
         ...skillInstructions
       ]
         .filter(Boolean)
@@ -9651,6 +9723,17 @@ export class ChatEngine {
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
     const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    // An orchestration session is user-started on the same terms. It is what
+    // grants the workstation tools, so the turn that types @cio-orchestrate
+    // gets the dispatch contract and every later turn of the thread keeps the
+    // tools reachable.
+    const orchestrationRequested = origin === 'user' && isCioOrchestrateRequest(text)
+    if (orchestrationRequested) this.cioOrchestrateThreads.set(threadId, true)
+    const orchestrationSession = await this.orchestrationSessionFor(
+      projectId,
+      threadId,
+      orchestrationRequested
+    )
     // The thread row carries the session, so the sidebar draws its marker from
     // the persisted field instead of a message scan. A thread that opened the
     // session in an earlier turn (detected as `continue` above) records it here
@@ -9712,7 +9795,8 @@ export class ChatEngine {
       assistantTaskTurn ? 'run' : routineHowToUpdateTurn ? 'edit' : 'none',
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
       designSession,
-      videoSession
+      videoSession,
+      orchestrationSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -24214,6 +24298,143 @@ export class ChatEngine {
     return thread
   }
 
+  /**
+   * Build the workstation tools' executor and hand it to the utility gateway.
+   *
+   * The engine owns everything a dispatch needs: the Oven registry and its
+   * harness inventory, the account registry, the provider catalogs, and the
+   * thread lifecycle a run has to enter so it appears in the sidebar and streams
+   * its status like any other thread. The dispatch book the runtime returns is
+   * what the turn finalizer reads to report an outcome back into the thread that
+   * asked for it.
+   */
+  private attachOrchestrationRuntime(): void {
+    const ovenRegistry = new OvenRegistry(this.storage, this.secretVault)
+    const ovenHarness = new OvenHarnessService(new OvenService(ovenRegistry), this.storage)
+    this.orchestration = createOrchestrationRuntime({
+      listProviderCatalogs: (projectId) => this.listProviderSnapshot(projectId),
+      listAccounts: () => this.accountRegistry.list(),
+      listOvens: () => ovenRegistry.state(),
+      harnessInventory: async (ovenId) => {
+        // This computer is never probed the way a remote Oven is, and the
+        // composer treats its harnesses as selectable without one.
+        if (ovenId === LOCAL_OVEN_ID) return []
+        try {
+          return await ovenHarness.getInventory(ovenId)
+        } catch {
+          // An unreachable Oven still answers with its last known scan.
+          return ovenHarness.cachedInventory(ovenId)
+        }
+      },
+      listModelProfiles: async () => (await this.storage.getConfig()).modelProfiles ?? [],
+      getThread: (projectId, threadId) => this.threadManager.getThread(projectId, threadId),
+      latestAssistantText: async (projectId, threadId) => {
+        const messages = await this.threadManager.loadMessages(projectId, threadId)
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (message.role !== 'assistant') continue
+          const text = assistantText(message).trim()
+          if (text) return text
+        }
+        return null
+      },
+      createThread: (input) => this.createOrchestrationThread(input),
+      sendPrompt: async (input) => {
+        await this.sendPrompt(
+          input.projectId,
+          input.threadId,
+          input.settings,
+          input.text,
+          [],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          // Internal with a visible turn, the same shape the Assignment worker
+          // dispatch uses, so the first message reads as the user's own.
+          'internal',
+          undefined,
+          undefined,
+          true
+        )
+      }
+    })
+    this.utilityOrchestration.setOrchestrationExecutor(this.orchestration.executor)
+  }
+
+  /**
+   * Create the real, user-visible thread a dispatch runs on.
+   *
+   * The thread takes the same path a user-created one takes: `prepareCreateThread`
+   * persists it with the resolved settings, so the row carries the Oven, the
+   * harness and the model, and the broadcast that follows is what makes it
+   * appear in every renderer's sidebar the moment it exists.
+   */
+  private async createOrchestrationThread(input: {
+    projectId: string
+    title: string
+    settings: ThreadSettings
+  }): Promise<Thread> {
+    const { thread, finalize } = this.threadManager.prepareCreateThread(
+      {
+        projectId: input.projectId,
+        providerId: input.settings.providerId,
+        title: input.title,
+        titleSource: 'manual',
+        settings: input.settings
+      },
+      {
+        onEviction: (outcome) => {
+          if (outcome.failedIds.length === 0) return
+          Logger.error('Orchestration thread eviction failed', {
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
+          })
+        }
+      }
+    )
+    await finalize()
+    broadcastThreadUpdate(thread)
+    return thread
+  }
+
+  /**
+   * Report a settled dispatch back into the thread that asked for it.
+   *
+   * Best-effort by design: the run thread's own row and its notification are
+   * the durable record, so a report that cannot land (the requesting thread is
+   * mid-turn, or has been closed) must never fail the run's finalization.
+   */
+  private async reportOrchestrationDispatch(
+    dispatch: PendingOrchestrationDispatch,
+    status: string
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(
+        dispatch.requestingProjectId,
+        dispatch.requestingThreadId
+      )
+      if (!thread?.settings) return
+      await this.sendPrompt(
+        dispatch.requestingProjectId,
+        dispatch.requestingThreadId,
+        thread.settings,
+        buildOrchestrationReportPrompt(dispatch, status),
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal'
+      )
+    } catch (error) {
+      Logger.dev('Orchestration dispatch report skipped:', error)
+    }
+  }
+
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     scheduler.attachPing((config) => this.sendHeartbeatPing(config))
@@ -26084,6 +26305,15 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      // A settled run this app dispatched on an agent's behalf is reported back
+      // into the thread that asked for it, so the outcome lands where the user
+      // asked for it instead of only on a row they have to go find.
+      const settledDispatch = finishedThread
+        ? this.orchestration?.dispatches.settle(finishedThread.id)
+        : undefined
+      if (settledDispatch) {
+        void this.reportOrchestrationDispatch(settledDispatch, finalStatus)
+      }
       // A settled turn on an assistant task is reported to the routine scheduler,
       // which knows whether it dispatched a run on that task and stamps its last
       // successful run. Harmless for a user's own chat: the scheduler ignores a
