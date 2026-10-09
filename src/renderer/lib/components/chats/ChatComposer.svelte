@@ -385,6 +385,23 @@
     return identity ? `Not installed on ${identity.name}` : 'Not installed on this Oven'
   })
 
+  /**
+   * True when the selected model's harness is not installed on the target Oven.
+   *
+   * The picker omits those harnesses, so the selection has to be treated as
+   * empty: the composer shows no model and holds the turn until the user picks
+   * one that exists on the Oven. Sending anyway is what dispatched a run the
+   * Oven could not start.
+   */
+  let ovenModelUnavailable = $derived(unavailableHarnessIds?.has(resolved.harnessId) === true)
+
+  /** Why the send is held, shown above the composer while it is. */
+  let ovenModelNotice = $derived(
+    ovenModelUnavailable
+      ? `${unavailableHarnessReason ?? 'That model is not installed on this Oven'}. Choose a model that is available there to send this turn.`
+      : ''
+  )
+
   $effect(() => {
     const ovenId = targetOvenId
     if (!ovenId || ovenId === 'local') return
@@ -614,6 +631,14 @@
   let plusMenuOpen = $state(false)
   let engineeringToolbox: EngineeringToolbox | undefined = $state(undefined)
   let modelMenuOpen = $state(false)
+  // Opening the picker re-probes the Oven's harnesses, so a harness installed on
+  // the Oven since the last check shows up without leaving the thread.
+  $effect(() => {
+    if (!modelMenuOpen) return
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return
+    void ovens.ensureInventory(ovenId, true)
+  })
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
   /** Open state of the thinking-level dropdown inside the shared model picker. */
@@ -1322,6 +1347,9 @@
   }
 
   function performSend(direct?: boolean): void {
+    // The chosen model's harness is not on the Oven, so this turn cannot run.
+    // Hold the draft instead of dispatching a run the Oven would fail.
+    if (ovenModelUnavailable) return
     if (selectedHarnessLacksAttachments && attachments.length > 0) {
       attachmentBlockedNotice = true
       return
@@ -1822,6 +1850,15 @@
     />
   {/if}
 
+  {#if ovenModelNotice}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      {ovenModelNotice}
+    </div>
+  {/if}
+
   {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
     <div
       class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
@@ -2006,8 +2043,9 @@
         {harnessId}
         {unavailableHarnessIds}
         {unavailableHarnessReason}
-        providerId={resolved.providerId}
-        modelId={resolved.modelId}
+        providerId={ovenModelUnavailable ? '' : resolved.providerId}
+        modelId={ovenModelUnavailable ? '' : resolved.modelId}
+        label={ovenModelUnavailable ? 'Choose a model for this Oven' : undefined}
         accountId={resolved.accountId}
         {favoriteModels}
         {recentModels}
@@ -2099,7 +2137,9 @@
             : working
               ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
               : `Send   ${sendModifierLabel}Enter`}
-        disabled={disabled || (!working && !hasSendableContent)}
+        disabled={disabled ||
+          (canStop ? false : ovenModelUnavailable) ||
+          (!working && !hasSendableContent)}
         onclick={() => submit()}
       >
         {#if pendingStop}

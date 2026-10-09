@@ -56,8 +56,9 @@
     harnessFilter?: string | null
     /**
      * Harnesses the current execution target does not have installed (a remote
-     * Oven without them). Their chips and model rows are disabled, because a
-     * model can only run where its harness exists.
+     * Oven without them). A model can only run where its harness exists, so
+     * those harnesses are omitted from the picker entirely: no chip, no model
+     * row, and no favorite or recent entry pointing at one.
      */
     unavailableHarnessIds?: ReadonlySet<string> | null
     /** Why those harnesses are unavailable, shown as the chip's and row's title. */
@@ -148,6 +149,7 @@
     new Set(
       [...displayProviders, ...cachedProviders]
         .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+        .filter((provider) => !isUnavailableHarness(provider.harnessId))
         .flatMap((provider) =>
           provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
         )
@@ -162,6 +164,7 @@
         return { modelKey: key, ...parsed }
       })
       .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
+      .filter((favorite) => !isUnavailableHarness(favorite.harnessId))
   )
   const favoriteModelsList = $derived(
     filterEntries(
@@ -182,6 +185,7 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
+              !isUnavailableHarness(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -208,6 +212,7 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
+              !isUnavailableHarness(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -221,6 +226,7 @@
     const words = searchWords(search)
     return displayProviders
       .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+      .filter((provider) => !isUnavailableHarness(provider.harnessId))
       .filter((provider) => passesRailHarness(provider.harnessId))
       .map((provider) => ({
         ...provider,
@@ -249,6 +255,7 @@
       new Map(
         displayProviders
           .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+          .filter((provider) => !isUnavailableHarness(provider.harnessId))
           .map((provider) => provider.harnessId)
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )

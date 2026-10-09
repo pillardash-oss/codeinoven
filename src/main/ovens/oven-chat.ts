@@ -75,6 +75,15 @@ interface Live {
   clockCursor?: number
 }
 
+/**
+ * The one error the Oven service raises for a run it does not know.
+ *
+ * A service update or restart drops the in-memory run map, so a run the desktop
+ * is still polling can disappear; this is the signal that it is gone for good
+ * rather than a transport failure worth retrying.
+ */
+const MISSING_RUN = 'The remote run does not exist.'
+
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
   readonly service: OvenService
@@ -341,7 +350,7 @@ export class OvenChat {
     try {
       result = await this.service.events(existing.ovenId, existing.runId, 0)
     } catch (error) {
-      if (error instanceof Error && error.message === 'The remote run does not exist.') {
+      if (error instanceof Error && error.message === MISSING_RUN) {
         existing.finished = true
         await this.storage.write(this.path(thread), existing)
         return
@@ -632,7 +641,22 @@ export class OvenChat {
     if (this.disposed || live.binding.finished) return
     if (live.timer) clearTimeout(live.timer)
     const binding = live.binding
-    const page = await this.service.events(binding.ovenId, binding.runId, live.after)
+    let page: Awaited<ReturnType<OvenService['events']>>
+    try {
+      page = await this.service.events(binding.ovenId, binding.runId, live.after)
+    } catch (error) {
+      // An Oven service update or restart drops its in-memory runs, so a run the
+      // client is still polling can vanish. Retrying forever left the turn stuck
+      // as "working" with Stop unable to clear it; the run is gone either way, so
+      // settle the turn instead.
+      if (error instanceof Error && error.message === MISSING_RUN) {
+        await this.finish(live, 'interrupted', {
+          error: 'This turn is no longer running on the Oven, so it was ended.'
+        })
+        return
+      }
+      throw error
+    }
     let exit = false
     for (const event of page.events) {
       if (event.stream === 'stdout') {
@@ -651,11 +675,9 @@ export class OvenChat {
     }
     if (exit || (page.run.status !== 'running' && page.events.length === 0)) {
       if (live.buffer.trim()) await this.record(live, live.buffer)
-      binding.finished = true
       const failed = page.run.status === 'failed'
-      await this.threads.setStatus(
-        binding.projectId,
-        binding.threadId,
+      await this.finish(
+        live,
         page.run.status === 'stopped' ? 'interrupted' : failed ? 'failed' : 'completed',
         failed
           ? {
@@ -664,19 +686,6 @@ export class OvenChat {
             }
           : undefined
       )
-      if (failed)
-        this.publish({
-          type: 'session.error',
-          sessionId: binding.session.id,
-          error: 'The Oven harness failed.',
-          rawError: live.stderr
-        })
-      this.publish({ type: 'session.idle', sessionId: binding.session.id })
-      this.publish({
-        type: 'session.status',
-        sessionId: binding.session.id,
-        status: { state: 'idle' }
-      })
     }
     await this.threads.upsertMessages(binding.projectId, binding.threadId, binding.session.messages)
     await this.storage.write(
@@ -685,6 +694,53 @@ export class OvenChat {
     )
     if (!binding.finished) this.schedule(live, page.events.length >= 128 ? 0 : 1000)
     else this.live.delete(binding.threadId)
+  }
+
+  /**
+   * End one live turn: settle its thread status, clear the working state, and
+   * mark the binding finished so no later poll resumes it.
+   *
+   * Idempotent, because the ways a turn can end   the harness exiting, the user
+   * stopping it, and the run vanishing from the Oven   race each other.
+   */
+  private async finish(
+    live: Live,
+    status: 'completed' | 'failed' | 'interrupted',
+    failure?: { error: string; errorDetail?: string }
+  ): Promise<void> {
+    const binding = live.binding
+    if (binding.finished) return
+    binding.finished = true
+    if (live.timer) clearTimeout(live.timer)
+    live.timer = undefined
+    await this.threads.setStatus(
+      binding.projectId,
+      binding.threadId,
+      status,
+      failure
+        ? {
+            error: failure.error,
+            ...(failure.errorDetail ? { errorDetail: failure.errorDetail } : {})
+          }
+        : undefined
+    )
+    if (failure)
+      this.publish({
+        type: 'session.error',
+        sessionId: binding.session.id,
+        error: failure.error,
+        ...(failure.errorDetail ? { rawError: failure.errorDetail } : {})
+      })
+    this.publish({ type: 'session.idle', sessionId: binding.session.id })
+    this.publish({
+      type: 'session.status',
+      sessionId: binding.session.id,
+      status: { state: 'idle' }
+    })
+    await this.storage.write(
+      this.path({ projectId: binding.projectId, id: binding.threadId }),
+      binding
+    )
   }
 
   private async record(live: Live, line: string): Promise<void> {
@@ -853,10 +909,23 @@ export class OvenChat {
   async stop(thread: Thread): Promise<void> {
     const binding = await this.storage.read<Binding>(this.path(thread))
     if (!binding || binding.finished) return
-    await this.service.stop(binding.ovenId, binding.runId)
+    try {
+      await this.service.stop(binding.ovenId, binding.runId)
+    } catch (error) {
+      // A run the Oven no longer knows is already stopped. Failing here was what
+      // left Stop   and the steer that stop-and-resends   unusable on a run that
+      // had vanished, so settle it locally instead.
+      if (!(error instanceof Error && error.message === MISSING_RUN)) throw error
+    }
     for (let attempt = 0; attempt < 10; attempt++) {
-      if ((await this.service.events(binding.ovenId, binding.runId, 0)).run.status !== 'running')
-        break
+      let status: Awaited<ReturnType<OvenService['events']>>['run']['status']
+      try {
+        status = (await this.service.events(binding.ovenId, binding.runId, 0)).run.status
+      } catch (error) {
+        if (error instanceof Error && error.message === MISSING_RUN) break
+        throw error
+      }
+      if (status !== 'running') break
       await new Promise<void>((resolve) => setTimeout(resolve, 500))
     }
     await this.restore(thread)

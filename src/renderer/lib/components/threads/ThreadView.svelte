@@ -6390,14 +6390,17 @@
 
     try {
       await invoke('agent:abort', projectId, id)
-      clearLocalTurn()
-      agentRuns.setIdle(projectId, id)
-      providerStatus = null
-      void refreshMessages()
-      void refreshCheckpoints()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
+    // The user's stop has to be visible even when the abort itself failed: a
+    // remote run that vanished mid-turn used to leave this stuck as working,
+    // because the failure skipped the local settle below.
+    clearLocalTurn()
+    agentRuns.setIdle(projectId, id)
+    providerStatus = null
+    void refreshMessages()
+    void refreshCheckpoints()
   }
 
   let showBankedResetConfirm = $state(false)

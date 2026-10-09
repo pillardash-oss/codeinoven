@@ -244,8 +244,8 @@ export function registerOvenIpc(
     const report = await setupRuntime.preflight(id)
     return setupRuntime.gitIdentity.verify(id, report)
   })
-  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
-    harnessService.getInventory(ovenId(rawId))
+  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown, rawRefresh?: unknown) =>
+    harnessService.getInventory(ovenId(rawId), rawRefresh === true)
   )
   ipcMain.handle('oven:agent:script', (_event, raw: unknown) =>
     agentService.script(validateOvenAgentScriptRequest(raw))

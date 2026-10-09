@@ -94,21 +94,25 @@ class OvenIdentityStore {
    *
    * Main keeps a persisted copy per Oven and refreshes it on every probe, so
    * this answers even while the Oven is unreachable and still picks up a
-   * harness the user installed on the Oven themselves.
+   * harness the user installed on the Oven themselves. `refresh` forces a live
+   * oven-side scan instead, which a surface uses when it needs the current
+   * answer (the model picker opening); a refresh that fails keeps the last known
+   * inventory rather than blanking the picker.
    */
-  ensureInventory(ovenId: string): Promise<void> {
+  ensureInventory(ovenId: string, refresh = false): Promise<void> {
     if (ovenId === LOCAL_OVEN_ID) return providerStore.init().then(() => providerStore.checkAll())
-    const pending = this.#inventoryPending.get(ovenId)
+    const key = `${ovenId}:${refresh ? 'refresh' : 'read'}`
+    const pending = this.#inventoryPending.get(key)
     if (pending) return pending
-    const task = invoke('oven:harness:inventory', ovenId)
+    const task = invoke('oven:harness:inventory', ovenId, refresh)
       .then((items) => {
         this.#inventories = { ...this.#inventories, [ovenId]: items }
       })
       .catch(() => {
-        this.#inventories = { ...this.#inventories, [ovenId]: null }
+        if (!refresh) this.#inventories = { ...this.#inventories, [ovenId]: null }
       })
-      .finally(() => this.#inventoryPending.delete(ovenId))
-    this.#inventoryPending.set(ovenId, task)
+      .finally(() => this.#inventoryPending.delete(key))
+    this.#inventoryPending.set(key, task)
     return task
   }
 

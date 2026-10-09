@@ -70,7 +70,10 @@ export const invokeOvenContract = {
   >,
   'oven:setup:cancel': {} as Contract<[id: string], OvenSetupOperation>,
   'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
-  'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
+  'oven:harness:inventory': {} as Contract<
+    [id: string, refresh?: boolean],
+    OvenHarnessInventoryItem[]
+  >,
   'oven:timezone:sync': {} as Contract<[id: string], OvenTimezoneSyncResult>,
   'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:uninstall': {} as Contract<
