@@ -8,6 +8,7 @@
     Pencil,
     Plus,
     Trash2,
+    UserRound,
     XCircle,
     Zap
   } from '@lucide/svelte'
@@ -15,11 +16,17 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { heartbeatStore } from '$lib/stores/heartbeat.svelte'
   import { modelKey } from '$lib/model-keys'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
-  import type { HeartbeatConfig, ProviderCatalog, ThinkingLevel } from '$shared/types'
+  import type {
+    HarnessAccount,
+    HeartbeatConfig,
+    ProviderCatalog,
+    ThinkingLevel
+  } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { formatDateTimeCompact, formatTimeOfDay } from '$shared/date-time-format'
 
@@ -70,6 +77,17 @@
       (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
     )
     return catalog?.models.find((model) => model.id === modelId)?.name ?? modelId
+  }
+
+  function accountFor(config: HeartbeatConfig): HarnessAccount | undefined {
+    const accounts = (harnessAccountCache.cached(config.harnessId) ?? []).filter(
+      (account) => account.providerId === config.providerId
+    )
+    return (
+      accounts.find((account) => account.id === config.accountId) ??
+      accounts.find((account) => account.isDefault) ??
+      accounts[0]
+    )
   }
 
   function formatLastRun(config: HeartbeatConfig): string {
@@ -181,7 +199,13 @@
   }
 
   onMount(() => {
-    void heartbeatStore.load()
+    void heartbeatStore
+      .load()
+      .then(async () => {
+        const harnessIds = [...new Set(heartbeatStore.heartbeats.map((config) => config.harnessId))]
+        await Promise.all(harnessIds.map((harnessId) => harnessAccountCache.list(harnessId)))
+      })
+      .catch(() => undefined)
     const load = async (): Promise<void> => {
       providersLoading = true
       providersError = ''
@@ -247,6 +271,7 @@
   {:else}
     <div class="overflow-hidden rounded-xl border bg-surface">
       {#each heartbeatStore.heartbeats as config (config.id)}
+        {@const account = accountFor(config)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
           <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
             <AgentIcon agentId={config.harnessId} size={16} />
@@ -280,6 +305,14 @@
               )}
               {#if config.thinkingLevel}· {config.thinkingLevel}{/if}
             </p>
+            {#if account}
+              <span
+                class="mt-1 inline-flex max-w-full truncate rounded-full border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
+                title="Account: {account.label}"
+              >
+                <UserRound size={10} class="mr-1 shrink-0" />{account.label}
+              </span>
+            {/if}
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
                 <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
