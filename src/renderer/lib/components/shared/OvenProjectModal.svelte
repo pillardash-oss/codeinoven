@@ -28,7 +28,6 @@
   let probing = $state(false)
   let probeError = $state('')
   let selectedPath = $state('')
-  let customName = $state('')
   let adding = $state(false)
   let error = $state('')
 
@@ -36,11 +35,20 @@
   let remoteOvens = $derived((ovenState?.ovens ?? []).filter((oven) => oven.kind === 'ssh'))
   let selectedOven = $derived(remoteOvens.find((oven) => oven.id === selectedOvenId) ?? null)
 
-  /** The project name, unless the user overrode the folder-derived default. */
-  let projectName = $derived(customName.trim() || folderBaseName(selectedPath))
+  /**
+   * The project takes its name from the folder the user picked, so there is
+   * nothing to type. A bare filesystem root has no last segment and therefore
+   * no name, which keeps the root itself from being added as a project.
+   */
+  let projectName = $derived(namedFolderSegment(selectedPath))
   let canAdd = $derived(
     !adding && Boolean(selectedOvenId) && Boolean(probeHome) && Boolean(projectName)
   )
+
+  /** The folder's last path segment, or an empty string when it has none. */
+  function namedFolderSegment(folder: string): string {
+    return /^[\\/]+$/u.test(folder) ? '' : folderBaseName(folder)
+  }
 
   async function loadOvens(): Promise<void> {
     loadingOvens = true
@@ -72,7 +80,6 @@
     probeError = ''
     probeHome = ''
     selectedPath = ''
-    customName = ''
     try {
       const probe = await invoke('oven:probe', ovenId)
       const home = homeFromProbe(probe)
@@ -108,7 +115,6 @@
     probing = false
     probeError = ''
     selectedPath = ''
-    customName = ''
     error = ''
     loadError = ''
     adding = false
@@ -242,29 +248,10 @@
         </p>
       {:else if selectedOvenId && probeHome}
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted" for="oven-project-name">
-            Project name
-          </label>
-          <input
-            id="oven-project-name"
-            type="text"
-            class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-            placeholder={folderBaseName(selectedPath) || 'Project name'}
-            bind:value={customName}
-          />
-        </div>
-
-        <div>
           <span class="mb-1 block text-xs font-medium text-muted">
             Folder on {selectedOven?.name ?? 'the Oven'}
           </span>
           <OvenFileBrowser ovenId={selectedOvenId} root={probeHome} bind:value={selectedPath} />
-          <p
-            class="mt-2 truncate rounded-lg bg-raised px-3 py-2 font-mono text-xs text-muted"
-            title={selectedPath}
-          >
-            {selectedPath || 'No folder selected'}
-          </p>
         </div>
       {/if}
 

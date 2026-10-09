@@ -20,8 +20,12 @@
   let error = $state('')
   let typedPath = $state('')
 
-  /** Inline "new folder" row: whether it is open, busy, and what it will create. */
-  let creating = $state(false)
+  /**
+   * Inline "new folder" row. It belongs to one directory: `createAt` is that
+   * directory, so navigating away closes the row on its own without the loader
+   * having to cancel it.
+   */
+  let createAt = $state('')
   let creatingBusy = $state(false)
   let newFolderName = $state('')
   let createError = $state('')
@@ -61,6 +65,9 @@
   })
 
   let canGoUp = $derived(parentDirectory(current) !== null)
+
+  /** The create row is open only while the user is still in the directory it opened in. */
+  let creating = $derived(Boolean(createAt) && createAt === current)
 
   /** Drop a trailing separator so `/home/user/` and `/home/user` compare equal. */
   function trimTrailingSeparator(path: string): string {
@@ -138,11 +145,11 @@
     if (disabled || !current) return
     newFolderName = ''
     createError = ''
-    creating = true
+    createAt = current
   }
 
   function cancelCreate(): void {
-    creating = false
+    createAt = ''
     creatingBusy = false
     newFolderName = ''
     createError = ''
@@ -167,7 +174,7 @@
         path: name,
         exclusive: true
       })
-      creating = false
+      createAt = ''
       newFolderName = ''
       await open(target)
     } catch (failure) {
@@ -231,46 +238,6 @@
     </button>
   </form>
 
-  <div class="flex items-center gap-2">
-    {#if crumbs.length > 0}
-      <nav
-        class="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-xs"
-        aria-label="Folder path"
-      >
-        {#each crumbs as crumb, index (crumb.path)}
-          {#if index > 0 && !(index === 1 && crumbs[0]?.path === separator)}
-            <span class="text-dimmed" aria-hidden="true">{separator}</span>
-          {/if}
-          <button
-            type="button"
-            class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
-            crumbs.length - 1
-              ? 'font-medium text-foreground'
-              : 'text-muted'}"
-            title={crumb.path}
-            {disabled}
-            onclick={() => void open(crumb.path)}
-          >
-            {crumb.label}
-          </button>
-        {/each}
-      </nav>
-    {:else}
-      <span class="min-w-0 flex-1"></span>
-    {/if}
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title="Create a folder in this directory"
-      aria-label="Create a folder in this directory"
-      disabled={disabled || loading || !current}
-      onclick={startCreate}
-    >
-      <FolderPlus size={13} />
-      New folder
-    </button>
-  </div>
-
   {#if creating}
     <form class="flex items-center gap-2" onsubmit={submitNewFolder}>
       <input
@@ -301,9 +268,50 @@
         Cancel
       </button>
     </form>
-    {#if createError}
-      <p class="text-xs text-danger" role="alert">{createError}</p>
-    {/if}
+  {:else}
+    <div class="flex items-center gap-2">
+      {#if crumbs.length > 0}
+        <nav
+          class="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-xs"
+          aria-label="Folder path"
+        >
+          {#each crumbs as crumb, index (crumb.path)}
+            {#if index > 0 && !(index === 1 && crumbs[0]?.path === separator)}
+              <span class="text-dimmed" aria-hidden="true">{separator}</span>
+            {/if}
+            <button
+              type="button"
+              class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
+              crumbs.length - 1
+                ? 'font-medium text-foreground'
+                : 'text-muted'}"
+              title={crumb.path}
+              {disabled}
+              onclick={() => void open(crumb.path)}
+            >
+              {crumb.label}
+            </button>
+          {/each}
+        </nav>
+      {:else}
+        <span class="min-w-0 flex-1"></span>
+      {/if}
+      <button
+        type="button"
+        class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        title="Create a folder in this directory"
+        aria-label="Create a folder in this directory"
+        disabled={disabled || loading || !current}
+        onclick={startCreate}
+      >
+        <FolderPlus size={13} />
+        New folder
+      </button>
+    </div>
+  {/if}
+
+  {#if creating && createError}
+    <p class="text-xs text-danger" role="alert">{createError}</p>
   {/if}
 
   <div
