@@ -93,6 +93,12 @@ class CitationPathsState {
     return this.cacheFor(cacheKey).known.has(path)
   }
 
+  /** Whether a path was resolved for the specific thread render context. */
+  isThreadPathValid(projectId: string, scopeBucketId: string | undefined, path: string): boolean {
+    void this.refreshKey
+    return this.cacheFor(`${projectId}:${scopeBucketId ?? ''}`).known.has(path)
+  }
+
   /** Whether an absolute path (outside the project root) exists on disk. */
   isKnownExternalPath(path: string): boolean {
     void this.refreshKey
@@ -141,6 +147,37 @@ class CitationPathsState {
         projectCandidates,
         workspaceState.activeScopeBucketIdFor(project.id)
       )
+    }
+    if (external.length > 0) this.ensureExternalChecked(external)
+  }
+
+  /** Queue citations against the thread's own root during message hydration.
+   *  The first transcript can mount before workspace selection finishes
+   *  restoring, so its links must not depend on the global active-project
+   *  pointer being ready. */
+  ensureThreadChecked(
+    projectId: string,
+    threadId: string,
+    scopeBucketId: string | undefined,
+    candidates: string[]
+  ): void {
+    if (candidates.length === 0) return
+    if (projectId === INBOX_PROJECT_ID) {
+      const workspaceCandidates = candidates.filter(
+        (candidate) =>
+          isAbsoluteCitationPath(candidate) && candidate.includes(`/${CHATS_CWD_DIR}/${threadId}/`)
+      )
+      if (workspaceCandidates.length > 0) this.ensureExternalChecked(workspaceCandidates)
+      return
+    }
+    const external: string[] = []
+    const projectCandidates: string[] = []
+    for (const candidate of candidates) {
+      if (isAbsoluteCitationPath(candidate)) external.push(candidate)
+      else projectCandidates.push(candidate)
+    }
+    if (projectCandidates.length > 0) {
+      this.ensureChecked(projectId, projectCandidates, scopeBucketId)
     }
     if (external.length > 0) this.ensureExternalChecked(external)
   }

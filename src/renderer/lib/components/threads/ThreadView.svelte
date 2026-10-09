@@ -481,6 +481,11 @@
   // svelte-ignore state_referenced_locally
   const mountedThread = threadProp
   let thread = $derived(threadProp ?? mountedThread)
+  let citationThreadContext = $derived({
+    projectId: thread.projectId,
+    threadId: thread.id,
+    scopeBucketId: thread.scopeBucketId
+  })
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -11822,7 +11827,7 @@
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} />
+                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
                     <InlineImageFigure
                       url={part.url}
@@ -11951,6 +11956,7 @@
                         {#if explicitPresentation.body}
                           <MarkdownView
                             text={explicitPresentation.body}
+                            citationThread={citationThreadContext}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -11958,6 +11964,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          citationThread={citationThreadContext}
                           inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12299,6 +12306,7 @@
                           {:else}
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              citationThread={citationThreadContext}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />

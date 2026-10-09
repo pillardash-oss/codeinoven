@@ -8,7 +8,13 @@
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
   import ArtifactCard from './ArtifactCard.svelte'
   import { artifactKindForLang, artifactNeedsCodeFallback } from './artifact'
-  import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
+  import {
+    blockHtml,
+    fileCitationTarget,
+    htmlFragment,
+    lexMarkdownCached,
+    type CitationThreadContext
+  } from './markdown'
   import { groupHtmlContainers, type MarkdownNode } from './html-containers'
   import { openInBrowser, type LinkDestination } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
@@ -65,6 +71,8 @@
     onOpenLocalFile?: (url: string) => void
     /** Fired when an annotatable Mermaid diagram requests a review comment. */
     onAnnotateMermaid?: (code: string, event: MouseEvent) => void
+    /** Explicit transcript owner used while a thread is restoring its messages. */
+    citationThread?: CitationThreadContext
   }
 
   let {
@@ -76,7 +84,8 @@
     inlineFileTags = [],
     onCiteFile,
     onOpenLocalFile,
-    onAnnotateMermaid
+    onAnnotateMermaid,
+    citationThread
   }: Props = $props()
 
   /**
@@ -230,7 +239,17 @@
   // Register cited paths for existence checks so only files that truly exist
   // render as links. Streaming re-fires per chunk, but the store dedupes.
   $effect(() => {
-    citationPathsState.ensureActiveProjectChecked(extractCitationCandidates(text))
+    const candidates = extractCitationCandidates(text)
+    if (citationThread) {
+      citationPathsState.ensureThreadChecked(
+        citationThread.projectId,
+        citationThread.threadId,
+        citationThread.scopeBucketId,
+        candidates
+      )
+    } else {
+      citationPathsState.ensureActiveProjectChecked(candidates)
+    }
     faviconState.ensureResolved(faviconState.externalUrlsFromText(text))
     // Images in the source are queued the same way favicons are, from the raw
     // text: the renderer cannot fetch them itself (the CSP blocks remote hosts),
@@ -492,7 +511,9 @@
       {#if seg.kind === 'long'}
         <LongTextBlock text={seg.text} />
       {:else}
-        {@render renderNodes(nodesFor(lexMarkdownCached(seg.text, lexedAllowHtml, repository)))}
+        {@render renderNodes(
+          nodesFor(lexMarkdownCached(seg.text, lexedAllowHtml, repository, citationThread))
+        )}
       {/if}
     {/each}
   </div>
