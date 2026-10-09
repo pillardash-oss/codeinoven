@@ -1839,7 +1839,13 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
-    const contextEstimated = latestReportedContextUsed === undefined
+    // Only the explicit composed-request estimate is an estimate. Falling back
+    // to the harness's own reported token total is a provider reading   the
+    // last request's prompt plus completion is the occupancy the provider
+    // actually processed   so it must never wear the "this harness does not
+    // report context telemetry" caveat while the turn is still running.
+    const contextEstimated =
+      latestReportedContextUsed === undefined && latestEstimatedContextUsed !== undefined
     const contextUsed =
       latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
     if (
