@@ -236,7 +236,7 @@ export const invokeProviderContract = {
   'utilities:getSkillMarketDetail': {} as Contract<[id: string], SkillMarketDetail>,
   'utilities:installMarketSkill': {} as Contract<[request: SkillMarketInstallRequest], string>,
   'utilities:installedSkillLocations': {} as Contract<[], InstalledSkillLocation[]>,
-  'utilities:uninstallMarketSkill': {} as Contract<[skillId: string], SkillUninstallReport>,
+  'utilities:uninstallMarketSkill': {} as Contract<[marketId: string], SkillUninstallReport>,
   'utilities:skillUpdateStatus': {} as Contract<[], SkillUpdateStatus>,
   'utilities:checkSkillUpdates': {} as Contract<[], SkillUpdateStatus>,
   'utilities:update': {} as Contract<

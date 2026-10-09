@@ -1846,10 +1846,17 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle('utilities:uninstallMarketSkill', async (_, rawSkillId: unknown) => {
-    const skillId = validateEntityId(rawSkillId, 'Skill ID', 200)
+    const marketId = validateBoundedString(rawSkillId, 'Skill market ID', 3, 500)
+    const segments = marketId.split('/')
+    const skillId = validateEntityId(segments.pop(), 'Skill ID', 200)
+    const source = segments.join('/')
+    if (!isGithubSkillSource(source) && !isWellKnownSkillSource(source)) {
+      throw new TypeError('Skill source is invalid')
+    }
     return uninstallMarketSkill(
       storage,
       skillId,
+      source,
       await skillScanProjects(),
       app.getPath('home'),
       utilityFootprint

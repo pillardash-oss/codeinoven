@@ -1,3 +1,4 @@
+import { marketSkillName } from '$shared/skill-market-identity'
 import type {
   AgentCapabilityEntry,
   InstalledSkillLocation,
@@ -265,7 +266,13 @@ export function registryUtilityVendor(
   if (utility.kind === 'skill') {
     const skillId = registrySkillId(utility)
     const source = locations.find(
-      (location) => location.skillId === skillId && location.source
+      (location) =>
+        location.manager === 'cio' &&
+        location.source &&
+        (marketSkillName(location.source, location.skillId) === skillId ||
+          location.skillId === skillId) &&
+        location.scope === utility.scope.level &&
+        location.projectId === ('projectId' in utility.scope ? utility.scope.projectId : undefined)
     )?.source
     return source ? marketplaceVendor(source) : LOCAL_VENDOR
   }

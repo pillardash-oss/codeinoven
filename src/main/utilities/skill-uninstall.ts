@@ -2,42 +2,44 @@ import type { SkillUninstallReport } from '../../lib/types'
 import type { InstalledSkillScanProject } from './installed-skill-locations'
 import { listInstalledSkillLocations } from './installed-skill-locations'
 import { SkillInstallRecordStore } from './skill-install-records'
-import { runSkillsCli } from './skills-cli'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { marketSkillName } from '../../lib/skill-market-identity'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import type { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { UtilityRegistryService } from './utility-registry-service'
 
-/**
- * Removes one marketplace skill from every place it was installed: all
- * CodeInOven registry entries that manage it, however they were scoped, and
- * every native copy on disk.
- *
- * Native copies are handed to the Skills CLI, which owns that layout: a global
- * run also drops the agent links and folders the CLI keeps for the other
- * harnesses, so an uninstall leaves nothing behind to be discovered later. A
- * project run is repeated in each project that still holds a copy.
- *
- * The install records go too: nothing left to keep fresh, and a later re-install
- * starts from a clean baseline.
- *
- * A copy CodeInOven installed into a project's or a thread's own folder goes with
- * its registry entry: `footprint` is the same installer the Utilities page uses,
- * so the uninstall removes what the install placed.
- */
+/** Remove only registry entries and native folders attributed to this publisher. */
 export async function uninstallMarketSkill(
   storage: StorageEngine,
   skillId: string,
+  source: string,
   projects: readonly InstalledSkillScanProject[],
-  home: string,
+  _home: string,
   footprint?: UtilityScopeFootprintService
 ): Promise<SkillUninstallReport> {
+  const locations = (await listInstalledSkillLocations(storage, projects)).filter(
+    (location) =>
+      location.skillId === skillId && location.source?.toLowerCase() === source.toLowerCase()
+  )
+  const installName = marketSkillName(source, skillId)
   const registry = new UtilityRegistryService(storage)
   let registryEntries = 0
   for (const utility of await registry.list()) {
     if (utility.kind !== 'skill') continue
     const managesSkill = utility.harnessBindings.some(
-      (binding) => binding.strategy === 'skill' && binding.transportName === skillId
+      (binding) =>
+        binding.strategy === 'skill' &&
+        (binding.transportName === installName ||
+          (binding.transportName === skillId &&
+            locations.some(
+              (location) =>
+                location.manager === 'cio' &&
+                location.scope === utility.scope.level &&
+                location.projectId ===
+                  ('projectId' in utility.scope ? utility.scope.projectId : undefined)
+            )))
     )
     if (managesSkill && (await registry.delete(utility.id))) registryEntries += 1
   }
@@ -47,27 +49,15 @@ export async function uninstallMarketSkill(
       .catch((error: unknown) => Logger.dev('Uninstalled skill folders were not removed:', error))
   }
 
-  const nativeLocations = (await listInstalledSkillLocations(storage, projects)).filter(
-    (location) => location.manager === 'native' && location.skillId === skillId
-  )
+  const nativeLocations = locations.filter((location) => location.manager === 'native')
   let nativeScopes = 0
-  if (nativeLocations.some((location) => location.scope !== 'project')) {
-    await runSkillsCli(['remove', skillId, '--global', '--yes'], home)
+  for (const location of nativeLocations) {
+    // Delete only the attributed folder. A short-name CLI removal also removes
+    // other harness copies, which can belong to a different publisher.
+    await rm(join(location.path, location.folderName ?? skillId), { recursive: true, force: true })
     nativeScopes += 1
   }
-  const projectIds = new Set(
-    nativeLocations
-      .filter((location) => location.scope === 'project')
-      .map((location) => location.projectId)
-  )
-  for (const projectId of projectIds) {
-    const project = projects.find((candidate) => candidate.id === projectId)
-    if (!project) continue
-    await runSkillsCli(['remove', skillId, '--yes'], project.path)
-    nativeScopes += 1
-  }
-
-  await new SkillInstallRecordStore(storage).removeSkill(skillId)
+  await new SkillInstallRecordStore(storage).removeSkill(skillId, source)
 
   return { registryEntries, nativeScopes }
 }

@@ -697,7 +697,7 @@
         >
           Marketplace
         </span>
-        {#if installedSkillState.isInstalled(row.entry.skillId)}
+        {#if installedSkillState.isInstalled(row.entry.skillId, row.entry.source)}
           <SkillInstalledBadge />
         {/if}
         {#if row.entry.isOfficial}

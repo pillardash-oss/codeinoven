@@ -185,7 +185,7 @@ export interface UtilityCatalog {
 export interface SkillInstallRecord {
   /** `manager:skillId:scope:projectId|all`   stable identity of one install. */
   id: string
-  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  /** Short upstream marketplace skill id; source supplies its namespace. */
   skillId: string
   /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
   manager: 'cio' | 'native'
@@ -326,7 +326,9 @@ export interface SkillMarketEntry {
  * without trusting a renderer-only flag that would not survive a restart.
  */
 export interface InstalledSkillLocation {
-  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  /** Exact native folder name, retained when the marketplace id is attributed. */
+  folderName?: string
+  /** Short upstream marketplace skill id; source supplies its namespace. */
   skillId: string
   /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
   manager: 'cio' | 'native'
@@ -353,7 +355,7 @@ export interface InstalledSkillLocation {
 
 /**
  * What one marketplace skill uninstall removed, so the caller can report it.
- * Native copies are removed by the Skills CLI, which owns that on-disk layout.
+ * Native copies are removed by their exact attributed folder name.
  */
 export interface SkillUninstallReport {
   /** Registry entries removed, across every scope the skill was installed in. */
