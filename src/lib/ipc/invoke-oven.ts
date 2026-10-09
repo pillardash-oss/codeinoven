@@ -82,6 +82,7 @@ export const invokeOvenContract = {
   >,
   'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
   'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
+  'oven:agent:test': {} as Contract<[input: OvenAgentRegistrationInput], OvenConnectionStatus>,
   'oven:agent:reachable': {} as Contract<[code: string], OvenEndpoint | null>,
   'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

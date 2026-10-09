@@ -24,13 +24,15 @@ Linux system package commands run directly as root or through sudo for other use
 npx cio-oven start
 ```
 
-The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. The command and its flags are described in **Add a machine with one command** below.
+The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. Name the machine's SSH port in the **SSH port on the machine** field to put it in the command, as in `npx cio-oven start --port 2222`; leave it empty and the command uses the machine's own `sshd` port. The command and its flags are described in **Add a machine with one command** below.
 
 Paste the printed code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved.
 
 A machine cannot know which of its own addresses this computer can reach: that depends on the network between them. So the code carries every address the machine answers on, ranked with its private LAN addresses first and its host name last, and the dialog dials them and uses the first that connects. The **Address this computer uses** field is prefilled with that answer, and the machine's other candidates sit below it as chips to pick from; nothing needs typing unless you reach the machine under a name it does not know, such as an SSH config alias or a forwarded port. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
 
-The SSH port is verified the same way as the address. A port a person typed is a claim the machine cannot check from the outside, so the dialog dials the machine's addresses on the reported port and then on the standard one, and saves the pair that answered. When the port that answered is not the one the command reported, the dialog says so rather than saving an endpoint every later connection would time out on.
+The SSH port is settled where the truth is available. A port you name, either with `--port` or at the command's prompt, is honoured: it is published only when SSH answers on it, and when nothing does the command refuses with the configuration file and restart command to fix, instead of quietly saving a port you never chose. A port the command detected on its own is only a guess, so it is corrected to the port that answers and the dialog says which was replaced.
+
+**Check code** shows what will be saved. **Test connection**, at the bottom left of the dialog, then opens a real SSH session using the identity from the code and the host and port in the fields, so authentication, host trust, and the remote shell are all confirmed before **Register Oven** stores anything.
 
 The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
 
@@ -44,7 +46,7 @@ The published `cio-oven` CLI prepares a machine from its own shell, without this
 npx cio-oven start
 ```
 
-It asks for the Oven name and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx cio-oven start --yes` or `npx cio-oven start --yes --no-identity`. The SSH port is not asked: the command uses the port `sshd` is really serving on, and refuses to print a code when nothing serves SSH at all, naming the configuration file and the restart command for the platform.
+It asks for the Oven name, the SSH port to publish, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx cio-oven start --yes`, or `npx cio-oven start --port 2222 --yes --no-identity`. A port you name, with `--port` or at the prompt, is honoured: it is published only when SSH answers on it, and refused with the fix instructions when it does not, rather than being switched to a different port. A port it detected on its own is corrected to the one that answers.
 
 ## Windows Ovens
 
