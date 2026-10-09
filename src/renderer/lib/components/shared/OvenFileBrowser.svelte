@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronRight, Folder, Home, Loader2 } from '@lucide/svelte'
+  import { ChevronRight, Folder, FolderPlus, Home, Loader2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 
@@ -20,6 +20,12 @@
   let error = $state('')
   let typedPath = $state('')
 
+  /** Inline "new folder" row: whether it is open, busy, and what it will create. */
+  let creating = $state(false)
+  let creatingBusy = $state(false)
+  let newFolderName = $state('')
+  let createError = $state('')
+
   /** Which listing request is current, so a slow one cannot overwrite a newer. */
   let generation = 0
 
@@ -38,8 +44,12 @@
     if (!path) return []
     const parts = path.split(/[\\/]+/u).filter(Boolean)
     const rooted = /^[\\/]/u.test(path)
-    const result: Array<{ label: string; path: string }> = []
-    let accumulated = rooted ? '' : ''
+    // A rooted path climbs all the way to `/`, so the root is its own first crumb
+    // and every ancestor below it is one click away.
+    const result: Array<{ label: string; path: string }> = rooted
+      ? [{ label: separator, path: separator }]
+      : []
+    let accumulated = ''
     for (let index = 0; index < parts.length; index += 1) {
       accumulated = accumulated ? joinPath(accumulated, parts[index], separator) : parts[index]
       result.push({
@@ -63,14 +73,21 @@
     return parent.endsWith(separator) ? `${parent}${child}` : `${parent}${separator}${child}`
   }
 
-  /** The directory one level up, or null when already at a filesystem root. */
+  /**
+   * The directory one level up, or null when already at a filesystem root.
+   *
+   * `/home` climbs to `/`   the root is a real listing, not a dead end   and a
+   * Windows drive root (`C:\`) is the only place with nowhere above it.
+   */
   function parentDirectory(path: string): string | null {
     const normalized = trimTrailingSeparator(path)
-    // A Windows drive root (`C:\`) has no parent to climb to.
-    if (/^[A-Za-z]:$/u.test(normalized)) return null
+    if (normalized === '' || normalized === separator) return null
+    if (/^[A-Za-z]:[\\/]?$/u.test(normalized)) return null
     const lastSeparator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
-    if (lastSeparator <= 0) return null
-    return normalized.slice(0, lastSeparator)
+    if (lastSeparator < 0) return null
+    if (lastSeparator === 0) return separator
+    const parent = normalized.slice(0, lastSeparator)
+    return /^[A-Za-z]:$/u.test(parent) ? `${parent}${separator}` : parent
   }
 
   async function open(path: string): Promise<void> {
@@ -115,6 +132,58 @@
   function submitTypedPath(event: SubmitEvent): void {
     event.preventDefault()
     void open(typedPath)
+  }
+
+  function startCreate(): void {
+    if (disabled || !current) return
+    newFolderName = ''
+    createError = ''
+    creating = true
+  }
+
+  function cancelCreate(): void {
+    creating = false
+    creatingBusy = false
+    newFolderName = ''
+    createError = ''
+  }
+
+  /** Create a folder in the open directory, then step into it. */
+  async function submitNewFolder(event: SubmitEvent): Promise<void> {
+    event.preventDefault()
+    const name = newFolderName.trim()
+    if (!name || disabled || creatingBusy || !current) return
+    if (name === '.' || name === '..' || /[\\/]/u.test(name)) {
+      createError = 'Enter a single folder name with no slashes.'
+      return
+    }
+    creatingBusy = true
+    createError = ''
+    const target = joinPath(current, name, separator)
+    try {
+      await invoke('oven:workspace', ovenId, {
+        operation: 'mkdir',
+        root: current,
+        path: name,
+        exclusive: true
+      })
+      creating = false
+      newFolderName = ''
+      await open(target)
+    } catch (failure) {
+      const message =
+        failure instanceof Error ? failure.message : 'The folder could not be created.'
+      createError = /EEXIST/u.test(message)
+        ? 'A folder with that name already exists here.'
+        : message
+    } finally {
+      creatingBusy = false
+    }
+  }
+
+  // Focus the name field the moment the create row appears.
+  function focusOnMount(node: HTMLInputElement): void {
+    node.focus()
   }
 </script>
 
@@ -162,26 +231,79 @@
     </button>
   </form>
 
-  {#if crumbs.length > 1}
-    <nav class="flex flex-wrap items-center gap-0.5 text-xs" aria-label="Folder path">
-      {#each crumbs as crumb, index (crumb.path)}
-        {#if index > 0}
-          <span class="text-dimmed" aria-hidden="true">/</span>
-        {/if}
-        <button
-          type="button"
-          class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
-          crumbs.length - 1
-            ? 'font-medium text-foreground'
-            : 'text-muted'}"
-          title={crumb.path}
-          {disabled}
-          onclick={() => void open(crumb.path)}
-        >
-          {crumb.label}
-        </button>
-      {/each}
-    </nav>
+  <div class="flex items-center gap-2">
+    {#if crumbs.length > 0}
+      <nav
+        class="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-xs"
+        aria-label="Folder path"
+      >
+        {#each crumbs as crumb, index (crumb.path)}
+          {#if index > 0 && !(index === 1 && crumbs[0]?.path === separator)}
+            <span class="text-dimmed" aria-hidden="true">{separator}</span>
+          {/if}
+          <button
+            type="button"
+            class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
+            crumbs.length - 1
+              ? 'font-medium text-foreground'
+              : 'text-muted'}"
+            title={crumb.path}
+            {disabled}
+            onclick={() => void open(crumb.path)}
+          >
+            {crumb.label}
+          </button>
+        {/each}
+      </nav>
+    {:else}
+      <span class="min-w-0 flex-1"></span>
+    {/if}
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      title="Create a folder in this directory"
+      aria-label="Create a folder in this directory"
+      disabled={disabled || loading || !current}
+      onclick={startCreate}
+    >
+      <FolderPlus size={13} />
+      New folder
+    </button>
+  </div>
+
+  {#if creating}
+    <form class="flex items-center gap-2" onsubmit={submitNewFolder}>
+      <input
+        type="text"
+        class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
+        placeholder="Folder name"
+        title={`Create a folder in ${current}`}
+        aria-label="New folder name"
+        {@attach focusOnMount}
+        bind:value={newFolderName}
+        disabled={disabled || creatingBusy}
+      />
+      <button
+        type="submit"
+        class="shrink-0 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        title="Create this folder"
+        disabled={disabled || creatingBusy || !newFolderName.trim()}
+      >
+        Create
+      </button>
+      <button
+        type="button"
+        class="shrink-0 rounded-lg px-2 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        title="Cancel"
+        disabled={creatingBusy}
+        onclick={cancelCreate}
+      >
+        Cancel
+      </button>
+    </form>
+    {#if createError}
+      <p class="text-xs text-danger" role="alert">{createError}</p>
+    {/if}
   {/if}
 
   <div
