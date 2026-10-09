@@ -437,11 +437,18 @@
     return ovenSetupStore.completed[oven.id] === true || setupComplete[oven.id] === true
   }
 
+  /** Where a harness lives, spelled for a caption or a badge. */
+  function harnessEnvironmentLabel(item: OvenHarnessInventoryItem | null): string {
+    if (item?.environment !== 'wsl') return ''
+    return item.wslDistribution ? `WSL: ${item.wslDistribution}` : 'WSL'
+  }
+
   /** One installed harness's actions, behind the badge it belongs to.
    *
-   *  The menu leads with the version the Oven runs today, because it is the only
-   *  place that answers what "Update" would move off. A harness the probe could
-   *  not read a version for gets no caption rather than an empty one.
+   *  The menu leads with where the harness lives and the version the Oven runs
+   *  today, because those are the only places that answer what "Update" would
+   *  move off. A harness the probe could not read a version for gets no version
+   *  caption rather than an empty one.
    */
   function harnessMenuItems(ovenId: string, row: OvenHarnessRow): MenuItem[] {
     const busyNow = Boolean(harnessBusy)
@@ -456,7 +463,9 @@
           onClick: () => void installHarness(ovenId, row)
         }
       ]
+    const environment = harnessEnvironmentLabel(item)
     return [
+      ...(environment ? [{ label: environment, header: true }] : []),
       ...(item?.installedVersion
         ? [{ label: `Version ${item.installedVersion}`, header: true }]
         : []),
@@ -1001,12 +1010,19 @@
                     </SettingsStatusBadge>
                     {#each harnessRows.filter((row) => row.installed) as row (row.harnessId)}
                       <span
-                        class="flex items-center rounded-lg bg-elevated p-1"
+                        class="flex items-center gap-1 rounded-lg bg-elevated p-1"
                         title={`${row.name}${
                           row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
+                        }${
+                          harnessEnvironmentLabel(row.item)
+                            ? ` · ${harnessEnvironmentLabel(row.item)}`
+                            : ''
                         }`}
                       >
                         <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                        {#if row.item?.environment === 'wsl'}
+                          <span class="text-[0.625rem] font-medium text-info">WSL</span>
+                        {/if}
                       </span>
                     {/each}
                   </div>
@@ -1166,9 +1182,16 @@
                               : 'flex items-center gap-0.5 rounded-lg border border-border py-0.5 pr-0.5 pl-1.5 opacity-50'}
                             title={`${row.name}${
                               row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
-                            }${row.installed ? '' : ' · not installed'}`}
+                            }${row.installed ? '' : ' · not installed'}${
+                              harnessEnvironmentLabel(row.item)
+                                ? ` · ${harnessEnvironmentLabel(row.item)}`
+                                : ''
+                            }`}
                           >
                             <AgentIcon agentId={row.harnessId} label={row.name} size={14} />
+                            {#if row.item?.environment === 'wsl'}
+                              <span class="text-[0.625rem] font-medium text-info">WSL</span>
+                            {/if}
                             {#if harnessBusy === `${oven.id}:${row.harnessId}`}
                               <Loader2 size={11} class="animate-spin text-muted" />
                             {:else}

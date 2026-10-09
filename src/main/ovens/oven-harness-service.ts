@@ -13,8 +13,9 @@ import {
   preferredHarnessInstallChannel
 } from '../agents/harness-install-service'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
-import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
+import { isWindowsShell, shellForPlatform, type RemoteShell } from './oven-remote-shell'
 import { remoteArgvCommand } from './oven-remote-command'
+import { wslChannelScript, wslScriptArgv } from './oven-wsl'
 import type { OvenService } from './oven-service'
 import { Logger } from '../system/logger'
 import { withOvenHarnessMutation } from './oven-operation-lock'
@@ -343,16 +344,30 @@ export class OvenHarnessService {
           throw new Error(
             `${descriptor.name} does not document an unattended update command. Update it on the Oven itself.`
           )
+        // An update has to run where the harness lives, so a WSL install is
+        // updated inside its distribution rather than beside the Windows PATH.
+        // The inventory is read when this process has not scanned the Oven yet,
+        // so a freshly started app still updates in the right environment.
+        const current =
+          this.cachedInventory(ovenId).find((item) => item.harnessId === harnessId) ??
+          (await this.getInventory(ovenId)).find((item) => item.harnessId === harnessId)
+        const distribution = current?.environment === 'wsl' ? current.wslDistribution : undefined
         return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
           const platform =
             this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
           const shell = shellForPlatform(platform)
           const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
-          Logger.info('Updating a harness on an oven', { ovenId, harnessId })
+          Logger.info('Updating a harness on an oven', {
+            ovenId,
+            harnessId,
+            environment: distribution ? 'wsl' : 'host'
+          })
           await this.service.ssh.execute(
             ovenId,
-            remoteArgvCommand(shell, [descriptor.command, ...args], { prefix }),
+            distribution
+              ? wslScriptCommand(shell, distribution, descriptor.command, args)
+              : remoteArgvCommand(shell, [descriptor.command, ...args], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -378,9 +393,15 @@ export class OvenHarnessService {
       this.withLock(`${ovenId}:${harnessId}`, async () => {
         const descriptor = findHarness(harnessId)
         if (!descriptor) throw new Error('That harness is not in the app registry.')
-        const platform =
-          this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
-        const channel = preferredHarnessInstallChannel(harnessId, platform as NodeJS.Platform)
+        const probe = await this.service.probe(ovenId)
+        // A Windows Oven that can run Linux installs there: the native one-line
+        // installers are Linux-first, and that is the environment the vendors
+        // support. An Oven without WSL installs on the host as before.
+        const distribution = probe.platform === 'win32' ? probe.wslDistributions?.[0] : undefined
+        const channel = preferredHarnessInstallChannel(
+          harnessId,
+          (distribution ? 'linux' : probe.platform) as NodeJS.Platform
+        )
         const installCommand = channel?.command
         const installArgs = channel?.args
         if (!installCommand || !installArgs)
@@ -389,16 +410,19 @@ export class OvenHarnessService {
           )
         return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
-          const shell = shellForPlatform(platform)
+          const shell = shellForPlatform(probe.platform)
           const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
           Logger.info('Installing a harness on an oven', {
             ovenId,
             harnessId,
-            method: channel.method
+            method: channel.method,
+            environment: distribution ? 'wsl' : 'host'
           })
           await this.service.ssh.execute(
             ovenId,
-            remoteArgvCommand(shell, [installCommand, ...installArgs], { prefix }),
+            distribution
+              ? wslScriptCommand(shell, distribution, installCommand, installArgs)
+              : remoteArgvCommand(shell, [installCommand, ...installArgs], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -437,10 +461,20 @@ export class OvenHarnessService {
           const managedNpm = current.executablePath?.includes('/harnesses/npm/') === true
           const prefix =
             managedNpm && !isWindowsShell(shell) ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ` : ''
-          Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
+          // A removal runs where the harness lives, so a WSL install is removed
+          // inside its own distribution with the Linux path it was found at.
+          const distribution = current.environment === 'wsl' ? current.wslDistribution : undefined
+          Logger.info('Uninstalling a harness on an oven', {
+            ovenId,
+            harnessId,
+            method,
+            environment: distribution ? 'wsl' : 'host'
+          })
           await this.service.ssh.execute(
             ovenId,
-            remoteArgvCommand(shell, [removal.command, ...removal.args], { prefix }),
+            distribution
+              ? wslScriptCommand(shell, distribution, removal.command, removal.args)
+              : remoteArgvCommand(shell, [removal.command, ...removal.args], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -487,6 +521,22 @@ export class OvenHarnessService {
     if (!row) throw new Error('The Oven did not report that harness.')
     return row
   }
+}
+
+/**
+ * Run one documented channel inside a WSL distribution, addressed over SSH.
+ *
+ * The channel is the Linux one, because that is the platform a distribution
+ * presents, and it is handed to `bash` there as a script so an installer that is
+ * itself a pipeline survives intact.
+ */
+function wslScriptCommand(
+  shell: RemoteShell,
+  distribution: string,
+  command: string,
+  args: string[]
+): string {
+  return remoteArgvCommand(shell, wslScriptArgv(distribution, wslChannelScript(command, args)))
 }
 
 /** Infer the install method from the resolved binary path so removal matches it. */

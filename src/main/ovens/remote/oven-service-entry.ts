@@ -19,12 +19,20 @@ import { join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
-import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
+import type { OvenHarnessInventoryItem, OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
 import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
+import {
+  NON_INTERACTIVE_WSL_DISTRIBUTIONS,
+  WSL_DISCOVERY_SCRIPT,
+  decodeWslOutput,
+  windowsWslExecutablePath,
+  wslDistributionFromUncPath,
+  wslRunArgv
+} from '../oven-wsl'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
 import {
@@ -61,6 +69,8 @@ const COMMANDS = [
 const VERSION_TIMEOUT_MS = 4_000
 const INVENTORY_TTL_MS = 10 * 60_000
 const INVENTORY_REFRESH_CONCURRENCY = 3
+type InventoryEnvironment = NonNullable<OvenHarnessInventoryItem['environment']>
+
 const versionCache = new Map<
   string,
   {
@@ -68,6 +78,8 @@ const versionCache = new Map<
     version: string | null
     health: string
     issueCategory?: string
+    environment?: InventoryEnvironment
+    wslDistribution?: string
     checkedAt: number
   }
 >()
@@ -199,6 +211,189 @@ async function executable(command: string): Promise<string | null> {
   return null
 }
 
+/* ----------------------------------------------------------- WSL on Windows */
+
+/** WSL cold starts are slow, and a distribution set rarely changes. */
+const WSL_CACHE_TTL_MS = 5 * 60_000
+const WSL_LIST_TIMEOUT_MS = 20_000
+const WSL_COMMAND_TIMEOUT_MS = 30_000
+
+function runCapture(
+  program: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<{ code: number | null; stdout: Buffer }> {
+  return new Promise((resolve) => {
+    let settled = false
+    const chunks: Buffer[] = []
+    const child = spawn(program, [...args], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const finish = (code: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code, stdout: Buffer.concat(chunks) })
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish(null)
+    }, timeoutMs)
+    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+    child.on('error', () => finish(null))
+    child.on('close', (code) => finish(code))
+  })
+}
+
+interface WslState {
+  executable?: string
+  distributions: string[]
+}
+
+let wslCache: { value: WslState; checkedAt: number } | undefined
+
+/**
+ * The distributions this Windows Oven can reach.
+ *
+ * A Windows Oven with no WSL, or WSL with only container distributions, answers
+ * with an empty list, which is what tells every caller to stay on the host side.
+ */
+async function wslState(): Promise<WslState> {
+  if (wslCache && Date.now() - wslCache.checkedAt < WSL_CACHE_TTL_MS) return wslCache.value
+  const executable = windowsWslExecutablePath(process.platform, process.env)
+  if (!executable) {
+    wslCache = { value: { distributions: [] }, checkedAt: Date.now() }
+    return wslCache.value
+  }
+  const result = await runCapture(executable, ['--list', '--quiet'], WSL_LIST_TIMEOUT_MS)
+  const distributions =
+    result.code === 0
+      ? [
+          ...new Set(
+            decodeWslOutput(result.stdout)
+              .split(/\r?\n/u)
+              .map((value) => value.replace(/\0/gu, '').trim())
+              .filter(
+                (value) =>
+                  Boolean(value) &&
+                  !NON_INTERACTIVE_WSL_DISTRIBUTIONS.has(value.toLocaleLowerCase('en-US'))
+              )
+          )
+        ]
+      : []
+  wslCache = { value: { executable, distributions }, checkedAt: Date.now() }
+  return wslCache.value
+}
+
+/** Resolve a set of commands inside one distribution, in a single WSL call. */
+async function discoverInDistribution(
+  executable: string,
+  distribution: string,
+  commands: readonly string[]
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  if (commands.length === 0) return found
+  const result = await runCapture(
+    executable,
+    ['--distribution', distribution, '--', 'sh', '-lc', WSL_DISCOVERY_SCRIPT, 'cio', ...commands],
+    WSL_COMMAND_TIMEOUT_MS
+  )
+  if (result.code !== 0) return found
+  for (const line of decodeWslOutput(result.stdout).split(/\r?\n/u)) {
+    const separator = line.indexOf('\t')
+    if (separator <= 0) continue
+    const command = line.slice(0, separator).trim()
+    const path = line.slice(separator + 1).trim()
+    if (commands.includes(command) && path.startsWith('/')) found.set(command, path)
+  }
+  return found
+}
+
+/**
+ * Resolve commands the Windows host does not have inside its distributions.
+ *
+ * The host wins whenever it has the command: a harness the user installed for
+ * Windows stays the one the app drives. WSL only answers for what the host
+ * lacks, which is exactly the install the app could not see before.
+ */
+async function discoverWslHarnesses(
+  commands: readonly string[]
+): Promise<Map<string, { path: string; distribution: string }>> {
+  const resolved = new Map<string, { path: string; distribution: string }>()
+  if (process.platform !== 'win32' || commands.length === 0) return resolved
+  const wsl = await wslState()
+  if (!wsl.executable) return resolved
+  for (const distribution of wsl.distributions) {
+    const pending = commands.filter((command) => !resolved.has(command))
+    if (pending.length === 0) break
+    for (const [command, path] of await discoverInDistribution(
+      wsl.executable,
+      distribution,
+      pending
+    ))
+      resolved.set(command, { path, distribution })
+  }
+  return resolved
+}
+
+/** Run one harness inside its distribution to read the version it reports. */
+async function wslHarnessVersion(
+  distribution: string,
+  path: string,
+  versionArgs: readonly string[]
+): Promise<string | null> {
+  const wsl = await wslState()
+  if (!wsl.executable) return null
+  const result = await runCapture(
+    wsl.executable,
+    ['--distribution', distribution, '--', 'sh', '-lc', 'exec "$0" "$@"', path, ...versionArgs],
+    VERSION_TIMEOUT_MS
+  )
+  if (result.code !== 0) return null
+  return firstVersionLine(decodeWslOutput(result.stdout))
+}
+
+/**
+ * Resolve one command for a run: the host first, then each distribution.
+ *
+ * The program to spawn travels with the answer, so a harness found in WSL is
+ * launched through the same `wsl.exe` it was found with.
+ */
+async function resolveHarnessForRun(
+  command: string,
+  cwd: string
+): Promise<{ program: string; path: string; distribution?: string } | null> {
+  const host = await executable(command)
+  if (host) return { program: host, path: host }
+  const wsl = await wslState()
+  if (!wsl.executable) return null
+  // A workspace opened through a distribution's own UNC root belongs to that
+  // distribution, so it is tried before the default one.
+  const preferred = wslDistributionFromUncPath(cwd)
+  const ordered = preferred
+    ? [
+        preferred,
+        ...wsl.distributions.filter(
+          (distribution) =>
+            distribution.toLocaleLowerCase('en-US') !== preferred.toLocaleLowerCase('en-US')
+        )
+      ]
+    : wsl.distributions
+  for (const distribution of ordered) {
+    const found = await discoverInDistribution(wsl.executable, distribution, [command])
+    const path = found.get(command)
+    if (path) return { program: wsl.executable, path, distribution }
+  }
+  return null
+}
+
+/** The first non-empty line a harness printed, shortened to one caption. */
+function firstVersionLine(output: string): string | null {
+  const line = output
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .find(Boolean)
+  return line ? line.slice(0, 200) : null
+}
+
 /** Run one harness version command, bounded so a hung binary cannot stall a probe. */
 function harnessVersion(path: string, versionArgs: readonly string[]): Promise<string | null> {
   return new Promise((resolve) => {
@@ -223,11 +418,7 @@ function harnessVersion(path: string, versionArgs: readonly string[]): Promise<s
       if (settled) return
       settled = true
       clearTimeout(timer)
-      const line = output
-        .split(/\r?\n/u)
-        .map((entry) => entry.trim())
-        .find(Boolean)
-      resolve(line ? line.slice(0, 200) : null)
+      resolve(firstVersionLine(output))
     })
   })
 }
@@ -243,6 +434,25 @@ function harnessVersion(path: string, versionArgs: readonly string[]): Promise<s
  */
 async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inventory']>> {
   const inventory: NonNullable<OvenProbe['inventory']> = []
+  const needsResolve =
+    force ||
+    HARNESSES.some((harness) => {
+      const cached = versionCache.get(harness.id)
+      return !cached || Date.now() - cached.checkedAt >= INVENTORY_TTL_MS
+    })
+  // The host PATH scan is cheap; a WSL pass is not, so it runs only when a
+  // harness actually needs resolving, and only for what the host does not have.
+  const hostPaths = new Map<string, string>()
+  let wslPaths = new Map<string, { path: string; distribution: string }>()
+  if (needsResolve) {
+    for (const harness of HARNESSES) {
+      const path = await executable(harness.command)
+      if (path) hostPaths.set(harness.command, path)
+    }
+    wslPaths = await discoverWslHarnesses(
+      HARNESSES.map((harness) => harness.command).filter((command) => !hostPaths.has(command))
+    )
+  }
   let cursor = 0
   const workers = Array.from(
     { length: Math.min(INVENTORY_REFRESH_CONCURRENCY, HARNESSES.length) },
@@ -265,17 +475,35 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
                   >[number]['issueCategory']
                 }
               : {}),
+            ...(cached.environment ? { environment: cached.environment } : {}),
+            ...(cached.wslDistribution ? { wslDistribution: cached.wslDistribution } : {}),
             updateAvailable: false,
             checkedAt: cached.checkedAt,
             cached: true
           })
           continue
         }
-        const path = await executable(harness.command)
-        const version = path ? await harnessVersion(path, harness.versionArgs) : null
+        const hostPath = hostPaths.get(harness.command)
+        const wslHit = hostPath ? undefined : wslPaths.get(harness.command)
+        const path = hostPath ?? wslHit?.path ?? null
+        const distribution = hostPath ? undefined : wslHit?.distribution
+        const version = distribution
+          ? path
+            ? await wslHarnessVersion(distribution, path, harness.versionArgs)
+            : null
+          : path
+            ? await harnessVersion(path, harness.versionArgs)
+            : null
         const health = !path ? 'missing' : version ? 'healthy' : 'broken'
         const issueCategory = !path ? 'not-installed' : version ? undefined : 'broken-executable'
-        const entry = { path, version, health, issueCategory, checkedAt: Date.now() }
+        const entry = {
+          path,
+          version,
+          health,
+          issueCategory,
+          ...(distribution ? { environment: 'wsl' as const, wslDistribution: distribution } : {}),
+          checkedAt: Date.now()
+        }
         versionCache.set(harness.id, entry)
         inventory.push({
           harnessId: harness.id,
@@ -284,6 +512,7 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
           installedVersion: version,
           health,
           ...(issueCategory ? { issueCategory } : {}),
+          ...(distribution ? { environment: 'wsl' as const, wslDistribution: distribution } : {}),
           updateAvailable: false,
           checkedAt: entry.checkedAt
         })
@@ -327,7 +556,8 @@ async function probe(refresh = false): Promise<OvenProbe> {
     },
     harnesses,
     activeRuns: [...jobs.values()].filter((job) => job.run.status === 'running').length,
-    inventory
+    inventory,
+    wslDistributions: (await wslState()).distributions
   }
 }
 function journal(job: Job, stream: OvenRunEvent['stream'], text: string): void {
@@ -380,8 +610,8 @@ async function start(raw: unknown): Promise<OvenRun> {
     throw new Error('Invalid harness arguments.')
   if (typeof value.cwd !== 'string' || !isAbsolute(value.cwd) || value.cwd.includes('\0'))
     throw new Error('Choose an absolute remote workspace path.')
-  const path = await executable(value.command)
-  if (!path) throw new Error('This harness is not installed on the Oven.')
+  const resolved = await resolveHarnessForRun(value.command, value.cwd)
+  if (!resolved) throw new Error('This harness is not installed on the Oven.')
   const environment = value.environment === undefined ? {} : record(value.environment)
   // Remote PATH/HOME remain remote. Account homes may be passed explicitly.
   const env: NodeJS.ProcessEnv = { ...process.env }
@@ -418,7 +648,13 @@ async function start(raw: unknown): Promise<OvenRun> {
   try {
     await atomicState(run)
     // The daemon owns this child. SSH disconnect and desktop exit never kill it.
-    const child = spawn(path, value.args as string[], {
+    // A harness that lives in a distribution runs through `wsl.exe`. Its path
+    // and arguments cross as positional parameters, so a prompt or a path that
+    // contains quotes arrives exactly as the caller sent it.
+    const spawnArgs = resolved.distribution
+      ? wslRunArgv(resolved.distribution, resolved.path, value.args as string[], run.cwd)
+      : (value.args as string[])
+    const child = spawn(resolved.program, spawnArgs, {
       cwd: run.cwd,
       env,
       detached: process.platform !== 'win32',

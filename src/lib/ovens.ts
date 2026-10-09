@@ -106,6 +106,13 @@ export interface OvenHarnessInventoryItem {
   latestVersion?: string
   checkedAt: number
   cached?: boolean
+  /**
+   * Which side of a Windows Oven holds this install. Missing means the host,
+   * and `wsl` means a Linux install living inside one of its distributions.
+   */
+  environment?: 'host' | 'wsl'
+  /** The distribution holding a `wsl` install. */
+  wslDistribution?: string
 }
 
 export interface OvenProbe {
@@ -127,6 +134,14 @@ export interface OvenProbe {
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
   inventory?: OvenHarnessInventoryItem[]
+  /**
+   * WSL distributions this Oven can run harnesses in, empty when it has none.
+   *
+   * A Windows Oven that can run Linux is the one case where a harness installs
+   * somewhere other than the host, so this is what the app asks before it picks
+   * an install channel.
+   */
+  wslDistributions?: string[]
 }
 
 /**
