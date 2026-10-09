@@ -15,7 +15,7 @@ const PEEK_TTL_MS = 60_000
 /** An explicit refresh is throttled, so a burst of page opens runs one check, not many. */
 const REFRESH_FLOOR_MS = 10_000
 /** At most two Ovens are read at once; each read opens its own SSH sessions. */
-const CONCURRENCY = 2
+const CONCURRENCY = 5
 /** Persisted last-known checks, so the first open after launch draws from disk. */
 const PEEK_STORE_PATH = 'ovens/peeks.json'
 /** A peek this old is not a safe authorization for a mutating setup. */
@@ -38,8 +38,8 @@ function messageOf(error: unknown): string {
  * Opening the Ovens page used to ping each Oven and the setup dialog then
  * checked again, so a session of setup work paid for the same reads several
  * times. This service answers the device, the harnesses, and the packages from
- * a single check, deduplicates concurrent callers, keeps two Ovens in flight at
- * most, and persists the last known answer so a later open can draw from disk
+ * a single check, deduplicates concurrent callers, keeps up to five Ovens in
+ * flight, and persists the last known answer so a later open can draw from disk
  * before refreshing. It never blocks the Electron main thread: every read is an
  * asynchronous SSH round trip and nothing here touches SQLite.
  */
@@ -94,7 +94,7 @@ export class OvenPeekService {
     return this.run(ovenId, refresh)
   }
 
-  /** Read several Ovens, letting the shared two-at-a-time limit bound the work. */
+  /** Read several Ovens, letting the shared five-at-a-time limit bound the work. */
   async peekAll(ovenIds: readonly string[], refresh = false): Promise<OvenPeek[]> {
     return Promise.all(ovenIds.map((ovenId) => this.peek(ovenId, refresh)))
   }

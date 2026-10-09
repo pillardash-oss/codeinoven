@@ -141,13 +141,20 @@ function remoteCommandIssue(stderr: string): string {
 }
 
 export class OvenSsh {
-  private tail: Promise<unknown> = Promise.resolve()
+  /**
+   * One queue per Oven, so commands to the same machine stay serialized without
+   * making every Oven wait behind every other one. A single shared queue meant a
+   * list of Ovens checked one at a time no matter how many could answer at once;
+   * keyed by Oven, each machine still runs one command at a time (so it is never
+   * flooded) while distinct machines run together.
+   */
+  private readonly tails = new Map<string, Promise<unknown>>()
   private initialized: Promise<void> | undefined
   private multiplexReady: Promise<void> | undefined
 
   constructor(private readonly registry: OvenSshRegistry) {}
 
-  /** Serialize transport work so reconnect/probe cannot flood a low-end device. */
+  /** Serialize transport work per Oven, so a reconnect never floods one device. */
   execute(
     id: string,
     command: string,
@@ -163,7 +170,8 @@ export class OvenSsh {
       maxOutputBytes > 8 * 1024 * 1024
     )
       throw new TypeError('Invalid Oven response limit.')
-    const result = this.tail
+    const previous = this.tails.get(id) ?? Promise.resolve()
+    const result = previous
       .catch(() => undefined)
       .then(async () => {
         this.initialized ??= this.cleanStaleCredentials()
@@ -179,7 +187,12 @@ export class OvenSsh {
           maxOutputBytes
         )
       })
-    this.tail = result
+    this.tails.set(id, result)
+    void result
+      .catch(() => undefined)
+      .then(() => {
+        if (this.tails.get(id) === result) this.tails.delete(id)
+      })
     return result
   }
 
