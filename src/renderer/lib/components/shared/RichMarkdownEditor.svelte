@@ -151,6 +151,16 @@
     return Math.min(anchor, focus) === 0 && Math.max(anchor, focus) === length
   }
 
+  /** True when a document reads as empty: nothing at all, or nothing but code
+   *  blocks the browser emptied without being able to remove their
+   *  `contenteditable="false"` wrappers (a fence marker, a blank line, a
+   *  closing fence). A note that ends in a code block serializes to exactly
+   *  that after a select-all delete, which is why it never read as cleared. */
+  function isEmptyCodeBlockOnly(markdown: string): boolean {
+    if (markdown.trim() === '') return true
+    return markdown.replace(/```[^\n]*\n[\s]*```/g, '').trim() === ''
+  }
+
   function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
     const hold = revertedRuleHold
     if (!block || !hold) return false
@@ -386,9 +396,11 @@
     pendingWholeDocumentDelete = false
     const revertedRule = applyMarkdownInputRule(editor, { isRuleSuppressed })
     syncCodeBlockLanguages(editor)
-    if (wholeDocumentDelete) {
-      // The browser refuses to remove a trailing code block, so it is cleared
-      // here: nothing may survive a delete that spanned the whole document.
+    if (wholeDocumentDelete || (deletable && isEmptyCodeBlockOnly(serializeRichMarkdown(editor)))) {
+      // A trailing code block is an atom the browser's delete cannot remove: it
+      // empties the block and keeps its wrapper. Nothing may survive a delete
+      // that spanned the document, and a document left holding only emptied
+      // code blocks is empty. Both are cleared by hand here.
       // eslint-disable-next-line svelte/no-dom-manipulating
       editor.innerHTML = renderRichMarkdown('')
       placeCaretAtEnd(editor)
