@@ -338,12 +338,18 @@ function harnessStep(
 }
 
 /**
- * Put the Oven's clock on this computer's zone.
+ * Match the Oven's clock to this computer: its absolute time and its zone.
  *
  * The step is app-owned rather than a shell command because the zone has to be
  * read back from the Oven to be trusted, and because a platform that cannot
  * express the zone must be skipped with its reason rather than failing a setup
  * that is otherwise complete.
+ *
+ * A matching zone never skips this step: `apt` compares mirror release
+ * timestamps against the Oven's absolute clock, so an Oven already on the right
+ * zone can still be hours behind and reject every repository. The step reads the
+ * clock and corrects it only when it is genuinely off, so running it always is
+ * cheap and is the only thing that catches a clock that drifted under the zone.
  */
 function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | null): PlannedStep {
   const base = {
@@ -368,16 +374,13 @@ function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | 
       detail: 'The Oven reports no supported way to change its clock zone.',
       skippedReason: 'The Oven reports no supported way to change its clock zone.'
     }
-  const alreadyMatches =
-    assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
-  const detail = alreadyMatches
-    ? `The Oven already runs on ${deviceZone}.`
-    : `Sets the Oven clock to ${deviceZone}, this computer's time zone.`
+  const zoneMatches = assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
   return {
     ...base,
     timezoneZone: deviceZone,
-    detail,
-    ...(alreadyMatches ? { skippedReason: detail } : {})
+    detail: zoneMatches
+      ? `The Oven already runs on ${deviceZone}; checks its absolute clock against this computer.`
+      : `Sets the Oven clock to ${deviceZone}, this computer's time zone.`
   }
 }
 

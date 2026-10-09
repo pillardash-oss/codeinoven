@@ -307,6 +307,17 @@ export async function syncOvenClock(
       message: 'The Oven clock already matches this computer.'
     }
 
+  /* Only root or a sudo-capable login can move the system clock. Reporting the
+     offset rather than running a command that is certain to be refused keeps an
+     Oven whose setup does not need the clock from failing over it, while still
+     naming the reason for the one that does. */
+  if (observation.privilege === 'none')
+    return {
+      status: 'unsupported',
+      zone: observation.timezone.current,
+      message: `The Oven clock is ${describeOffset(offset)} ${offset >= 0 ? 'behind' : 'ahead of'} this computer, and CodeInOven has no permission to set it there.`
+    }
+
   const commands = clockSetCommands({
     platform: observation.platform,
     method: observation.timezone.method,
