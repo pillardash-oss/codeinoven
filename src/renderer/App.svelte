@@ -510,12 +510,13 @@
    */
   function reconcileThreadForContentView(view: View): void {
     const decision = decideContentViewThread(view, workspaceState.selectedThread, {
+      isEmpty: (family) => workspaceState.contentViewIsEmpty(family),
       remembered: rememberedThreadOfFamily,
       recentOfFamily: lastThreadOfFamily
     })
     if (decision.kind === 'keep') return
     if (decision.kind === 'clear') {
-      workspaceState.clearThread()
+      workspaceState.clearThread(false)
       return
     }
     const project =
@@ -1590,8 +1591,8 @@
       originalOpenThread(thread, project, iconUrl)
       observeNavigationLocation()
     }
-    workspaceState.clearThread = () => {
-      originalClearThread()
+    workspaceState.clearThread = (rememberEmpty = true) => {
+      originalClearThread(rememberEmpty)
       observeNavigationLocation()
     }
     observeNavigationLocation()

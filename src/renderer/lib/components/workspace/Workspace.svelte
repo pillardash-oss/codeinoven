@@ -3243,45 +3243,6 @@
     void hydrateThreadsViewGuarantees()
   })
 
-  /** The chat a Chats view with nothing to restore should land on: the last chat
-   *  the user actually visited (`recentThreadVisits` is persisted visit order),
-   *  else the family's most recently active thread. `allThreads` order is not
-   *  visit recency, so it is only ever the activity fallback. */
-  function lastChatToLandOn(): Thread | null {
-    const chats = allThreads.filter((t) => !t.archived && t.projectId === INBOX_PROJECT_ID)
-    const byVisit = new Map(chats.map((t) => [threadVisitKey(t), t]))
-    return (
-      workspaceState.recentThreadVisits
-        .map((key) => byVisit.get(key))
-        .find((t) => t !== undefined) ??
-      chats.sort((a, b) => b.lastActivity - a.lastActivity)[0] ??
-      null
-    )
-  }
-
-  /** True once the Chats view has been shown, so the entry guarantee below runs
-   *  once per entry instead of on every reactive pass while the view stays open.
-   *  Clearing the thread for a fresh chat must not immediately create another. */
-  let chatViewEntered = false
-
-  // Restore an existing chat on entry, but leave an empty inbox on its welcome
-  // composer. A blank thread is created only by New chat or by writing a draft,
-  // so returning after deletion cannot manufacture a replacement thread.
-  $effect(() => {
-    if (!active || mode !== 'chats' || loading) {
-      chatViewEntered = false
-      return
-    }
-    if (chatViewEntered) return
-    chatViewEntered = true
-    if (workspaceState.selectedThread) return
-    const existing = lastChatToLandOn()
-    if (existing) {
-      workspaceState.openThread(existing, inboxProject())
-      return
-    }
-  })
-
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
    *  project filter can render far fewer than 200 rows even though matching
    *  threads exist beyond the window. The filter must replace hidden rows with
