@@ -3,7 +3,12 @@ import type {
   BrowserNewTabMenuChoice
 } from '../browser/browser-new-tab-menu'
 import type { DarkReaderTabAction, DarkReaderTabState } from '../browser/browser-darkreader-control'
-import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
+import type {
+  NativeDockAck,
+  NativeDockCommit,
+  NativeDockInteraction,
+  NativeDockRequest
+} from '../native-dock'
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
@@ -68,6 +73,7 @@ export const invokeBrowserContract = {
   >,
   'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
   'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
+  'browser:commitDockOverlay': {} as Contract<[request: NativeDockCommit], boolean>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's

@@ -1,4 +1,4 @@
-import type { NativeDockRequest } from '../../lib/native-dock'
+import type { NativeDockCommit, NativeDockRequest } from '../../lib/native-dock'
 import { BrowserWindow, screen } from 'electron'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -139,7 +139,7 @@ export class BrowserOverlayWindow {
       this.settle()
       // Keep the one tooltip overlay warm between hovers instead of creating
       // and destroying a renderer for every title. It stays hidden and inert.
-      if (!this.hasContent() && id !== 'app-tooltip') this.dispose()
+      if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.dispose()
       return true
     }
     if (!this.docks.has(id) && this.docks.size >= 32) return false
@@ -154,6 +154,15 @@ export class BrowserOverlayWindow {
   /** Everything on display, resolved to the document's own pull on first load. */
   currentState(): BrowserOverlaySnapshot {
     return { stack: this.stack, strip: this.strip, docks: [...this.docks.values()] }
+  }
+
+  /** Settle selection in the window that actually saw the latest mouse move. */
+  commitDock(request: NativeDockCommit): boolean {
+    const popup = this.popup
+    if (!popup || popup.isDestroyed() || !this.ready || !this.docks.get(request.id)?.modal)
+      return false
+    sendToRenderer(popup.webContents, 'browser:overlay:dockCommit', request)
+    return true
   }
 
   /** Whether the pointer is over drawn content, which decides click-through. */

@@ -10,6 +10,7 @@ import {
 import {
   validateNativeDockAck,
   validateNativeDockId,
+  validateNativeDockCommit,
   validateNativeDockInteraction,
   validateNativeDockRequest
 } from '../../lib/native-dock'
@@ -1182,6 +1183,9 @@ export class BrowserService {
         validateNativeDockAck(rawAck)
       )
     })
+    replaceHandler('browser:commitDockOverlay', (_event, rawRequest) =>
+      this.overlay.commitDock(validateNativeDockCommit(rawRequest))
+    )
     replaceHandler('browser:overlayReady', () => this.overlay.currentState())
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about

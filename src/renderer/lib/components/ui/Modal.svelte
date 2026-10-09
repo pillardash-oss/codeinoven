@@ -3,6 +3,8 @@
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import {
@@ -175,6 +177,12 @@
     blocksBrowserView?: boolean
     /** Render above browser page shells and Peek flight animations. */
     abovePage?: boolean
+    /** Present this canonical shell in the native overlay without parking pages. */
+    nativeOverlay?: string
+    nativeReady?: boolean
+    nativeFailed?: boolean
+    onNativeHover?: (button: HTMLButtonElement) => void
+    onNativeCommit?: (key: string) => void
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
     /** Runs as the panel closes, before focus is restored. Call
@@ -209,10 +217,50 @@
     scrim = true,
     blocksBrowserView = true,
     abovePage = false,
+    nativeOverlay,
+    nativeReady = $bindable(false),
+    nativeFailed = $bindable(false),
+    onNativeHover,
+    onNativeCommit,
     claimInitialFocus,
     onCloseAutoFocus,
     panelEl = $bindable(null)
   }: Props = $props()
+
+  function nativePanel(id: string): Attachment<HTMLElement> {
+    return (panel) => {
+      nativeReady = false
+      nativeFailed = false
+      const bounds = (): BrowserViewBounds => {
+        const rect = panel.getBoundingClientRect()
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      }
+      const controller = new NativeDockController(id, () => {}, bounds, false, {
+        onHover: (button) => onNativeHover?.(button),
+        onDismiss: () => onClose(),
+        onCommit: (key) => onNativeCommit?.(key),
+        onReady: () => {
+          nativeReady = true
+        },
+        onFailure: () => {
+          nativeReady = false
+          nativeFailed = true
+        }
+      })
+      const cleanup = controller.mount(panel)
+      const update = (): void => controller.update(true, bounds())
+      const observer = new ResizeObserver(update)
+      observer.observe(panel)
+      window.addEventListener('resize', update)
+      queueMicrotask(update)
+      return () => {
+        observer.disconnect()
+        window.removeEventListener('resize', update)
+        cleanup()
+        nativeReady = false
+      }
+    }
+  }
 
   const stackingClass = $derived(abovePage ? 'z-80' : 'z-60')
   let alignment = $derived(ALIGNMENTS[placement])
@@ -232,7 +280,11 @@
   // panel claims the view through the store, so nothing else is left uncovered.
   const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
   $effect(() =>
-    browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open && blocksBrowserView)
+    browserVisibility.hideWhile(
+      suppressionKey,
+      'fullscreen-surface',
+      open && (nativeOverlay ? nativeFailed : blocksBrowserView)
+    )
   )
 
   $effect(() => {
@@ -274,11 +326,12 @@
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
   <Dialog.Portal>
-    {#if scrim}
+    {#if scrim && !nativeReady}
       <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
     {/if}
     <div
       class="pointer-events-none fixed {stackingClass} flex {bounds ? '' : 'inset-0'} {alignment}"
+      style:opacity={nativeReady ? 0 : undefined}
       style={bounds
         ? `left: ${bounds.x}px; top: ${bounds.y}px; width: ${bounds.width}px; height: ${bounds.height}px;`
         : undefined}
@@ -307,7 +360,11 @@
         class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
       >
         {#snippet child({ props })}
-          <div {...props} aria-modal={modal}>
+          <div
+            {...props}
+            aria-modal={modal}
+            {@attach nativeOverlay ? nativePanel(nativeOverlay) : undefined}
+          >
             {#if chrome}
               <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
                 <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>

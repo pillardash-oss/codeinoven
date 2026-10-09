@@ -6,12 +6,19 @@
     NativeDockInteraction
   } from '$shared/native-dock'
   import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { onMount } from 'svelte'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
     $props()
   let origin: { x: number; y: number } | null = null
   let pending: NativeDockInteraction | null = null
   let frame = 0
+  let pointerOrigin: { x: number; y: number } | null = null
+  let hoveredAction: string | null = null
+  let hoveredAt = 0
+  let selectedAction: string | null = null
+  let modalRoot: HTMLDivElement | null = null
+  let lastScroll: { target: string; top: number } | null = null
   function report(report: NativeDockInteraction): void {
     void invoke('browser:overlayDockInteract', report).catch(() => {})
   }
@@ -26,14 +33,31 @@
     return element
   }
   const draw: Attachment<HTMLDivElement> = (element) => {
+    modalRoot = element
     $effect(() => {
       const current = dock
+      if (selectedAction !== (current.selectedAction ?? null)) {
+        if (hoveredAction !== current.selectedAction) hoveredAction = null
+        selectedAction = current.selectedAction ?? null
+      }
       element.replaceChildren(...current.nodes.map((node) => create(node)))
+      for (const target of element.querySelectorAll<HTMLElement>('[data-native-dock-scroll]')) {
+        target.scrollTop = Number(target.dataset.nativeDockScrollTop ?? 0)
+      }
+      if (current.modal) {
+        for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
+          row.dataset.nativeModalRow = ''
+        }
+        highlight(element, hoveredAction ?? selectedAction)
+      }
       void invoke('browser:overlayDockDrawn', {
         id: current.id,
         revision: current.revision
       }).catch(() => {})
     })
+    return () => {
+      modalRoot = null
+    }
   }
   const events: Attachment<HTMLDivElement> = (element) => {
     element.addEventListener('click', click)
@@ -42,6 +66,14 @@
     element.addEventListener('pointermove', move)
     element.addEventListener('pointerup', up)
     element.addEventListener('pointercancel', up)
+    element.addEventListener('scroll', scroll, true)
+    if (dock.modal) {
+      void invoke('browser:overlayCursor')
+        .then((point) => {
+          pointerOrigin ??= point
+        })
+        .catch(() => {})
+    }
     return () => {
       element.removeEventListener('click', click)
       element.removeEventListener('keydown', keydown)
@@ -49,10 +81,40 @@
       element.removeEventListener('pointermove', move)
       element.removeEventListener('pointerup', up)
       element.removeEventListener('pointercancel', up)
+      element.removeEventListener('scroll', scroll, true)
       cancelAnimationFrame(frame)
       if (origin) onDragging(false)
     }
   }
+  function highlight(element: HTMLElement, action: string | null): void {
+    for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
+      row.setAttribute('aria-selected', String(row.dataset.nativeDockAction === action))
+    }
+  }
+  function scroll(event: Event): void {
+    const target = event.target
+    if (!(target instanceof HTMLElement) || !target.dataset.nativeDockScroll) return
+    const id = target.dataset.nativeDockScroll
+    if (lastScroll?.target === id && lastScroll.top === target.scrollTop) return
+    lastScroll = { target: id, top: target.scrollTop }
+    report({ id: dock.id, kind: 'scroll', target: id, top: target.scrollTop })
+  }
+  onMount(() =>
+    subscribe('browser:overlay:dockCommit', (request) => {
+      if (request.id !== dock.id || !dock.modal) return
+      // Keyboard cycling may still be waiting for its batched paint. Compare
+      // event times rather than committing an older projected selection.
+      const hoveredRow = [
+        ...(modalRoot?.querySelectorAll<HTMLElement>('[data-native-modal-row]') ?? [])
+      ].find((row) => row.dataset.nativeDockAction === hoveredAction)
+      const key =
+        hoveredAction && hoveredAt > request.keyboardAt
+          ? hoveredRow?.dataset.nativeDockKey
+          : request.selectedKey
+      if (key) report({ id: dock.id, kind: 'commit', key })
+      else report({ id: dock.id, kind: 'dismiss' })
+    })
+  )
   function click(event: MouseEvent): void {
     const target = event.target
     if (!(target instanceof Element)) return
@@ -81,6 +143,23 @@
     event.preventDefault()
   }
   function move(event: PointerEvent): void {
+    if (dock.modal && event.target instanceof Element) {
+      pointerOrigin ??= { x: event.clientX, y: event.clientY }
+      const dx = event.clientX - pointerOrigin.x
+      const dy = event.clientY - pointerOrigin.y
+      const row = event.target.closest<HTMLButtonElement>(
+        'button[aria-selected][data-native-dock-action]'
+      )
+      const action = row?.dataset.nativeDockAction
+      if (action && !row.disabled && dx * dx + dy * dy > 16) {
+        hoveredAt = performance.timeOrigin + performance.now()
+        if (action !== hoveredAction) {
+          hoveredAction = action
+          if (modalRoot) highlight(modalRoot, action)
+          report({ id: dock.id, kind: 'hover', action })
+        }
+      }
+    }
     if (!origin) return
     pending = {
       id: dock.id,
@@ -122,10 +201,39 @@
   role="group"
   data-native-overlay-dock
   data-native-overlay-passive={dock.passive || undefined}
-  class={['fixed z-50 flex items-stretch gap-1.5', dock.passive && 'pointer-events-none']}
-  style:left={`${dock.bounds.x}px`}
-  style:top={`${dock.bounds.y - TOAST_OVERLAY_TOP}px`}
+  class={[
+    dock.modal ? 'fixed inset-0 z-80' : 'fixed z-50 flex items-stretch gap-1.5',
+    dock.passive && 'pointer-events-none'
+  ]}
+  style:left={dock.modal ? undefined : `${dock.bounds.x}px`}
+  style:top={dock.modal ? undefined : `${dock.bounds.y - TOAST_OVERLAY_TOP}px`}
   {@attach events}
 >
-  <div class="flex min-w-0 items-stretch gap-1.5" {@attach draw}></div>
+  {#if dock.modal}
+    <button
+      type="button"
+      tabindex={-1}
+      class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
+      aria-label="Dismiss switcher"
+      title="Dismiss switcher"
+      onclick={() => report({ id: dock.id, kind: 'dismiss' })}
+    ></button>
+  {/if}
+  <div
+    class={dock.modal ? 'absolute flex flex-col' : 'flex min-w-0 items-stretch gap-1.5'}
+    style:left={dock.modal ? `${dock.bounds.x}px` : undefined}
+    style:top={dock.modal ? `${dock.bounds.y - TOAST_OVERLAY_TOP}px` : undefined}
+    style:width={dock.modal ? `${dock.bounds.width}px` : undefined}
+    style:height={dock.modal ? `${dock.bounds.height}px` : undefined}
+    {@attach draw}
+  ></div>
 </div>
+
+<style>
+  :global([data-native-modal-row][aria-selected='true']) {
+    background: var(--color-selected);
+  }
+  :global([data-native-modal-row] > .bg-selected) {
+    background: transparent;
+  }
+</style>

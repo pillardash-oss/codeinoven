@@ -49,6 +49,13 @@
     )
     const theme = next.at(-1)?.theme
     if (theme) document.documentElement.classList.toggle('dark', theme === 'dark')
+    const typography = next.at(-1)?.typography
+    if (typography) {
+      const root = document.documentElement
+      root.style.setProperty('--font-app', typography.fontFamily)
+      root.style.fontSize = `${typography.fontSize}px`
+      root.style.fontWeight = String(typography.fontWeight)
+    }
     void tick().then(afterDraw)
   }
 
