@@ -281,7 +281,7 @@
         {#if adding}
           <Loader2 size={15} class="animate-spin" />
         {/if}
-        Add project
+        Use This Folder
       </button>
     {/if}
   {/snippet}

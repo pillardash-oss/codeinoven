@@ -190,7 +190,7 @@
           onSelect={addOvenProject}
         >
           <Server size={14} class="shrink-0 text-muted" />
-          Oven Project
+          Remote Oven
         </DropdownMenu.Item>
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
