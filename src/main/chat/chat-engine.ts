@@ -878,9 +878,10 @@ export class ChatEngine {
 
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
 
-  /** Local working directory for app-wide harness discovery, which never needs
-   *  a project's own files and cannot use a remote (Oven) project's path. */
-  private static readonly DISCOVERY_CWD_DIR = 'harness-cwd'
+  /** Root for every disposable working directory a local harness turn needs.
+   *  Such a turn never reads the project's files, and a remote (Oven) project's
+   *  path exists only on the Oven, so it can never use that path as its cwd. */
+  private static readonly EPH_CWD_DIR = 'eph-cwd'
 
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
@@ -4890,8 +4891,7 @@ export class ChatEngine {
     const project = await this.projectManager.getProject(projectId)
     if (!project || (project.source === 'local' && project.path))
       return this.resolveProjectPath(projectId)
-    await this.storage.ensureDirectory(ChatEngine.DISCOVERY_CWD_DIR)
-    return this.storage.resolve(ChatEngine.DISCOVERY_CWD_DIR)
+    return this.ephemeralWorkingDirectory()
   }
 
   /** One app-wide discovery pass; all projects share installed harness models. */
@@ -8993,7 +8993,7 @@ export class ChatEngine {
       if (shouldAutoTitle && settings.titleMode !== 'deterministic') {
         // The project's path lives on the Oven, so a disposable title turn on
         // this machine needs a local working directory of its own.
-        const titleProjectPath = await this.localTitleWorkspace(threadId)
+        const titleProjectPath = await this.ephemeralWorkingDirectory(threadId)
         void createAutoTitleLauncher(true, () =>
           this.autoTitleThread(
             projectId,
@@ -12122,15 +12122,16 @@ export class ChatEngine {
   // ─── Thread auto-titling ──────────────────────────────────────────────────
 
   /**
-   * A local working directory a disposable title turn can run in.
+   * A local working directory for one disposable harness turn.
    *
    * An Oven project's path lives on the Oven, so resolving it on this machine
    * points at a directory that does not exist here (and that `/home` famously
-   * refuses to create on macOS). A one-shot title turn needs a writable working
-   * directory and nothing else, so it gets its own under the app's data root.
+   * refuses to create on macOS). A turn that never reads the project's files
+   * (one-shot titles, app-wide discovery) runs under `eph-cwd`, in a per-thread
+   * subdirectory when a thread owns it.
    */
-  private async localTitleWorkspace(threadId: string): Promise<string> {
-    const relative = join('title-cwd', threadId)
+  private async ephemeralWorkingDirectory(threadId?: string): Promise<string> {
+    const relative = threadId ? join(ChatEngine.EPH_CWD_DIR, threadId) : ChatEngine.EPH_CWD_DIR
     await this.storage.ensureDirectory(relative)
     return this.storage.resolve(relative)
   }
