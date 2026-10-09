@@ -12,6 +12,12 @@ import {
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
 import { validateIdentityPath } from './oven-validation'
+import {
+  ensureMultiplexDirectory,
+  multiplexControlPath,
+  multiplexOptions,
+  multiplexSupported
+} from './oven-ssh-multiplex'
 
 type OvenSshRegistry = Pick<OvenRegistry, 'require'> & {
   storage: Pick<OvenRegistry['storage'], 'resolve'>
@@ -137,6 +143,7 @@ function remoteCommandIssue(stderr: string): string {
 export class OvenSsh {
   private tail: Promise<unknown> = Promise.resolve()
   private initialized: Promise<void> | undefined
+  private multiplexReady: Promise<void> | undefined
 
   constructor(private readonly registry: OvenSshRegistry) {}
 
@@ -368,6 +375,42 @@ export class OvenSsh {
     }
   }
 
+  /**
+   * Close the shared connection for one Oven if this app opened it.
+   *
+   * The master is a background process, so the app closes it deliberately on
+   * quit instead of waiting out the idle watchdog. `-O exit` only signals the
+   * local control socket, so it reuses the same connection args (and therefore
+   * finds the right master) without talking to the Oven again.
+   */
+  async closeShared(id: string): Promise<void> {
+    if (!multiplexSupported()) return
+    this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
+    await this.multiplexReady
+    const prepared = await this.prepare(id, undefined, false)
+    const separator = prepared.args.indexOf('--')
+    if (separator < 0) return
+    const args = [
+      ...prepared.args.slice(0, separator),
+      '-O',
+      'exit',
+      ...prepared.args.slice(separator)
+    ]
+    try {
+      await new Promise<void>((resolve) => {
+        const child = spawn(prepared.executable, args, {
+          env: prepared.env,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore']
+        })
+        child.once('error', () => resolve())
+        child.once('close', () => resolve())
+      })
+    } finally {
+      await prepared.dispose()
+    }
+  }
+
   /** Reclaim private identity files left by a crash without touching a live connection. */
   private async cleanStaleCredentials(): Promise<void> {
     const root = this.registry.storage.resolve('ovens/credentials')
@@ -434,6 +477,23 @@ export class OvenSsh {
       '-o',
       'ClearAllForwardings=yes'
     ]
+    // Share one SSH connection per Oven across every command in the app, so a
+    // turn does not pay a full handshake on each poll. `ControlPersist` closes
+    // it only once nothing is using it (see oven-ssh-multiplex.ts).
+    if (multiplexSupported()) {
+      this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
+      await this.multiplexReady
+      args.push(
+        ...multiplexOptions(
+          multiplexControlPath(this.registry.storage, {
+            id,
+            host: connection.host,
+            port: connection.port,
+            ...(connection.user ? { user: connection.user } : {})
+          })
+        )
+      )
+    }
     if (connection.user) args.push('-l', connection.user)
     let scratch: string | undefined
     const configureAskpass = async (directory: string, reference: string): Promise<void> => {

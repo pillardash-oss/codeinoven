@@ -100,6 +100,22 @@ export function registerOvenIpc(
     return result
   })
   app.once('before-quit', () => previews.dispose())
+  // One shared SSH connection per Oven backs every command in the app; release
+  // it on quit instead of leaving the background master to time out on its own.
+  app.once('before-quit', () => {
+    void registry
+      .state()
+      .then((state) =>
+        Promise.all(
+          state.ovens
+            .filter((oven) => oven.kind !== 'local')
+            .map((oven) => service.ssh.closeShared(oven.id).catch(() => undefined))
+        )
+      )
+      .catch((error: unknown) =>
+        Logger.dev('Closing shared Oven connections failed on quit:', error)
+      )
+  })
   ipcMain.handle('oven:state', () => registry.state())
   ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))
   ipcMain.handle('oven:save', async (_event, raw: unknown) => {
