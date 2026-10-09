@@ -326,10 +326,18 @@
     }
   }
 
-  /** One installed harness's occasional actions, behind the badge it belongs to. */
+  /** One installed harness's occasional actions, behind the badge it belongs to.
+   *
+   *  The menu leads with the version the Oven runs today, because it is the only
+   *  place that answers what "Update" would move off. A harness the probe could
+   *  not read a version for gets no caption rather than an empty one.
+   */
   function harnessMenuItems(ovenId: string, item: OvenHarnessInventoryItem): MenuItem[] {
     const busyNow = Boolean(harnessBusy)
     return [
+      ...(item.installedVersion
+        ? [{ label: `Version ${item.installedVersion}`, header: true }]
+        : []),
       {
         label: `Update ${item.command}`,
         icon: RefreshCw,
