@@ -1578,66 +1578,68 @@
             </div>
           {/if}
 
-          <!-- Vertical toggle cards + check-for-updates button -->
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <!-- Update controls, one row per setting with the control on the right -->
+          <div class="mt-1 divide-y">
             <!-- Nightly builds enrollment -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Nightly builds</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Over-the-air updates from the nightly channel
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={isNightlyChannel}
-                  onchange={onNightlyToggleRequested}
-                  aria-label="Toggle nightly builds"
-                  disabled={!settingsReady || channelBusy}
-                  title="Opt into nightly prerelease builds"
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Nightly builds</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Over-the-air updates from the nightly channel
+                </p>
               </div>
+              <Switch
+                checked={isNightlyChannel}
+                onchange={onNightlyToggleRequested}
+                aria-label="Toggle nightly builds"
+                disabled={!settingsReady || channelBusy}
+                title="Opt into nightly prerelease builds"
+              />
             </div>
 
             <!-- Auto-download toggle -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Auto-download</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Automatically download updates when available
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={config.autoDownloadUpdates}
-                  onchange={() =>
-                    void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
-                  aria-label="Toggle auto-download"
-                  disabled={!settingsReady}
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Auto-download</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Download updates as soon as they are available
+                </p>
               </div>
+              <Switch
+                checked={config.autoDownloadUpdates}
+                onchange={() =>
+                  void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
+                aria-label="Toggle auto-download"
+                disabled={!settingsReady}
+              />
             </div>
 
             <!-- Auto-install toggle -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Auto-install</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Automatically restart and install after download
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={config.autoInstallUpdates}
-                  onchange={() =>
-                    void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
-                  aria-label="Toggle auto-install"
-                  disabled={!settingsReady}
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Auto-install</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Restart and install after an update downloads
+                </p>
               </div>
+              <Switch
+                checked={config.autoInstallUpdates}
+                onchange={() =>
+                  void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
+                aria-label="Toggle auto-install"
+                disabled={!settingsReady}
+              />
             </div>
 
             <!-- Check for updates -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Check for updates</p>
-              <p class="text-xs leading-relaxed text-dimmed">Look for a new release now</p>
-              <div class="mt-auto flex flex-wrap items-center gap-2 pt-1">
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3 last:pb-0">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Check for updates</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">Look for a new release now</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   disabled={updaterState.status.state === 'checking' || !settingsReady}
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
@@ -1651,7 +1653,7 @@
 
                 {#if updaterState.status.state === 'available'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                    class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
@@ -1675,72 +1677,57 @@
           </div>
         </div>
 
-        <!-- Storage + Diagnostics share one row and wrap apart on narrow screens -->
-        <div class="mt-4 flex flex-wrap gap-4">
-          <div
-            id="settings-block-about-storage"
-            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
-          >
+        <!-- Storage + Diagnostics sit side by side and stack on narrow screens -->
+        <div class="mt-4 grid gap-4 md:grid-cols-2">
+          <div id="settings-block-about-storage" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
-            <div
-              class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                <p class="text-sm font-medium">Data directory</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  All projects, threads, and history stored here
-                </p>
-              </div>
-              <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-                <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
-                  ~/.config/{ORG_SLUG}/{APP_SLUG}
-                </span>
-                <button
-                  type="button"
-                  class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-                  title="Open the data directory in the file manager"
-                  onclick={() => void openDataDirectory()}
-                >
-                  <FolderOpen size={13} />
-                  Open in file manager
-                </button>
-              </div>
+            <p class="text-sm font-medium">Data directory</p>
+            <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+              Projects, threads, and history are stored here.
+            </p>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span
+                class="min-w-0 truncate rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+                title="~/.config/{ORG_SLUG}/{APP_SLUG}"
+              >
+                ~/.config/{ORG_SLUG}/{APP_SLUG}
+              </span>
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                title="Open the data directory in the file manager"
+                onclick={() => void openDataDirectory()}
+              >
+                <FolderOpen size={13} />
+                Open in file manager
+              </button>
             </div>
           </div>
 
-          <div
-            id="settings-block-about-diagnostics"
-            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
-          >
+          <div id="settings-block-about-diagnostics" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
               Diagnostics
             </h3>
-            <div class="flex flex-wrap items-center justify-between gap-4">
-              <div class="min-w-[12rem] flex-1">
-                <p class="text-sm font-medium">Export failure report</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Redacted logs and operational state; prompts and file contents are excluded.
-                </p>
-                {#if diagnosticsResult}
-                  <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">
-                    {diagnosticsResult}
-                  </p>
-                {/if}
-              </div>
-              <button
-                class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-                disabled={diagnosticsBusy}
-                title="Export a redacted diagnostics report"
-                onclick={() => void exportDiagnostics()}
-              >
-                {#if diagnosticsBusy}
-                  <Loader2 size={13} class="animate-spin" />
-                {:else}
-                  <Download size={13} />
-                {/if}
-                Export
-              </button>
-            </div>
+            <p class="text-sm font-medium">Export failure report</p>
+            <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+              Redacted logs and operational state; prompts and file contents are excluded.
+            </p>
+            {#if diagnosticsResult}
+              <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">{diagnosticsResult}</p>
+            {/if}
+            <button
+              class="mt-3 flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              disabled={diagnosticsBusy}
+              title="Export a redacted diagnostics report"
+              onclick={() => void exportDiagnostics()}
+            >
+              {#if diagnosticsBusy}
+                <Loader2 size={13} class="animate-spin" />
+              {:else}
+                <Download size={13} />
+              {/if}
+              Export
+            </button>
           </div>
         </div>
 

@@ -82,7 +82,7 @@ const DEFAULT_CONFIG: AppConfig = {
   fontWeight: 200,
   zoomLevel: 1,
   onboardingCompleted: false,
-  shareAnonymousUsage: false,
+  shareAnonymousUsage: true,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
@@ -220,7 +220,9 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
-      shareAnonymousUsage: config?.shareAnonymousUsage === true,
+      // Analytics is on by default: only an explicit opt-out in the stored
+      // config turns it off, and a missing field keeps the default.
+      shareAnonymousUsage: config?.shareAnonymousUsage !== false,
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})

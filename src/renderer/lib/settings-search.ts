@@ -14,6 +14,7 @@ import {
   Router,
   Server,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   UsersRound,
@@ -469,5 +470,23 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Release notes for the latest published build.',
     keywords: ['release notes', 'what’s new', 'changes'],
     icon: Info
+  },
+  {
+    id: 'about-community',
+    section: 'about',
+    blockId: 'about-community',
+    title: 'Community',
+    description: 'Report a bug, send feedback, or contribute on GitHub.',
+    keywords: ['feedback', 'bug report', 'contribute', 'github', 'issue'],
+    icon: UsersRound
+  },
+  {
+    id: 'about-privacy',
+    section: 'about',
+    blockId: 'about-privacy',
+    title: 'Privacy',
+    description: 'Anonymous usage statistics sent with a random installation ID.',
+    keywords: ['analytics', 'telemetry', 'posthog', 'usage statistics'],
+    icon: ShieldCheck
   }
 ]

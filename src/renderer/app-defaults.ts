@@ -23,7 +23,7 @@ export const defaultConfig: AppConfig = {
   fontWeight: 200,
   zoomLevel: 1,
   onboardingCompleted: false,
-  shareAnonymousUsage: false,
+  shareAnonymousUsage: true,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
