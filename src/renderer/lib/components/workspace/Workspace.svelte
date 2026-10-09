@@ -3264,15 +3264,9 @@
    *  Clearing the thread for a fresh chat must not immediately create another. */
   let chatViewEntered = false
 
-  // The Chats view is thread-backed: its composer, its conversation and its
-  // right rail all belong to a thread, so showing it with nothing selected must
-  // still land on one. The shell restores a chat the user visited this session;
-  // when that leaves nothing (a first visit, or a session holding chats it has
-  // never opened) the view lands on the most recently active chat, and only a
-  // family with no thread at all falls through to creating the empty draft chat
-  // it would otherwise create on the first keystroke. Without this the view
-  // opened on its thread-less welcome composer, and the right rail had no thread
-  // to belong to. `loading` keeps it from racing the startup thread restore.
+  // Restore an existing chat on entry, but leave an empty inbox on its welcome
+  // composer. A blank thread is created only by New chat or by writing a draft,
+  // so returning after deletion cannot manufacture a replacement thread.
   $effect(() => {
     if (!active || mode !== 'chats' || loading) {
       chatViewEntered = false
@@ -3286,9 +3280,6 @@
       workspaceState.openThread(existing, inboxProject())
       return
     }
-    // Nothing to land on: open the blank chat row the view is built around, so
-    // it never paints the thread-less welcome composer (and never loses its rail).
-    openNewChatThread()
   })
 
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
