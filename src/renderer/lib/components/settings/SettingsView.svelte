@@ -1387,6 +1387,7 @@
             onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
             onOpenPluginMarketplace={() => navigateUtilities({ page: 'plugins-marketplace' })}
             onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+            onOpenPlugin={(pluginId) => navigateUtilities({ page: 'plugin', pluginId })}
           />
         </div>
         {#if settingsRouteState.marketplaceMounted}

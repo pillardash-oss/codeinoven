@@ -42,6 +42,7 @@
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
   import {
     bookmarkVendor,
+    marketplaceVendor,
     groupRowsByVendor,
     nativeCapabilityVendor,
     registryUtilityVendor,
@@ -54,6 +55,7 @@
     AgentToolDefinition,
     McpProbeTarget,
     SkillMarketEntry,
+    AgentPluginMarketEntry,
     UtilityBundleInstallRequest,
     UtilityDefinition,
     UtilityKind
@@ -70,12 +72,20 @@
     onSelectTab: (tab: UtilitiesTab) => void
     onOpenMarketplace: () => void
     onOpenPluginMarketplace: () => void
-    /** Opens one marketplace skill from the bookmarks list. */
+    /** Opens a marketplace skill from the bookmarks list. */
     onOpenSkill: (entry: SkillMarketEntry) => void
+    /** Opens a marketplace plugin from the bookmarks list. */
+    onOpenPlugin: (pluginId: string) => void
   }
 
-  let { activeTab, onSelectTab, onOpenMarketplace, onOpenPluginMarketplace, onOpenSkill }: Props =
-    $props()
+  let {
+    activeTab,
+    onSelectTab,
+    onOpenMarketplace,
+    onOpenPluginMarketplace,
+    onOpenSkill,
+    onOpenPlugin
+  }: Props = $props()
 
   const cioIconUrl = publicAssetUrl('icon.svg')
 
@@ -109,18 +119,19 @@
         vendor: UtilityVendor
       }
 
-  /** A marketplace skill the user bookmarked without installing it. */
+  /** A marketplace entry saved for later, rendered with the Utilities row layout. */
   type BookmarkRowItem = {
     id: string
     src: 'bookmark'
-    entry: SkillMarketEntry
     name: string
     description: string
     keywords: string
     tags: string[]
     /** Vendor the row is grouped and attributed to. */
     vendor: UtilityVendor
-  }
+  } & (
+    { kind: 'skill'; entry: SkillMarketEntry } | { kind: 'plugin'; entry: AgentPluginMarketEntry }
+  )
 
   type RowItem = UtilityRowItem | BookmarkRowItem
 
@@ -144,6 +155,10 @@
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
   let pluginManifest = $state('')
+  let bookmarkedPlugins = $state.raw<AgentPluginMarketEntry[]>([])
+  let pluginBookmarksLoaded = $state(false)
+  let pluginBookmarksLoading = $state(false)
+  let pluginBookmarkRequest = 0
 
   let tabs: Array<{ id: UtilitiesTab; label: string }> = [
     { id: 'all', label: 'All' },
@@ -158,8 +173,7 @@
   const TAB_BLURB: Record<UtilitiesTab, string> = {
     all: `Every skill, MCP server, browser, and web utility installed in ${APP_NAME}.`,
     skills: 'Skills for every harness plus the shared global layer.',
-    bookmarks:
-      'Marketplace skills you bookmarked, without installing them, so they stay one click away.',
+    bookmarks: 'Saved skills and plugins from their marketplaces.',
     mcp: 'MCP servers for every harness plus the shared global layer.',
     plugins: 'Install a plugin bundle that adds capabilities together.',
     web: 'Browser control, web search, web fetch, provider, and image-description utilities.',
@@ -177,7 +191,7 @@
   const SEARCH_PLACEHOLDER: Record<UtilitiesTab, string> = {
     all: 'Search all utilities',
     skills: 'Search skills',
-    bookmarks: 'Search bookmarked skills',
+    bookmarks: 'Search saved skills and plugins',
     mcp: 'Search MCP servers',
     plugins: 'Search plugins',
     web: 'Search web & browser utilities',
@@ -188,7 +202,7 @@
   const TAB_TITLE: Record<UtilitiesTab, string> = {
     all: 'Every installed utility',
     skills: 'Installed skills',
-    bookmarks: 'Bookmarked marketplace skills',
+    bookmarks: 'Saved marketplace skills and plugins',
     mcp: 'MCP servers',
     plugins: 'Install a plugin bundle',
     web: 'Web and browser utilities',
@@ -310,18 +324,79 @@
     return []
   })
 
-  /** Bookmarked marketplace skills, newest bookmark first. */
+  /** Saved skills and plugins, each keeping its publisher and source identity. */
   function bookmarkRows(): BookmarkRowItem[] {
-    return skillBookmarkState.bookmarks.map((bookmark) => ({
-      id: `bookmark:${bookmark.id}`,
-      src: 'bookmark' as const,
-      entry: bookmark,
-      name: bookmark.name,
-      description: bookmark.source,
+    const skills: BookmarkRowItem[] = skillBookmarkState.bookmarks.map((entry) => ({
+      id: `bookmark:skill:${entry.id}`,
+      src: 'bookmark',
+      kind: 'skill',
+      entry,
+      name: entry.name,
+      description: entry.source,
       keywords: '',
       tags: [],
-      vendor: bookmarkVendor(bookmark)
+      vendor: bookmarkVendor(entry)
     }))
+    const plugins: BookmarkRowItem[] = bookmarkedPlugins.map((entry) => ({
+      id: `bookmark:plugin:${entry.id}`,
+      src: 'bookmark',
+      kind: 'plugin',
+      entry,
+      name: entry.displayName,
+      description: entry.description || entry.publisher || entry.source.repository,
+      keywords: `${entry.publisher ?? ''} ${entry.source.repository} ${entry.components.join(' ')}`,
+      tags: [],
+      vendor: marketplaceVendor(entry.publisher ?? entry.source.repository)
+    }))
+    return [...skills, ...plugins].sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    )
+  }
+
+  async function loadPluginBookmarks(): Promise<void> {
+    const request = ++pluginBookmarkRequest
+    pluginBookmarksLoading = true
+    try {
+      const entries: AgentPluginMarketEntry[] = []
+      for (let offset = 0; ; offset += 60) {
+        const page = await invoke('plugins:list', '', offset, 60, 'bookmarks')
+        entries.push(...page)
+        if (page.length < 60) break
+      }
+      if (request === pluginBookmarkRequest) {
+        bookmarkedPlugins = entries
+        pluginBookmarksLoaded = true
+      }
+    } catch (loadError) {
+      if (request === pluginBookmarkRequest) {
+        error =
+          loadError instanceof Error ? loadError.message : 'Bookmarked plugins could not load.'
+      }
+    } finally {
+      if (request === pluginBookmarkRequest) pluginBookmarksLoading = false
+    }
+  }
+
+  async function removePluginBookmark(entry: AgentPluginMarketEntry): Promise<void> {
+    try {
+      await invoke('plugins:setBookmarked', entry.id, false)
+      bookmarkedPlugins = bookmarkedPlugins.filter((plugin) => plugin.id !== entry.id)
+    } catch (bookmarkError) {
+      error =
+        bookmarkError instanceof Error
+          ? bookmarkError.message
+          : 'The bookmark could not be removed.'
+    }
+  }
+
+  function openBookmark(row: BookmarkRowItem): void {
+    if (row.kind === 'skill') onOpenSkill(row.entry)
+    else onOpenPlugin(row.entry.id)
+  }
+
+  function selectTab(tab: UtilitiesTab): void {
+    onSelectTab(tab)
+    if (tab === 'bookmarks') void loadPluginBookmarks()
   }
 
   function rowIcon(row: UtilityRowItem): typeof BookOpen {
@@ -568,6 +643,7 @@
   function refreshActiveTab(): void {
     if (activeTab === 'tools') void agentToolsStore.load(true)
     else void load()
+    if (activeTab === 'bookmarks') void loadPluginBookmarks()
   }
 
   async function toggleEnabled(row: UtilityRowItem): Promise<void> {
@@ -650,10 +726,12 @@
    */
   export function reload(): void {
     void load()
+    if (activeTab === 'bookmarks') void loadPluginBookmarks()
   }
 
   onMount(() => {
     void load()
+    if (activeTab === 'bookmarks') void loadPluginBookmarks()
     void installedSkillState.ensureLoaded()
     void providerStore.init()
     void agentToolsStore.load()
@@ -687,8 +765,8 @@
     <button
       class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       type="button"
-      title="Open {row.name} in the marketplace"
-      onclick={() => onOpenSkill(row.entry)}
+      title="Open {row.name}"
+      onclick={() => openBookmark(row)}
     >
       <span class="flex flex-wrap items-center gap-2">
         <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
@@ -697,10 +775,15 @@
         >
           Marketplace
         </span>
-        {#if installedSkillState.isInstalled(row.entry.skillId, row.entry.source)}
+        {#if row.kind === 'skill' && installedSkillState.isInstalled(row.entry.skillId, row.entry.source)}
           <SkillInstalledBadge />
+        {:else if row.kind === 'plugin' && row.entry.installed}
+          <span
+            class="rounded-md bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
+            >Installed</span
+          >
         {/if}
-        {#if row.entry.isOfficial}
+        {#if row.kind === 'skill' && row.entry.isOfficial}
           <span
             class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
           >
@@ -708,13 +791,37 @@
           </span>
         {/if}
       </span>
-      <span class="mt-1 block truncate text-xs text-muted">{row.entry.source}</span>
-      <span class="mt-1 block text-[0.6875rem] tabular-nums text-dimmed">
-        {row.entry.installs.toLocaleString()} installs at bookmark time
-      </span>
+      {#if row.kind === 'skill'}
+        <span class="mt-1 block truncate text-xs text-muted">{row.entry.source}</span>
+        <span class="mt-1 block text-[0.6875rem] tabular-nums text-dimmed">
+          {row.entry.installs.toLocaleString()} installs when bookmarked
+        </span>
+      {:else}
+        <span class="mt-1 block truncate text-xs text-muted"
+          >{row.entry.publisher ?? row.entry.source.repository}</span
+        >
+        <span class="mt-1 block truncate text-xs text-dimmed">{row.entry.description}</span>
+      {/if}
     </button>
     <div class="flex shrink-0 items-center gap-1">
-      <SkillBookmarkButton entry={row.entry} title={skillBookmarkTitle(row.name, true)} />
+      {#if row.kind === 'skill'}
+        <SkillBookmarkButton entry={row.entry} title={skillBookmarkTitle(row.name, true)} />
+      {:else}
+        <button
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-accent hover:bg-elevated"
+          type="button"
+          title="Remove bookmark for {row.name}"
+          aria-label="Remove bookmark for {row.name}"
+          aria-pressed={true}
+          onclick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            void removePluginBookmark(row.entry)
+          }}
+        >
+          <Bookmark size={14} fill="currentColor" />
+        </button>
+      {/if}
     </div>
   </div>
 {/snippet}
@@ -820,7 +927,7 @@
   <!-- Header: what this page holds on the left, the page's own actions on the
        right, so the title never competes with navigation for one row. -->
   <div class="flex flex-wrap items-start justify-between gap-4">
-    <div class="min-w-0">
+    <div class="min-w-0 flex-1">
       <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
       <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
     </div>
@@ -885,7 +992,7 @@
           role="tab"
           aria-selected={activeTab === tab.id}
           title={TAB_TITLE[tab.id]}
-          onclick={() => onSelectTab(tab.id)}
+          onclick={() => selectTab(tab.id)}
         >
           {tab.label}
         </button>
@@ -925,7 +1032,7 @@
           class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
         />
         <span class="sr-only">
-          Search {activeTab === 'bookmarks' ? 'bookmarked skills' : 'utilities'}
+          Search {activeTab === 'bookmarks' ? 'saved skills and plugins' : 'utilities'}
         </span>
         <input
           bind:this={searchInputEl}
@@ -1069,7 +1176,7 @@
         </p>
       {/if}
 
-      {#if loading && tabRows.length === 0}
+      {#if (loading || (activeTab === 'bookmarks' && pluginBookmarksLoading)) && tabRows.length === 0}
         <div class="rounded-xl border border-dashed p-8 text-center">
           <Loader2 size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading…</p>
@@ -1091,20 +1198,39 @@
             >
               Show built-in
             </button>
-          {:else if activeTab === 'bookmarks'}
+          {:else if activeTab === 'bookmarks' && !pluginBookmarksLoaded}
             <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
-            <p class="text-sm font-medium">No bookmarked skills</p>
-            <p class="mt-1 text-xs text-dimmed">
-              Bookmark a skill in the marketplace to keep it one click away, without installing it.
-            </p>
+            <p class="text-sm font-medium">Saved plugins could not load</p>
             <button
               class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
-              title="Open the skills marketplace"
-              onclick={onOpenMarketplace}
+              title="Retry loading saved plugins"
+              onclick={() => void loadPluginBookmarks()}
             >
-              <Search size={13} /> Skills marketplace
+              <RefreshCw size={13} /> Retry
             </button>
+          {:else if activeTab === 'bookmarks' && pluginBookmarksLoaded}
+            <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
+            <p class="text-sm font-medium">No saved skills or plugins</p>
+            <p class="mt-1 text-xs text-dimmed">Bookmark a skill or plugin to keep it here.</p>
+            <div class="mt-4 flex justify-center gap-2">
+              <button
+                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                type="button"
+                title="Open the skills marketplace"
+                onclick={onOpenMarketplace}
+              >
+                <Search size={13} /> Skills marketplace
+              </button>
+              <button
+                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                type="button"
+                title="Open the plugin marketplace"
+                onclick={onOpenPluginMarketplace}
+              >
+                <Search size={13} /> Plugin marketplace
+              </button>
+            </div>
           {:else}
             <Puzzle size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">No matching entries</p>
