@@ -1,13 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import {
-    AppWindow,
-    FileSearch,
-    FolderKanban,
-    MessageCircle,
-    MessagesSquare,
-    Workflow
-  } from '@lucide/svelte'
+  import { FileSearch, FolderKanban, Globe, Timeline } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -17,6 +10,7 @@
   import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import {
     AppHeaderNavigationController,
     type HeaderViewOptionId
@@ -359,7 +353,7 @@
           emptyLabel: threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
-          headerIcon: MessagesSquare,
+          headerIcon: Timeline,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
@@ -378,7 +372,7 @@
           emptyLabel: chatSearch.loading
             ? 'Searching chats…'
             : 'Type at least two characters to search chats',
-          headerIcon: MessageCircle,
+          headerIcon: CONTENT_FAMILY_ICONS.chats,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
@@ -396,7 +390,7 @@
           emptyLabel: assistantSearch.loading
             ? 'Searching assistant tasks…'
             : 'Type at least two characters to search assistant tasks and routines',
-          headerIcon: Workflow,
+          headerIcon: CONTENT_FAMILY_ICONS.assistant,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
@@ -415,7 +409,7 @@
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
-          headerIcon: AppWindow,
+          headerIcon: Globe,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
           serverFiltered: true,

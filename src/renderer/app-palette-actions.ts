@@ -1,6 +1,5 @@
 import type { Component } from 'svelte'
 import {
-  AppWindow,
   Bell,
   Blocks,
   BookOpen,
@@ -17,17 +16,17 @@ import {
   Keyboard,
   LayoutDashboard,
   ListTree,
-  MessageCircle,
   MessageSquarePlus,
   MessagesSquare,
   SlidersHorizontal,
   SquarePen,
   Terminal,
+  Timeline,
   Users,
-  Workflow,
   Wrench
 } from '@lucide/svelte'
 import { APP_NAME } from '$shared/brand'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
 import type { ActionDefinition, ActionSource } from '$lib/actions'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
@@ -368,7 +367,9 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Find a standalone conversation by title or message content',
       category: 'thread',
       source: applicationSource,
-      icon: MessageCircle,
+      // Same mark the view rail gives the Chats view, so the entry reads as
+      // "Chat" at a glance instead of a second, unrelated conversation glyph.
+      icon: CONTENT_FAMILY_ICONS.chats,
       keywords: ['quick open', 'find', 'conversation', 'messages', 'chats', 'inbox']
     },
     {
@@ -377,7 +378,8 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Find an assistant task or routine by name, title, or message content',
       category: 'routine',
       source: applicationSource,
-      icon: Workflow,
+      // The Assistant view's rail mark, kept from the one shared source.
+      icon: CONTENT_FAMILY_ICONS.assistant,
       keywords: ['quick open', 'find', 'routine', 'assistant', 'task', 'schedule']
     },
     {
@@ -386,7 +388,8 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Find an open tab by title, address, or group',
       category: 'browser',
       source: applicationSource,
-      icon: AppWindow,
+      // The Browser view's rail mark.
+      icon: Globe,
       keywords: ['quick open', 'find', 'tab', 'browser', 'group', 'url']
     }
   ]
@@ -399,7 +402,8 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
             description: 'Find an engineering thread by title or message content in any project',
             category: 'thread',
             source: applicationSource,
-            icon: MessagesSquare,
+            // The Threads view's rail mark, not the generic chat bubble.
+            icon: Timeline,
             keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline', 'project']
           } satisfies ActionDefinition
         ]
