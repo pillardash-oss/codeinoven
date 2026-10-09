@@ -20,6 +20,7 @@
   import { uuidv7 } from '$shared/id'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
+  import BrowserHistoryModal from '../browser/BrowserHistoryModal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
@@ -43,6 +44,9 @@
   /** Which library the user asked to empty, held while the confirmation is up.
    *  Both clears are destructive and irreversible, so each one is confirmed. */
   let clearing = $state<'history' | 'bookmarks' | null>(null)
+
+  /** Whether the full-screen history manager is up. */
+  let historyOpen = $state(false)
 
   /** Live sizes, so the two buttons say what is actually at stake before the user
    *  commits to a clear. */
@@ -339,8 +343,8 @@
           <p class="text-sm font-medium">History size</p>
           <p class="text-xs leading-relaxed text-dimmed">
             How many pages each browser remembers. Older visits are dropped once the limit is
-            reached, so the newest ones are always kept. A thread's browser keeps its history
-            only while it is open; the global browser's is kept between launches.
+            reached, so the newest ones are always kept. A thread's browser keeps its history only
+            while it is open; the global browser's is kept between launches.
           </p>
         </div>
         <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
@@ -360,6 +364,25 @@
       </div>
 
       <div class="mt-4 space-y-3 border-t pt-4">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium">View and edit history</p>
+            <p class="text-xs leading-relaxed text-dimmed">
+              Read the pages the app remembers and remove single visits without clearing the rest
+            </p>
+          </div>
+          <button
+            type="button"
+            class="h-8 shrink-0 rounded-lg border bg-elevated px-3 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
+            disabled={!settingsReady}
+            title="View and edit your browsing history"
+            aria-label="View and edit browsing history"
+            onclick={() => (historyOpen = true)}
+          >
+            View
+          </button>
+        </div>
+
         <div class="flex items-center justify-between gap-4">
           <div>
             <p class="text-sm font-medium">Clear browsing history</p>
@@ -427,3 +450,5 @@
     </p>
   {/if}
 </ConfirmDialog>
+
+<BrowserHistoryModal open={historyOpen} onClose={() => (historyOpen = false)} />
