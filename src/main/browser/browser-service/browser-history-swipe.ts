@@ -159,8 +159,16 @@ export function installBrowserHistorySwipe(contents: WebContents): void {
         if (direction !== 'back' && direction !== 'forward') return
         state.cooldownUntil = Date.now() + NAVIGATION_COOLDOWN_MS
         const history = contents.navigationHistory
-        if (direction === 'back' && history.canGoBack()) history.goBack()
-        if (direction === 'forward' && history.canGoForward()) history.goForward()
+        const canNavigate = direction === 'back' ? history.canGoBack() : history.canGoForward()
+        if (canNavigate) {
+          // Native history traversal can hand focus back to the app renderer.
+          // Keep the page that received this gesture focused so the next swipe
+          // reaches it too. A parked page's late result must not steal focus.
+          const wasFocused = contents.isFocused()
+          if (direction === 'back') history.goBack()
+          else history.goForward()
+          if (wasFocused && !contents.isDestroyed()) contents.focus()
+        }
         arm()
       })
       .catch((error: unknown) => {
