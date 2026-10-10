@@ -18,7 +18,7 @@ import {
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
-import { GitIssueCache, type CachedIssueTimeline } from './git-store-issues.svelte'
+import { GitIssueCache, type CachedIssueRead } from './git-store-issues.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
 import { GitIssueOperations } from './git-store-issue-operations.svelte'
@@ -45,6 +45,8 @@ import type {
   IssueBundle,
   IssuePage,
   IssueReference,
+  IssueRelationships,
+  IssueTimelineEvent,
   NewIssueInput,
   PrAgentAssignmentInput,
   PrAgentAssignmentSummary,
@@ -447,8 +449,12 @@ export class GitState {
     return this.issues.bundles
   }
 
-  get issueTimelines(): Record<string, CachedIssueTimeline> {
-    return this.issues.timelines
+  get issueTimelines(): Record<string, CachedIssueRead<IssueTimelineEvent[]>> {
+    return this.issues.timelines.values
+  }
+
+  get issueRelationships(): Record<string, CachedIssueRead<IssueRelationships>> {
+    return this.issues.relationships.values
   }
 
   get prAgentReports(): Record<string, PrAgentReport[]> {
@@ -1676,12 +1682,33 @@ export class GitState {
     issueNumber: number,
     force = false
   ): Promise<void> {
-    return this.issues.ensureIssueTimeline(projectId, owner, repo, issueNumber, force)
+    return this.issues.timelines.ensure(projectId, owner, repo, issueNumber, force)
+  }
+
+  /**
+   * Read one issue's relationships: its parent, its sub-issues and its dependencies.
+   *
+   * Deferred for the same reason as the history: it is four more requests, and the
+   * issue is readable without any of them.
+   */
+  ensureIssueRelationships(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.relationships.ensure(projectId, owner, repo, issueNumber, force)
   }
 
   /** Forget an issue's cached history, so a state change is read back with its event. */
   invalidateIssueTimeline(owner: string, repo: string, issueNumber: number): void {
-    this.issues.invalidateIssueTimeline(owner, repo, issueNumber)
+    this.issues.timelines.invalidate(owner, repo, issueNumber)
+  }
+
+  /** Forget an issue's cached relationships, so a link change is read back. */
+  invalidateIssueRelationships(owner: string, repo: string, issueNumber: number): void {
+    this.issues.relationships.invalidate(owner, repo, issueNumber)
   }
 
   /** Warm the issue under the pointer, so the click that follows renders from cache. */

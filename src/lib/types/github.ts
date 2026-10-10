@@ -711,6 +711,43 @@ export interface IssuePage {
   transientError?: string
 }
 
+/**
+ * One issue a relationship points at.
+ *
+ * Leaner than a listing row on purpose: a relationship is drawn as a link with its
+ * state and the repository it lives in. GitHub serves these endpoints with the
+ * item's own repository attached, and a dependency is allowed to live in a
+ * different repository from the issue it relates to, so the repository travels
+ * with the item rather than being assumed from the issue being read.
+ */
+export interface IssueRelationshipItem {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed'
+  stateReason: IssueStateReason | null
+  /** `owner/repo` the item lives in, which is not always this issue's own. */
+  repository: string
+}
+
+/**
+ * An issue's relationships, as its own sidebar shows them.
+ *
+ * Four separate answers held together because the reader draws them as one block:
+ * the parent it belongs to, the sub-issues under it, and the issues that block it
+ * or that it blocks. Any of them may be empty, which is the common case.
+ */
+export interface IssueRelationships {
+  /** The parent this issue is a sub-issue of, or null when it has none. */
+  parent: IssueRelationshipItem | null
+  /** Issues filed under this one, in GitHub's own order. */
+  subIssues: IssueRelationshipItem[]
+  /** Issues that block this one. */
+  blockedBy: IssueRelationshipItem[]
+  /** Issues this one blocks. */
+  blocking: IssueRelationshipItem[]
+}
+
 /** Full issue view, loaded when one is opened in the sidebar. */
 export interface IssueDetail extends IssueSummary {
   body: string

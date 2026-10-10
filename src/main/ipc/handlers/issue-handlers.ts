@@ -152,6 +152,14 @@ export function registerIssueHandlers(ctx: IpcHandlerContext): void {
     }
   )
 
+  ipcMain.handle(
+    'issue:relationships',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, issueNumber: unknown) => {
+      const { provider, ...target } = await issueContext(projectId, owner, repo, issueNumber)
+      return provider.listIssueRelationships(target)
+    }
+  )
+
   ipcMain.handle('issue:create', async (_, projectId: unknown, input: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const provider = await providerForProject(safeProjectId)

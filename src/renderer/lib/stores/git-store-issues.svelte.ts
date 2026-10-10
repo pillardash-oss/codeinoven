@@ -5,6 +5,7 @@ import type {
   IssueListQuery,
   IssueMilestone,
   IssuePage,
+  IssueRelationships,
   IssueStateReason,
   IssueSummary,
   IssueTimelineEvent,
@@ -44,16 +45,91 @@ export interface CachedIssuePage {
   state: PrState
 }
 
-/**
- * One cached issue history, held apart from its bundle.
- *
- * Apart because the two are read separately: the bundle is what the reader draws
- * on open, and the history is a larger, slower payload that arrives after it.
- * Caching them together would mean one freshness clock for two different jobs.
- */
-export interface CachedIssueTimeline {
-  events: IssueTimelineEvent[]
+/** One cached value of a deferred per-issue read, with when it was read. */
+export interface CachedIssueRead<T> {
+  value: T
   fetchedAt: number
+}
+
+/**
+ * A per-issue read that happens after the bundle instead of inside it.
+ *
+ * The history and the relationships are both like this: neither is needed to read
+ * the issue, both are several requests, and a failure costs the reader nothing they
+ * already had. Keeping the freshness rule, the in-flight dedupe and the failure
+ * back-off in one place means the second deferred read is a value and a call, not
+ * another copy of this bookkeeping.
+ */
+class DeferredIssueRead<T> {
+  values: Record<string, CachedIssueRead<T>> = $state({})
+
+  /** One request per key, so two mounted readers of one issue are one round trip. */
+  private requests: Record<string, Promise<void> | undefined> = {}
+
+  /**
+   * Epoch ms of the last failed read per key. Plain rather than `$state`, as it
+   * only gates fetching: a read that failed is usually one the provider could not
+   * answer in time, so it is retried after the error cooldown rather than on every
+   * render, and the reader never shows an error for it.
+   */
+  private failures: Record<string, number> = {}
+
+  constructor(
+    private readonly read: (
+      projectId: string,
+      owner: string,
+      repo: string,
+      issueNumber: number
+    ) => Promise<T>
+  ) {}
+
+  async ensure(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    if (!projectId || !owner || !repo || issueNumber <= 0) return
+    const key = issueBundleKey(owner, repo, issueNumber)
+    if (!force) {
+      const cached = this.values[key]
+      if (cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+      const failedAt = this.failures[key]
+      if (failedAt !== undefined && Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return
+      delete this.failures[key]
+    }
+    const existing = this.requests[key]
+    if (existing && !force) return existing
+    const request = this.read(projectId, owner, repo, issueNumber)
+      .then((value) => {
+        this.values = { ...this.values, [key]: { value, fetchedAt: Date.now() } }
+        delete this.failures[key]
+      })
+      .catch(() => {
+        this.failures[key] = Date.now()
+      })
+      .finally(() => {
+        if (this.requests[key] === request) delete this.requests[key]
+      })
+    this.requests[key] = request
+    return request
+  }
+
+  /**
+   * Forget one issue's value, so the next read goes to the provider.
+   *
+   * A write can make a cached answer wrong: a close becomes a history event, and a
+   * new sub-issue changes the relationship list. Dropping the entry is enough, as
+   * the next read finds nothing cached and asks the provider again.
+   */
+  invalidate(owner: string, repo: string, issueNumber: number): void {
+    const key = issueBundleKey(owner, repo, issueNumber)
+    if (!this.values[key]) return
+    const next = { ...this.values }
+    delete next[key]
+    this.values = next
+  }
 }
 
 /**
@@ -70,7 +146,26 @@ export interface CachedIssueTimeline {
 export class GitIssueCache {
   pages: Record<string, CachedIssuePage> = $state({})
   bundles: Record<string, IssueBundle> = $state({})
-  timelines: Record<string, CachedIssueTimeline> = $state({})
+
+  /**
+   * The issue's history, read after the bundle rather than inside it.
+   *
+   * Both deferred reads are silent: no busy state and no error banner. They are
+   * what the issue already did and who it relates to, so a read that fails costs
+   * the reader nothing they had, and the issue stays fully readable without it.
+   * That is also why neither is part of the bundle request: a heavily referenced
+   * issue answers its history slowly, and the description must not wait on it.
+   */
+  readonly timelines = new DeferredIssueRead<IssueTimelineEvent[]>(
+    (projectId, owner, repo, issueNumber) =>
+      invoke('issue:timeline', projectId, owner, repo, issueNumber)
+  )
+
+  /** The issue's parent, sub-issues and dependencies, read the same way. */
+  readonly relationships = new DeferredIssueRead<IssueRelationships>(
+    (projectId, owner, repo, issueNumber) =>
+      invoke('issue:relationships', projectId, owner, repo, issueNumber)
+  )
 
   /**
    * Epoch ms of the last failure per cache key. Deliberately plain (not `$state`)
@@ -84,17 +179,6 @@ export class GitIssueCache {
 
   /** One `issue:bundle` request per key, so a warm-up and the click are one round trip. */
   private bundleRequests: Record<string, Promise<IssueBundle> | undefined> = {}
-
-  /** One `issue:timeline` request per key, so two mounted readers are one round trip. */
-  private timelineRequests: Record<string, Promise<void> | undefined> = {}
-
-  /**
-   * Epoch ms of the last failed history read per key. Plain rather than `$state`,
-   * as it only gates fetching: a history that could not be read is usually one the
-   * provider could not answer in time, so it is retried after the error cooldown
-   * rather than on every render, and the reader never shows an error for it.
-   */
-  private timelineFailures: Record<string, number> = {}
 
   /**
    * Warm-ups that failed, per key. Plain rather than `$state` because nothing
@@ -379,63 +463,6 @@ export class GitIssueCache {
     } finally {
       this.markBusy('issue-detail', false)
     }
-  }
-
-  /**
-   * Read one issue's history into the cache, apart from the bundle it belongs to.
-   *
-   * Deliberately silent: no busy state and no error banner. A history is what the
-   * issue already did, so a read that fails costs the reader nothing they had, and
-   * the issue stays fully readable without it. That is also why it is not part of
-   * the bundle request: a heavily referenced issue answers its history slowly, and
-   * making the reader wait on that would hold back the description itself.
-   */
-  async ensureIssueTimeline(
-    projectId: string,
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    force = false
-  ): Promise<void> {
-    if (!projectId || !owner || !repo || issueNumber <= 0) return
-    const key = issueBundleKey(owner, repo, issueNumber)
-    if (!force) {
-      const cached = this.timelines[key]
-      if (cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
-      const failedAt = this.timelineFailures[key]
-      if (failedAt !== undefined && Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return
-      delete this.timelineFailures[key]
-    }
-    const existing = this.timelineRequests[key]
-    if (existing && !force) return existing
-    const request = invoke('issue:timeline', projectId, owner, repo, issueNumber)
-      .then((events) => {
-        this.timelines = { ...this.timelines, [key]: { events, fetchedAt: Date.now() } }
-        delete this.timelineFailures[key]
-      })
-      .catch(() => {
-        this.timelineFailures[key] = Date.now()
-      })
-      .finally(() => {
-        if (this.timelineRequests[key] === request) delete this.timelineRequests[key]
-      })
-    this.timelineRequests[key] = request
-    return request
-  }
-
-  /**
-   * Forget one issue's history, so the next read goes to the provider.
-   *
-   * A state change writes an event onto the history, so a cached copy would keep
-   * claiming the issue was never closed. Dropping the entry is enough: the next
-   * read finds nothing cached and asks the provider again.
-   */
-  invalidateIssueTimeline(owner: string, repo: string, issueNumber: number): void {
-    const key = issueBundleKey(owner, repo, issueNumber)
-    if (!this.timelines[key]) return
-    const next = { ...this.timelines }
-    delete next[key]
-    this.timelines = next
   }
 
   /** Warm one issue's detail bundle so the click that opens it renders from cache. */

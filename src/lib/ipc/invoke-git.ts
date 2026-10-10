@@ -34,6 +34,7 @@ import type {
   IssueMilestone,
   IssuePage,
   IssueReference,
+  IssueRelationships,
   IssueTimelineEvent,
   MergeSummary,
   NewIssueInput,
@@ -453,6 +454,17 @@ export const invokeGitContract = {
   'issue:timeline': {} as Contract<
     [projectId: string, owner: string, repo: string, issueNumber: number],
     IssueTimelineEvent[]
+  >,
+  /**
+   * One issue's relationships: the parent it belongs to, its sub-issues, and the
+   * issues that block it or that it blocks.
+   *
+   * Read apart from `issue:bundle` for the same reason as the history: it is four
+   * more requests, and none of them is needed to read the issue itself.
+   */
+  'issue:relationships': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number],
+    IssueRelationships
   >,
   /** Open a new issue on the repository (owner/repo resolve from the origin). */
   'issue:create': {} as Contract<

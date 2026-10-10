@@ -896,6 +896,114 @@ describe('GitHubProvider', () => {
     })
   })
 
+  /**
+   * The relationship read, against payloads captured from GitHub itself.
+   *
+   * The four endpoints share no shape, so the cases that matter are the ones a mock
+   * written from memory gets wrong: a parent that 404s rather than answering empty,
+   * and a dependency whose own repository differs from the issue's.
+   */
+  it("reads an issue's parent, sub-issues and dependencies across repositories", async () => {
+    // Routed by URL rather than by call order: the four reads run concurrently, and
+    // a queue of responses would encode an ordering the implementation never promised.
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/parent')) {
+        return Promise.resolve(
+          jsonResponse({
+            number: 109005,
+            title: 'Docs: IA revamp',
+            state: 'open',
+            html_url: 'https://github.com/grafana/grafana/issues/109005',
+            repository: { full_name: 'grafana/grafana' }
+          })
+        )
+      }
+      if (url.includes('/sub_issues')) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              number: 115489,
+              title: 'A sub-issue',
+              state: 'closed',
+              state_reason: 'completed',
+              html_url: 'https://github.com/grafana/grafana/issues/115489',
+              repository: { full_name: 'grafana/grafana' }
+            }
+          ])
+        )
+      }
+      if (url.includes('/dependencies/blocking')) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              number: 105,
+              title: 'A dependency in another repository',
+              state: 'closed',
+              state_reason: 'not_planned',
+              html_url: 'https://github.com/grafana/grafanactl/issues/105',
+              repository: { full_name: 'grafana/grafanactl' }
+            }
+          ])
+        )
+      }
+      return Promise.resolve(jsonResponse([]))
+    })
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const relations = await provider.listIssueRelationships({
+      owner: 'grafana',
+      repo: 'grafana',
+      issueNumber: 110230
+    })
+
+    expect(fetchMock.mock.calls.map((call) => call[0]).sort()).toEqual(
+      [
+        'https://api.github.com/repos/grafana/grafana/issues/110230/parent',
+        'https://api.github.com/repos/grafana/grafana/issues/110230/sub_issues?per_page=100',
+        'https://api.github.com/repos/grafana/grafana/issues/110230/dependencies/blocked_by?per_page=100',
+        'https://api.github.com/repos/grafana/grafana/issues/110230/dependencies/blocking?per_page=100'
+      ].sort()
+    )
+    expect(relations.parent).toMatchObject({ number: 109005, repository: 'grafana/grafana' })
+    expect(relations.subIssues).toHaveLength(1)
+    expect(relations.subIssues[0]).toMatchObject({
+      number: 115489,
+      state: 'closed',
+      stateReason: 'completed'
+    })
+    expect(relations.blockedBy).toEqual([])
+    // The repository travels with the item, which is what keeps a cross-repository
+    // dependency labelled with the repository it actually lives in.
+    expect(relations.blocking[0]).toMatchObject({
+      number: 105,
+      repository: 'grafana/grafanactl',
+      stateReason: 'not_planned'
+    })
+  })
+
+  it('treats a 404 on the parent endpoint as an issue with no parent', async () => {
+    // GitHub answers a 404 for an issue with no parent, and a GET 404 against
+    // github.com also triggers the provider's anonymous retry, so this endpoint is
+    // the one relationship read that costs two requests when there is no parent.
+    fetchMock.mockImplementation((url: string) =>
+      url.endsWith('/parent')
+        ? Promise.resolve(jsonResponse({ message: 'No parent issue found' }, 404))
+        : Promise.resolve(jsonResponse([]))
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const relations = await provider.listIssueRelationships({
+      owner: 'acme',
+      repo: 'app',
+      issueNumber: 7
+    })
+
+    expect(relations).toEqual({ parent: null, subIssues: [], blockedBy: [], blocking: [] })
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/parent'))).toHaveLength(
+      2
+    )
+  })
+
   it('reads a duplicate close reason from an issue summary and its detail', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

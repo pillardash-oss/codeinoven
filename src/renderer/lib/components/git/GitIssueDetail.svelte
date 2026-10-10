@@ -33,9 +33,11 @@
   import { prLabelStyle, type PrMetadataMode } from './pr-view'
   import PrReactionPicker from './PrReactionPicker.svelte'
   import PrReactionChips from './PrReactionChips.svelte'
+  import IssueRelationships from './IssueRelationships.svelte'
   import type { GithubRepoContext } from '$lib/github-references'
   import type {
     IssueComment,
+    IssueRelationshipItem,
     IssueSummary,
     IssueTimelineEvent,
     PrReactionContent
@@ -73,6 +75,8 @@
     onRequestClose: (issue: IssueSummary) => void
     /** Bring a closed issue back, which needs no confirmation: it adds state back. */
     onReopen: (issue: IssueSummary) => void
+    /** Open an issue this one relates to, when it lives in the same repository. */
+    onOpenRelated: (item: IssueRelationshipItem) => void
     onOpenInBrowser: (issue: IssueSummary) => void
   }
 
@@ -86,6 +90,7 @@
     onEditMetadata,
     onRequestClose,
     onReopen,
+    onOpenRelated,
     onOpenInBrowser
   }: Props = $props()
 
@@ -108,7 +113,10 @@
    * than with it, so a heavily referenced issue's slow timeline never holds back
    * the description and the conversation the reader came for.
    */
-  const timeline = $derived(gitState.issueTimelines[bundleKey]?.events ?? [])
+  const timeline = $derived(gitState.issueTimelines[bundleKey]?.value ?? [])
+
+  /** The issue's parent, sub-issues and dependencies, read the same way. */
+  const relationships = $derived(gitState.issueRelationships[bundleKey]?.value ?? null)
   const loading = $derived(gitState.isBusy('issue-detail') && bundle === null)
   const posting = $derived(gitState.isBusy('issue-comment'))
   const busyCommentId = $derived(
@@ -181,9 +189,10 @@
     void owner
     void repo
     void gitState.ensureIssueBundle(projectId, owner, repo, number, false)
-    // The history is a second, independent read. Nothing in the reader waits on it,
-    // and a history the provider cannot answer in time leaves the issue readable.
+    // The history and the relationships are independent reads. Nothing in the reader
+    // waits on either, and one the provider cannot answer leaves the issue readable.
     void gitState.ensureIssueTimeline(projectId, owner, repo, number, false)
+    void gitState.ensureIssueRelationships(projectId, owner, repo, number, false)
   })
 
   let draft = $state('')
@@ -382,6 +391,18 @@
           <span class="text-[0.5625rem] text-dimmed">Closed as {reasonLabel.toLowerCase()}</span>
         {/if}
       </div>
+
+      <!--
+        What this issue relates to, in the same place github.com puts it: beside the
+        labels and assignees rather than buried under the conversation, because a
+        parent or a blocker changes how the issue should be read.
+      -->
+      <IssueRelationships
+        repository={repositoryName}
+        {relationships}
+        onOpenIssue={onOpenRelated}
+        onOpenRemote={(item) => void openInBrowser(item.url)}
+      />
 
       <!-- The issue body, rendered as the author wrote it. -->
       <div class="mt-2 rounded-lg border border-border bg-surface/60">

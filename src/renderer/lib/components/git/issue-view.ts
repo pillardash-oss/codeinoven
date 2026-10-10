@@ -10,6 +10,7 @@ import { CircleCheck, CircleDot, CircleSlash, CircleX } from '@lucide/svelte'
 import type {
   IssueListFilter,
   IssueListSort,
+  IssueRelationshipItem,
   IssueStateReason,
   IssueSummary,
   IssueTimelineEvent,
@@ -187,6 +188,31 @@ export function issueReferenceLabel(reference: IssueTimelineReference, repositor
   return reference.repository && reference.repository !== repository
     ? `${reference.repository}#${reference.number}`
     : `#${reference.number}`
+}
+
+/**
+ * A related issue as the row shape the reader opens.
+ *
+ * The relationship endpoints answer with a leaner object than a listing row, so the
+ * fields they do not carry (the author, the timestamps, the comment count) start
+ * empty. That is safe because the reader draws the row it opened and replaces it the
+ * moment the bundle lands; the alternative, inventing values, would show a comment
+ * count and an author that no payload ever said.
+ */
+export function issueRelationshipSummary(item: IssueRelationshipItem): IssueSummary {
+  return {
+    number: item.number,
+    title: item.title,
+    url: item.url,
+    state: item.state,
+    stateReason: item.stateReason,
+    authorLogin: '',
+    authorAvatarUrl: null,
+    authorIsBot: false,
+    createdAt: '',
+    updatedAt: '',
+    comments: 0
+  }
 }
 
 /**

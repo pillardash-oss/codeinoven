@@ -12,6 +12,7 @@
   import GitIssueDetail from './GitIssueDetail.svelte'
   import MetadataPickerDialog from './MetadataPickerDialog.svelte'
   import { assignAgentToIssue } from './git-status-panel-agent-actions'
+  import { issueRelationshipSummary } from './issue-view'
   import type { IssueListFilter, IssueListSort, IssueSummary, PrState } from '$shared/types'
   import type { PrMetadataMode } from './pr-view'
 
@@ -229,6 +230,7 @@
       onEditMetadata={(mode, issue) => (metadata = { mode, issue })}
       onRequestClose={(issue) => (confirmingClose = issue)}
       onReopen={(issue) => void applyState(issue, 'open')}
+      onOpenRelated={(item) => openIssue(issueRelationshipSummary(item))}
       onOpenInBrowser={(issue) => void openInBrowser(issue.url)}
     />
   </div>

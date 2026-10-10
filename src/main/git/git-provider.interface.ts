@@ -9,6 +9,7 @@ import type {
   IssueListSort,
   IssuePage,
   IssueReference,
+  IssueRelationships,
   IssueTimelineEvent,
   IssueUpdateInput,
   NewIssueInput,
@@ -279,6 +280,15 @@ export interface GitProvider {
    * `listIssueComments`, which carries the fields a comment row draws.
    */
   listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]>
+  /**
+   * An issue's relationships: the parent it belongs to, its sub-issues, and the
+   * issues that block it or that it blocks.
+   *
+   * Four reads behind one call because the reader draws one block, and because a
+   * dependency may live in another repository, which the provider reports on the
+   * item rather than assuming from the issue being read.
+   */
+  listIssueRelationships(input: IssueTarget): Promise<IssueRelationships>
   /** Post a comment on an issue. */
   createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment>
   /** Rewrite an issue comment's body. Only the author may do this. */
