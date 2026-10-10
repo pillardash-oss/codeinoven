@@ -18,6 +18,12 @@ import {
   sectionKeyFromHeading
 } from '$lib/agent-source-citations'
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
+
+export interface CitationThreadContext {
+  projectId: string
+  threadId: string
+  scopeBucketId?: string
+}
 import { faviconState } from '$lib/stores/favicons.svelte'
 import { githubImageState } from '$lib/stores/github-images.svelte'
 import { schemeState } from '$lib/stores/scheme.svelte'
@@ -301,14 +307,22 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 export function lexMarkdown(
   text: string,
   allowHtml = false,
-  repository: GithubRepoContext | null = null
+  repository: GithubRepoContext | null = null,
+  citationThread?: CitationThreadContext
 ): Token[] {
   const parser = parserFor(allowHtml, repository)
   const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
   const tokens = parser.lexer(
     linkifyFileCitations(
       sectionLinked,
-      (path) => citationPathsState.isValidPath(path),
+      (path) =>
+        citationThread
+          ? citationPathsState.isThreadPathValid(
+              citationThread.projectId,
+              citationThread.scopeBucketId,
+              path
+            )
+          : citationPathsState.isValidPath(path),
       (path) => citationPathsState.isKnownExternalPath(path)
     )
   )
@@ -329,7 +343,8 @@ const lexCache = new Map<string, Token[]>()
 export function lexMarkdownCached(
   text: string,
   allowHtml = false,
-  repository: GithubRepoContext | null = null
+  repository: GithubRepoContext | null = null,
+  citationThread?: CitationThreadContext
 ): Token[] {
   // Read the revision in the caller's reactive context so a resolution bump
   // re-evaluates this expression, and use it as part of the key so the bumped
@@ -337,7 +352,10 @@ export function lexMarkdownCached(
   // the key too: the same text lexes to different links in a different repo.
   const revision = citationPathsState.revision
   const scope = repository ? `${repository.owner}/${repository.repo}` : ''
-  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${text}`
+  const threadScope = citationThread
+    ? `${citationThread.projectId}/${citationThread.threadId}/${citationThread.scopeBucketId ?? ''}`
+    : ''
+  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${threadScope}\u0000${text}`
   const cached = lexCache.get(key)
   if (cached) {
     // Refresh for LRU ordering   most recently used survives eviction.
@@ -345,7 +363,7 @@ export function lexMarkdownCached(
     lexCache.set(key, cached)
     return cached
   }
-  const tokens = lexMarkdown(text, allowHtml, repository)
+  const tokens = lexMarkdown(text, allowHtml, repository, citationThread)
   lexCache.set(key, tokens)
   if (lexCache.size > LEX_CACHE_LIMIT) {
     const oldest = lexCache.keys().next().value

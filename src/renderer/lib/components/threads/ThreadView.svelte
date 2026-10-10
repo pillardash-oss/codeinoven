@@ -129,7 +129,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -481,6 +481,11 @@
   // svelte-ignore state_referenced_locally
   const mountedThread = threadProp
   let thread = $derived(threadProp ?? mountedThread)
+  let citationThreadContext = $derived({
+    projectId: thread.projectId,
+    threadId: thread.id,
+    scopeBucketId: thread.scopeBucketId
+  })
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -1675,6 +1680,33 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven workstation control session   the slash spelling of the
+    // @cio-hey composer tag. Selecting sends the tag (plus any typed
+    // arguments) through the normal send path, so the main-process
+    // orchestration contract owns the tooling that goes with it.
+    actions.push({
+      id: 'command:cio-orchestrate',
+      title: '/cio-hey',
+      description:
+        'Start a workstation control turn: run work on a machine, model and account, or drive the app itself',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: [
+        'hey',
+        'cio',
+        'orchestrate',
+        'workstation',
+        'oven',
+        'machine',
+        'model',
+        'app',
+        'panel',
+        'rail'
+      ],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -1735,6 +1767,10 @@
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
+    // The harness's own session-cumulative spend (pi reports it on every usage
+    // refresh). Preferred over the per-message sum when present, because the
+    // loaded transcript can be a page while this covers the whole session.
+    let latestSessionCostUsd: number | undefined
 
     const emptyTokens: NonNullable<AgentContextUsage['tokens']> = {
       input: 0,
@@ -1771,6 +1807,7 @@
         0
       )
       costUsd += message.cost ?? stepCost
+      if (message.sessionCostUsd !== undefined) latestSessionCostUsd = message.sessionCostUsd
       // Prefer the message-level (whole-turn) usage the harness reports; while
       // a turn is still streaming, sum every completed step so the indicator
       // grows monotonically instead of bouncing between per-step token counts
@@ -1834,16 +1871,23 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
-    const contextEstimated = latestReportedContextUsed === undefined
+    // Only the explicit composed-request estimate is an estimate. Falling back
+    // to the harness's own reported token total is a provider reading   the
+    // last request's prompt plus completion is the occupancy the provider
+    // actually processed   so it must never wear the "this harness does not
+    // report context telemetry" caveat while the turn is still running.
+    const contextEstimated =
+      latestReportedContextUsed === undefined && latestEstimatedContextUsed !== undefined
     const contextUsed =
       latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
+    const displayCostUsd = latestSessionCostUsd ?? costUsd
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
       latestCredits === undefined &&
-      costUsd <= 0
+      displayCostUsd <= 0
     ) {
       return undefined
     }
@@ -1854,7 +1898,7 @@
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
-      costUsd,
+      costUsd: displayCostUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
       rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
@@ -6385,14 +6429,17 @@
 
     try {
       await invoke('agent:abort', projectId, id)
-      clearLocalTurn()
-      agentRuns.setIdle(projectId, id)
-      providerStatus = null
-      void refreshMessages()
-      void refreshCheckpoints()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
+    // The user's stop has to be visible even when the abort itself failed: a
+    // remote run that vanished mid-turn used to leave this stuck as working,
+    // because the failure skipped the local settle below.
+    clearLocalTurn()
+    agentRuns.setIdle(projectId, id)
+    providerStatus = null
+    void refreshMessages()
+    void refreshCheckpoints()
   }
 
   let showBankedResetConfirm = $state(false)
@@ -6456,6 +6503,15 @@
   function triggerCioVideoTurn(args: string): void {
     const request = args.trim()
     sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
+  }
+
+  /** Open a workstation control session   the slash spelling of the @cio-hey
+   *  composer tag. The main process owns the orchestration contract and the
+   *  tools that go with it, so this only has to send the tag and whatever the
+   *  user typed after it. */
+  function triggerCioOrchestrateTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-hey ${request}` : '@cio-hey', [])
   }
 
   /** Ask the agent to load and follow a skill by name. This is the route for
@@ -6769,6 +6825,10 @@
       triggerCioVideoTurn(args)
       return
     }
+    if (commandId === 'command:cio-orchestrate') {
+      triggerCioOrchestrateTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6887,6 +6947,7 @@
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
       action.id === 'command:cio-video' ||
+      action.id === 'command:cio-orchestrate' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')
@@ -11822,7 +11883,7 @@
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} />
+                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
                     <InlineImageFigure
                       url={part.url}
@@ -11951,6 +12012,7 @@
                         {#if explicitPresentation.body}
                           <MarkdownView
                             text={explicitPresentation.body}
+                            citationThread={citationThreadContext}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -11958,6 +12020,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          citationThread={citationThreadContext}
                           inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12299,6 +12362,7 @@
                           {:else}
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              citationThread={citationThreadContext}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />

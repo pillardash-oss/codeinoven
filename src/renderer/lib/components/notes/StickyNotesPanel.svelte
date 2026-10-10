@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { cubicOut } from 'svelte/easing'
-  import { Eye, Maximize2, NotebookPen, Plus, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
-  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
-  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { motionDuration, slideWidth } from '$lib/motion'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
+  import { Eye, Maximize2, Plus, Redo2, SquarePen, StickyNotes, Undo2, X } from '@lucide/svelte'
+  import { tick } from 'svelte'
+  import { cubicOut } from 'svelte/easing'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorTarget } from '../../speech/editor-target'
 
@@ -214,7 +214,7 @@
     </div>
   {:else if stickyNotes.error && !stickyNotes.isLoaded}
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <NotebookPen size={22} class="text-dimmed" />
+      <StickyNotes size={22} class="text-dimmed" />
       <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
       <button
         type="button"
@@ -228,7 +228,7 @@
     </div>
   {:else if stickyNotes.entries.length === 0}
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <NotebookPen size={22} class="text-dimmed" />
+      <StickyNotes size={22} class="text-dimmed" />
       <div class="space-y-1">
         <h2 class="text-sm font-medium text-foreground">No sticky notes yet</h2>
         <p class="text-xs text-muted">Create a note to keep it handy across the app.</p>
@@ -241,7 +241,7 @@
         disabled={!stickyNotes.isLoaded}
         onclick={() => void createNote()}
       >
-        <NotebookPen size={13} />
+        <StickyNotes size={13} />
         New sticky note
       </button>
       {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
@@ -275,7 +275,7 @@
                 {#if icon}
                   <img src={icon} alt="" class="h-3 w-3 shrink-0 object-contain" />
                 {:else}
-                  <NotebookPen size={12} class="shrink-0" />
+                  <StickyNotes size={12} class="shrink-0" />
                 {/if}
                 <span class="truncate text-[0.6875rem] font-medium">{note.title}</span>
               </button>
@@ -357,8 +357,8 @@
   {/if}
 </div>
 
-  {#if activeNote?.loaded && fullscreen}
-    <FullscreenPanelDialog
+{#if activeNote?.loaded && fullscreen}
+  <FullscreenPanelDialog
     {tabs}
     activeTabId={stickyNotes.activeNoteId}
     newLabel="New sticky note"
@@ -375,7 +375,7 @@
       {#if icon}
         <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
       {:else}
-        <NotebookPen size={13} class="shrink-0" />
+        <StickyNotes size={13} class="shrink-0" />
       {/if}
     {/snippet}
     {#if activeNote}{@render noteBody(activeNote)}{/if}

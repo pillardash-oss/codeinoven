@@ -102,6 +102,11 @@ export const invokeAppContract = {
     { id: string; pid: number }
   >,
   'pty:destroy': {} as Contract<[id: string], void>,
+  /** A plain shell on one Oven's home directory, with no chat behind it. */
+  'pty:createOven': {} as Contract<
+    [id: string, ovenId: string, columns: number, rows: number],
+    { id: string; pid: number }
+  >,
   'shell:openExternal': {} as Contract<[url: string], void>,
   'shell:revealPath': {} as Contract<[path: string], boolean>,
   /** Reveal an existing absolute path (e.g. an agent-cited file outside the

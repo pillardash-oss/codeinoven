@@ -38,6 +38,8 @@
     ariaLabel: string
     title: string
     disabled?: boolean
+    /** Render short choices in the owning panel, so native projection keeps every action. */
+    inline?: boolean
     /** Layout classes for the trigger, e.g. a flex sizing class. */
     class?: string
   }
@@ -50,74 +52,104 @@
     ariaLabel,
     title,
     disabled = false,
+    inline = false,
     class: className = ''
   }: Props = $props()
 
   const selected = $derived(options.find((option) => option.id === value) ?? null)
 </script>
 
-<DropdownMenu.Root>
-  <DropdownMenu.Trigger
-    class="flex w-full items-center gap-2 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-left text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+{#if inline}
+  <div
+    role="group"
     aria-label={ariaLabel}
-    {title}
-    {disabled}
+    class="flex overflow-hidden rounded-lg border border-border bg-elevated {className}"
   >
-    <span class="flex min-w-0 flex-1 items-center gap-1.5">
-      {#if selected?.iconUrl}
-        <img src={selected.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
-      {:else if selected?.accent}
-        <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {selected.accent}"
-        ></span>
-      {/if}
-      <span class="min-w-0 truncate text-[0.75rem] {selected ? '' : 'text-dimmed'}">
-        {selected?.label ?? placeholder}
-      </span>
-    </span>
-    <ChevronDown size={13} class="shrink-0 text-dimmed" />
-  </DropdownMenu.Trigger>
-
-  <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      side="bottom"
-      align="start"
-      sideOffset={6}
-      class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+    {#each options as option (option.id)}
+      <button
+        type="button"
+        {disabled}
+        title={option.hint ?? option.label}
+        aria-label={`${ariaLabel}: ${option.label}`}
+        aria-pressed={option.id === value}
+        class={[
+          'min-w-0 flex-1 cursor-pointer px-2 py-1.5 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50',
+          option.id === value
+            ? 'bg-primary text-on-primary'
+            : 'text-muted hover:bg-overlay hover:text-foreground'
+        ]}
+        onclick={() => onChange(option.id)}>{option.label}</button
+      >
+    {/each}
+  </div>
+{:else}
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex w-full items-center gap-2 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-left text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+      aria-label={ariaLabel}
+      {title}
+      {disabled}
     >
-      {#each options as option (option.id)}
-        <DropdownMenu.Item
-          class="flex items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-          textValue={option.label}
-          onSelect={(event) => {
-            event.preventDefault()
-            onChange(option.id)
-          }}
-        >
-          {#if option.iconUrl}
-            <img
-              src={option.iconUrl}
-              alt=""
-              class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
-            />
-          {:else if option.accent}
-            <span
-              class="mt-0.5 h-2 w-2 shrink-0 rounded-full"
-              style="background-color: {option.accent}"
-            ></span>
-          {/if}
-          <span class="min-w-0 flex-1">
-            <span class="block truncate text-xs font-medium text-foreground">{option.label}</span>
-            {#if option.hint}
-              <span class="mt-0.5 block text-[0.625rem] leading-relaxed text-dimmed">
-                {option.hint}
-              </span>
+      <span class="flex min-w-0 flex-1 items-center gap-1.5">
+        {#if selected?.iconUrl}
+          <img
+            src={selected.iconUrl}
+            alt=""
+            class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+          />
+        {:else if selected?.accent}
+          <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {selected.accent}"
+          ></span>
+        {/if}
+        <span class="min-w-0 truncate text-[0.75rem] {selected ? '' : 'text-dimmed'}">
+          {selected?.label ?? placeholder}
+        </span>
+      </span>
+      <ChevronDown size={13} class="shrink-0 text-dimmed" />
+    </DropdownMenu.Trigger>
+
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+      >
+        {#each options as option (option.id)}
+          <DropdownMenu.Item
+            class="flex items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+            textValue={option.label}
+            onSelect={(event) => {
+              event.preventDefault()
+              onChange(option.id)
+            }}
+          >
+            {#if option.iconUrl}
+              <img
+                src={option.iconUrl}
+                alt=""
+                class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+              />
+            {:else if option.accent}
+              <span
+                class="mt-0.5 h-2 w-2 shrink-0 rounded-full"
+                style="background-color: {option.accent}"
+              ></span>
             {/if}
-          </span>
-          {#if option.id === value}
-            <Check size={12} class="mt-0.5 shrink-0 text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-      {/each}
-    </DropdownMenu.Content>
-  </DropdownMenu.Portal>
-</DropdownMenu.Root>
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-xs font-medium text-foreground">{option.label}</span>
+              {#if option.hint}
+                <span class="mt-0.5 block text-[0.625rem] leading-relaxed text-dimmed">
+                  {option.hint}
+                </span>
+              {/if}
+            </span>
+            {#if option.id === value}
+              <Check size={12} class="mt-0.5 shrink-0 text-primary" />
+            {/if}
+          </DropdownMenu.Item>
+        {/each}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
+{/if}

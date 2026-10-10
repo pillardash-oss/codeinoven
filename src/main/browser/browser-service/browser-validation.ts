@@ -4,6 +4,7 @@
  * validators before the service touches it.
  */
 
+import { validateNativeDockTypography } from '../../../lib/native-dock'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
@@ -653,6 +654,23 @@ export function validatePermissionDecision(value: unknown): BrowserPermissionDec
   return value
 }
 
+/** Validate the state the Site Permissions modal set for one permission. */
+export function validateSitePermissionState(value: unknown): 'allow' | 'block' | 'ask' {
+  if (typeof value !== 'string' || (value !== 'allow' && value !== 'block' && value !== 'ask')) {
+    throw new TypeError('Browser site permission state is invalid')
+  }
+  return value
+}
+
+/** Validate a permission id from the Site Permissions modal. The id is looked up
+ *  in the catalog before use, so this only bounds the string. */
+export function validateSitePermissionId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 80) {
+    throw new TypeError('Browser site permission id is invalid')
+  }
+  return value
+}
+
 export function validateDownloadId(value: unknown): string {
   if (typeof value !== 'string' || !DOWNLOAD_ID_PATTERN.test(value)) {
     throw new TypeError('Browser download ID is invalid')
@@ -819,6 +837,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
   const bookmarkAvailable = record['bookmarkAvailable']
   const bookmarked = record['bookmarked']
   const pinned = record['pinned']
+  const hibernated = record['hibernated']
+  const active = record['active']
   const canReopenClosedTab = record['canReopenClosedTab']
   const groupId = record['groupId']
   const boxId = validateOptionalBoxId(record['boxId'])
@@ -828,6 +848,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     typeof bookmarkAvailable !== 'boolean' ||
     typeof bookmarked !== 'boolean' ||
     typeof pinned !== 'boolean' ||
+    typeof hibernated !== 'boolean' ||
+    typeof active !== 'boolean' ||
     typeof canReopenClosedTab !== 'boolean'
   ) {
     throw new TypeError('Browser tab context menu flags are invalid')
@@ -883,6 +905,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     bookmarkAvailable,
     bookmarked,
     pinned,
+    hibernated,
+    active,
     groupId,
     boxId,
     canReopenClosedTab,
@@ -1261,9 +1285,11 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
       title,
       description: overlayText(entry['description']),
       duration:
-        typeof duration === 'number' && Number.isFinite(duration) && duration > 0
-          ? Math.min(duration, 60_000)
-          : undefined,
+        duration === Infinity
+          ? Infinity
+          : typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+            ? Math.min(duration, 60_000)
+            : undefined,
       style: overlayText(entry['style']),
       closeButton: entry['closeButton'] === true ? true : undefined,
       dismissible: typeof entry['dismissible'] === 'boolean' ? entry['dismissible'] : undefined,
@@ -1274,6 +1300,10 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
   return {
     toasts,
     theme: stack['theme'] === 'dark' ? 'dark' : 'light',
+    typography:
+      stack['typography'] === undefined
+        ? undefined
+        : validateNativeDockTypography(stack['typography']),
     // The revision the overlay echoes back once these cards are drawn. A request
     // without one is not rejected: revision 0 simply never matches what the
     // renderer waits for, so the stack falls back rather than being trusted.

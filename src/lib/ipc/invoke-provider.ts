@@ -1,5 +1,8 @@
 import type {
   AgentCapabilityCatalog,
+  AgentPluginDetail,
+  AgentPluginMarketEntry,
+  AgentPluginMarketplace,
   AgentCapabilitySource,
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
@@ -35,6 +38,7 @@ import type {
   SkillMarketDetail,
   SkillMarketInstallRequest,
   InstalledSkillLocation,
+  InstalledAgentPlugin,
   SkillMarketLeaderboard,
   SkillMarketSearchResult,
   SkillMarketView,
@@ -58,6 +62,28 @@ import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
 import type { Contract } from './contract-helpers'
 
 export const invokeProviderContract = {
+  'plugins:listMarketplaces': {} as Contract<[], AgentPluginMarketplace[]>,
+  'plugins:addMarketplace': {} as Contract<
+    [{ url: string; platform: 'codex' | 'claude' }],
+    AgentPluginMarketplace
+  >,
+  'plugins:removeMarketplace': {} as Contract<[id: string], void>,
+  'plugins:list': {} as Contract<
+    [
+      query?: string,
+      offset?: number,
+      limit?: number,
+      view?: 'discover' | 'bookmarks' | 'installed'
+    ],
+    AgentPluginMarketEntry[]
+  >,
+  'plugins:getIcon': {} as Contract<[id: string], string | null>,
+  'plugins:getDetail': {} as Contract<[id: string], AgentPluginDetail>,
+  'plugins:setBookmarked': {} as Contract<[id: string, bookmarked: boolean], void>,
+  'plugins:listInstalled': {} as Contract<[], InstalledAgentPlugin[]>,
+  'plugins:install': {} as Contract<[id: string], InstalledAgentPlugin>,
+  'plugins:update': {} as Contract<[id: string], InstalledAgentPlugin>,
+  'plugins:uninstall': {} as Contract<[id: string], void>,
   'capabilities:readSkill': {} as Contract<
     [source: AgentCapabilitySource],
     NativeSkillContent | null
@@ -210,7 +236,7 @@ export const invokeProviderContract = {
   'utilities:getSkillMarketDetail': {} as Contract<[id: string], SkillMarketDetail>,
   'utilities:installMarketSkill': {} as Contract<[request: SkillMarketInstallRequest], string>,
   'utilities:installedSkillLocations': {} as Contract<[], InstalledSkillLocation[]>,
-  'utilities:uninstallMarketSkill': {} as Contract<[skillId: string], SkillUninstallReport>,
+  'utilities:uninstallMarketSkill': {} as Contract<[marketId: string], SkillUninstallReport>,
   'utilities:skillUpdateStatus': {} as Contract<[], SkillUpdateStatus>,
   'utilities:checkSkillUpdates': {} as Contract<[], SkillUpdateStatus>,
   'utilities:update': {} as Contract<

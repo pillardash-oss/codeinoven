@@ -3,6 +3,17 @@ export const LOCAL_OVEN_ID = 'local'
 export const OVEN_PROTOCOL_VERSION = 1
 export type OvenIcon = string
 
+/**
+ * Whether an Oven id names a remote Oven rather than this device.
+ *
+ * Remote work keeps running on its Oven while the app is closed, so every
+ * surface that tears work down, blocks a close, or reconciles interrupted turns
+ * uses this to leave a remote turn alone. A missing id is this device.
+ */
+export function isRemoteOvenId(ovenId: string | undefined | null): boolean {
+  return typeof ovenId === 'string' && ovenId.length > 0 && ovenId !== LOCAL_OVEN_ID
+}
+
 export interface OvenAppearance {
   icon: OvenIcon
   color: string
@@ -95,6 +106,13 @@ export interface OvenHarnessInventoryItem {
   latestVersion?: string
   checkedAt: number
   cached?: boolean
+  /**
+   * Which side of a Windows Oven holds this install. Missing means the host,
+   * and `wsl` means a Linux install living inside one of its distributions.
+   */
+  environment?: 'host' | 'wsl'
+  /** The distribution holding a `wsl` install. */
+  wslDistribution?: string
 }
 
 export interface OvenProbe {
@@ -116,6 +134,39 @@ export interface OvenProbe {
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
   inventory?: OvenHarnessInventoryItem[]
+  /**
+   * WSL distributions this Oven can run harnesses in, empty when it has none.
+   *
+   * A Windows Oven that can run Linux is the one case where a harness installs
+   * somewhere other than the host, so this is what the app asks before it picks
+   * an install channel.
+   */
+  wslDistributions?: string[]
+}
+
+/**
+ * One cached, unified read of a remote Oven.
+ *
+ * A single check answers the three questions every Oven surface asks: what the
+ * machine is (`probe`), which harnesses it runs and whether they can update
+ * (`inventory`), and whether its packages are behind (`preflight`). The Ovens
+ * page, the Oven picker, and the setup dialog all read this instead of each
+ * running their own probe.
+ */
+export interface OvenPeek {
+  ovenId: string
+  checkedAt: number
+  durationMs: number
+  /** Live service probe: specs, service revision, and active runs. Null when the Oven did not answer. */
+  probe: OvenProbe | null
+  /** Enriched harness rows: installed version plus update availability. */
+  inventory: OvenHarnessInventoryItem[]
+  /** The read-only setup observation the setup dialog consumes. Null when it did not complete. */
+  preflight: OvenSetupPreflightResult | null
+  /** Why the check failed, when part or all of it did. */
+  error?: string
+  /** True when this is the cached copy, so the caller refreshes instead of trusting it. */
+  stale: boolean
 }
 
 export interface OvenRun {

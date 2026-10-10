@@ -3,6 +3,7 @@
   import { toast } from 'svelte-sonner'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import { appPanelSlot } from '$lib/app-panel-portal'
   import { copyText } from '$lib/copy-text'
   import { invoke } from '$lib/ipc.svelte'
   import {
@@ -441,14 +442,10 @@
 </script>
 
 {#snippet railContent()}
-  {#if notificationsTab}
-    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-      <NotificationPanel />
-    {/await}
-  {:else if stickyNotesTab}
-    {#await import('$lib/components/notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
-      <StickyNotesPanel />
-    {/await}
+  {#if notificationsTab || stickyNotesTab}
+    <!-- The app's global panels are mounted once by `AppPanelHost`; this rail
+         only offers the body slot it fills. -->
+    <div class="h-full" {@attach appPanelSlot}></div>
   {:else if globalBrowser.popupsSidebarShown}
     {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
       <BrowserPopupWindowPanel popupId={activePopup?.id ?? ''} />

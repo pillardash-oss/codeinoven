@@ -16,6 +16,12 @@
   import { CIO_CLEANUP_CATEGORIES } from '$shared/cio-cleanup'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import {
+    settingsRouteState,
+    type UtilitiesRoute,
+    type UtilitiesTab
+  } from '$lib/stores/settings-route.svelte'
+  import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
@@ -36,7 +42,6 @@
     type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
-    type SkillMarketEntry,
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
@@ -85,8 +90,10 @@
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
+  import AgentPluginsMarketplaceView from './AgentPluginsMarketplaceView.svelte'
+  import AgentPluginDetail from './AgentPluginDetail.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
-  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
+  import UtilitiesView from './UtilitiesView.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -101,6 +108,8 @@
     onNavigateSection: (section: SettingsSection) => void
     /** Returns to the content view that opened Settings. */
     onBack: () => void
+    /** Steps back through the app's navigation history, including settings pages. */
+    onHistoryBack: () => void
   }
 
   let {
@@ -111,7 +120,8 @@
     updateConfig,
     section,
     onNavigateSection,
-    onBack
+    onBack,
+    onHistoryBack
   }: Props = $props()
 
   let diagnosticsBusy = $state(false)
@@ -124,89 +134,64 @@
   let blockersModalOpen = $state(false)
   let channelBusy = $state(false)
 
-  type UtilitiesRoute =
-    | { page: 'catalog'; tab: UtilitiesTab }
-    | { page: 'marketplace' }
-    | { page: 'skill'; entry: SkillMarketEntry }
-
-  interface SettingsHistoryEntry {
-    section: SettingsSection
-    utilitiesRoute: UtilitiesRoute
-  }
-
-  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog', tab: 'all' })
-  let settingsHistory = $state<SettingsHistoryEntry[]>([])
-
-  /**
-   * True from the moment the marketplace is opened until the utilities section is
-   * left again. It keeps the marketplace mounted (invisibly) behind the catalog and
-   * behind a skill page, so Back restores the results instead of rebuilding them.
-   */
-  let marketplaceVisited = $state(false)
-
   /** The mounted catalog, so returning to it can re-read what the marketplace
    *  may have installed or uninstalled while the catalog sat behind it. */
   let utilitiesCatalog: UtilitiesView | undefined = $state(undefined)
 
-  function currentSettingsLocation(): SettingsHistoryEntry {
-    return { section, utilitiesRoute }
-  }
-
   function navigateSection(nextSection: SettingsSection): void {
-    if (
-      nextSection === section &&
-      (nextSection !== 'utilities' || utilitiesRoute.page === 'catalog')
-    ) {
+    if (nextSection === section) {
+      // Re-selecting the Utilities section from one of its sub-pages returns to the catalog.
+      if (nextSection === 'utilities' && settingsRouteState.utilities.page !== 'catalog') {
+        settingsRouteState.showUtilities({ page: 'catalog', tab: 'all' })
+      }
       return
     }
-    settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    utilitiesRoute = { page: 'catalog', tab: 'all' }
-    marketplaceVisited = false
     onNavigateSection(nextSection)
   }
 
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
-    settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    if (nextRoute.page === 'marketplace') marketplaceVisited = true
-    applyUtilitiesRoute(nextRoute)
-  }
-
-  /** Moves the utilities route and re-reads the catalog when the route returns to
-   *  it, because the marketplace can change what belongs in the list. */
-  function applyUtilitiesRoute(nextRoute: UtilitiesRoute): void {
-    const returningToCatalog = utilitiesRoute.page !== 'catalog' && nextRoute.page === 'catalog'
-    utilitiesRoute = nextRoute
-    if (returningToCatalog) utilitiesCatalog?.reload()
+    settingsRouteState.showUtilities(nextRoute)
   }
 
   /** Section tabs are one page, so switching them replaces the route, never the history. */
   function selectUtilitiesTab(tab: UtilitiesTab): void {
-    if (utilitiesRoute.page !== 'catalog') return
-    utilitiesRoute = { page: 'catalog', tab }
+    if (settingsRouteState.utilities.page !== 'catalog') return
+    settingsRouteState.showUtilities({ page: 'catalog', tab })
   }
 
   /** Utilities section on screen. The catalog route owns it, so Back stays truthful. */
   let catalogTab = $derived<UtilitiesTab>(
-    utilitiesRoute.page === 'catalog' ? utilitiesRoute.tab : 'all'
+    settingsRouteState.utilities.page === 'catalog' ? settingsRouteState.utilities.tab : 'all'
   )
 
-  /** Where the skill page's back control returns to, and what it is called. */
-  function skillDetailBackLabel(): string {
-    return settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace'
+  /** Where a sub-page's back control returns to, and what it is called. */
+  function subPageBackLabel(): string {
+    const previous = navigationHistoryState.backStack.at(-1)?.utilities?.page
+    // Opening a card leaves a results page behind, and that is what the label names.
+    return previous === 'marketplace' || previous === 'plugins-marketplace' || previous === 'plugin'
       ? 'Back to results'
       : 'Back to utilities'
   }
 
+  /** The header label for a Utilities sub-page; null on the catalog. */
+  function utilitiesPageLabel(route: UtilitiesRoute): string | null {
+    if (route.page === 'catalog') return null
+    if (route.page === 'plugins-marketplace') return 'Plugin Marketplace'
+    if (route.page === 'plugin') return 'Plugin'
+    return 'Skills Marketplace'
+  }
+
+  // The catalog re-reads what the marketplaces may have changed whenever history
+  // or a sub-page brings it back on screen.
+  let utilitiesOnCatalog = $derived(settingsRouteState.utilities.page === 'catalog')
+  $effect(() => {
+    if (utilitiesOnCatalog) utilitiesCatalog?.reload()
+  })
+
+  /** Back goes one step through the app history; with no history it leaves Settings. */
   function goBack(): void {
-    const previous = settingsHistory.at(-1)
-    if (!previous) {
-      onBack()
-      return
-    }
-    settingsHistory = settingsHistory.slice(0, -1)
-    applyUtilitiesRoute(previous.utilitiesRoute)
-    if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
-    if (previous.section !== section) onNavigateSection(previous.section)
+    if (navigationHistoryState.canGoBack) onHistoryBack()
+    else onBack()
   }
 
   const escHandler = (e: KeyboardEvent) => {
@@ -279,8 +264,8 @@
       if (tab.id === section) activeLabel = tab.label
     }
     settingsUiState.activeTabLabel =
-      section === 'utilities' && utilitiesRoute.page !== 'catalog'
-        ? 'Skills Marketplace'
+      section === 'utilities'
+        ? (utilitiesPageLabel(settingsRouteState.utilities) ?? activeLabel)
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
@@ -1391,7 +1376,7 @@
       -->
       <div class="relative h-full min-h-0 overflow-hidden">
         <div
-          class="absolute inset-0 overflow-y-auto {utilitiesRoute.page === 'catalog'
+          class="absolute inset-0 overflow-y-auto {settingsRouteState.utilities.page === 'catalog'
             ? ''
             : 'invisible'}"
         >
@@ -1400,25 +1385,47 @@
             activeTab={catalogTab}
             onSelectTab={selectUtilitiesTab}
             onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
+            onOpenPluginMarketplace={() => navigateUtilities({ page: 'plugins-marketplace' })}
             onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+            onOpenPlugin={(pluginId) => navigateUtilities({ page: 'plugin', pluginId })}
           />
         </div>
-        {#if marketplaceVisited}
-          <div class="absolute inset-0 {utilitiesRoute.page === 'marketplace' ? '' : 'invisible'}">
+        {#if settingsRouteState.marketplaceMounted}
+          <div
+            class="absolute inset-0 {settingsRouteState.utilities.page === 'marketplace'
+              ? ''
+              : 'invisible'}"
+          >
             <SkillsMarketplaceView
               onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
               onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
             />
           </div>
         {/if}
-        {#if utilitiesRoute.page === 'skill'}
+        {#if settingsRouteState.utilities.page === 'plugins-marketplace'}
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            <AgentPluginsMarketplaceView
+              onOpenPlugin={(pluginId) => navigateUtilities({ page: 'plugin', pluginId })}
+            />
+          </div>
+        {/if}
+        {#if settingsRouteState.utilities.page === 'plugin'}
+          {@const pluginId = settingsRouteState.utilities.pluginId}
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            {#key pluginId}
+              <AgentPluginDetail {pluginId} backLabel={subPageBackLabel()} onBack={goBack} />
+            {/key}
+          </div>
+        {/if}
+        {#if settingsRouteState.utilities.page === 'skill'}
+          {@const skillEntry = settingsRouteState.utilities.entry}
           <!-- The skill page owns its scrolling: a pinned identity header and a body
                pane that scrolls under it. -->
           <div class="absolute inset-0 overflow-hidden bg-app">
-            {#key utilitiesRoute.entry.id}
+            {#key skillEntry.id}
               <SkillMarketplaceDetail
-                entry={utilitiesRoute.entry}
-                backLabel={skillDetailBackLabel()}
+                entry={skillEntry}
+                backLabel={subPageBackLabel()}
                 onBack={goBack}
               />
             {/key}
@@ -1571,66 +1578,68 @@
             </div>
           {/if}
 
-          <!-- Vertical toggle cards + check-for-updates button -->
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <!-- Update controls, one row per setting with the control on the right -->
+          <div class="mt-1 divide-y">
             <!-- Nightly builds enrollment -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Nightly builds</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Over-the-air updates from the nightly channel
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={isNightlyChannel}
-                  onchange={onNightlyToggleRequested}
-                  aria-label="Toggle nightly builds"
-                  disabled={!settingsReady || channelBusy}
-                  title="Opt into nightly prerelease builds"
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Nightly builds</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Over-the-air updates from the nightly channel
+                </p>
               </div>
+              <Switch
+                checked={isNightlyChannel}
+                onchange={onNightlyToggleRequested}
+                aria-label="Toggle nightly builds"
+                disabled={!settingsReady || channelBusy}
+                title="Opt into nightly prerelease builds"
+              />
             </div>
 
             <!-- Auto-download toggle -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Auto-download</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Automatically download updates when available
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={config.autoDownloadUpdates}
-                  onchange={() =>
-                    void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
-                  aria-label="Toggle auto-download"
-                  disabled={!settingsReady}
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Auto-download</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Download updates as soon as they are available
+                </p>
               </div>
+              <Switch
+                checked={config.autoDownloadUpdates}
+                onchange={() =>
+                  void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
+                aria-label="Toggle auto-download"
+                disabled={!settingsReady}
+              />
             </div>
 
             <!-- Auto-install toggle -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Auto-install</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Automatically restart and install after download
-              </p>
-              <div class="mt-auto pt-1">
-                <Switch
-                  checked={config.autoInstallUpdates}
-                  onchange={() =>
-                    void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
-                  aria-label="Toggle auto-install"
-                  disabled={!settingsReady}
-                />
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Auto-install</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                  Restart and install after an update downloads
+                </p>
               </div>
+              <Switch
+                checked={config.autoInstallUpdates}
+                onchange={() =>
+                  void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
+                aria-label="Toggle auto-install"
+                disabled={!settingsReady}
+              />
             </div>
 
             <!-- Check for updates -->
-            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
-              <p class="text-sm font-medium">Check for updates</p>
-              <p class="text-xs leading-relaxed text-dimmed">Look for a new release now</p>
-              <div class="mt-auto flex flex-wrap items-center gap-2 pt-1">
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3 last:pb-0">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Check for updates</p>
+                <p class="mt-0.5 text-xs leading-relaxed text-dimmed">Look for a new release now</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   disabled={updaterState.status.state === 'checking' || !settingsReady}
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
@@ -1644,7 +1653,7 @@
 
                 {#if updaterState.status.state === 'available'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                    class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
@@ -1668,72 +1677,57 @@
           </div>
         </div>
 
-        <!-- Storage + Diagnostics share one row and wrap apart on narrow screens -->
-        <div class="mt-4 flex flex-wrap gap-4">
-          <div
-            id="settings-block-about-storage"
-            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
-          >
+        <!-- Storage + Diagnostics sit side by side and stack on narrow screens -->
+        <div class="mt-4 grid gap-4 md:grid-cols-2">
+          <div id="settings-block-about-storage" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
-            <div
-              class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                <p class="text-sm font-medium">Data directory</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  All projects, threads, and history stored here
-                </p>
-              </div>
-              <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-                <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
-                  ~/.config/{ORG_SLUG}/{APP_SLUG}
-                </span>
-                <button
-                  type="button"
-                  class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-                  title="Open the data directory in the file manager"
-                  onclick={() => void openDataDirectory()}
-                >
-                  <FolderOpen size={13} />
-                  Open in file manager
-                </button>
-              </div>
+            <p class="text-sm font-medium">Data directory</p>
+            <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+              Projects, threads, and history are stored here.
+            </p>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span
+                class="min-w-0 truncate rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+                title="~/.config/{ORG_SLUG}/{APP_SLUG}"
+              >
+                ~/.config/{ORG_SLUG}/{APP_SLUG}
+              </span>
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                title="Open the data directory in the file manager"
+                onclick={() => void openDataDirectory()}
+              >
+                <FolderOpen size={13} />
+                Open in file manager
+              </button>
             </div>
           </div>
 
-          <div
-            id="settings-block-about-diagnostics"
-            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
-          >
+          <div id="settings-block-about-diagnostics" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
               Diagnostics
             </h3>
-            <div class="flex flex-wrap items-center justify-between gap-4">
-              <div class="min-w-[12rem] flex-1">
-                <p class="text-sm font-medium">Export failure report</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Redacted logs and operational state; prompts and file contents are excluded.
-                </p>
-                {#if diagnosticsResult}
-                  <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">
-                    {diagnosticsResult}
-                  </p>
-                {/if}
-              </div>
-              <button
-                class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-                disabled={diagnosticsBusy}
-                title="Export a redacted diagnostics report"
-                onclick={() => void exportDiagnostics()}
-              >
-                {#if diagnosticsBusy}
-                  <Loader2 size={13} class="animate-spin" />
-                {:else}
-                  <Download size={13} />
-                {/if}
-                Export
-              </button>
-            </div>
+            <p class="text-sm font-medium">Export failure report</p>
+            <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+              Redacted logs and operational state; prompts and file contents are excluded.
+            </p>
+            {#if diagnosticsResult}
+              <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">{diagnosticsResult}</p>
+            {/if}
+            <button
+              class="mt-3 flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              disabled={diagnosticsBusy}
+              title="Export a redacted diagnostics report"
+              onclick={() => void exportDiagnostics()}
+            >
+              {#if diagnosticsBusy}
+                <Loader2 size={13} class="animate-spin" />
+              {:else}
+                <Download size={13} />
+              {/if}
+              Export
+            </button>
           </div>
         </div>
 

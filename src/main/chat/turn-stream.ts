@@ -1,6 +1,10 @@
 import type { AgentPart } from '../../lib/types'
 import { appendPartDelta, mergeStreamedPart } from '../../lib/agent-part-merge'
 
+export function turnStreamPath(projectId: string, threadId: string): string {
+  return `projects/${projectId}/threads/${threadId}/stream.jsonl`
+}
+
 /**
  * Durable, append-only per-thread SSE stream log.
  *

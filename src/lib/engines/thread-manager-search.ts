@@ -3,7 +3,8 @@ import {
   buildThreadSearchSql,
   mergeThreadSearchResults,
   threadSearchMessageLimit,
-  ThreadRepo
+  ThreadRepo,
+  type ThreadSearchOptions
 } from '../../main/database/repositories/thread-repo'
 import type { ThreadSearchResult } from '../types'
 
@@ -22,11 +23,9 @@ export class ThreadSearchService {
     private readonly threadRepo: ThreadRepo
   ) {}
 
-  /** Project-scoped when `options.projectId` is set. */
-  async search(
-    query: string,
-    options: { projectId?: string; limit?: number } = {}
-  ): Promise<ThreadSearchResult[]> {
+  /** Family-scoped when `options.family` is set; project-scoped when
+   *  `options.projectId` is set. */
+  async search(query: string, options: ThreadSearchOptions = {}): Promise<ThreadSearchResult[]> {
     const raw = query.trim()
     if (!raw) return []
     const useSearchMeta = this.db.isSearchMetaReady()

@@ -5,22 +5,19 @@
   /**
    * The app's toaster, configured once.
    *
-   * Two windows draw this stack: the app window, and the native overlay that
-   * covers a browser page (`BrowserOverlaySurface.svelte`). They have to be the
-   * same toaster to the pixel, or a toast would visibly jump when the stack
-   * hands over between them, so the configuration lives here rather than being
-   * written out twice. The cards' own look is `toaster.css`, which the app's
-   * stylesheet pulls in for both windows.
+   * Only NativeToastSurface mounts the cards. The app renderer owns the toast
+   * state and callbacks, while one bounded native view draws this stack.
+   * The shared stylesheet supplies the card appearance and motion.
    */
   interface Props {
     /** The palette the cards are drawn in. */
     theme: 'light' | 'dark'
-    /** Distance from the top of this document to the first card, in pixels. The
-     *  overlay's document starts above the app's content, so the two differ. */
+    /** Distance from the top of the native document to the first card. */
     offsetTop: number
+    native?: boolean
   }
 
-  let { theme, offsetTop }: Props = $props()
+  let { theme, offsetTop, native = false }: Props = $props()
 </script>
 
 {#snippet successIcon()}
@@ -45,6 +42,7 @@
   closeButton
   pauseWhenPageIsHidden
   offset={{ top: `${offsetTop}px` }}
+  mobileOffset={native ? { top: `${offsetTop}px`, right: '24px', left: '32px' } : undefined}
   {successIcon}
   {warningIcon}
   {errorIcon}

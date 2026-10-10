@@ -33,6 +33,16 @@ export interface PtyRemoteLaunchHook {
     variables?: Record<string, string>
   ): Promise<PtyRemoteLaunch | null>
 }
+/**
+ * Prepare one plain shell on an Oven, not tied to a chat or a checkout.
+ *
+ * `pty:createOven` uses this when the user opens an Oven from Settings, where
+ * there is no thread to route through: the launch lands in the Oven's home
+ * directory instead of a project checkout.
+ */
+export interface PtyOvenShellLaunchHook {
+  (ovenId: string): Promise<PtyRemoteLaunch>
+}
 
 interface PtySession {
   id: string
@@ -208,7 +218,8 @@ export class PtyService {
     scopeResolver?: ScopeRootResolver,
     private readonly trackProcess?: (process: PtyTrackedProcess) => void,
     private readonly onUserInput?: PtyUserInputHook,
-    private readonly remoteLaunch?: PtyRemoteLaunchHook
+    private readonly remoteLaunch?: PtyRemoteLaunchHook,
+    private readonly ovenShellLaunch?: PtyOvenShellLaunchHook
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -263,6 +274,9 @@ export class PtyService {
         rows: number,
         scopeBucketId?: string
       ) => this.createAction(id, projectId, threadId, script, variables, cols, rows, scopeBucketId)
+    )
+    ipcMain.handle('pty:createOven', (_, id: string, ovenId: string, cols: number, rows: number) =>
+      this.createOven(id, ovenId, cols, rows)
     )
     ipcMain.on('pty:write', (_, id: string, data: string) => this.write(id, data))
     ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) =>
@@ -395,6 +409,27 @@ export class PtyService {
       timestamp: createdAt
     })
     return { id, pid: proc.pid }
+  }
+
+  /**
+   * Open a plain shell on one Oven, with no chat or checkout behind it.
+   *
+   * The renderer asks for this from Settings, where no thread exists to route
+   * through, so the launch comes from the dedicated Oven-shell hook and lands in
+   * the Oven's home directory. A live session under the same id is reattached
+   * rather than respawned, exactly like a thread terminal.
+   */
+  private async createOven(
+    id: string,
+    ovenId: string,
+    cols: number,
+    rows: number
+  ): Promise<{ id: string; pid: number }> {
+    if (!this.ovenShellLaunch) throw new Error(`This build cannot open an ${APP_NAME} Oven shell.`)
+    const launch = await this.ovenShellLaunch(ovenId)
+    const reused = await this.reuseOvenSession(id, launch)
+    if (reused) return reused
+    return this.createRemote(id, '', '', cols, rows, launch)
   }
 
   private async createRemote(

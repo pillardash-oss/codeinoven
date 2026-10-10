@@ -163,3 +163,30 @@
   align-self: flex-start;
   margin-top: 1px;
 }
+
+/* Native cards keep Sonner's transform/opacity motion and respond without IPC. */
+html[data-native-toasts] [data-sonner-toast] {
+  transition-duration: 200ms !important;
+}
+
+html[data-native-toasts] [data-sonner-toast] button {
+  cursor: pointer;
+  transition:
+    filter 120ms ease,
+    opacity 120ms ease;
+}
+
+html[data-native-toasts] [data-sonner-toast] button:hover {
+  filter: brightness(1.12);
+}
+
+html[data-native-toasts] [data-sonner-toast] button:disabled {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-native-toasts] [data-sonner-toast],
+  html[data-native-toasts] [data-sonner-toast] button {
+    transition-duration: 0ms !important;
+  }
+}

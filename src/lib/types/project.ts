@@ -109,6 +109,14 @@ export interface Project {
   path: string
   source: 'local' | 'ssh'
   host?: string
+  /**
+   * Registry id of the remote Oven this project runs on.
+   *
+   * `path` is the workspace directory on that Oven and `host` its address.
+   * New chats in the project seed their own Oven binding from these three, so a
+   * project created from the Add Project flow runs where the user pointed it.
+   */
+  ovenId?: string
   providerId: string
   workflowId: string
   threadLimit: number
@@ -140,6 +148,7 @@ export interface CreateProjectInput {
   path: string
   source?: 'local' | 'ssh'
   host?: string
+  ovenId?: string
   providerId?: string
   workflowId?: string
   threadLimit?: number

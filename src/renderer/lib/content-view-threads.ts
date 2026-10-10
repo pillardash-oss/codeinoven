@@ -61,6 +61,8 @@ export type ContentViewThreadDecision =
   { kind: 'keep' } | { kind: 'open'; thread: Thread } | { kind: 'clear' }
 
 export interface ContentViewThreadLookup {
+  /** Closing or deleting the family's thread deliberately left its view empty. */
+  isEmpty?: (family: ContentThreadFamily) => boolean
   /** The thread the family was last showing, when it still exists. */
   remembered: (family: ContentThreadFamily) => Thread | null
   /** The most recently visited thread of the family, as a fallback. */
@@ -86,6 +88,7 @@ export function decideContentViewThread(
   const family = contentViewFamily(view)
   if (!family) return { kind: 'keep' }
   if (selectedThread && contentThreadFamily(selectedThread) === family) return { kind: 'keep' }
+  if (lookup.isEmpty?.(family)) return { kind: 'clear' }
   const remembered = lookup.remembered(family)
   if (remembered) return { kind: 'open', thread: remembered }
   const recent = lookup.recentOfFamily(family)

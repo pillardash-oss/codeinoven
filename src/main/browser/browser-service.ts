@@ -10,6 +10,7 @@ import {
 import {
   validateNativeDockAck,
   validateNativeDockId,
+  validateNativeDockCommit,
   validateNativeDockInteraction,
   validateNativeDockRequest
 } from '../../lib/native-dock'
@@ -22,7 +23,9 @@ import {
   Menu,
   screen,
   session,
+  shell,
   systemPreferences,
+  webContents,
   webFrameMain,
   WebContentsView,
   type MenuItemConstructorOptions,
@@ -65,6 +68,12 @@ import type {
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
+import {
+  browserActionTargetScript,
+  reviewBrowserAction,
+  type BrowserActionTarget,
+  type BrowserActionReview
+} from './browser-service/browser-action-policy'
 import { isVideoCaptureUrl } from '../../lib/video/project'
 import {
   boundedBrowserTabHistory,
@@ -96,6 +105,13 @@ import {
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
+import { NativeToastView } from './native-toast-view'
+import { NativeStripView } from './native-strip-view'
+import {
+  STATUS_BUBBLE_DELAY_MS,
+  browserStatusOverlayPlacement,
+  type BrowserStatusOverlay
+} from '../../lib/browser-overlay'
 import {
   BrowserDownloadManager,
   type BrowserDownloadOwner
@@ -144,6 +160,8 @@ import {
   permissionResolutions,
   permissionSilentGrant,
   rememberedPermissionOutcome,
+  screenCaptureDeniedInLedger,
+  sitePermissionDescriptor,
   sitePermissionState,
   type PermissionResolution
 } from './browser-service/browser-permissions'
@@ -151,6 +169,15 @@ import {
   BrowserPermissionMemory,
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
+import {
+  BrowserScreenShareService,
+  type BrowserScreenShareOwner
+} from './browser-service/browser-screen-share'
+import {
+  EXTERNAL_PROTOCOL_PERMISSION,
+  externalProtocolTarget,
+  type ExternalProtocolTarget
+} from '../../lib/browser/external-protocol'
 import {
   type BrowserPageOwner,
   type BrowserTab,
@@ -160,6 +187,7 @@ import {
 } from './browser-service/browser-types'
 import {
   isAbortedNavigation,
+  rejectedLoadIsNotAFailure,
   RESTORE_SETTLE_TIMEOUT_MS,
   restoreNeedsFallbackLoad
 } from './browser-service/browser-navigation-outcome'
@@ -234,6 +262,8 @@ import {
   validateSiteDataScopes,
   validateSiteMenuOrigin,
   validateSiteMenuPoint,
+  validateSitePermissionId,
+  validateSitePermissionState,
   validateTabDestroyReason,
   validateTabId,
   validateThreadId,
@@ -272,6 +302,20 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
   find: 'find',
   findNext: 'find-next',
   findPrevious: 'find-previous'
+}
+
+/**
+ * Whether a browser action is answered by the renderer rather than a page.
+ *
+ * The tab strip, the address field and the find bar are DOM chrome, so these
+ * actions reach the renderer even for a tab this process holds no page for: a
+ * sleeping tab, a blank one, or one whose view has not been created yet. Page
+ * actions (`reload`, `back`, zooming) have nothing to act on in that state.
+ */
+function isRendererAnsweredAction(
+  action: BrowserShortcutAction
+): action is keyof typeof PANEL_SHORTCUT_TARGETS {
+  return action in PANEL_SHORTCUT_TARGETS
 }
 
 /**
@@ -437,11 +481,9 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * The browser operations a page belonging to the user answers.
  *
  * A browser tab's assistant conversation answers about the page on screen, so its
- * browser capability is attached to that tab. Only the reading operations are
- * allowed there: they observe the page, while everything else in the capability
- * changes it. File upload is the one reviewed exception: Auto Review uses a
- * native file chooser or an exact-file confirmation, while Full Access may name
- * the files directly. Navigation, clicks and resizing remain agent-page only.
+ * browser capability is attached to that tab. Reading operations observe it;
+ * mutations pass through action-aware Auto Review. File upload uses a native
+ * file chooser or exact-file confirmation, while Full Access may name files.
  */
 const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
 const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
@@ -463,6 +505,7 @@ export interface BrowserAgentActionApproval {
   action: string
   origin: string
   pageUrl: string
+  review: BrowserActionReview
 }
 
 /** Outcome of a permission-card approval. An alternative carries the user's correction. */
@@ -498,6 +541,9 @@ export class BrowserService {
    *  comments; the panel drives it through the browser IPC contract. */
   private readonly inspector: BrowserInspector
   private readonly siteData: BrowserSiteDataService
+  /** The screen-share source picker for platforms without a native one, and the
+   *  ledger gate that refuses a share the user remembered blocking. */
+  private readonly screenShare: BrowserScreenShareService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
   /**
@@ -507,6 +553,8 @@ export class BrowserService {
    * raises a toast and never hovers the strip never pays for a second renderer.
    */
   private readonly overlay: BrowserOverlayWindow
+  private readonly nativeToasts: NativeToastView
+  private readonly nativeStrip: NativeStripView
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
@@ -535,6 +583,29 @@ export class BrowserService {
     { directory: string; time: number; playing: boolean }
   >()
   private activeTabId: string | null = null
+  /**
+   * The link target the pointer on the active page rests on, and the tab's page
+   * that reported it, or null while none is.
+   *
+   * Kept raw beside the bubble so a page that moves under a resting pointer can
+   * be re-placed from the same target rather than waiting for another hover.
+   */
+  private targetUrl: string | null = null
+  private targetUrlTabId: string | null = null
+  /**
+   * Whether the pointer has rested on `targetUrl` long enough to paint it.
+   *
+   * A new target starts false and flips true when the resting delay elapses; a
+   * target the bubble is already showing stays true so moving between links
+   * updates it live. It gates the placement, so a pointer sweeping across a page
+   * shows no bubble at all.
+   */
+  private statusDelayElapsed = false
+  /** The pending resting-delay timer, or null while none is armed. */
+  private statusShowTimer: ReturnType<typeof setTimeout> | null = null
+  /** The link preview currently drawn by the overlay window, or null while none
+   *  is. Compared against the next placement so a repeat frame is not a repaint. */
+  private statusOverlay: BrowserStatusOverlay | null = null
   /** Chords the browser claims, resolved from the keymap by the renderer. Empty
    *  until that report arrives, which leaves every key to the rest of the app. */
   private shortcutBindings: BrowserShortcutBindings = {}
@@ -723,7 +794,14 @@ export class BrowserService {
     private readonly downloads: BrowserDownloadManager
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
-    this.overlay = new BrowserOverlayWindow(window)
+    this.nativeToasts = new NativeToastView(window)
+    this.nativeStrip = new NativeStripView(window)
+    this.overlay = new BrowserOverlayWindow(window, undefined, (host) =>
+      this.nativeToasts.setHost(host ?? window)
+    )
+    // Chromium drops its own status bubble when the window loses the pointer's
+    // context; so does this.
+    window.on('blur', () => this.dismissStatusOverlay())
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -753,9 +831,13 @@ export class BrowserService {
           this.permissionGrants.get(partition),
           this.permissionDenies.get(partition)
         ),
-      applySitePermission: (partition, keys, action) =>
-        this.applySitePermission(partition, keys, action),
       reloadOriginTabs: (partition, origin) => this.reloadOriginTabs(partition, origin)
+    })
+    this.screenShare = new BrowserScreenShareService({
+      window,
+      resolveFrameOwner: (frame) => this.resolveScreenShareOwner(frame),
+      isScreenShareDenied: (partition, origin) =>
+        screenCaptureDeniedInLedger(this.permissionDenies.get(partition), origin)
     })
     this.extensions = new BrowserExtensionService(getConfigRoot(), permissionPersistence, {
       window: () => (this.window.isDestroyed() ? null : this.window),
@@ -1027,6 +1109,10 @@ export class BrowserService {
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
+        // A page that moved under a resting pointer keeps its preview where it is
+        // relative to the page; a switch to another tab drops the one the old
+        // page was showing, because the pointer is no longer over it.
+        if (this.targetUrl !== null) this.refreshStatusOverlay()
         if (previousActiveTabId !== tabId) this.notifyExtensionActivated(tabId)
         // Remember the frame the page is on screen at. Parking lays the page out at
         // this size from now on, so leaving a tab never resizes the page away from
@@ -1145,23 +1231,28 @@ export class BrowserService {
     })
     replaceHandler('browser:setToastOverlay', (_event, rawRequest) => {
       const request = validateToastOverlayRequest(rawRequest)
-      // Null is the renderer saying no page covers the toaster's corner any
-      // more, so the stack belongs back in the app's own DOM. The window itself
-      // only goes when nothing else is drawing in it.
-      if (request === null) {
-        this.overlay.releaseStack()
-        return true
-      }
-      return this.overlay.applyStack(request)
+      return this.nativeToasts.apply(request)
+    })
+    replaceHandler('browser:toastOverlayHeight', (event, rawHeight) => {
+      if (!this.nativeToasts.owns(event.sender.id)) return
+      this.nativeToasts.setHeight(rawHeight)
     })
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
-      this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
+      this.nativeStrip.apply(validateBrowserStripOverlayRequest(rawRequest))
+    )
+    replaceHandler('browser:warmStripOverlay', (_event, warm) =>
+      this.nativeStrip.setWarm(warm === true)
+    )
+    replaceHandler('browser:warmOverlayWindow', (_event, warm) =>
+      this.overlay.setWarm(warm === true)
     )
     replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
       const id = validateNativeDockId(rawId)
       const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
       if (request && request.id !== id) throw new TypeError('Native dock identities differ')
-      return this.overlay.applyDock(id, request)
+      return id === 'browser-tab-strip'
+        ? this.nativeStrip.applyDock(request)
+        : this.overlay.applyDock(id, request)
     })
     replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
       sendToRenderer(
@@ -1177,7 +1268,24 @@ export class BrowserService {
         validateNativeDockAck(rawAck)
       )
     })
-    replaceHandler('browser:overlayReady', () => this.overlay.currentState())
+    replaceHandler('browser:commitDockOverlay', (_event, rawRequest) =>
+      this.overlay.commitDock(validateNativeDockCommit(rawRequest))
+    )
+    replaceHandler('browser:focusDockOverlay', (_event, rawId) =>
+      this.overlay.focusDock(validateNativeDockId(rawId))
+    )
+    replaceHandler('browser:overlayReady', (event) =>
+      this.nativeToasts.owns(event.sender.id)
+        ? { stack: this.nativeToasts.currentStack(), docks: [], strip: null, status: null }
+        : this.nativeStrip.owns(event.sender.id)
+          ? {
+              stack: null,
+              docks: this.nativeStrip.currentDocks(),
+              strip: this.nativeStrip.currentStrip(),
+              status: null
+            }
+          : this.overlay.currentState()
+    )
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
       // what the user did: the app renderer owns the toast and runs its handler.
@@ -1440,7 +1548,9 @@ export class BrowserService {
         const y = validateSiteMenuPoint(rawY, 'y coordinate')
         // Native popup menus run a nested run loop; detach from the invoke reply
         // so the renderer's call resolves immediately.
-        setImmediate(() => this.siteData.showSiteMenu(projectId, host, origin, boxId, boxName, x, y))
+        setImmediate(() =>
+          this.siteData.showSiteMenu(projectId, host, origin, boxId, boxName, x, y)
+        )
       }
     )
     replaceHandler('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
@@ -1509,6 +1619,35 @@ export class BrowserService {
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
     })
+    replaceHandler('browser:resolveScreenShare', (_event, rawRequestId, rawSourceId) => {
+      const requestId = validatePermissionRequestId(rawRequestId)
+      const sourceId = typeof rawSourceId === 'string' ? rawSourceId : null
+      this.screenShare.resolveChoice(requestId, sourceId)
+    })
+    replaceHandler(
+      'browser:setSitePermission',
+      (_event, rawProjectId, rawBoxId, rawOrigin, rawPermissionId, rawAction) => {
+        const projectId = validateProjectId(rawProjectId)
+        const boxId = validateOptionalBoxId(rawBoxId)
+        const origin = validateSiteMenuOrigin(rawOrigin)
+        if (!origin) throw new Error('Site permissions require a site origin')
+        const descriptor = sitePermissionDescriptor(validateSitePermissionId(rawPermissionId))
+        if (!descriptor) throw new Error('Site permission is unknown')
+        const action = validateSitePermissionState(rawAction)
+        // The modal writes the same ledger keys the page-initiated prompt writes,
+        // so a manual decision and a prompt decision are the same decision.
+        const partition = browserPartitionFor(projectId, boxId)
+        this.applySitePermission(
+          partition,
+          descriptor.keysFor(origin),
+          action === 'ask' ? 'reset' : action
+        )
+        // A page that already read the old answer only re-queries on navigation,
+        // so the origin's tabs are reloaded into the new one, exactly as the old
+        // padlock submenus did.
+        this.reloadOriginTabs(partition, origin)
+      }
+    )
     replaceHandler('browser:popupReady', () => {
       // Pull model: the popup document requests the prompt on display once its
       // listener is bound. Invoke replies bypass the push-side load-state
@@ -1598,6 +1737,8 @@ export class BrowserService {
     this.displayedTab = null
     for (const handle of this.pendingParks.values()) clearTimeout(handle)
     this.pendingParks.clear()
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
     this.agentReveals.clear()
@@ -1606,6 +1747,9 @@ export class BrowserService {
     this.stage.dispose()
     this.promptWindow.dispose()
     this.overlay.dispose()
+    this.nativeToasts.dispose()
+    this.nativeStrip.dispose()
+    this.screenShare.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
@@ -1850,35 +1994,34 @@ export class BrowserService {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // The user's tab is read-only by default. Full Access follows the thread's
-    // permission tier; Auto Review asks the user to approve each page mutation.
-    // File upload has its own exact-file review and never submits a form.
+    // Review effects, rather than prompting for every click on an attached page.
+    // Agent-owned pages use the same gate; uploads keep their exact-file review.
+    let reviewedTarget: BrowserActionTarget | null = null
     if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
       if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
         throw new Error(
           `The page the user is on is attached for reading (${[...ATTACHED_PAGE_READ_OPERATIONS].join(', ')}), so "${operation}" is unavailable.`
         )
       }
-      if (
-        context.permissionLevel === 'auto_review' &&
-        operation !== 'upload' &&
-        !(await this.approveAttachedPageOperation(operation, input, tab, {
-          projectId,
-          threadId,
-          sessionId: context.sessionId
-        }))
-      ) {
-        return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
-      }
     }
     if (
-      attached &&
-      !ATTACHED_PAGE_READ_OPERATIONS.has(operation) &&
-      !ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)
+      context.permissionLevel !== 'full_access' &&
+      ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) &&
+      operation !== 'upload'
     ) {
-      throw new Error(
-        `The page the user is on cannot run "${operation}". Open a page of your own first.`
-      )
+      const reviewed = await this.approveAttachedPageOperation(operation, input, tab, {
+        projectId,
+        threadId,
+        sessionId: context.sessionId
+      })
+      if (!reviewed.approved) {
+        return {
+          ...this.utilityTabContext(tabId, tab),
+          page: attached ? 'user' : 'agent',
+          cancelled: true
+        }
+      }
+      reviewedTarget = reviewed.target
     }
     // An operation is a use: it revives a tab the agent owns that was evicted
     // from the parked set, and protects it from eviction while the agent keeps
@@ -1947,6 +2090,7 @@ export class BrowserService {
     if (operation === 'click') {
       const selector = this.requiredInputString(input, 'selector')
       const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
+        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { clicked: false, reason: 'target changed; inspect the page and retry' };` : ''}
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { clicked: false, reason: 'not found' };
         element.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1959,6 +2103,7 @@ export class BrowserService {
       const selector = this.requiredInputString(input, 'selector')
       const text = this.requiredInputString(input, 'text', true)
       const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
+        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { typed: false, reason: 'target changed; inspect the page and retry' };` : ''}
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { typed: false, reason: 'not found' };
         element.focus();
@@ -1988,17 +2133,24 @@ export class BrowserService {
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
-  /** Ask before an Auto Review turn mutates the page the user is viewing. */
+  /** Route a browser action through the ledger and confirm consequential effects. */
   private async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,
     tab: BrowserTab,
     context: { projectId: string; threadId: string; sessionId?: string }
-  ): Promise<boolean> {
+  ): Promise<{ approved: boolean; target: BrowserActionTarget | null }> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
     const pageUrl = contents.getURL()
     const pageGeneration = tab.navigationGeneration
+    const target: BrowserActionTarget | null =
+      operation === 'click' || operation === 'type'
+        ? await contents.executeJavaScript(
+            browserActionTargetScript(this.requiredInputString(input, 'selector'))
+          )
+        : null
+    const review = reviewBrowserAction(operation, input, target)
     let action: string
     if (operation === 'click') {
       action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
@@ -2021,13 +2173,14 @@ export class BrowserService {
       operation,
       action,
       origin: safeOrigin(pageUrl),
-      pageUrl
+      pageUrl,
+      review
     })
     const approved = typeof decision === 'boolean' ? decision : decision.approved
     if (typeof decision !== 'boolean' && decision.alternative) {
       throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
     }
-    if (!approved) return false
+    if (!approved) return { approved: false, target }
     if (
       contents.isDestroyed() ||
       tab.navigationGeneration !== pageGeneration ||
@@ -2037,7 +2190,7 @@ export class BrowserService {
         'The page changed while the browser action was being approved; retry on the current page'
       )
     }
-    return true
+    return { approved: true, target }
   }
 
   /**
@@ -2737,6 +2890,14 @@ export class BrowserService {
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
     if (this.forwardNavigationShortcut(action)) return
+    // The strip, the address field and the find bar are the renderer's, so their
+    // actions are forwarded before this process looks for a page to act on. A
+    // claimed tab with no view (a sleeping or blank tab) still has a row the
+    // renderer owns, and that row is what these actions act on.
+    if (isRendererAnsweredAction(action)) {
+      this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
+      return
+    }
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
     const contents = tab.view.webContents
@@ -2767,16 +2928,6 @@ export class BrowserService {
         return
       case 'savePage':
         void this.savePage(contents)
-        return
-      case 'focusAddress':
-      case 'closeTab':
-      case 'newTab':
-      case 'reopenTab':
-      case 'toggleNotes':
-      case 'find':
-      case 'findNext':
-      case 'findPrevious':
-        this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }
   }
@@ -2834,13 +2985,16 @@ export class BrowserService {
    */
   consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
     const tabId = this.focusedChromeTabId
-    // The claim can name a tab this process has not created yet (a view claims the
-    // keyboard as it mounts, before the show that creates its page), and a tab it
-    // no longer has is one whose keys belong to the app again, so the match is what
-    // decides.
-    if (!tabId || !this.tabs.has(tabId)) return false
+    if (!tabId) return false
     const action = matchBrowserShortcut(input, this.shortcutBindings)
     if (!action) return false
+    // A claim can name a tab this process holds no page for: a sleeping tab, a
+    // blank one, or a tab whose view is still being created. Its row is the
+    // renderer's regardless, so the strip's own actions are still claimed here.
+    // Claiming them is what keeps Cmd/Ctrl+W on a sleeping tab from falling
+    // through to the application menu's "Close Window" and closing the app. A
+    // page action has nothing to act on without a page, so it is left alone.
+    if (!this.tabs.has(tabId) && !isRendererAnsweredAction(action)) return false
     event.preventDefault()
     this.runBrowserShortcut(tabId, action)
     return true
@@ -3075,6 +3229,12 @@ export class BrowserService {
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
     view.webContents.on('audio-state-changed', publish)
+    // Chromium reports the resolved address under the pointer here, and an empty
+    // string once it leaves the link. That is the whole source of the bottom-left
+    // status bubble: an embedded page has no browser chrome to draw one itself.
+    view.webContents.on('update-target-url', (_event, url) => {
+      this.onTargetUrlReport(tabId, url)
+    })
     // The document is parsed at dom-ready, which is the earliest point at which
     // the capture observer can be installed before the page's own scripts ask
     // for the microphone.
@@ -3374,10 +3534,30 @@ export class BrowserService {
         frameUrl: null
       })
     })
+    const owner: BrowserPageOwner = { tabId, projectId, threadId, boxId: tab.boxId }
     view.webContents.on('will-navigate', (event, url) => {
+      // An external address (the App Store, mail, a native app) is offered to
+      // the OS behind a confirmation; the page itself never navigates to it.
+      if (this.offerExternalNavigation(owner, url)) {
+        event.preventDefault()
+        return
+      }
       if (!this.isAllowedTabNavigation(projectId, tab.boxId, url)) event.preventDefault()
     })
-    this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
+    view.webContents.on('will-redirect', (event, url) => {
+      if (this.offerExternalNavigation(owner, url)) event.preventDefault()
+    })
+    // `will-navigate` is the main frame only. A companion-app button often
+    // lives in a page's own embedded frame (an embedded widget, a booking
+    // panel), whose navigation fires this event and nothing else, so it is
+    // handled here rather than left to be dropped in silence.
+    view.webContents.on('will-frame-navigate', (details) => {
+      if (details.isMainFrame) return
+      if (this.offerExternalNavigation(owner, details.url, details.frame?.url)) {
+        details.preventDefault()
+      }
+    })
+    this.installWindowOpenPolicy(view, owner)
     return tab
   }
   /**
@@ -3403,6 +3583,9 @@ export class BrowserService {
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
+    // A `window.open` aimed at an external scheme is the same handoff a link
+    // click is, and never becomes a tab: the address is not a page.
+    if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
     if (
       details.disposition === 'new-window' &&
       !details.features &&
@@ -3947,7 +4130,20 @@ export class BrowserService {
       this.showPopupWindowContextMenu(record, params)
     })
     contents.on('will-navigate', (event, url) => {
+      if (this.offerExternalNavigation(popupPageOwner(record), url)) {
+        event.preventDefault()
+        return
+      }
       if (!this.isAllowedPopupNavigation(record, url)) event.preventDefault()
+    })
+    contents.on('will-redirect', (event, url) => {
+      if (this.offerExternalNavigation(popupPageOwner(record), url)) event.preventDefault()
+    })
+    contents.on('will-frame-navigate', (details) => {
+      if (details.isMainFrame) return
+      if (this.offerExternalNavigation(popupPageOwner(record), details.url, details.frame?.url)) {
+        details.preventDefault()
+      }
     })
     contents.setWindowOpenHandler((details) =>
       this.windowOpenResponse(popupPageOwner(record), details)
@@ -4861,8 +5057,33 @@ export class BrowserService {
       // stranded request.
       void this.promptFromDurableMemory(id)
     })
+    // Screen sharing needs its own handler on Electron: `getDisplayMedia`
+    // rejects with `NotSupportedError` when a session never answers it. The
+    // native system picker is preferred where the platform has one, and the
+    // permission request handler above has already gated the call, so a
+    // remembered refusal refuses the share before any picker can appear.
+    browserSession.setDisplayMediaRequestHandler(
+      (request, callback) => {
+        void this.screenShare.handle(request, callback)
+      },
+      { useSystemPicker: true }
+    )
     this.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /** The tab and jar a display-media request's frame belongs to, or null when
+   *  the frame is gone or belongs to no tab of this browser. */
+  private resolveScreenShareOwner(frame: WebFrameMain | null): BrowserScreenShareOwner | null {
+    const contents = frame ? webContents.fromFrame(frame) : undefined
+    if (!contents || contents.isDestroyed()) return null
+    const owner = this.tabForContents(contents.id)
+    if (!owner) return null
+    return {
+      tabId: owner.id,
+      projectId: owner.tab.projectId,
+      partition: browserPartitionFor(owner.tab.projectId, owner.tab.boxId)
+    }
   }
 
   /**
@@ -4900,16 +5121,88 @@ export class BrowserService {
     }
     // Native OS popup composites above the WebContentsView: the page stays
     // live and interactive while the prompt is on screen.
-    const tab = this.tabs.get(remaining.request.tabId)
+    this.showPendingPermission(remaining)
+  }
+
+  /** Put one pending request on the prompt card, labelled with its tab. Every
+   *  path that raises a prompt shares this, so a permission request and an
+   *  external-address handoff draw the same card and cannot drift apart. */
+  private showPendingPermission(pending: PendingBrowserPermission): void {
+    const tab = this.tabs.get(pending.request.tabId)
     this.promptWindow.show(
       {
-        request: remaining.request,
+        request: pending.request,
         queueSize: this.pendingPermissions.size,
         projectLabel: tab ? this.permissionLabel(tab) : null,
-        systemAccessDenied: remaining.systemAccessDenied
+        systemAccessDenied: pending.systemAccessDenied
       },
       this.promptAnchor()
     )
+  }
+
+  /**
+   * Offer a page's external address to the operating system, and answer whether
+   * it was one.
+   *
+   * The address is not opened here: a page must not be able to launch an app on
+   * the machine just by pointing a link at it. It goes on the same prompt card a
+   * permission request uses, and the OS open happens only after the user
+   * confirms it ({@link openExternalUrl}). A caller that gets true must refuse
+   * the in-app navigation, because the destination is not a page.
+   */
+  private offerExternalNavigation(
+    owner: BrowserPageOwner,
+    url: string,
+    requestingFrameUrl?: string | null
+  ): boolean {
+    const target = externalProtocolTarget(url)
+    if (!target) return false
+    const tab = this.tabs.get(owner.tabId)
+    if (!tab || this.window.webContents.isDestroyed()) return false
+    // An embedded frame that asked for the handoff names itself on the card; a
+    // main-frame navigation names the page it is on. Only an http(s) requester
+    // can ask at all: a page with no origin of its own (a blank document, a
+    // dead renderer) has no site to name.
+    const origin =
+      permissionOrigin(requestingFrameUrl ?? '') ?? permissionOrigin(tab.view.webContents.getURL())
+    if (!origin) return false
+    const id = crypto.randomUUID()
+    const request: BrowserPermissionRequest = {
+      id,
+      tabId: owner.tabId,
+      projectId: owner.projectId,
+      origin,
+      permission: EXTERNAL_PROTOCOL_PERMISSION,
+      mediaTypes: [],
+      externalUrl: target.url
+    }
+    const timer = setTimeout(
+      () => this.resolvePermission(id, permissionResolutions.dismiss),
+      PERMISSION_TIMEOUT_MS
+    )
+    const pending: PendingBrowserPermission = {
+      request,
+      // An external address has no Chromium callback waiting on it: the page's
+      // navigation was already refused, and the OS open is the whole outcome.
+      callback: () => {},
+      timer,
+      systemAccessDenied: false,
+      partition: browserPartitionFor(owner.projectId, owner.boxId)
+    }
+    this.pendingPermissions.set(id, pending)
+    this.showPendingPermission(pending)
+    return true
+  }
+
+  /** Hand a confirmed external address to the operating system. Only an address
+   *  that passed {@link externalProtocolTarget} reaches here, and only after the
+   *  user asked for it, so the value handed out is validated twice. */
+  private openExternalUrl(url: string): void {
+    const target: ExternalProtocolTarget | null = externalProtocolTarget(url)
+    if (!target) return
+    void shell.openExternal(target.url).catch((error: unknown) => {
+      Logger.error('Browser external address could not be opened:', error)
+    })
   }
 
   /** The live grant/deny ledgers the permission handlers read and write. */
@@ -5016,7 +5309,11 @@ export class BrowserService {
       this.persistPermissionMemory()
     }
     if (resolution.granted) {
-      void this.grantBrowserPermission(pending, resolution.rememberGrant)
+      if (pending.request.externalUrl) {
+        this.openExternalUrl(pending.request.externalUrl)
+      } else {
+        void this.grantBrowserPermission(pending, resolution.rememberGrant)
+      }
     } else {
       pending.callback(false)
     }
@@ -5030,16 +5327,7 @@ export class BrowserService {
       this.promptWindow.hide()
       return
     }
-    const nextTab = this.tabs.get(next.value.request.tabId)
-    this.promptWindow.show(
-      {
-        request: next.value.request,
-        queueSize: this.pendingPermissions.size,
-        projectLabel: nextTab ? this.permissionLabel(nextTab) : null,
-        systemAccessDenied: next.value.systemAccessDenied
-      },
-      this.promptAnchor()
-    )
+    this.showPendingPermission(next.value)
   }
 
   /** Ask macOS for capture access only after the user allows the site. The
@@ -5082,16 +5370,7 @@ export class BrowserService {
 
   /** Keep the denied request visible until the user dismisses it or retries. */
   private promptSystemAccessDenied(pending: PendingBrowserPermission): void {
-    const tab = this.tabs.get(pending.request.tabId)
-    this.promptWindow.show(
-      {
-        request: pending.request,
-        queueSize: this.pendingPermissions.size,
-        projectLabel: tab ? this.permissionLabel(tab) : null,
-        systemAccessDenied: true
-      },
-      this.promptAnchor()
-    )
+    this.showPendingPermission(pending)
   }
 
   /** Content-anchored placement data for the permission popup: the active tab's
@@ -5241,6 +5520,19 @@ export class BrowserService {
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
+          // A media document commits and plays without ever reporting a finished
+          // load, so Electron rejects `loadURL` with `ERR_FAILED` over a page that
+          // is already on screen. The rejection is read against what the tab
+          // recorded before it is allowed to become an error card.
+          if (
+            rejectedLoadIsNotAFailure({
+              reportedFailure: this.tabs.get(tabId)?.navigationFailure ?? null,
+              loading: !contents.isDestroyed() && contents.isLoading(),
+              url: contents.isDestroyed() ? '' : contents.getURL()
+            })
+          ) {
+            return
+          }
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
           const reason = error instanceof Error && error.message ? error.message : String(error)
           this.setTabLoadError(tabId, {
@@ -5994,6 +6286,7 @@ export class BrowserService {
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
     this.stage.park(tab.view, viewport)
     this.markParked(tabId)
+    if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
     if (this.activeTabId === tabId && !options.keepActive) {
       this.activeTabId = null
       this.activeTabBounds = null
@@ -6070,6 +6363,8 @@ export class BrowserService {
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
+    this.nativeStrip.raise()
+    this.nativeToasts.raise()
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
@@ -6228,6 +6523,9 @@ export class BrowserService {
    *  losing its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
+    // The DOM toast replaces the overlay window's own content, so the preview
+    // steps aside with it rather than drawing over the toast.
+    if (visible) this.dismissStatusOverlay()
     // A popup window's page is a native view too, so a DOM toast under it would be
     // invisible. It steps aside with the tab's page and comes back at the same
     // frame, which is what keeps a momentary toast from resizing a page.
@@ -6245,6 +6543,119 @@ export class BrowserService {
       return
     }
     this.showActiveView()
+  }
+
+  /**
+   * Show or drop the link preview for a report from a page's pointer.
+   *
+   * `update-target-url` carries the resolved address under the pointer and an
+   * empty string once it leaves the link, which is the one signal that takes the
+   * bubble down. Only the page actually on screen can be hovered, so a report
+   * from a parked or background tab is dropped rather than drawn over another.
+   * A fresh target earns the bubble only after `STATUS_BUBBLE_DELAY_MS` of rest,
+   * so a pointer sweeping across a page shows nothing; a bubble already up
+   * follows the pointer between links at once.
+   */
+  private onTargetUrlReport(tabId: string, url: string): void {
+    const target = statusTextForTarget(url)
+    if (target === null) {
+      if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
+      return
+    }
+    if (this.window.isDestroyed()) return
+    if (this.activeTabId !== tabId || this.toastVisible) return
+    // A repeated report for the pointer's current target is not a new hover: an
+    // armed delay is left to run and an elapsed one stays up. Only a target the
+    // pointer has newly moved onto restarts the wait.
+    if (this.targetUrl === target && this.targetUrlTabId === tabId) {
+      if (this.statusDelayElapsed) this.refreshStatusOverlay()
+      return
+    }
+    this.targetUrl = target
+    this.targetUrlTabId = tabId
+    // A bubble already on screen follows the pointer between links at once, the
+    // way a native browser does; the delay guards only the first appearance.
+    if (this.statusDelayElapsed) {
+      this.refreshStatusOverlay()
+      return
+    }
+    this.armStatusDelay()
+  }
+
+  /**
+   * Start the resting delay that earns the pointer a bubble.
+   *
+   * The timer is armed for the newest target only: a pointer crossing onto
+   * another link re-arms it, so a link it merely swept past never shows.
+   */
+  private armStatusDelay(): void {
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
+    this.statusShowTimer = setTimeout(() => {
+      this.statusShowTimer = null
+      this.statusDelayElapsed = true
+      this.refreshStatusOverlay()
+    }, STATUS_BUBBLE_DELAY_MS)
+  }
+
+  /** Cancel any pending resting delay. */
+  private clearStatusDelay(): void {
+    if (this.statusShowTimer === null) return
+    clearTimeout(this.statusShowTimer)
+    this.statusShowTimer = null
+  }
+
+  /**
+   * Re-place the preview from the tab and frame that are current, or take it down
+   * when there is nothing it can be drawn against.
+   *
+   * Called on a hover, a tab switch, a frame change, and the page leaving the
+   * screen, so a bubble only ever belongs to the page the pointer is over and
+   * never lingers after it. A frame that produces the same placement is not a
+   * repaint, which matters because a surface animation re-reports its frame every
+   * frame it runs.
+   */
+  private refreshStatusOverlay(): void {
+    if (this.window.isDestroyed()) return
+    const bounds = this.activeTabBounds
+    const target = this.targetUrl
+    if (
+      target === null ||
+      !this.statusDelayElapsed ||
+      this.targetUrlTabId !== this.activeTabId ||
+      this.toastVisible ||
+      bounds === null
+    ) {
+      this.setStatusOverlay(null)
+      return
+    }
+    const placement = browserStatusOverlayPlacement(bounds, this.window.getContentBounds().height)
+    const current = this.statusOverlay
+    if (
+      current !== null &&
+      current.url === target &&
+      current.left === placement.left &&
+      current.bottom === placement.bottom
+    ) {
+      return
+    }
+    this.setStatusOverlay({ url: target, left: placement.left, bottom: placement.bottom })
+  }
+
+  /** Send the preview to the overlay window, tracking what is on display. */
+  private setStatusOverlay(request: BrowserStatusOverlay | null): void {
+    this.statusOverlay = request
+    this.overlay.applyStatus(request)
+  }
+
+  /** Drop the preview, for the page that owns it leaving the screen. */
+  private dismissStatusOverlay(): void {
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
+    if (this.targetUrl === null && this.targetUrlTabId === null) return
+    this.targetUrl = null
+    this.targetUrlTabId = null
+    this.refreshStatusOverlay()
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
@@ -6295,6 +6706,7 @@ export class BrowserService {
       this.activeTabBounds = null
     }
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
+    if (this.targetUrlTabId === tabId) this.dismissStatusOverlay()
     // A destroyed tab can no longer hold the keyboard, so its toolbar must not
     // stay the tab the window-level interception routes to.
     if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
@@ -6384,6 +6796,23 @@ function safeOrigin(url: string): string {
     return new URL(url).origin
   } catch {
     return 'the current page'
+  }
+}
+
+/**
+ * What the link preview should show for a target the page reported, or null when
+ * there is nothing useful to say.
+ *
+ * A `javascript:` link navigates nowhere, so Chromium leaves its own status
+ * bubble empty for one and this does the same. An address that will not parse is
+ * dropped for the same reason: it is not a place the user is about to visit.
+ */
+function statusTextForTarget(url: string): string | null {
+  if (url.length === 0) return null
+  try {
+    return new URL(url).protocol === 'javascript:' ? null : url
+  } catch {
+    return null
   }
 }
 

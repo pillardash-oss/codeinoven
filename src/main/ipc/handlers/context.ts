@@ -133,6 +133,8 @@ export type IpcChatEngine = Pick<
   | 'connectionRestored'
   | 'deleteThreadSession'
   | 'activeTurnChangeSummary'
+  | 'markTurnRankingUndone'
+  | 'clearTurnRankingUndone'
   | 'hasActiveProcessesInScope'
   | 'abort'
   | 'recordUserFileSave'

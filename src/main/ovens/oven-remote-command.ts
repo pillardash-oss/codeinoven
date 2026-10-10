@@ -28,11 +28,18 @@ const WINDOWS_ROOT_SEGMENT = OVEN_DATA_DIRECTORY.split('/').join('\\')
  * The Node runtime check every POSIX runtime command starts from.
  *
  * The managed npm prefix is on PATH first, so a harness-bootstrapped Node is
- * found; a missing or too-old runtime fails before the service is touched.
+ * found; a missing or too-old runtime fails before the service is touched. Each
+ * failure writes a reason that names the version it found, so a failed request
+ * reports the real cause instead of an unclassified exit code.
  */
 export const POSIX_NODE_CHECK =
   `${OVEN_HARNESS_PATH} ` +
-  'set -eu; command -v node >/dev/null 2>&1 || { printf "Node.js is required on this Oven\\n" >&2; exit 1; }; node -e \'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)\''
+  'set -eu; ' +
+  'if ! command -v node >/dev/null 2>&1; then ' +
+  'printf "Node.js 22 or later is required on this Oven (node was not found on the non-interactive SSH PATH)\\n" >&2; ' +
+  'exit 1; ' +
+  'fi; ' +
+  'node -e \'const major = Number(process.versions.node.split(".")[0]); if (major < 22) { process.stderr.write("Node.js 22 or later is required on this Oven (found v" + process.versions.node + ")\\n"); process.exit(1); }\''
 
 function isEnvironmentName(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)
@@ -81,7 +88,7 @@ export function remoteServiceCommand(
   const script = [
     `$root = ${windowsRoot}`,
     `$service = Join-Path $root 'service.mjs'`,
-    `if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js is required on this Oven'); exit 1 }`,
+    `if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js 22 or later is required on this Oven (node was not found)'); exit 1 }`,
     ...environmentAssignments(environment),
     `$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)`,
     `$data = $reader.ReadToEnd()`,

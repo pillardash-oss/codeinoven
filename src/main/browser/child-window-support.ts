@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme } from 'electron'
+import { app, nativeTheme, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,7 +43,7 @@ export function resolveAppTheme(): 'light' | 'dark' {
  * renderer output beside the main bundle.
  */
 export function loadRendererDocument(
-  target: BrowserWindow,
+  target: Pick<WebContents, 'loadURL' | 'loadFile'>,
   document: string,
   query: Record<string, string> = {}
 ): Promise<void> {

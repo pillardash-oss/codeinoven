@@ -9,7 +9,7 @@
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { ensureStoredBrowserTabs, isBrowserLoaded } from '$lib/stores/browser-access.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import type { Project } from '$shared/types'
@@ -28,6 +28,15 @@
   let { entries, projects, projectIconUrls, selectedKey, onSelect }: Props = $props()
 
   let open = $state(false)
+  let nativeReady = $state(false)
+  let nativeFailed = $state(false)
+  let keyboardAt = 0
+  /**
+   * Bumped by every close path, and by a commit attempt before it arms its
+   * fallback. A fallback can then tell whether its own selection is still the
+   * one in flight rather than one that already resolved.
+   */
+  let commitToken = 0
   /**
    * The highlighted row, held by entry key rather than by index.
    *
@@ -106,7 +115,11 @@
     if (index < 0) return false
     const row = contentElement?.querySelector<HTMLElement>(`[data-entry-index="${index}"]`)
     if (!row) return false
-    row.focus()
+    if (nativeReady && !nativeFailed) {
+      // The native window owns focus. Focusing its hidden source row would
+      // activate the parent again and dismiss the native modal on hover.
+      row.scrollIntoView({ block: 'nearest' })
+    } else row.focus()
     return true
   }
 
@@ -144,6 +157,7 @@
   }
 
   function cycle(direction: 1 | -1): void {
+    keyboardAt = performance.timeOrigin + performance.now()
     // The stored tab list is read before the empty check, because this read is
     // the only thing that can fill an empty list: a session with no live thread
     // and a browser runtime this launch never loaded has nothing to show yet,
@@ -152,6 +166,7 @@
     if (entries.length === 0) return
 
     if (!open) {
+      nativeFailed = false
       previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
       restoreFocusOnClose = true
       pointerAtOpen = lastPointer
@@ -174,11 +189,13 @@
 
   function cancel(): void {
     if (!open) return
+    commitToken += 1
     restoreFocusOnClose = true
     open = false
   }
 
   async function selectEntry(entry: ThreadSwitcherEntry): Promise<void> {
+    commitToken += 1
     restoreFocusOnClose = false
     open = false
     await onSelect(entry)
@@ -189,11 +206,39 @@
     workspaceState.requestFocusComposerEditor()
   }
 
-  /** The entry a key release would open: the highlighted one. */
-  function commitHighlighted(): void {
+  /** Resolve the highlighted row. Every close path ends here. */
+  function resolveHighlighted(): void {
     const entry = highlightedIndex >= 0 ? entries[highlightedIndex] : undefined
     if (entry) void selectEntry(entry)
     else cancel()
+  }
+
+  /** The entry a key release would open: the highlighted one. */
+  async function commitHighlighted(): Promise<void> {
+    // Mouse events and Control release arrive in different renderers. Let the
+    // window drawing the rows settle its latest hover before selecting a row.
+    if (nativeReady) {
+      const accepted = await invoke('browser:commitDockOverlay', {
+        id: 'thread-switcher',
+        selectedKey: highlightedKey,
+        keyboardAt
+      }).catch(() => false)
+      if (accepted) {
+        // The overlay answers the commit through its own renderer. A lost answer
+        // must not leave the switcher covering the window, so a fallback resolves
+        // the highlighted row once the answer is overdue. Whichever lands first
+        // closes the switcher and bumps the token, and the other becomes a no-op.
+        const token = ++commitToken
+        setTimeout(() => {
+          if (token !== commitToken || !open) return
+          commitToken += 1
+          resolveHighlighted()
+        }, 300)
+        return
+      }
+      if (!open) return
+    }
+    resolveHighlighted()
   }
 
   /** Warm the highlighted thread's message cache so releasing Ctrl (or
@@ -247,10 +292,13 @@
   function handleWindowKeyup(event: KeyboardEvent): void {
     if (!open || event.key !== 'Control') return
     event.preventDefault()
-    commitHighlighted()
+    void commitHighlighted()
   }
 
   function handleWindowBlur(): void {
+    // Native presentation owns keyboard focus until it closes. Its own blur
+    // report dismisses the switcher when the user leaves the application.
+    if (nativeReady && !nativeFailed) return
     cancel()
   }
 </script>
@@ -267,6 +315,22 @@
   onClose={cancel}
   placement="palette"
   abovePage
+  nativeOverlay="thread-switcher"
+  bind:nativeReady
+  bind:nativeFailed
+  onNativeHover={(button) => {
+    const entry = entries[Number(button.dataset.entryIndex)]
+    if (entry) highlightedKey = threadSwitcherEntryKey(entry)
+  }}
+  onNativeCommit={(key) => {
+    // The overlay's answer to a commit. Ignore one that arrives after the
+    // fallback already closed the switcher, so the gesture never selects twice.
+    commitToken += 1
+    if (!open) return
+    const entry = entries.find((candidate) => threadSwitcherEntryKey(candidate) === key)
+    if (entry) void selectEntry(entry)
+    else cancel()
+  }}
   panelWidth="max-w-lg"
   chrome={false}
   bind:panelEl={contentElement}
@@ -305,10 +369,13 @@
         role="option"
         aria-selected={entryKey === highlightedKey}
         data-entry-index={index}
-        class="w-full overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
+        data-native-dock-key={entryKey}
+        class="w-full cursor-pointer overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
         title={entryTitle(entry)}
         onpointerenter={(event) => {
-          if (pointerMovedSinceOpen(event)) highlightedKey = entryKey
+          // The native window owns pointer selection, including its opening
+          // position. Only a failed native presentation uses this DOM fallback.
+          if (nativeFailed && pointerMovedSinceOpen(event)) highlightedKey = entryKey
         }}
         onclick={() => void selectEntry(entry)}
       >

@@ -83,6 +83,9 @@
     "electron",
     "ffmpeg-static",
   ],
+  "patchedDependencies": {
+    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch",
+  },
   "overrides": {
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",

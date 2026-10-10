@@ -165,7 +165,13 @@ export class ProjectManager {
 
   async createProject(input: CreateProjectInput): Promise<Project> {
     if (!input.hidden && input.path) {
-      const duplicate = await this.findByPath(input.path)
+      // A remote path only identifies a project together with its host: two
+      // Ovens can legitimately serve the same absolute directory. A local path
+      // is unique on its own, so it keeps the exact-path check.
+      const duplicate =
+        input.source === 'ssh' && input.host
+          ? await this.projectRepo.findByHostPath(input.host, input.path)
+          : await this.findByPath(input.path)
       if (duplicate) {
         throw new Error(`A project for "${input.path}" already exists (${duplicate.name})`)
       }
@@ -180,6 +186,7 @@ export class ProjectManager {
       path: input.path,
       source: input.source ?? 'local',
       host: input.host,
+      ovenId: input.ovenId,
       providerId: input.providerId ?? '',
       workflowId: input.workflowId ?? 'default',
       threadLimit: input.threadLimit ?? 70,
@@ -429,6 +436,7 @@ export class ProjectManager {
       path: input.path ?? existing.path,
       source: input.source ?? existing.source,
       host: input.host ?? existing.host,
+      ovenId: input.ovenId ?? existing.ovenId,
       providerId: input.providerId ?? existing.providerId,
       workflowId: input.workflowId ?? existing.workflowId,
       threadLimit: input.threadLimit ?? existing.threadLimit,

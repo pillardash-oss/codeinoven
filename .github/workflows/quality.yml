@@ -1,19 +1,24 @@
 name: Quality
 
-# The full suite runs once per change, on the nightly side:
+# The full suite runs exactly once per change, on the pull request that is the
+# last gate before the content lands:
 #   - on every pull_request (feature PRs, dev -> nightly promotion PRs)
-#   - on push to nightly (the promotion merge itself)
+#
+# There is no `push: nightly` trigger. A dev -> nightly promotion PR merges only
+# with its required "Release verification" check green under a `strict`
+# (head-must-be-up-to-date) policy, and nightly carries no content of its own, so
+# the merge commit's tree is exactly the tree that PR verified. Re-running the
+# whole suite, and its four production builds, on the resulting push to nightly
+# could only re-confirm that same content.
+#
 # A nightly -> main promotion PR re-delivers the exact content that just
-# passed the full suite on nightly, so only the cheap "Release promotion
+# passed the full suite, so only the cheap "Release promotion
 # policy" job runs there; the heavy jobs report "Skipped" (treated as
 # passing by required-check policies). Pushes to main are excluded entirely:
 # main only ever receives nightly promotion merges, which were just checked
-# on the nightly push.
+# on the promotion PR.
 on:
   pull_request:
-  push:
-    branches:
-      - nightly
   workflow_dispatch:
 
 permissions:
@@ -286,13 +291,47 @@ jobs:
   verify-release:
     name: Release verification
     needs: [policy, check, lint, test, build, windows-runtime, linux-runtime]
-    if: needs.policy.outputs.skip != 'true'
+    # `always()` so a failed dependency still reaches the assertion below.
+    # Without it GitHub skips this job when a `needs` job fails, and a skipped
+    # required check counts as passing, which would let a red PR merge.
+    if: always() && needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
-    timeout-minutes: 30
-    env:
-      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+    timeout-minutes: 15
 
     steps:
+      # This job is the required status check on `dev` and `nightly`. It used to
+      # run `bun run verify:release`, which is `check && lint && test && audit &&
+      # build:production && check:bundle`: every one of those had just run in a
+      # job above on this same macOS image and commit, and it rebuilt the whole
+      # application a second time on the critical path. It now asserts those
+      # jobs' results instead.
+      - name: Assert every gated job succeeded
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          WINDOWS_RESULT: ${{ needs.windows-runtime.result }}
+          LINUX_RESULT: ${{ needs.linux-runtime.result }}
+        run: |
+          failed=0
+          for entry in \
+            "Type check:$CHECK_RESULT" \
+            "Lint:$LINT_RESULT" \
+            "Tests:$TEST_RESULT" \
+            "Production build:$BUILD_RESULT" \
+            "Windows quality and packaged startup:$WINDOWS_RESULT" \
+            "Linux quality and packaged startup:$LINUX_RESULT"; do
+            label="${entry%%:*}"
+            result="${entry#*:}"
+            echo "$label -> $result"
+            if [ "$result" != "success" ]; then
+              echo "::error::$label reported '$result'"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
       - name: Check out repository
         uses: actions/checkout@v6
 
@@ -301,5 +340,9 @@ jobs:
         with:
           install: 'true'
 
-      - name: Release verification
-        run: bun run verify:release
+      # The dependency audit lives in security.yml, which is not a required
+      # check, so it is the one part of `verify:release` this gate keeps running
+      # itself; everything else it used to run is covered by the jobs asserted
+      # above.
+      - name: Audit dependencies
+        run: bun run audit

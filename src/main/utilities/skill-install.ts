@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs'
-import { cp, mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { marketSkillName } from '../../lib/skill-market-identity'
+import { skillInstallDocument } from '../../lib/skill-frontmatter'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import type { UtilityActivation, UtilityDefinitionInput } from '../../lib/types'
 import { listHarnesses } from '../agents/harness-registry'
@@ -24,8 +25,6 @@ import { UtilityRegistryService } from './utility-registry-service'
  * a skill somewhere the card does not advertise, and the install record it
  * writes is what makes the updater own exactly the copies CodeInOven placed.
  */
-
-const CANONICAL_ONLY_GLOBAL_SKILL_AGENTS = new Set(['opencode', 'codex', 'antigravity'])
 
 /**
  * The Skills CLI classifies every agent whose skills folder is the canonical
@@ -81,28 +80,6 @@ export interface MarketSkillInstallContext {
   footprint?: UtilityScopeFootprintService
 }
 
-/**
- * Skills CLI currently leaves universal agents in the canonical global folder
- * even for a named `--agent` install. Materialize the harness-advertised path
- * so OpenCode, Codex, and Antigravity can discover the selected skill there.
- */
-async function materializeHarnessGlobalSkill(
-  home: string,
-  skillId: string,
-  harnessId: string
-): Promise<void> {
-  if (!CANONICAL_ONLY_GLOBAL_SKILL_AGENTS.has(harnessId)) return
-  const displayPath = harnessGlobalSkillPath(harnessId)
-  if (!displayPath || displayPath === SHARED_GLOBAL_SKILL_PATH || !displayPath.startsWith('~/')) {
-    return
-  }
-  const canonicalSkill = join(home, SHARED_GLOBAL_SKILL_PATH.slice(2), skillId)
-  if (!existsSync(canonicalSkill)) return
-  const harnessSkill = join(home, displayPath.slice(2), skillId)
-  await mkdir(dirname(harnessSkill), { recursive: true })
-  await cp(canonicalSkill, harnessSkill, { recursive: true, force: true, dereference: true })
-}
-
 /** Record every copy this install just placed, so the updater can keep it fresh. */
 async function recordInstall(
   context: MarketSkillInstallContext,
@@ -125,7 +102,13 @@ async function recordInstall(
   }))
   await new SkillInstallRecordStore(context.storage).upsert(records)
   return records.map((record) =>
-    skillInstallRecordId(record.manager, record.skillId, record.scope, record.projectId)
+    skillInstallRecordId(
+      record.manager,
+      record.skillId,
+      record.scope,
+      record.projectId,
+      record.source
+    )
   )
 }
 
@@ -156,17 +139,22 @@ async function installManagedSkill(
       : request.projectIds.map((projectId) => ({ level: 'project' as const, projectId }))
   const definitions: UtilityDefinitionInput<'skill'>[] = scopes.map((utilityScope) => ({
     kind: 'skill',
-    name: detail.name,
+    name: marketSkillName(request.source, request.skillId),
     description: detail.description,
     enabled: true,
     activation,
     scope: utilityScope,
-    config: { instructions: detail.skillMarkdown },
+    config: {
+      instructions: skillInstallDocument({
+        markdown: detail.skillMarkdown,
+        name: marketSkillName(request.source, request.skillId)
+      })
+    },
     harnessBindings: [
       {
         harnessId: '*',
         strategy: 'skill',
-        transportName: request.skillId
+        transportName: marketSkillName(request.source, request.skillId)
       }
     ]
   }))
@@ -233,31 +221,59 @@ async function installNativeSkill(
     : `https://${request.source}`
   const githubToken = (await context.githubToken?.().catch(() => null)) ?? null
   const outputs: string[] = []
-  for (const directory of destinations) {
-    for (const agentTarget of agentTargets) {
-      outputs.push(
-        await runSkillsCli(
-          [
-            'add',
-            installSource,
-            '--skill',
-            request.skillId,
-            '--agent',
-            agentTarget,
-            // Real folders instead of symlinks back to a canonical copy, so an
-            // uninstall can never leave a dangling link behind.
-            '--copy',
-            '-y',
-            ...(request.scope === 'projects' ? [] : ['--global'])
-          ],
-          directory,
-          { githubToken }
-        )
+  const installName = marketSkillName(request.source, request.skillId)
+  const stagingRoot = context.storage.resolve('skills/staging')
+  await mkdir(stagingRoot, { recursive: true })
+  const staging = await mkdtemp(join(stagingRoot, 'install-'))
+  try {
+    outputs.push(
+      await runSkillsCli(
+        [
+          'add',
+          installSource,
+          '--skill',
+          request.skillId,
+          '--agent',
+          CANONICAL_SKILL_AGENT,
+          '--copy',
+          '-y'
+        ],
+        staging,
+        { githubToken }
       )
-      if (request.scope === 'harnesses') {
-        await materializeHarnessGlobalSkill(directory, request.skillId, agentTarget)
+    )
+    const stagedSkill = join(staging, '.agents/skills', request.skillId)
+    const markdown = await readFile(join(stagedSkill, 'SKILL.md'), 'utf-8')
+    await writeFile(
+      join(stagedSkill, 'SKILL.md'),
+      skillInstallDocument({ markdown, name: installName })
+    )
+    await writeFile(
+      join(stagedSkill, '.cio-market.json'),
+      JSON.stringify({ source: request.source, skillId: request.skillId })
+    )
+    for (const directory of destinations) {
+      for (const agentTarget of agentTargets) {
+        const root =
+          request.scope === 'projects'
+            ? join(directory, '.agents/skills')
+            : join(
+                context.home,
+                (request.scope === 'harnesses'
+                  ? harnessGlobalSkillPath(agentTarget)!
+                  : SHARED_GLOBAL_SKILL_PATH
+                ).replace(/^~\//u, '')
+              )
+        await mkdir(root, { recursive: true })
+        await cp(stagedSkill, join(root, installName), {
+          recursive: true,
+          force: true,
+          dereference: true
+        })
       }
     }
+  } finally {
+    await rm(staging, { recursive: true, force: true })
   }
   const recordIds = await recordInstall(
     context,

@@ -1,4 +1,5 @@
 import type { Thread, ThreadStatus } from '../../lib/types'
+import { isRemoteOvenId } from '../../lib/ovens'
 import type { Database } from '../database/database'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
@@ -65,6 +66,12 @@ export interface RestartRecoveryResult {
   stopped: Thread[]
   /** Threads whose turns demonstrably completed before the stop   not resumed. */
   completed: Thread[]
+  /**
+   * Remote Oven turns left untouched because they are still running on their
+   * Oven. Their bindings are reattached rather than settled, so they resume
+   * streaming once the transport is back.
+   */
+  remote: Thread[]
   failures: RestartRecoveryFailure[]
 }
 
@@ -104,12 +111,25 @@ export class RestartRecoveryService {
     const recovered: Thread[] = []
     const stopped: Thread[] = []
     const completed: Thread[] = []
+    const remote: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
 
     for (const thread of allThreads) {
       const hasActiveTurn = activeTurnOwners.has(thread.id)
       const completedWithOrphanCheckpoint = thread.status === 'completed' && hasActiveTurn
       if (!RECOVERABLE_STATUSES.has(thread.status) && !completedWithOrphanCheckpoint) continue
+      // A remote Oven turn keeps running on its Oven while this app is stopped,
+      // so it is not an orphan to settle: leave its status and checkpoints alone
+      // and let the chat engine reattach its binding, which resumes streaming
+      // the moment the transport is back.
+      if (isRemoteOvenId(thread.settings?.ovenId)) {
+        // A remote run carries no pid owner, so nothing can attribute it to one
+        // instance. Only a pass that knows no sibling is live (the plain restart
+        // scope) may reattach it; otherwise two instances would poll and write
+        // the same run at once.
+        if (options.scope !== 'take-over') remote.push(thread)
+        continue
+      }
       const ownerPid = activeTurnOwners.get(thread.id)
       if (options.scope === 'take-over') {
         // Only a turn a departed process was running can be adopted here. A turn
@@ -196,6 +216,7 @@ export class RestartRecoveryService {
       recovered,
       stopped,
       completed,
+      remote,
       failures
     }
   }

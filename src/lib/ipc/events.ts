@@ -1,4 +1,10 @@
-import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
+import type {
+  NativeDockAck,
+  NativeDockCommit,
+  NativeDockKey,
+  NativeDockInteraction,
+  NativeDockRequest
+} from '../native-dock'
 import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
@@ -23,6 +29,8 @@ import type {
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserPopupWindow,
+  BrowserScreenSharePrompt,
+  BrowserSitePermissionsPrompt,
   BrowserSwitcherKey,
   BrowserShortcutChord
 } from './browser'
@@ -37,16 +45,23 @@ import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
+  BrowserStatusOverlay,
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   ToastOverlayInteractionReport,
   ToastOverlayRequestStack
 } from '../browser-overlay'
+import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  /** One app call for the renderer to perform on the agent's behalf. The
+   *  renderer answers on the `appControl:respond` invoke with the request id. */
+  'appControl:request': [] as unknown as [request: AppControlRequest],
   'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
   'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
+  'browser:overlay:dockCommit': [] as unknown as [request: NativeDockCommit],
+  'browser:overlay:dockKey': [] as unknown as [input: NativeDockKey],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
@@ -292,6 +307,12 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
   /**
+   * The link preview the native overlay should draw at the page's bottom-left,
+   * delivered to the overlay document. Null takes it down. It is paint-only, so
+   * unlike the stack and the strip it never carries a handler or a revision.
+   */
+  'browser:overlay:status': [] as unknown as [status: BrowserStatusOverlay | null],
+  /**
    * One interaction with a toast the overlay drew, delivered back to the app
    * renderer, which runs the handler that toast holds (open the thread, copy the
    * details, and so on) and then drops the toast from its own state.
@@ -312,6 +333,12 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /** Open the Site Permissions modal for one origin, with every permission's
+   *  remembered state so the modal draws without a round trip. */
+  'browser:sitePermissions': [] as unknown as [prompt: BrowserSitePermissionsPrompt],
+  /** A page asked to share the screen and no system picker is available, so the
+   *  in-app source picker should be shown. */
+  'browser:screenShareSources': [] as unknown as [prompt: BrowserScreenSharePrompt],
   /**
    * The browser's installed extensions, whole, after any change to them: one
    * installed, removed, or its enablement edited. The list is short, so it is

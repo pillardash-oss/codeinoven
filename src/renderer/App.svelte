@@ -1,11 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
-  import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
+  import { FileSearch, FolderKanban, Globe, Timeline } from '@lucide/svelte'
+  import type {
+    CommandPaletteProps,
+    PaletteFooterFilter
+  } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import AppPanelHost from '$lib/components/layout/AppPanelHost.svelte'
   import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import {
     AppHeaderNavigationController,
     type HeaderViewOptionId
@@ -21,6 +26,8 @@
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
+  import { startAppControlResponder } from '$lib/app-control/app-control-responder'
+  import { registerShellNavigationActions } from '$lib/app-control/app-control-actions'
   import {
     rendererRecovery,
     flushAllDraftCommits,
@@ -38,19 +45,23 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
-  import { viewShowsProject, viewShowsScopedSidebar } from '$lib/content-view-projects'
+  import {
+    viewShowsProject,
+    viewShowsScopedSidebar,
+    viewShowsWorkspaceShell
+  } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { settingsRouteState } from '$lib/stores/settings-route.svelte'
   import {
     browserStore,
     isBrowserLoaded,
     loadBrowser,
     withBrowser
   } from '$lib/stores/browser-access.svelte'
-  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
@@ -70,7 +81,10 @@
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { getRoutineIcon } from '$lib/routine-icons'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
@@ -94,6 +108,7 @@
     type ElementSelectionBookmark
   } from '$lib/selection-bookmark'
   import {
+    ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
@@ -103,6 +118,7 @@
     type AppConfigPatch,
     type InstanceRole,
     type Project,
+    type Routine,
     type ThemePreference,
     type Thread
   } from '$shared/types'
@@ -119,6 +135,7 @@
   import { defaultConfig } from './app-defaults'
   import { FileSearchPaletteController } from './app-file-search.svelte'
   import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { BrowserTabPaletteController } from './app-browser-tab-search.svelte'
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
@@ -140,8 +157,23 @@
   /** The one-time start-at-login offer, raised once after the first routine how-to. */
   let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
-  const threadSearch = new ThreadSearchPaletteController({
-    openThread: (thread) => void openThreadFromSearch(thread)
+  const threadSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void openThreadFromSearch(thread) },
+    'projects'
+  )
+  const chatSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void openThreadFromSearch(thread) },
+    'chats'
+  )
+  const assistantSearch = new ThreadSearchPaletteController(
+    {
+      openThread: (thread) => void openThreadFromSearch(thread),
+      openRoutine: (routine) => void openRoutineFromSearch(routine)
+    },
+    'assistant'
+  )
+  const browserTabSearch = new BrowserTabPaletteController({
+    openTab: (tabId) => openBrowserTabFromSearch(tabId)
   })
   const projectSwitch = new ProjectSwitchPaletteController({
     focusProject: (project) => focusProjectFromSpotlight(project)
@@ -184,7 +216,8 @@
 
   /** The spotlight is one surface, not four. `actions` is its home screen; the
    *  other three open from it and only ever show inside the same shell. */
-  type SpotlightScreenId = 'actions' | 'files' | 'threads' | 'projects'
+  type SpotlightScreenId =
+    'actions' | 'files' | 'threads' | 'chats' | 'assistants' | 'browser' | 'projects'
 
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
@@ -196,16 +229,87 @@
     // That is what made the spotlight refuse to reopen after a screen hop.
     const files = fileSearch.paletteOpen
     const threads = threadSearch.paletteOpen
+    const chats = chatSearch.paletteOpen
+    const assistants = assistantSearch.paletteOpen
+    const browser = browserTabSearch.paletteOpen
     const projects = projectSwitch.paletteOpen
     const actions = commandPaletteOpen
     if (files) return 'files'
     if (threads) return 'threads'
+    if (chats) return 'chats'
+    if (assistants) return 'assistants'
+    if (browser) return 'browser'
     if (projects) return 'projects'
     if (actions) return 'actions'
     return null
   }
 
   let spotlightScreenId = $derived(resolveSpotlightScreen())
+
+  /** The footer filter for a project-scoped search: the local projects, driving
+   *  the same multi-select picker the routine and browser-group screens use. */
+  function projectFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    return {
+      options: scopeState.projects.map((project) => ({
+        id: project.id,
+        label: project.name,
+        ...(project.color ? { color: project.color } : {}),
+        iconUrl: project.iconUrl ?? null
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Projects',
+      ariaLabel: 'Scope search to projects',
+      searchPlaceholder: 'Search projects…',
+      emptyMessage: 'No matching projects'
+    }
+  }
+
+  /** The footer filter for assistant search: one row per routine. */
+  function routineFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    return {
+      options: assistantRoutines.routines.map((routine) => ({
+        id: routine.id,
+        label: routine.name,
+        ...(routine.color ? { color: routine.color } : {}),
+        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Routines',
+      ariaLabel: 'Scope search to routines',
+      searchPlaceholder: 'Search routines…',
+      emptyMessage: 'No matching routines'
+    }
+  }
+
+  /** The footer filter for browser tab search: one row per tab group. */
+  function groupFooterFilter(
+    selectedIds: readonly string[],
+    onChange: (ids: string[]) => void
+  ): PaletteFooterFilter {
+    const store = browserStore()
+    return {
+      options: (store?.groups ?? []).map((group) => ({
+        id: group.id,
+        label: group.name,
+        ...(group.color ? { color: group.color } : {}),
+        iconUrl: store?.groupIconUrls.get(group.id) ?? null
+      })),
+      selectedIds,
+      onChange,
+      allLabel: 'All Groups',
+      ariaLabel: 'Scope search to browser groups',
+      searchPlaceholder: 'Search groups…',
+      emptyMessage: 'No matching groups'
+    }
+  }
 
   /**
    * The props for the single mounted palette, for whichever screen is on top.
@@ -237,9 +341,7 @@
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
-          projects: scopeState.projects,
-          selectedProjectIds: fileSearch.projectIds,
-          onSelectedProjectsChange: (projectIds) => fileSearch.setScope(projectIds),
+          filter: projectFooterFilter(fileSearch.projectIds, (ids) => fileSearch.setScope(ids)),
           onBack: backToSpotlightHome,
           onQueryChange: (query) => fileSearch.handleQuery(query),
           onSelect: (selection) => fileSearch.select(selection),
@@ -254,16 +356,72 @@
           emptyLabel: threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
-          headerIcon: MessagesSquare,
+          headerIcon: Timeline,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
-          projects: scopeState.projects,
-          selectedProjectIds: threadSearch.projectIds,
-          onSelectedProjectsChange: (projectIds) => threadSearch.setScope(projectIds),
+          filter: projectFooterFilter(threadSearch.scopeIds, (ids) => threadSearch.setScope(ids)),
           onBack: backToSpotlightHome,
           onQueryChange: (query) => threadSearch.handleQuery(query),
           onSelect: (selection) => threadSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'chats':
+        return {
+          ...shell,
+          actions: chatSearch.actions,
+          title: 'Search chats',
+          placeholder: 'Search chat titles and messages…',
+          emptyLabel: chatSearch.loading
+            ? 'Searching chats…'
+            : 'Type at least two characters to search chats',
+          headerIcon: CONTENT_FAMILY_ICONS.chats,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
+          serverFiltered: true,
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => chatSearch.handleQuery(query),
+          onSelect: (selection) => chatSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'assistants':
+        return {
+          ...shell,
+          actions: assistantSearch.actions,
+          title: 'Search assistant tasks',
+          placeholder: 'Search routines, tasks, and messages…',
+          emptyLabel: assistantSearch.loading
+            ? 'Searching assistant tasks…'
+            : 'Type at least two characters to search assistant tasks and routines',
+          headerIcon: CONTENT_FAMILY_ICONS.assistant,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
+          serverFiltered: true,
+          filter: routineFooterFilter(assistantSearch.scopeIds, (ids) =>
+            assistantSearch.setScope(ids)
+          ),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => assistantSearch.handleQuery(query),
+          onSelect: (selection) => assistantSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'browser':
+        return {
+          ...shell,
+          actions: browserTabSearch.actions,
+          title: 'Search browser tabs',
+          placeholder: 'Search open tabs by title, address, or group…',
+          emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
+          headerIcon: Globe,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
+          serverFiltered: true,
+          filter: groupFooterFilter(browserTabSearch.groupIds, (ids) =>
+            browserTabSearch.setScope(ids)
+          ),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => browserTabSearch.handleQuery(query),
+          onSelect: (selection) => browserTabSearch.select(selection),
           closeOnSelect: false
         }
       case 'projects':
@@ -299,14 +457,9 @@
   let lastContentView = $derived(rendererRecovery.lastContentView)
 
   /** True while the workspace shell renders the view (Projects, Chats, Threads
-   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it. */
-  let showsContentView = $derived(
-    activeView === 'projects' ||
-      activeView === 'projects-scope' ||
-      activeView === 'chats' ||
-      activeView === 'threads' ||
-      activeView === 'assistant'
-  )
+   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it.
+   *  Shared with the link pipeline, which routes by the same surface. */
+  let showsContentView = $derived(viewShowsWorkspaceShell(activeView))
 
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
@@ -325,6 +478,17 @@
     // when it comes up, and this covers every theme change after that.
     if (isBrowserLoaded()) publishBrowserScrollbarTheme()
   }
+
+  // The file surface changes shells through lazy imports. Its visibility lease
+  // belongs to this stable owner, so neither the import gap nor an outro can
+  // reveal the page between the docked and fullscreen modes.
+  $effect(() =>
+    browserVisibility.hideWhile(
+      'standalone-file-surface',
+      'fullscreen-surface',
+      standaloneFiles.open && !standaloneFiles.minimized
+    )
+  )
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
   $effect(() => {
@@ -406,11 +570,15 @@
     const thread = workspaceState.selectedThread
     return {
       view: activeView,
-      thread: thread ? { projectId: thread.projectId, threadId: thread.id } : null
+      thread: thread ? { projectId: thread.projectId, threadId: thread.id } : null,
+      utilities: activeView === 'settings-utilities' ? settingsRouteState.utilities : null
     }
   }
 
   function navigate(view: View): void {
+    // Entering another section starts its Utilities page fresh; history
+    // restores a recorded Utilities page after this navigation.
+    if (view !== activeView) settingsRouteState.resetUtilities()
     // Warm the lazy page chunks so the view swap resolves instantly   the
     // sidebar/header hover preloads cover the mouse path; this covers every
     // other entry point (shortcuts, palette, programmatic navigation). The
@@ -506,12 +674,13 @@
    */
   function reconcileThreadForContentView(view: View): void {
     const decision = decideContentViewThread(view, workspaceState.selectedThread, {
+      isEmpty: (family) => workspaceState.contentViewIsEmpty(family),
       remembered: rememberedThreadOfFamily,
       recentOfFamily: lastThreadOfFamily
     })
     if (decision.kind === 'keep') return
     if (decision.kind === 'clear') {
-      workspaceState.clearThread()
+      workspaceState.clearThread(false)
       return
     }
     const project =
@@ -550,10 +719,16 @@
     navigationHistoryState.beginTraversal()
     try {
       navigate(entry.view)
+      restoreUtilitiesFromHistory(entry)
       await restoreThreadFromHistory(entry)
     } finally {
       navigationHistoryState.endTraversal()
     }
+  }
+
+  /** Re-show the Utilities page captured in a history entry. */
+  function restoreUtilitiesFromHistory(entry: NavigationLocation): void {
+    if (entry.utilities) settingsRouteState.showUtilities(entry.utilities)
   }
 
   /** Navigate to the location the user backed away from, if any. */
@@ -563,6 +738,7 @@
     navigationHistoryState.beginTraversal()
     try {
       navigate(entry.view)
+      restoreUtilitiesFromHistory(entry)
       await restoreThreadFromHistory(entry)
     } finally {
       navigationHistoryState.endTraversal()
@@ -664,6 +840,15 @@
         return
       case 'app:thread-search':
         threadSearch.openPalette()
+        return
+      case 'app:chat-search':
+        chatSearch.openPalette()
+        return
+      case 'app:assistant-search':
+        assistantSearch.openPalette()
+        return
+      case 'app:browser-tab-search':
+        browserTabSearch.openPalette()
         return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
@@ -782,6 +967,9 @@
     commandPaletteOpen = false
     if (fileSearch.paletteOpen) fileSearch.close()
     if (threadSearch.paletteOpen) threadSearch.close()
+    if (chatSearch.paletteOpen) chatSearch.close()
+    if (assistantSearch.paletteOpen) assistantSearch.close()
+    if (browserTabSearch.paletteOpen) browserTabSearch.close()
     if (projectSwitch.paletteOpen) projectSwitch.close()
   }
 
@@ -798,6 +986,26 @@
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
     await openThreadFromNotification(thread, project)
+  }
+
+  /**
+   * Focus a routine picked in assistant search: land on the Assistant view, open
+   * the routine's seed thread so its context becomes the active one, then dock
+   * that routine's how-to panel on it.
+   */
+  async function openRoutineFromSearch(routine: Routine): Promise<void> {
+    navigate('assistant')
+    const anchor = await assistantRoutines.howToThread(routine.id).catch(() => null)
+    if (!anchor) return
+    await openThreadFromNotification(anchor, null)
+    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+  }
+
+  /** Focus a tab picked in browser search: land on the Browser view and switch
+   *  its strip to that tab. */
+  function openBrowserTabFromSearch(tabId: string): void {
+    navigate('browser')
+    void withBrowser((store) => store.switchTo(tabId))
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -1160,9 +1368,9 @@
 
   /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
-   * a sidebar panel, or the open thread. When nothing is active the shortcut is
-   * intentionally a no-op; application shutdown is reserved for explicit quit
-   * actions and the native window close control.
+   * the browser tab on screen, a sidebar panel, or the open thread. When nothing
+   * is active the shortcut is intentionally a no-op; application shutdown is
+   * reserved for explicit quit actions and the native window close control.
    */
   function handleCloseShortcut(): void {
     // The spotlight is one surface: the close chord closes it whole, whichever
@@ -1178,6 +1386,24 @@
     // On a Settings page: leave back to the previous view.
     if (isSettingsView(activeView)) {
       navigate(lastViewBeforeSettings)
+      return
+    }
+    // The standalone browser view answers the chord with the page it is showing:
+    // the tab closes, exactly as a page closes in a browser. A sleeping tab and a
+    // blank one close the same way, so repeated presses empty the strip and land
+    // on the browser's own empty state. The claim store names the tab main routes
+    // browser keys to, which is the one the user is working in; the active tab is
+    // the fallback for the moment before that claim lands.
+    if (activeView === 'browser') {
+      const claimed = browserKeyboardFocus.tabId
+      void withBrowser((store) => {
+        // A claim names the surface the user is working in. When it names a tab
+        // this store does not hold (a Peek preview owns its own tab, which is
+        // not a strip tab) there is no tab of ours to close. With no claim at
+        // all, the view's active tab is the one the chord means.
+        const tab = claimed ? store.tabById(claimed) : store.activeTab
+        if (tab) store.close(tab.id)
+      })
       return
     }
     // Focus inside the context sidebar: close the active tab of the surface that
@@ -1500,7 +1726,13 @@
     }
   }
 
-  navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
+  settingsRouteState.onUtilitiesChange = observeNavigationLocation
+  navigationHistoryState.init({
+    view: rendererRecovery.activeView,
+    thread: rendererRecovery.selectedThread,
+    utilities:
+      rendererRecovery.activeView === 'settings-utilities' ? settingsRouteState.utilities : null
+  })
 
   /** Windows/Linux may report both an app command and a renderer mouse event.
    *  macOS can report a raw mouse event or a native swipe. Collapse duplicate
@@ -1545,6 +1777,11 @@
     const uninstallVoiceShortcut = initVoiceShortcutListener()
     const uninstallComposerFocusShortcut = initComposerFocusShortcut()
 
+    // The renderer half of the app-control bridge, plus the shell-owned
+    // navigation actions. Both are idempotent: a remount re-registers nothing.
+    startAppControlResponder()
+    registerShellNavigationActions((view) => navigate(view as View))
+
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
     const unsubscribeIpc = installAppIpcSubscriptions({
       openThreadFromNotification,
@@ -1573,8 +1810,8 @@
       originalOpenThread(thread, project, iconUrl)
       observeNavigationLocation()
     }
-    workspaceState.clearThread = () => {
-      originalClearThread()
+    workspaceState.clearThread = (rememberEmpty = true) => {
+      originalClearThread(rememberEmpty)
       observeNavigationLocation()
     }
     observeNavigationLocation()
@@ -1697,6 +1934,7 @@
               section={settingsSectionForView(activeView) ?? 'general'}
               onNavigateSection={(section) => navigate(settingsViewForSection(section))}
               onBack={() => navigate(lastViewBeforeSettings)}
+              onHistoryBack={() => void goBack()}
             />
           </div>
         {/await}
@@ -1728,6 +1966,16 @@
             <BrowserPeekWindow />
           {/await}
         {/key}
+      {/if}
+      {#if browserStore()?.sitePermissionsPrompt}
+        {#await import('$lib/components/browser/BrowserSitePermissionsModal.svelte') then { default: BrowserSitePermissionsModal }}
+          <BrowserSitePermissionsModal />
+        {/await}
+      {/if}
+      {#if browserStore()?.screenSharePrompt}
+        {#await import('$lib/components/browser/BrowserScreenSharePicker.svelte') then { default: BrowserScreenSharePicker }}
+          <BrowserScreenSharePicker />
+        {/await}
       {/if}
     </main>
   </div>
@@ -1920,18 +2168,8 @@
     {/await}
   {/if}
 
-  <!-- Scope and Settings render notifications as a floating panel because they
-       have no shared right sidebar of their own. The Browser view does: its rail
-       hosts the notifications panel beside its note, agent and downloads tools,
-       so it must not also get this second, invented rail. -->
-  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
-    <div
-      class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
-      {@attach trackBrowserOcclusion}
-    >
-      {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-        <NotificationPanel />
-      {/await}
-    </div>
-  {/if}
+  <!-- The app's global panels (notifications and sticky notes) are mounted once
+       here and moved into whichever rail is on screen, so a view switch never
+       rebuilds them. See `app-panel-portal.ts`. -->
+  <AppPanelHost />
 </div>

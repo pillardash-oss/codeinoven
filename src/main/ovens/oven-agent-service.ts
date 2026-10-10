@@ -10,9 +10,11 @@ import {
   type OvenAgentScript,
   type OvenAgentScriptRequest,
   type OvenEndpoint,
+  type OvenConnectionStatus,
   type SaveOvenInput
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
+import { testDraftConnection } from './oven-connection'
 import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
 import { firstReachableEndpoint } from './oven-agent-address'
 import { fingerprint } from './oven-agent-descriptor'
@@ -70,6 +72,19 @@ export class OvenAgentService {
   async reachableEndpoint(code: string): Promise<OvenEndpoint | null> {
     const descriptor = decodeOvenAgentDescriptor(code)
     return firstReachableEndpoint(descriptor.addresses ?? [], [descriptor.port, STANDARD_SSH_PORT])
+  }
+
+  /**
+   * Open a real SSH session to the machine a code describes and report its facts.
+   *
+   * A reachability probe only proves a socket is listening. This builds the exact
+   * Oven the code would save, including its vaulted identity, and runs the same
+   * read-only inspect the app uses everywhere else, so authentication, host trust,
+   * and the remote shell are all exercised before anything is stored.
+   */
+  async test(input: OvenAgentRegistrationInput): Promise<OvenConnectionStatus> {
+    const descriptor = decodeOvenAgentDescriptor(input.code)
+    return testDraftConnection(this.registry, this.saveInputFor(descriptor, input))
   }
 
   /** Validate a descriptor and save it as an Oven, storing any identity in the vault. */

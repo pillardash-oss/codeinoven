@@ -1,4 +1,5 @@
 import { invokeAccountContract } from './ipc/invoke-account'
+import { invokeAppControlContract } from './ipc/invoke-app-control'
 import { invokeAgentContract } from './ipc/invoke-agent'
 import { invokeThreadContract } from './ipc/invoke-thread'
 import { invokeProviderContract } from './ipc/invoke-provider'
@@ -32,6 +33,7 @@ export * from './ipc/invoke-cio-cleanup'
 
 export const IPC_INVOKE_CONTRACT = {
   ...invokeAccountContract,
+  ...invokeAppControlContract,
   ...invokeAgentContract,
   ...invokeThreadContract,
   ...invokeProviderContract,

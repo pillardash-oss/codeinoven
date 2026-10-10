@@ -180,6 +180,8 @@ export type AgentEvent =
       contextWindow?: number
       contextUsed?: number
       contextEstimated?: boolean
+      /** Cumulative spend of the whole harness session, not this message's own
+       *  cost. Stored on the message as `sessionCostUsd`. */
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
       credits?: AgentUsageCredits

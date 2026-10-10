@@ -121,6 +121,13 @@ export async function reconcileInterruptedWork(
   if (recovery.recovered.length > 0) {
     await state.chatEngine?.resumeRecoveredThreads(recovery.recovered)
   }
+  // A remote Oven turn never stopped: its Oven kept running it while this app was
+  // closed, so there is nothing to resume   only a binding to reattach. Reattach
+  // it now so the turn streams into the transcript as soon as the transport is
+  // back, whether or not the user opens the thread first.
+  if (recovery.remote.length > 0) {
+    await state.chatEngine?.resumeRecoveredThreads(recovery.remote)
+  }
 }
 
 /**
@@ -207,6 +214,18 @@ function reportRecovered(recovery: RestartRecoveryResult): void {
     Logger.info('Settled deliberately stopped threads after a clean app close', {
       inspected: recovery.inspected,
       stopped: recovery.stopped.map((thread) => ({
+        projectId: thread.projectId,
+        threadId: thread.id
+      }))
+    })
+  }
+  // Remote Oven turns are neither settled nor broadcast: their row already reads
+  // `executing`, which is true   the Oven is still working   so the sidebar is
+  // correct as hydrated and needs no correction.
+  if (recovery.remote.length > 0) {
+    Logger.info('Reattached remote Oven turns still running on their Oven', {
+      inspected: recovery.inspected,
+      remote: recovery.remote.map((thread) => ({
         projectId: thread.projectId,
         threadId: thread.id
       }))

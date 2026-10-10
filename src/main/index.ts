@@ -27,6 +27,7 @@ import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
+import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
@@ -115,6 +116,11 @@ installProcessCrashDiagnostics()
 const state = createBootstrapState()
 
 installOpenWithHandling(state)
+
+// The renderer's answer to a parked app-control call. Registered as early as the
+// close-confirmation surface, because a `@cio-hey` turn can park a call the
+// moment the app is usable, before the lazy feature graph is up.
+registerAppControlHandlers()
 
 ipcMain.handle('app:confirmClose', async () => {
   // The user approved the forced close while threads are working. When another

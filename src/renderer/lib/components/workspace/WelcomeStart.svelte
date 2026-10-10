@@ -17,11 +17,10 @@
     /**
      * Which view's empty state this is. Projects and Threads share their body
      * because both need a project before there is anything to show, and differ
-     * in the sidebar they toggle and the tour they open. The Assistant has
-     * actions of its own. Chats never uses this surface: its own empty state is
-     * the composer.
+     * in the sidebar they toggle and the tour they open. Chats and Assistant
+     * have their own instructions and actions.
      */
-    variant?: 'projects' | 'threads' | 'assistant'
+    variant?: 'projects' | 'threads' | 'chats' | 'assistant'
     /**
      * Whether the view's sidebar holds anything right now. A sidebar with
      * nothing in it is not rendered at all, so the toggle row is offered only
@@ -71,9 +70,10 @@
     highlight?: boolean
   }
 
-  const subtitles: Record<'projects' | 'threads' | 'assistant', string> = {
+  const subtitles: Record<'projects' | 'threads' | 'chats' | 'assistant', string> = {
     projects: 'What would you like to work on?',
     threads: 'Every project conversation, in one timeline',
+    chats: 'Ask a question or start a conversation, no project needed',
     assistant: 'Jobs the agent runs for you, on their own schedule'
   }
 
@@ -128,6 +128,32 @@
     return items
   }
 
+  function chatActions(): ActionItem[] {
+    const items: ActionItem[] = []
+    if (onNewChat) {
+      items.push({
+        id: 'new-chat',
+        icon: MessageSquarePlus,
+        title: 'New chat',
+        description: 'Start a conversation with an agent',
+        run: () => onNewChat?.(),
+        highlight: true
+      })
+    }
+    if (sidebarHasContent && onToggleSidebar) {
+      items.push({
+        id: 'toggle-sidebar',
+        icon: PanelLeft,
+        title: 'Toggle chats sidebar',
+        description: 'Choose an existing chat to continue the conversation',
+        run: () => onToggleSidebar?.()
+      })
+    }
+    if (onOpenSettings) items.push(settingsAction())
+    if (onShowTour) items.push(tourAction('chats'))
+    return withLeadHighlight(items)
+  }
+
   /** Projects and Threads: the same way in (a project), reached from either
    *  view, with the sidebar toggle only while there is a sidebar to toggle. */
   function workspaceActions(): ActionItem[] {
@@ -174,7 +200,13 @@
     return withLeadHighlight(items)
   }
 
-  const actions = $derived(variant === 'assistant' ? assistantActions() : workspaceActions())
+  const actions = $derived(
+    variant === 'assistant'
+      ? assistantActions()
+      : variant === 'chats'
+        ? chatActions()
+        : workspaceActions()
+  )
 </script>
 
 <div class="flex h-full flex-col items-center justify-center px-6">

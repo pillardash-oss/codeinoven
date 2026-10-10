@@ -8,14 +8,14 @@
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { ovenPeeks } from '$lib/stores/oven-peeks.svelte'
   import {
     OVEN_HARNESS_COMMANDS,
     ovenHarnessIdForCommand,
     type Oven,
     type OvenSetupConfiguration,
     type OvenSetupOperation,
-    type OvenSetupProgressEvent,
-    type OvenSetupPreflightResult
+    type OvenSetupProgressEvent
   } from '$shared/ovens'
   import { remoteOvensForSetup } from '$shared/oven-setup-policy'
 
@@ -29,8 +29,6 @@
   let { open, initialOvenId, onComplete, onClose }: Props = $props()
   let ovens = $state<Oven[]>([])
   let ovenId = $state('')
-  let preflight = $state<OvenSetupPreflightResult | null>(null)
-  let preflightBusy = $state(false)
   let startBusy = $state(false)
   let error = $state('')
   let selectedHarnesses = $state<string[]>([])
@@ -44,6 +42,16 @@
   let minimized = $state(false)
 
   const selectedOven = $derived(ovens.find((oven) => oven.id === ovenId))
+  /**
+   * The unified check for the selected Oven, read from the shared cache.
+   *
+   * The Ovens page already ran this check, so opening the dialog hydrates from
+   * its result instead of starting a second one; a check still in flight is
+   * awaited here rather than restarted.
+   */
+  const peek = $derived(ovenPeeks.peek(ovenId))
+  const preflight = $derived(peek?.preflight ?? null)
+  const preflightBusy = $derived(!preflight && ovenPeeks.running(ovenId))
   const blockers = $derived(preflight?.assessment.issues.filter((issue) => issue.blocking) ?? [])
   const active = $derived(Boolean(operation && ['running', 'preparing'].includes(operation.status)))
   const completedSteps = $derived(
@@ -57,7 +65,15 @@
       const id = ovenHarnessIdForCommand(command)
       if (!id) return []
       const observed = preflight?.assessment.harnesses.find((harness) => harness.harnessId === id)
-      return [{ id, name: observed?.name ?? id }]
+      const row = peek?.inventory.find((item) => item.harnessId === id)
+      return [
+        {
+          id,
+          name: observed?.name ?? id,
+          installed: observed?.health === 'healthy' || row?.health === 'healthy',
+          updateAvailable: row?.updateAvailable === true
+        }
+      ]
     })
   )
 
@@ -66,18 +82,9 @@
     selectedHarnesses = enabled ? harnessOptions.map((option) => option.id) : []
   }
 
-  async function readPreflight(id: string): Promise<void> {
-    if (!id) return
-    preflightBusy = true
-    error = ''
-    preflight = null
-    try {
-      preflight = await invoke('oven:setup:preflight', id)
-    } catch (cause) {
-      error = message(cause)
-    } finally {
-      preflightBusy = false
-    }
+  /** Hydrate from the shared check, starting one only if none is running. */
+  function readPreflight(id: string): void {
+    if (id) void ovenPeeks.ensure(id)
   }
 
   function message(value: unknown): string {
@@ -91,7 +98,7 @@
       ovenId = ovens.some((oven) => oven.id === initialOvenId)
         ? initialOvenId
         : (ovens[0]?.id ?? '')
-      if (ovenId) await readPreflight(ovenId)
+      if (ovenId) readPreflight(ovenId)
     } catch (cause) {
       error = message(cause)
     }
@@ -228,7 +235,7 @@
       <select
         class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
         bind:value={ovenId}
-        onchange={() => void readPreflight(ovenId)}
+        onchange={() => readPreflight(ovenId)}
       >
         {#each ovens as oven (oven.id)}<option value={oven.id}>{oven.name}</option>{/each}
       </select>
@@ -244,6 +251,10 @@
     {#if preflightBusy}
       <p class="flex items-center gap-2 text-sm text-muted">
         <Loader2 size={15} class="animate-spin" /> Checking the Oven without making changes
+      </p>
+    {:else if peek?.error}
+      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        {peek.error}
       </p>
     {:else if preflight}
       <section class="space-y-2 rounded-lg border p-3" aria-label="Preflight results">

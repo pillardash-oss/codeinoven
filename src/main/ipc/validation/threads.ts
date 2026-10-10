@@ -92,6 +92,7 @@ const CREATE_PROJECT_FIELDS = new Set([
   'path',
   'source',
   'host',
+  'ovenId',
   'providerId',
   'workflowId',
   'threadLimit',
@@ -300,6 +301,9 @@ export function validateCreateProjectInput(value: unknown): CreateProjectInput {
   }
   if (input.host !== undefined) {
     sanitized.host = validateBoundedString(input.host, 'SSH host', 1, 255)
+  }
+  if (input.ovenId !== undefined) {
+    sanitized.ovenId = validateEntityId(input.ovenId, 'Oven ID')
   }
   if (input.providerId !== undefined) {
     sanitized.providerId = validateEntityId(input.providerId, 'Provider ID')

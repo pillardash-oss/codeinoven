@@ -703,13 +703,19 @@
         canGoBack={pageState.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+        onEditAddress={() => addressBar?.focusAndSelect()}
       />
     {:else if isBlank}
       <BrowserBlankTab
         projectId={tabProjectId}
         threadId={tabThreadId}
         boxId={tabBoxId}
+        scopeLabel={contextSidebarState.browserScopeBoxLabel(tabProjectId, tabThreadId)}
         onNavigate={navigate}
+        onSelectBox={(nextBoxId) => {
+          const replacementId = contextSidebarState.setBrowserTabBox(tabId, nextBoxId)
+          if (replacementId) onTabReplaced?.(replacementId)
+        }}
       />
     {/if}
   </div>

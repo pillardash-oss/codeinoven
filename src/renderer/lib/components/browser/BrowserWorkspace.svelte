@@ -4,7 +4,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import type { BrowserPanelShortcutAction, BrowserViewBounds } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
-  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { DEFAULT_BOX_ID, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { type BrowserSurface, browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -305,6 +305,9 @@
         canGoBack={runtime.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+        onEditAddress={// The spotlight edits the tab on screen, so the peek (whose tab is
+        // not the one on screen) leaves the pill static instead.
+        surface === 'workspace' ? () => globalBrowser.openAddressSpotlight() : undefined}
       />
     {:else if isBlank}
       <BrowserBlankTab
@@ -313,6 +316,12 @@
         boxId={tab.boxId}
         autofocus
         onNavigate={(url) => globalBrowser.openInActiveTab(url)}
+        onSelectBox={(nextBoxId) => {
+          // The default box names the browser's own jar, so it travels as the
+          // absent id: picking the row the tab is already in is then a no-op
+          // rather than a close plus an open of the same jar.
+          globalBrowser.reopenInBox(tabId, nextBoxId === DEFAULT_BOX_ID ? null : nextBoxId)
+        }}
       />
     {/if}
   </div>

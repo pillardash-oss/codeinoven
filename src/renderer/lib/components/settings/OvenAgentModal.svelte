@@ -1,10 +1,17 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, ClipboardCopy, Loader2, ShieldCheck } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    Cable,
+    CheckCircle2,
+    ClipboardCopy,
+    Loader2,
+    ShieldCheck
+  } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPreview, OvenEndpoint } from '$shared/ovens'
+  import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpoint } from '$shared/ovens'
 
   interface Props {
     open: boolean
@@ -23,6 +30,14 @@
   let previewing = $state(false)
   let registering = $state(false)
   let copying = $state(false)
+  /** An SSH port the user names for the machine, kept out of the command when empty. */
+  let commandPort = $state('')
+  /** The command the user runs, with their SSH port named when they set one. */
+  const startCommand = $derived(
+    /^\d{1,5}$/u.test(commandPort.trim())
+      ? `${START_COMMAND} --port ${commandPort.trim()}`
+      : START_COMMAND
+  )
   /** The address this computer reaches the machine on, editable before saving. */
   let host = $state('')
   let port = $state(22)
@@ -30,6 +45,10 @@
   let detecting = $state(false)
   /** The endpoint that answered, when one did. */
   let detected = $state<OvenEndpoint | null>(null)
+  /** True while a full SSH probe is running against the machine. */
+  let testing = $state(false)
+  /** The result of the last Test connection, cleared when the target changes. */
+  let testResult = $state<OvenConnectionStatus | null>(null)
   let error = $state('')
 
   function message(value: unknown): string {
@@ -40,7 +59,7 @@
     if (copying) return
     copying = true
     try {
-      await copyText(START_COMMAND)
+      await copyText(startCommand)
       toast.success('Command copied')
     } catch (cause) {
       error = message(cause)
@@ -55,6 +74,39 @@
     // invalidates it rather than letting a stale machine be registered.
     if (preview) preview = null
     detected = null
+    testResult = null
+  }
+
+  /** Drop a stale probe result the moment its target changes. */
+  function onTargetChange(): void {
+    testResult = null
+  }
+
+  /**
+   * Prove the endpoint before anything is saved.
+   *
+   * Reachability only says a socket is listening. This runs a real SSH session
+   * with the identity from the code, so authentication, host trust, and the remote
+   * shell are all confirmed on the host and port as typed.
+   */
+  async function testConnection(): Promise<void> {
+    if (!preview || testing) return
+    const address = host.trim()
+    if (!address) {
+      error = 'Enter the address or SSH alias this computer reaches the machine on.'
+      return
+    }
+    testing = true
+    error = ''
+    testResult = null
+    try {
+      testResult = await invoke('oven:agent:test', { code, host: address, port })
+      if (testResult.state === 'connected') toast.success('Connection works')
+    } catch (cause) {
+      error = message(cause)
+    } finally {
+      testing = false
+    }
   }
 
   async function checkCode(): Promise<void> {
@@ -138,6 +190,7 @@
     host = ''
     detected = null
     detecting = false
+    testResult = null
     error = ''
     onClose()
   }
@@ -174,7 +227,7 @@
       <div class="flex items-center gap-2">
         <code
           class="min-w-0 flex-1 truncate rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
-          >{START_COMMAND}</code
+          >{startCommand}</code
         >
         <button
           type="button"
@@ -189,9 +242,23 @@
         </button>
       </div>
 
+      <label class="flex items-center gap-2 text-xs text-muted">
+        <span>SSH port on the machine</span>
+        <input
+          class="w-20 rounded-lg border bg-elevated px-2 py-1 text-foreground"
+          type="text"
+          inputmode="numeric"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="22"
+          aria-label="SSH port on the machine"
+          bind:value={commandPort}
+        />
+      </label>
+
       <p class="text-xs text-muted">
-        The machine needs Node.js 22 or later already installed. The command asks for the Oven name,
-        the SSH port this computer connects on, and whether to provision a dedicated key.
+        Name the port here to put it in the command. Leave it empty and the command uses the
+        machine's own sshd port. The machine needs Node.js 22 or later already installed.
       </p>
     </section>
 
@@ -259,6 +326,7 @@
                 spellcheck="false"
                 autocomplete="off"
                 bind:value={host}
+                oninput={onTargetChange}
                 placeholder="192.168.64.10 or an SSH alias"
               />
             </label>
@@ -270,6 +338,7 @@
                 min="1"
                 max="65535"
                 bind:value={port}
+                oninput={onTargetChange}
               />
             </label>
           </div>
@@ -299,6 +368,23 @@
             </span>
           {/if}
 
+          {#if testResult}
+            <p
+              class="rounded-md px-2 py-1 {testResult.state === 'connected'
+                ? 'bg-success/10 text-success'
+                : 'bg-danger/10 text-danger'}"
+              role={testResult.state === 'connected' ? 'status' : 'alert'}
+            >
+              {#if testResult.state === 'connected'}
+                Connection works: SSH, the key, and the remote shell all answered on {host}:{port}{testResult.specs
+                  ? ` (${testResult.specs.hostname})`
+                  : ''}.
+              {:else}
+                {testResult.error ?? 'The connection failed.'}
+              {/if}
+            </p>
+          {/if}
+
           {#if preview.addresses.length > 1}
             <div class="flex flex-wrap gap-1.5">
               {#each preview.addresses as address (address)}
@@ -309,7 +395,10 @@
                     : 'bg-elevated text-muted hover:text-foreground'}"
                   aria-pressed={host === address}
                   title={`Use ${address}`}
-                  onclick={() => (host = address)}
+                  onclick={() => {
+                    host = address
+                    onTargetChange()
+                  }}
                 >
                   {address}
                 </button>
@@ -341,23 +430,38 @@
   </div>
 
   {#snippet footer()}
-    <div class="flex items-center justify-end gap-2">
-      <button
-        type="button"
-        data-modal-dismiss
-        class="h-8 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-        onclick={close}>Close</button
-      >
-      {#if preview}
+    <div class="flex items-center justify-between gap-2">
+      <div>
+        {#if preview}
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+            disabled={testing}
+            onclick={() => void testConnection()}
+          >
+            {#if testing}<Loader2 size={14} class="animate-spin" />{:else}<Cable size={14} />{/if}
+            Test connection
+          </button>
+        {/if}
+      </div>
+      <div class="flex items-center gap-2">
         <button
           type="button"
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          disabled={registering}
-          onclick={() => void register()}
+          data-modal-dismiss
+          class="h-8 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+          onclick={close}>Close</button
         >
-          {#if registering}<Loader2 size={14} class="animate-spin" />{/if} Register Oven
-        </button>
-      {/if}
+        {#if preview}
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            disabled={registering || testing}
+            onclick={() => void register()}
+          >
+            {#if registering}<Loader2 size={14} class="animate-spin" />{/if} Register Oven
+          </button>
+        {/if}
+      </div>
     </div>
   {/snippet}
 </Modal>

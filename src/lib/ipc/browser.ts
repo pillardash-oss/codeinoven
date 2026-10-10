@@ -526,6 +526,37 @@ export interface BrowserPermissionPromptContext {
   systemAccessDenied: boolean
 }
 
+/** A permission a page can be granted or blocked, and the state it holds. */
+export type BrowserSitePermissionState = 'allow' | 'block' | 'ask'
+
+/** What the renderer needs to open the Site Permissions modal for one origin.
+ *  `states` is keyed by the shared catalog's permission id. */
+export interface BrowserSitePermissionsPrompt {
+  projectId: string
+  boxId: string | null
+  host: string
+  origin: string
+  states: Record<string, BrowserSitePermissionState>
+}
+
+/** One capture source the in-app screen-share picker offers. */
+export interface BrowserScreenShareSource {
+  id: string
+  name: string
+  /** A `data:` URL thumbnail, or null when the platform gave none. */
+  thumbnailDataUrl: string | null
+  kind: 'screen' | 'window'
+}
+
+/** What the renderer needs to draw the in-app screen-share picker. The system
+ *  picker is preferred where the platform has one; this is the fallback. */
+export interface BrowserScreenSharePrompt {
+  requestId: string
+  origin: string
+  host: string
+  sources: BrowserScreenShareSource[]
+}
+
 /** A permission requested by a page inside the project-scoped browser session. */
 export interface BrowserPermissionRequest {
   id: string
@@ -534,6 +565,13 @@ export interface BrowserPermissionRequest {
   origin: string
   permission: string
   mediaTypes: string[]
+  /**
+   * The external address the page asked the operating system to open, present
+   * only for a handoff (`permission` is `external-protocol`). A request that
+   * carries it is confirmed by the same prompt card as a permission and, when
+   * allowed, opens through the OS instead of granting anything to the page.
+   */
+  externalUrl?: string
 }
 
 /**
