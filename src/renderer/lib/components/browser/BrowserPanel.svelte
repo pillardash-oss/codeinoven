@@ -703,6 +703,7 @@
         canGoBack={pageState.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+        onEditAddress={() => addressBar?.focusAndSelect()}
       />
     {:else if isBlank}
       <BrowserBlankTab

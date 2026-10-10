@@ -305,6 +305,9 @@
         canGoBack={runtime.canGoBack}
         onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
         onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+        onEditAddress={// The spotlight edits the tab on screen, so the peek (whose tab is
+        // not the one on screen) leaves the pill static instead.
+        surface === 'workspace' ? () => globalBrowser.openAddressSpotlight() : undefined}
       />
     {:else if isBlank}
       <BrowserBlankTab
