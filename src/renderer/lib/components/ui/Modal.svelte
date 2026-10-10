@@ -246,6 +246,33 @@
   )
   const frameBounds = $derived(placement === 'fullscreen' ? null : bounds)
 
+  /**
+   * Whether the native host, not this component's own DOM panel, is the
+   * presentation on screen.
+   *
+   * A modal the host can draw is projected into the overlay window, which sits
+   * above the browser's native page view. Painting the DOM panel as well shows
+   * it *behind* that page: the panel and its scrim land in the app window's DOM,
+   * which the page composites over, so the user sees the dimmed chrome around the
+   * page, then the panel vanish and reappear the moment the host takes over.
+   *
+   * The DOM panel is therefore the projection source only while the host can draw
+   * it, and becomes the presentation the moment it cannot. Nothing else decides
+   * this: a half-drawn handover is exactly the double appearance.
+   */
+  const nativeProjected = $derived(nativeId !== undefined && !nativeFailed)
+  const domPresented = $derived(!nativeProjected)
+
+  /**
+   * Whether this component's own DOM must be kept out of reach.
+   *
+   * While the native document draws the panel it owns the pointer and the
+   * keyboard, and before it draws the panel is not on screen at all. Either way
+   * nothing here may be focused or pressed, so Tab cannot wander into a copy the
+   * user cannot see.
+   */
+  const sourceInert = $derived(nativeProjected || nativeReady)
+
   function nativePanel(id: string): Attachment<HTMLElement> {
     return (panel) => {
       nativeReady = false
@@ -366,7 +393,7 @@
       <!-- Only an open dialog may paint a scrim: a scrim rendered on the way out
          would be inserted into a portal that is already leaving the document and
          would stay behind covering the whole window. -->
-      {#if scrim && !nativeReady}
+      {#if scrim && domPresented}
         <Dialog.Overlay forceMount>
           {#snippet child({ props })}
             <div
@@ -378,10 +405,11 @@
         </Dialog.Overlay>
       {/if}
       <div
+        inert={sourceInert || undefined}
         class="pointer-events-none fixed {stackingClass} flex {frameBounds
           ? ''
           : 'inset-0'} {alignment}"
-        style:opacity={nativeReady ? 0 : undefined}
+        style:opacity={domPresented ? undefined : 0}
         style={frameBounds
           ? `left: ${frameBounds.x}px; top: ${frameBounds.y}px; width: ${frameBounds.width}px; height: ${frameBounds.height}px;`
           : undefined}
@@ -389,7 +417,7 @@
         <Dialog.Content
           forceMount
           bind:ref={panelEl}
-          trapFocus={trapFocus && !nativeReady}
+          trapFocus={trapFocus && domPresented}
           preventScroll={modal}
           preventOverflowTextSelection={modal}
           onOpenAutoFocus={focusInitialElement}
@@ -408,7 +436,9 @@
             if (isWithinToastLayer(event.target)) event.preventDefault()
             if (!closeOnBackdrop) event.preventDefault()
           }}
-          class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
+          class="{PANEL_BASE} {layout} {widthClass} {panelClass} {domPresented
+            ? ''
+            : 'pointer-events-none'}"
         >
           {#snippet child({ props })}
             <div
@@ -417,7 +447,7 @@
               {@attach trackPresentation}
               {@attach nativeId ? nativePanel(nativeId) : undefined}
               transition:fly|global={{
-                duration: prefersReducedMotion.current || (nativeId && !nativeFailed) ? 0 : 140,
+                duration: prefersReducedMotion.current || nativeProjected ? 0 : 140,
                 y: placement === 'fullscreen' ? 0 : 4
               }}
             >

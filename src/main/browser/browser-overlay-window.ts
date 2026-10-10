@@ -22,6 +22,16 @@ import {
 } from './child-window-support'
 
 /**
+ * How long the overlay window outlives the last content it drew.
+ *
+ * The surfaces that draw here arrive in bursts   opening the switcher, closing
+ * an editor, reopening a palette   and a document reload between two of them is
+ * a few hundred milliseconds the user watches as a blank frame. Long enough to
+ * cover a burst, short enough that an idle session releases the renderer.
+ */
+const IDLE_DISPOSE_MS = 20_000
+
+/**
  * Owns the frameless child window that draws the app's overlay content over a
  * browser page.
  *
@@ -71,6 +81,24 @@ export class BrowserOverlayWindow {
   private deliveredDockImages = new Map<string, Set<string>>()
   /** True while the document has finished loading and may be sent content. */
   private ready = false
+  /**
+   * A modal dock that arrived before the document could draw it.
+   *
+   * Revealing the window now would put an empty frame on screen and the panel
+   * would then appear to arrive a second time, so the first modal to need a cold
+   * document waits for it instead.
+   */
+  private awaitingDocument = false
+  /**
+   * Kept loaded between uses while the browser view is on screen.
+   *
+   * A modal is opened and closed repeatedly in one browsing session, and a fresh
+   * document costs a few hundred milliseconds to load. Paying that on every open
+   * is what the user watches as a blank frame before the panel arrives.
+   */
+  private warm = false
+  /** The pending idle teardown, armed while nothing is drawing in the window. */
+  private idleTimer: ReturnType<typeof setTimeout> | undefined
   /** Tracked rather than read back, because the toggle is only ever a change. */
   private pointerOverContent = false
   /** The click-through state the window server was last given, so it is only
@@ -163,7 +191,42 @@ export class BrowserOverlayWindow {
   releaseStack(): void {
     this.stack = null
     this.settle()
+    if (!this.hasContent()) this.retire()
+  }
+
+  /**
+   * Keep the window loaded between uses, or release it.
+   *
+   * The browser view calls this while it is on screen: the surfaces this window
+   * draws are its floating chrome, and a surface that has to load its renderer on
+   * the gesture that asks for it arrives late. Releasing it leaves it to the idle
+   * reclaim it would get once nothing is drawing.
+   */
+  setWarm(warm: boolean): boolean {
+    this.warm = warm
+    if (warm) return this.ensure() !== null
     if (!this.hasContent()) this.dispose()
+    return true
+  }
+
+  /**
+   * Tear the window down, unless it is still wanted.
+   *
+   * A browsing session keeps it loaded outright. Everywhere else it outlives its
+   * last content by a short idle window, because the surfaces that draw here are
+   * opened and closed in bursts   cycling the switcher, reopening an editor   and
+   * reloading the document for each one is what the user watches as a blank frame
+   * before the panel arrives. The window is still only hidden meanwhile, so a
+   * session that stops using it releases the renderer.
+   */
+  private retire(): void {
+    if (this.warm) return
+    clearTimeout(this.idleTimer)
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined
+      if (!this.hasContent()) this.dispose()
+    }, IDLE_DISPOSE_MS)
+    this.idleTimer.unref?.()
   }
 
   /** Dock chips share this window with toasts and the floating browser strip. */
@@ -182,12 +245,12 @@ export class BrowserOverlayWindow {
         const timer = setTimeout(() => {
           this.leavingDocks.delete(id)
           this.settle()
-          if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.dispose()
+          if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
         }, 160)
         this.leavingDocks.set(id, { modal: true, timer })
       }
       this.settle()
-      if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.dispose()
+      if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
       return true
     }
     if (!this.docks.has(id) && this.docks.size >= 32) return false
@@ -205,7 +268,11 @@ export class BrowserOverlayWindow {
     // A dock that joins or leaves can change whether a modal owns the window, so
     // re-derive the click-through state before the window is shown for it.
     this.applyClickThrough()
-    this.reveal(popup)
+    // A modal revealed into a document that has not loaded yet shows an empty
+    // frame, and the panel then reads as arriving a second time. Wait for the
+    // first paint instead; every later dock draws into a loaded document.
+    if (this.ready) this.reveal(popup)
+    else this.awaitingDocument = true
     this.publish(popup)
     return true
   }
@@ -271,12 +338,15 @@ export class BrowserOverlayWindow {
   dispose(): void {
     this.onModalHostChanged(null)
     this.restoreParentThrottling()
+    clearTimeout(this.idleTimer)
+    this.idleTimer = undefined
     const popup = this.popup
     this.popup = null
     this.stack = null
     this.strip = null
     this.status = null
     this.docks.clear()
+    this.awaitingDocument = false
     for (const dock of this.leavingDocks.values()) clearTimeout(dock.timer)
     this.leavingDocks.clear()
     this.deliveredDockImages.clear()
@@ -403,7 +473,13 @@ export class BrowserOverlayWindow {
 
   private ensure(): BrowserWindow | null {
     const existing = this.popup
-    if (existing && !existing.isDestroyed()) return existing
+    if (existing && !existing.isDestroyed()) {
+      // Something is drawing again, so the idle teardown it was armed with no
+      // longer applies.
+      clearTimeout(this.idleTimer)
+      this.idleTimer = undefined
+      return existing
+    }
     this.popup = null
     this.ready = false
     if (this.parent.isDestroyed()) return null
@@ -489,6 +565,12 @@ export class BrowserOverlayWindow {
       this.deliveredDockImages.clear()
       this.ready = true
       this.publish(popup)
+      // The modal that needed this document is revealed now that there is
+      // something to see, rather than as a window with nothing in it.
+      if (this.awaitingDocument) {
+        this.awaitingDocument = false
+        if (this.hasContent()) this.reveal(popup)
+      }
     })
     popup.webContents.on(
       'did-fail-load',
@@ -531,7 +613,7 @@ export class BrowserOverlayWindow {
         return
       }
       this.position(popup)
-      if (this.hasContent() && !popup.isVisible()) popup.showInactive()
+      if (this.ready && this.hasContent() && !popup.isVisible()) popup.showInactive()
     }
     this.parent.on('move', reposition)
     this.parent.on('resize', reposition)

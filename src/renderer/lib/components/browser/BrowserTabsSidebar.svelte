@@ -516,6 +516,11 @@
     // renderer that draws it must already be up. Released with this component,
     // because the sidebar it draws is nothing without it.
     void invoke('browser:warmStripOverlay', true).catch(() => {})
+    // The native modals (the address palette, the tab and group editors, the
+    // permission prompt) draw in the shared overlay window over this view, so
+    // its document is loaded with the same intent and released with this
+    // component.
+    void invoke('browser:warmOverlayWindow', true).catch(() => {})
     // Wire the overlay's reports before anything can publish a strip, so a
     // window that cannot hear it never hands it the panel in the first place.
     const stopOverlay = browserStripOverlay.start()
@@ -525,6 +530,7 @@
       // going away in the same breath.
       void browserStripOverlay.publish(null)
       void invoke('browser:warmStripOverlay', false).catch(() => {})
+      void invoke('browser:warmOverlayWindow', false).catch(() => {})
       stopOverlay()
     }
   })

@@ -255,6 +255,16 @@ export const invokeBrowserContract = {
    */
   'browser:warmStripOverlay': {} as Contract<[warm: boolean], boolean>,
   /**
+   * Load or release the shared overlay window that draws native modals.
+   *
+   * A native modal is opened and closed repeatedly in one browsing session, and
+   * its document costs a few hundred milliseconds to load. Loading it while the
+   * browser view is on screen is what lets an address palette or a tab editor
+   * appear in a frame instead of after an empty window. `false` leaves it to the
+   * idle reclaim it would get once nothing is drawing in it.
+   */
+  'browser:warmOverlayWindow': {} as Contract<[warm: boolean], boolean>,
+  /**
    * Everything on display in the overlay, asked for by the overlay document
    * itself once its listener is bound. First delivery is a pull here because a
    * push straight after `loadURL` loses the same race the permission popup
