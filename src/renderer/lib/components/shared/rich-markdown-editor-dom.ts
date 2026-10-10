@@ -278,6 +278,29 @@ export function isCursorAtBoundary(element: HTMLElement, start: boolean): boolea
     : !hasTextAfter(element, range.endContainer, range.endOffset)
 }
 
+/**
+ * True when `range` crosses a code-block `wrapper` rather than sitting entirely
+ * inside its code: the selection touches the wrapper while at least one end sits
+ * outside it. A selection made wholly within a block's code deletes the text the
+ * user selected, not the block itself.
+ *
+ * A code block is a `contenteditable="false"` wrapper whose inner `<code>` is
+ * its own editing host, so caret movement treats the wrapper as an atom while a
+ * native delete edits only the text inside it and leaves the wrapper behind.
+ */
+export function selectionCrossesCodeBlock(range: Range, wrapper: HTMLElement): boolean {
+  if (!range.intersectsNode(wrapper)) return false
+  if (wrapper.contains(range.startContainer) && wrapper.contains(range.endContainer)) return false
+  return true
+}
+
+/** Every code-block wrapper a selection crosses, in document order. */
+export function codeBlocksCrossedByRange(root: HTMLElement, range: Range): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-editor-codeblock]')).filter(
+    (wrapper) => selectionCrossesCodeBlock(range, wrapper)
+  )
+}
+
 /** The inline element whose very start (left) or very end (right) the collapsed
  *  caret is sitting at, or null when the caret is not on such a boundary. */
 export function inlineElementAtBoundary(editor: HTMLElement, left: boolean): HTMLElement | null {

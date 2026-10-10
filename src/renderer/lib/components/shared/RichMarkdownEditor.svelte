@@ -20,6 +20,7 @@
   } from './rich-markdown'
   import type { MarkdownRuleKind, RichInlineBadge } from './rich-markdown'
   import {
+    codeBlocksCrossedByRange,
     demoteSmartPunctuation,
     flattenWithNewlines,
     hasRealAdjacentContent,
@@ -159,6 +160,49 @@
   function isEmptyCodeBlockOnly(markdown: string): boolean {
     if (markdown.trim() === '') return true
     return markdown.replace(/```[^\n]*\n[\s]*```/g, '').trim() === ''
+  }
+
+  /** Deletes a selection that crosses one or more code blocks, wrapper and all,
+   *  and returns true when it handled the delete.
+   *
+   *  A code block is a `contenteditable="false"` wrapper whose inner `<code>` is
+   *  its own editing host, so the native delete edits the text inside it and
+   *  leaves the wrapper behind: Shift+Arrow down over a block, then Backspace,
+   *  wiped the blocks around it and kept the code block. A selection that only
+   *  sits inside a block's code stays on the native path   there the text the
+   *  user selected is what they are deleting, not the block. */
+  function deleteSelectionCrossingCodeBlocks(inputType: string): boolean {
+    if (!editor) return false
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false
+    const range = selection.getRangeAt(0)
+    if (!editor.contains(range.commonAncestorContainer)) return false
+    const crossed = codeBlocksCrossedByRange(editor, range)
+    if (crossed.length === 0) return false
+
+    const historyEntry = history.captureEntry()
+    // Where the caret lands when the range itself collapses into a block that is
+    // about to be removed wholesale.
+    const anchor = (crossed[0].previousElementSibling ??
+      crossed[0].nextElementSibling) as HTMLElement | null
+    // Delete the range by hand so the wrapper goes with it; the native command
+    // cannot unwrap a `contenteditable="false"` block.
+    range.deleteContents()
+    for (const block of crossed) {
+      if (block.isConnected) block.remove()
+    }
+    if (editor.contains(range.startContainer)) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    } else if (anchor?.isConnected) {
+      placeCaretInside(anchor)
+    } else {
+      placeCaretAtEnd(editor)
+    }
+    emitEditorValue(true)
+    history.commit(historyEntry, inputType)
+    publishCaretText()
+    return true
   }
 
   function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
@@ -446,6 +490,16 @@
         insertRawAtSelection(text)
         return
       }
+    }
+    // A delete whose selection crosses a code block removes the block by hand,
+    // wrapper and all   the native command leaves a `contenteditable="false"`
+    // wrapper behind after emptying its text.
+    if (
+      inputEvent.inputType.startsWith('delete') &&
+      deleteSelectionCrossingCodeBlocks(inputEvent.inputType)
+    ) {
+      inputEvent.preventDefault()
+      return
     }
     pendingWholeDocumentDelete = selectionSpansWholeDocument()
     history.setPending(history.captureEntry())
