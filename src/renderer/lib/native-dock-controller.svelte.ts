@@ -58,6 +58,15 @@ function describeRefusal(error: unknown): string {
   }
 }
 
+/**
+ * A grab affordance, not a control.
+ *
+ * The dock chip's grip is a button, and a press on it drags the chip. Giving it
+ * an action would turn its press into a click and take the drag away from it, so
+ * it is identified as a handle instead (see `data-native-dock-handle`).
+ */
+const DOCK_GRAB_SELECTOR = '[data-popover-drag-handle]'
+
 /** The original controls remain the owners of their actions and live updates. */
 export class NativeDockController {
   ready = $state(false)
@@ -411,9 +420,13 @@ export class NativeDockController {
       attributes.style = `${attributes.style ?? ''} height: ${height}px; max-height: ${height}px;`
       this.scrollTargets.set(id, node)
     }
+    // A drag handle is not an action, so a press on it starts a drag. Everything
+    // else inside one   the buttons on a dockable panel's header   keeps its own
+    // press: the header is the handle, not the controls on it.
     if (
       node instanceof HTMLElement &&
-      !node.closest('[data-native-dock-handle]') &&
+      node.closest('[data-native-dock-handle]') !== node &&
+      !node.matches(DOCK_GRAB_SELECTOR) &&
       node.matches(DOCK_ACTION_SELECTOR)
     ) {
       let action = this.buttons.get(node)
@@ -473,7 +486,7 @@ export class NativeDockController {
   private publish(): void {
     if (!this.root || !this.bounds || !this.active) return
     if (this.modalOptions?.requireCompleteProjection) {
-      const refusal = nativeModalRefusal(this.root)
+      const refusal = nativeModalRefusal(this.root, { panel: this.modalOptions.panel === true })
       if (refusal) {
         this.refuse(`its content cannot be projected: ${refusal}`)
         return

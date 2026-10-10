@@ -323,12 +323,15 @@
     }
   }
   function down(event: PointerEvent): void {
-    if (
-      event.button !== 0 ||
-      !(event.target instanceof Element) ||
-      !event.target.closest('[data-native-dock-handle]')
-    )
-      return
+    if (event.button !== 0 || !(event.target instanceof Element)) return
+    const handle = event.target.closest('[data-native-dock-handle]')
+    if (!handle) return
+    // The whole handle drags   a dockable panel's header, a dock chip's grip
+    // but not the controls on it. A press that lands on one of those is that
+    // control's press, which is exactly how the app window treats a header's own
+    // buttons.
+    const control = event.target.closest('[data-native-dock-action]')
+    if (control && control !== handle) return
     origin = { x: event.clientX, y: event.clientY }
     onDragging(true)
     if (event.currentTarget instanceof HTMLElement)
