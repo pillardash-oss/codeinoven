@@ -18,9 +18,13 @@ import {
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
+import { GitIssueCache } from './git-store-issues.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
+import { GitIssueOperations } from './git-store-issue-operations.svelte'
 import type { PrBatchStepListener } from './git-store-pr-operations.svelte'
+import type { GitIssueOperationAccess } from './git-store-issue-operations.svelte'
+import { issueBundleKey, issuePageKey } from './git-store-helpers'
 import { GitGitHubAuth } from './git-store-github.svelte'
 import { GitLocalOperations } from './git-store-local-operations.svelte'
 import type {
@@ -38,6 +42,10 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  IssueBundle,
+  IssuePage,
+  IssueReference,
+  NewIssueInput,
   PrAgentAssignmentInput,
   PrAgentAssignmentSummary,
   PrAgentAssignmentWorkspace,
@@ -294,6 +302,21 @@ export class GitState {
     (login) => (this.githubViewerLogin = login)
   )
 
+  /** Cached issue listings and detail bundles. */
+  private readonly issues = new GitIssueCache(
+    (operation, busy) => this.markBusy(operation, busy),
+    (message) => (this.error = message)
+  )
+
+  /** Online issue mutations, backed by this store's shared state. */
+  private readonly issueOps = new GitIssueOperations({
+    markBusy: (operation, busy) => this.markBusy(operation, busy),
+    setError: (message) => (this.error = message),
+    setGitHubPermission: (permission) => (this.githubPermission = permission),
+    patchIssue: (owner, repo, issueNumber, patch) =>
+      this.issues.patchIssue(owner, repo, issueNumber, patch)
+  } satisfies GitIssueOperationAccess)
+
   get status(): GitStatus | null {
     return this.local.status
   }
@@ -412,6 +435,14 @@ export class GitState {
 
   get prBundles(): Record<string, PullRequestBundle> {
     return this.prs.bundles
+  }
+
+  get issuePages(): Record<string, { page: IssuePage; fetchedAt: number }> {
+    return this.issues.pages
+  }
+
+  get issueBundles(): Record<string, IssueBundle> {
+    return this.issues.bundles
   }
 
   get prAgentReports(): Record<string, PrAgentReport[]> {
@@ -1492,6 +1523,140 @@ export class GitState {
     return this.prs.mentionUsersFor(projectId, owner, repo)
   }
 
+  // Issue operations, delegated to the online mutation service.
+  createIssue(projectId: string, input: NewIssueInput): Promise<IssueReference | null> {
+    return this.issueOps.createIssue(projectId, input)
+  }
+
+  updateIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    title: string | undefined,
+    body: string | undefined
+  ): Promise<IssueReference | null> {
+    return this.issueOps.updateIssue(projectId, owner, repo, issueNumber, title, body)
+  }
+
+  setIssueState(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    state: 'open' | 'closed',
+    stateReason?: 'completed' | 'not_planned'
+  ): Promise<IssueReference | null> {
+    return this.issueOps.setIssueState(projectId, owner, repo, issueNumber, state, stateReason)
+  }
+
+  createIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    body: string
+  ): Promise<boolean> {
+    return this.issueOps.createIssueComment(projectId, owner, repo, issueNumber, body)
+  }
+
+  updateIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    return this.issueOps.updateIssueComment(projectId, owner, repo, commentId, body)
+  }
+
+  deleteIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    commentId: number
+  ): Promise<boolean> {
+    return this.issueOps.deleteIssueComment(projectId, owner, repo, commentId)
+  }
+
+  /** Replace the labels an issue carries, from the label picker. */
+  setIssueLabels(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    labels: string[]
+  ) {
+    return this.issueOps.setIssueLabels(projectId, owner, repo, issueNumber, labels)
+  }
+
+  /** Replace an issue's assignees, from the assignee picker. */
+  setIssueAssignees(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    logins: string[]
+  ) {
+    return this.issueOps.setIssueAssignees(projectId, owner, repo, issueNumber, logins)
+  }
+
+  /** Attach or clear an issue's milestone. */
+  setIssueMilestone(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    milestone: number | null
+  ) {
+    return this.issueOps.setIssueMilestone(projectId, owner, repo, issueNumber, milestone)
+  }
+
+  // Cached issue listings and detail bundles.
+  ensureIssuePage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: Parameters<GitIssueCache['ensureIssuePage']>[3],
+    page: number,
+    query: Parameters<GitIssueCache['ensureIssuePage']>[5],
+    force = false
+  ): Promise<void> {
+    return this.issues.ensureIssuePage(projectId, owner, repo, state, page, query, force)
+  }
+
+  ensureIssueBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.ensureIssueBundle(projectId, owner, repo, issueNumber, force)
+  }
+
+  /** Warm the issue under the pointer, so the click that follows renders from cache. */
+  preloadIssueBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number
+  ): Promise<void> {
+    return this.issues.preloadIssueBundle(projectId, owner, repo, issueNumber)
+  }
+
+  /** Warm the page behind Next, from the current page's cursor alone. */
+  preloadIssueNextPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: Parameters<GitIssueCache['preloadIssueNextPage']>[3],
+    page: number,
+    query: Parameters<GitIssueCache['preloadIssueNextPage']>[5]
+  ): Promise<void> {
+    return this.issues.preloadIssueNextPage(projectId, owner, repo, state, page, query)
+  }
+
   getCommitFiles(projectId: string, owner: string, repo: string, sha: string) {
     return this.prs.getCommitFiles(projectId, owner, repo, sha)
   }
@@ -1714,6 +1879,23 @@ export class GitState {
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {
     return prBundleKey(owner, repo, pullNumber)
+  }
+
+  /** Cache key for one page of the issue listing, mirroring `pageKey`. */
+  static issuePageKey(
+    owner: string,
+    repo: string,
+    state: string,
+    filter: string,
+    sort: string,
+    page: number
+  ): string {
+    return issuePageKey(owner, repo, state, filter, sort, page)
+  }
+
+  /** Cache key for one issue's detail bundle. */
+  static issueBundleKey(owner: string, repo: string, issueNumber: number): string {
+    return issueBundleKey(owner, repo, issueNumber)
   }
 
   static deploymentKey(owner: string, repo: string): string {

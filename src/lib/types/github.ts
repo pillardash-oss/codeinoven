@@ -585,6 +585,173 @@ export interface PullRequestBundle {
 }
 
 /**
+ * How an issue listing narrows, beyond its state.
+ *
+ * GitHub's own issue list narrows by the viewer's relationship to the issue, a
+ * question only its search index can answer (`author:@me`, `assignee:@me`,
+ * `mentions:@me`, `involves:@me`). These are those relationships; `all` adds no
+ * qualifier at all. Deliberately its own union rather than a reuse of
+ * `PrListFilter`: an issue has no reviewer to be requested from, so a filter the
+ * provider cannot answer must never be offerable.
+ */
+export type IssueListFilter = 'all' | 'created' | 'assigned' | 'mentioned' | 'involves'
+
+/**
+ * How an issue listing is ordered.
+ *
+ * The same `sort:` qualifiers a pull request listing accepts, because GitHub's
+ * search index orders both kinds of node the same way. Reused rather than
+ * restated so an ordering added for pull requests cannot silently go missing for
+ * issues.
+ */
+export type IssueListSort = PrListSort
+
+/**
+ * The listing choices that are not the state filter or the page: what the page
+ * was asked as one value, so the store can key a cached page by all of it.
+ */
+export interface IssueListQuery {
+  filter: IssueListFilter
+  sort: IssueListSort
+}
+
+/**
+ * A listing request, as the renderer sends it: the choices plus where to continue
+ * from. The cursor is grouped with the choices because it only ever means
+ * anything alongside the filter and sort that produced it.
+ */
+export interface IssueListRequest extends IssueListQuery {
+  /** Cursor the previous page reported, or null to ask for the first page. */
+  cursor: string | null
+}
+
+/**
+ * A repository label as an issue carries it.
+ *
+ * Labels are repository-level metadata on GitHub, so an issue and a pull request
+ * carry the very same shape, and the same picker edits both.
+ */
+export type IssueLabel = PullRequestLabel
+
+/** A repository milestone, which GitHub itself models as an issue field. */
+export type IssueMilestone = PullRequestMilestone
+
+/**
+ * One comment on an issue.
+ *
+ * GitHub files issue comments and pull request conversation comments in one
+ * collection with one payload shape, which is exactly why this is the comment
+ * type the pull request conversation already renders.
+ */
+export type IssueComment = PullRequestComment
+
+/** Renderer-safe issue reference returned by a create or state change. */
+export type IssueReference = PullRequestReference
+
+/**
+ * Why an issue was closed, as GitHub's `state_reason` reports it.
+ *
+ * `completed` is a resolved issue, `not_planned` is one dismissed on purpose, and
+ * `reopened` is what GitHub keeps while an issue carries no closure reason
+ * because it was brought back. Null when the payload carries none.
+ */
+export type IssueStateReason = 'completed' | 'not_planned' | 'reopened'
+
+/**
+ * One issue as shown in the sidebar list.
+ *
+ * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves
+ * a picture from `authorLogin` through main and draws a monogram until it
+ * arrives, exactly as the pull request list does.
+ */
+export interface IssueSummary {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed'
+  /** Why the issue was closed, or null while it is open or carries no reason. */
+  stateReason: IssueStateReason | null
+  authorLogin: string
+  authorAvatarUrl: string | null
+  /** True for app/bot accounts, which GitHub labels with a `Bot` badge. */
+  authorIsBot: boolean
+  createdAt: string
+  updatedAt: string
+  /** How many comments the issue has received, as github.com counts them. */
+  comments: number
+  /** Labels in GitHub's own order. Absent when the payload did not carry them. */
+  labels?: IssueLabel[]
+  /**
+   * Accounts assigned to the issue, in the provider's order. The same shape as a
+   * pull request's assignees on purpose: GitHub answers both from the repository's
+   * assignable-accounts collection, so one picker renders either.
+   */
+  assignees?: RepositoryMentionUser[]
+  /** The milestone the issue belongs to, or null when it has none. */
+  milestone?: IssueMilestone | null
+}
+
+/** One page of issues, with a cursor the UI can advance. */
+export interface IssuePage {
+  items: IssueSummary[]
+  /** The 1-based page this listing answers. */
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+  /** Where the next page starts, for providers that page by cursor. */
+  nextCursor?: string | null
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+  /**
+   * A transient transport failure (offline, timeout) returned instead of a
+   * rejected IPC call, so the listing holds on to the rows it already had rather
+   * than blanking them.
+   */
+  transientError?: string
+}
+
+/** Full issue view, loaded when one is opened in the sidebar. */
+export interface IssueDetail extends IssueSummary {
+  body: string
+  /**
+   * GraphQL global id of the issue, when the payload carried one. Null for a
+   * payload that omitted it, and the description then offers no reaction control
+   * rather than one that cannot land.
+   */
+  nodeId: string | null
+  /**
+   * What the issue's author is to the repository. The description is a comment
+   * like any other in the conversation, so it carries the same role badge its
+   * author's comments do.
+   */
+  authorAssociation: PrAuthorAssociation | null
+  /** When the issue was closed, or null while it is open. */
+  closedAt: string | null
+}
+
+/** Everything the issue detail view renders, fetched in one round trip. */
+export interface IssueBundle {
+  detail: IssueDetail
+  comments: IssueComment[]
+  /** Epoch ms this bundle was fetched, for cache staleness display. */
+  fetchedAt: number
+}
+
+/** A new issue as the renderer asks for one; owner/repo resolve from the origin. */
+export interface NewIssueInput {
+  title: string
+  body?: string
+  labels?: string[]
+  assignees?: string[]
+}
+
+/** The fields a caller may rewrite on an existing issue. */
+export interface IssueUpdateInput {
+  title?: string
+  body?: string
+}
+
+/**
  * What an agent assignment was asked to work on.
  *
  * The kind is what the reader uses to decide which controls a report card offers:

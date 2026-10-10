@@ -13,6 +13,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import {
     prLifecycleStore,
+    type PrDraftSeed,
     type PrDockDescriptor,
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
@@ -65,6 +66,12 @@
     storageKey?: string
     /** Set by the host (`PrDockHost`) so the sheet can drive its own dock chip. */
     draftId?: string
+    /**
+     * Prefill supplied by whichever surface opened this draft, e.g. an issue the
+     * pull request should close. Read once, when the sheet is mounted: a seeded
+     * open always creates its own draft, so there is never a later seed to apply.
+     */
+    seed?: PrDraftSeed | null
   }
 
   let {
@@ -77,7 +84,8 @@
     onMinimize: onMinimizeProp,
     onExpand: onExpandProp,
     storageKey: storageKeyProp,
-    draftId
+    draftId,
+    seed = null
   }: Props = $props()
 
   /** This draft owns its Git state; active-thread navigation cannot replace it. */
@@ -96,8 +104,24 @@
     projectMeta ? getProjectIcon(projectMeta, projectIconUrl ?? undefined) : null
   )
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
-  let title = $state('')
-  let body = $state('')
+  /**
+   * The draft's prefill, read once when the sheet is created.
+   *
+   * A seeded open always creates its own draft, so the prefill is fixed for this
+   * sheet's whole life: reading it through a function keeps the values out of the
+   * reactive graph, which is what stops a prop change from overwriting text the
+   * user has already typed.
+   */
+  function initialTitle(): string {
+    return seed?.title ?? ''
+  }
+
+  function initialBody(): string {
+    return seed?.body ?? ''
+  }
+
+  let title = $state(initialTitle())
+  let body = $state(initialBody())
   let head = $state(initialPreferences.head ?? '')
   let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)

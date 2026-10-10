@@ -28,7 +28,14 @@ import type {
   GitSyncPeer,
   GitSyncPeerOption,
   GitSyncResult,
+  IssueBundle,
+  IssueLabel,
+  IssueListRequest,
+  IssueMilestone,
+  IssuePage,
+  IssueReference,
   MergeSummary,
+  NewIssueInput,
   PrCommentKind,
   PrCreateInput,
   PrListRequest,
@@ -410,6 +417,91 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string, pullNumber: number],
     /** null when the provider request fails (timeout, rate limit, network). */
     PullRequestDetail | null
+  >,
+  /**
+   * One page of the repository's issues, narrowed by the viewer's relationship
+   * and ordered the way the sidebar draws it.
+   */
+  'issue:page': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      state: PrState,
+      page: number,
+      /** Which relationship to keep, how to order, and where to continue from. */
+      request: IssueListRequest
+    ],
+    IssuePage
+  >,
+  /** One issue's detail and its conversation comments, fetched together. */
+  'issue:bundle': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number],
+    IssueBundle
+  >,
+  /** Open a new issue on the repository (owner/repo resolve from the origin). */
+  'issue:create': {} as Contract<
+    [projectId: string, input: NewIssueInput],
+    GitHubMutationResult<IssueReference>
+  >,
+  /** Rewrite an issue's title and/or body. */
+  'issue:update': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      issueNumber: number,
+      title: string | undefined,
+      body: string | undefined
+    ],
+    GitHubMutationResult<IssueReference>
+  >,
+  /**
+   * Close or reopen an issue.
+   *
+   * The reason travels with a close and is ignored on a reopen, because GitHub
+   * clears the reason itself when an issue is brought back.
+   */
+  'issue:state': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      issueNumber: number,
+      state: 'open' | 'closed',
+      stateReason?: 'completed' | 'not_planned'
+    ],
+    GitHubMutationResult<IssueReference>
+  >,
+  /** Post a comment on an issue's conversation. */
+  'issue:comment': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number, body: string],
+    GitHubMutationResult<PullRequestComment>
+  >,
+  /** Rewrite an already-posted issue comment. Only the author may do this. */
+  'issue:commentEdit': {} as Contract<
+    [projectId: string, owner: string, repo: string, commentId: number, body: string],
+    GitHubMutationResult<PullRequestComment>
+  >,
+  /** Permanently delete an issue comment. Only the author may do this. */
+  'issue:commentDelete': {} as Contract<
+    [projectId: string, owner: string, repo: string, commentId: number],
+    GitHubMutationResult<null>
+  >,
+  /** Replace the labels an issue carries, returning the labels it now has. */
+  'issue:setLabels': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number, labels: string[]],
+    GitHubMutationResult<IssueLabel[]>
+  >,
+  /** Replace an issue's assignees, returning the accounts it now has. */
+  'issue:setAssignees': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number, logins: string[]],
+    GitHubMutationResult<RepositoryMentionUser[]>
+  >,
+  /** Attach or clear an issue's milestone. `null` clears it. */
+  'issue:setMilestone': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number, milestone: number | null],
+    GitHubMutationResult<IssueMilestone | null>
   >,
   'deployment:overview': {} as Contract<
     [projectId: string, owner: string, repo: string],

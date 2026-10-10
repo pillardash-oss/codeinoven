@@ -54,6 +54,7 @@
     ChevronLeft,
     ChevronRight,
     CircleCheck,
+    CircleDot,
     Download,
     ExternalLink,
     FileDiff,
@@ -103,6 +104,7 @@
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
+  import GitIssuesView from './GitIssuesView.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import PrBatchDialog from './PrBatchDialog.svelte'
@@ -2560,7 +2562,8 @@
       },
       { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
       { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null }
+      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null },
+      { id: 'issues', label: 'Issues', icon: CircleDot, count: null }
     ]
     // Stash is just shelved work   it earns a tab only once something is shelved.
     if (gitState.stashes.length > 0) {
@@ -3834,6 +3837,17 @@
                 onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               />
             {/if}
+          </div>
+        {:else if activeTab === 'issues'}
+          <div class="h-full min-h-0">
+            <GitIssuesView
+              {projectId}
+              {threadId}
+              {scopeBucketId}
+              identity={githubIdentity}
+              {githubConnected}
+              onSignIn={() => githubSignIn.start()}
+            />
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor

@@ -8,7 +8,8 @@ import type {
 } from '$shared/types'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
-export type GitPanelTabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+export type GitPanelTabId =
+  'changes' | 'history' | 'branches' | 'pulls' | 'issues' | 'deployments' | 'stashes'
 
 export interface GitPanelViewState {
   activeTab: GitPanelTabId

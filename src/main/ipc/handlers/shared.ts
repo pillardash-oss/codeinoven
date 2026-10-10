@@ -1,5 +1,6 @@
-import { ProviderHttpError } from '../../providers/github-provider'
+import { GitHubProvider, ProviderHttpError } from '../../providers/github-provider'
 import { validateEntityId } from '../ipc-validation'
+import type { RepositoryService } from '../../git/repository-service'
 import type {
   AttachmentStorageScope,
   GitHubMutationResult,
@@ -8,6 +9,44 @@ import type {
 
 /** GitHub App installation link offered when a mutation hits a 403. */
 export const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
+
+/**
+ * Returned instead of a raw fetch failure when GitHub could not be reached at
+ * all   offline, or a request that outlived the provider's own deadline.
+ *
+ * It is a transient state rather than a broken feature, so the listing says so
+ * instead of rejecting the IPC call, which is also what keeps a network blip out
+ * of the main process's handler-error log.
+ */
+export const GITHUB_TRANSIENT_MESSAGE =
+  'GitHub could not be reached right now. This listing will refresh automatically.'
+
+/**
+ * Returned when the App cannot see the repository at all (its installation is
+ * missing, or its permissions are pending). Actionable, unlike a transient blip.
+ */
+export const GITHUB_REPOSITORY_ACCESS_MESSAGE =
+  'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
+
+/**
+ * Resolve `owner/repo` from a project's origin remote, so a call can target the
+ * right repository without asking the user for an extra identity.
+ *
+ * The provider is constructed with an empty token because the identity comes
+ * from the remote URL alone; nothing here is authenticated.
+ */
+export async function resolveGitHubRemoteIdentity(
+  repositoryService: RepositoryService,
+  projectPath: string
+): Promise<{ owner: string; repo: string }> {
+  const remoteUrl = await repositoryService.getRemoteOrigin(projectPath)
+  const provider = new GitHubProvider('')
+  const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
+  if (!identity) {
+    throw new Error('No GitHub remote (origin) is configured for this project')
+  }
+  return identity
+}
 export function canonicalGitHubBranch(branch: string): string {
   return branch
     .replace(/^refs\/remotes\/origin\//u, '')

@@ -9,6 +9,11 @@ import type {
   GitRepositoryIdentity,
   GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
+  IssueDetail,
+  IssuePage,
+  IssueReference,
+  IssueStateReason,
+  IssueSummary,
   PrAuthorAssociation,
   PrCommentKind,
   PrDraft,
@@ -39,9 +44,14 @@ import type {
 import { capJobLogText } from '../../lib/github-job-log'
 import { isReactionContent } from '../../lib/github-reactions'
 import type {
+  CreateIssueCommentInput,
+  CreateIssueInput,
   CreatePrCommentInput,
   CreatePrReviewInput,
   GitProvider,
+  IssueCommentTarget,
+  IssueTarget,
+  ListIssuePageInput,
   ListPullRequestPageInput,
   ListPullRequestsInput,
   MergePullRequestInput,
@@ -50,6 +60,9 @@ import type {
   PullRequestTarget,
   ReplyPrReviewCommentInput,
   ResolvePrReviewThreadInput,
+  SetIssueStateInput,
+  UpdateIssueCommentInput,
+  UpdateIssueInput,
   UpdatePrCommentInput
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
@@ -224,13 +237,70 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
 }`
 
 /**
- * The `sort:` qualifier for each ordering the listing offers.
+ * One GraphQL search for a page of issues.
+ *
+ * Search rather than the repository's `issues` connection, for the same reason
+ * the pull request listing uses it: `author:@me` and `mentions:@me` are questions
+ * only the search index can answer. `type: ISSUE` returns both kinds of node, so
+ * the `is:issue` qualifier is what keeps pull requests out of the answer, and the
+ * `... on Issue` fragment is what keeps a stray `PullRequest` node from being read
+ * as an issue.
+ */
+const ISSUE_LIST_QUERY = `query IssueList($q: String!, $first: Int!, $after: String) {
+  search(query: $q, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      __typename
+      ... on Issue {
+        number
+        title
+        url
+        state
+        stateReason
+        createdAt
+        updatedAt
+        author {
+          login
+          avatarUrl
+        }
+        labels(first: 20) {
+          nodes {
+            name
+            color
+          }
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            name
+            avatarUrl
+          }
+        }
+        milestone {
+          number
+          title
+          state
+          description
+          dueOn
+        }
+        totalCommentsCount
+      }
+    }
+  }
+}`
+
+/**
+ * The `sort:` qualifier for each ordering the listings offer.
  *
  * A record keyed by the union rather than a chain of comparisons, so adding an
  * ordering to `PrListSort` without giving it a qualifier here fails to compile
- * instead of silently listing by something else.
+ * instead of silently listing by something else. The same table orders issues and
+ * pull requests, which is why `IssueListSort` is an alias of `PrListSort`.
  */
-const PULL_REQUEST_LIST_SORTS: Record<PrListSort, string> = {
+const LIST_SORTS: Record<PrListSort, string> = {
   updated: 'sort:updated-desc',
   created: 'sort:created-desc',
   'comments-desc': 'sort:comments-desc',
@@ -427,7 +497,7 @@ export class GitHubProvider implements GitProvider {
     else if (input.filter === 'assigned') qualifiers.push('assignee:@me')
     else if (input.filter === 'review-requested') qualifiers.push('review-requested:@me')
     else if (input.filter === 'involves') qualifiers.push('involves:@me')
-    qualifiers.push(PULL_REQUEST_LIST_SORTS[input.sort])
+    qualifiers.push(LIST_SORTS[input.sort])
 
     // Ask for exactly the page size. An over-fetch of one extra would move
     // `endCursor` past the first row of the next page, because the cursor is the
@@ -487,6 +557,160 @@ export class GitHubProvider implements GitProvider {
       changedFiles: this.readNumber(record, 'changed_files'),
       commitCount: this.readNumber(record, 'commits')
     }
+  }
+
+  async listIssuePage(input: ListIssuePageInput): Promise<IssuePage> {
+    const state = input.state ?? 'open'
+    const qualifiers = ['is:issue', `repo:${input.owner}/${input.repo}`]
+    if (state === 'open') qualifiers.push('is:open')
+    else if (state === 'closed') qualifiers.push('is:closed')
+    if (input.filter === 'created') qualifiers.push('author:@me')
+    else if (input.filter === 'assigned') qualifiers.push('assignee:@me')
+    else if (input.filter === 'mentioned') qualifiers.push('mentions:@me')
+    else if (input.filter === 'involves') qualifiers.push('involves:@me')
+    qualifiers.push(LIST_SORTS[input.sort])
+
+    // Ask for exactly the page size. An over-fetch of one extra would move
+    // `endCursor` past the first row of the next page, because the cursor is the
+    // last node the search returned.
+    const perPage = Math.min(Math.max(input.perPage, 1), 50)
+    try {
+      const data = await this.runGraphql(ISSUE_LIST_QUERY, {
+        q: qualifiers.join(' '),
+        first: perPage,
+        after: input.cursor
+      })
+      const search = this.readRecord(data, 'search')
+      const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+      const items = nodes.flatMap((node) => {
+        const summary = this.toGraphqlIssueSummary(node, input.owner, input.repo)
+        return summary ? [summary] : []
+      })
+      const pageInfo = search ? this.readRecord(search, 'pageInfo') : null
+      const hasMore = pageInfo?.['hasNextPage'] === true
+      return {
+        items,
+        page: input.page,
+        hasMore,
+        nextCursor: hasMore && pageInfo ? this.readString(pageInfo, 'endCursor') : null
+      }
+    } catch (failure) {
+      // The IPC handler tells a repository the App cannot see apart from a
+      // transient outage by HTTP status, so a GraphQL access failure has to
+      // arrive as the same `ProviderHttpError` the REST calls raise.
+      if (failure instanceof ProviderGraphqlError) {
+        if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
+        if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)
+      }
+      throw failure
+    }
+  }
+
+  async getIssue(input: IssueTarget): Promise<IssueDetail> {
+    const response = await this.request(this.issuePath(input), { method: 'GET' })
+    const record = Array.isArray(response) ? {} : response
+    // A pull request is an issue carrying a `pull_request` link. The GitHub
+    // issues endpoints answer with both kinds, so the issue reader refuses the
+    // other one rather than opening onto something it cannot represent.
+    if (this.readRecord(record, 'pull_request')) {
+      throw new Error(`#${input.issueNumber} is a pull request, not an issue`)
+    }
+    const summary = this.toIssueSummary(record, input.owner, input.repo)
+    if (!summary) throw new Error(`Issue #${input.issueNumber} could not be read`)
+    return {
+      ...summary,
+      body: this.readString(record, 'body') ?? '',
+      nodeId: this.readString(record, 'node_id'),
+      authorAssociation: this.toAuthorAssociation(record),
+      closedAt: this.readString(record, 'closed_at')
+    }
+  }
+
+  async createIssue(input: CreateIssueInput): Promise<IssueReference> {
+    const payload: Record<string, unknown> = { title: input.title }
+    if (input.body !== undefined) payload['body'] = input.body
+    if (input.labels && input.labels.length > 0) payload['labels'] = input.labels
+    if (input.assignees && input.assignees.length > 0) payload['assignees'] = input.assignees
+    const response = await this.request(`${this.repoPath(input)}/issues`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+    const reference = this.toIssueReference(response, input)
+    if (!reference) throw new Error('The issue was created but could not be read back')
+    return reference
+  }
+
+  async updateIssue(input: UpdateIssueInput): Promise<IssueReference> {
+    const payload: Record<string, unknown> = {}
+    if (input.title !== undefined) payload['title'] = input.title
+    if (input.body !== undefined) payload['body'] = input.body
+    const response = await this.request(this.issuePath(input), {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    })
+    const reference = this.toIssueReference(response, input)
+    if (!reference) throw new Error('The issue was saved but could not be read back')
+    return reference
+  }
+
+  async setIssueState(input: SetIssueStateInput): Promise<IssueReference> {
+    const payload: Record<string, unknown> = { state: input.state }
+    // GitHub records why an issue was closed, and clears the reason itself on
+    // reopen, so a reason is only ever sent with a close.
+    if (input.state === 'closed' && input.stateReason) payload['state_reason'] = input.stateReason
+    const response = await this.request(this.issuePath(input), {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    })
+    const reference = this.toIssueReference(response, input)
+    if (!reference) throw new Error('The issue state change was not confirmed')
+    return reference
+  }
+
+  async listIssueComments(input: IssueTarget): Promise<PullRequestComment[]> {
+    const response = await this.request(`${this.issuePath(input)}/comments?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestComment[] => {
+      const comment = this.toComment(item)
+      return comment ? [comment] : []
+    })
+  }
+
+  async createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment> {
+    const response = await this.request(`${this.issuePath(input)}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body: input.body })
+    })
+    const comment = this.toComment(response)
+    if (!comment) throw new Error('The comment was posted but could not be read back')
+    return comment
+  }
+
+  /**
+   * Where GitHub files an issue comment.
+   *
+   * Repository-scoped, with the issue number appearing nowhere in the path: a
+   * comment is addressed by its own id, the same as the pull request conversation
+   * comments that share this collection.
+   */
+  private issueCommentPath(input: IssueCommentTarget): string {
+    return `${this.repoPath(input)}/issues/comments/${input.commentId}`
+  }
+
+  async updateIssueComment(input: UpdateIssueCommentInput): Promise<PullRequestComment> {
+    const response = await this.request(this.issueCommentPath(input), {
+      method: 'PATCH',
+      body: JSON.stringify({ body: input.body })
+    })
+    const comment = this.toComment(response)
+    if (!comment) throw new Error('The comment was saved but could not be read back')
+    return comment
+  }
+
+  async deleteIssueComment(input: IssueCommentTarget): Promise<void> {
+    await this.request(this.issueCommentPath(input), { method: 'DELETE' })
   }
 
   async listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]> {
@@ -1928,6 +2152,112 @@ export class GitHubProvider implements GitProvider {
       milestone: this.toMilestone(record['milestone']),
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       mergeableState: mergeableStateRaw || null
+    }
+  }
+
+  /**
+   * Map one GraphQL search node to the renderer-safe issue summary, or null when
+   * it is not an issue or has no usable number.
+   *
+   * The `Issue` typename check is what keeps a pull request out of an issue
+   * listing even if the search qualifiers ever let one through; the row must never
+   * draw something the reader cannot open.
+   */
+  private toGraphqlIssueSummary(
+    payload: unknown,
+    owner: string,
+    repo: string
+  ): IssueSummary | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    if (this.readString(record, '__typename') !== 'Issue') return null
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    const author = this.readRecord(record, 'author')
+    const login = author ? (this.readString(author, 'login') ?? 'unknown') : 'unknown'
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Issue #${number}`,
+      url: this.readString(record, 'url') ?? `https://github.com/${owner}/${repo}/issues/${number}`,
+      state: this.readString(record, 'state') === 'CLOSED' ? 'closed' : 'open',
+      stateReason: this.toStateReason(this.readString(record, 'stateReason')),
+      authorLogin: login,
+      authorAvatarUrl: author ? this.readString(author, 'avatarUrl') : null,
+      authorIsBot: login.endsWith('[bot]'),
+      createdAt: this.readString(record, 'createdAt') ?? '',
+      updatedAt: this.readString(record, 'updatedAt') ?? '',
+      comments: this.readNumber(record, 'totalCommentsCount'),
+      labels: this.readLabels(record),
+      assignees: this.readGraphqlAssignees(record),
+      milestone: this.readGraphqlMilestone(record)
+    }
+  }
+
+  /** Map a GitHub issue payload to the renderer-safe summary, or null if unusable. */
+  private toIssueSummary(payload: unknown, owner: string, repo: string): IssueSummary | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Issue #${number}`,
+      url:
+        this.readString(record, 'html_url') ??
+        `https://github.com/${owner}/${repo}/issues/${number}`,
+      state: this.readString(record, 'state') === 'closed' ? 'closed' : 'open',
+      stateReason: this.toStateReason(this.readString(record, 'state_reason')),
+      ...this.toAuthor(this.readRecord(record, 'user')),
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at') ?? '',
+      comments: this.readNumber(record, 'comments'),
+      labels: this.toLabels(record['labels']),
+      assignees: this.toAssignees(record),
+      milestone: this.toMilestone(record['milestone'])
+    }
+  }
+
+  /**
+   * GitHub's closure reason, spelled once for both transports.
+   *
+   * The search vocabulary uppercases the enum (`NOT_PLANNED`) while the REST field
+   * lowercases it (`not_planned`), so the two are folded together here and an
+   * undocumented value is dropped rather than passed through as a word the row
+   * cannot place.
+   */
+  private toStateReason(raw: string | null): IssueStateReason | null {
+    switch ((raw ?? '').toUpperCase()) {
+      case 'COMPLETED':
+        return 'completed'
+      case 'NOT_PLANNED':
+        return 'not_planned'
+      case 'REOPENED':
+        return 'reopened'
+      default:
+        return null
+    }
+  }
+
+  /** Address one issue's REST resource. */
+  private issuePath(input: IssueTarget): string {
+    return `${this.repoPath(input)}/issues/${input.issueNumber}`
+  }
+
+  /** Map a GitHub issue payload to the reference a create or state change returns. */
+  private toIssueReference(
+    payload: unknown,
+    input: { owner: string; repo: string }
+  ): IssueReference | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      url:
+        this.readString(record, 'html_url') ??
+        `https://github.com/${input.owner}/${input.repo}/issues/${number}`,
+      title: this.readString(record, 'title') ?? `Issue #${number}`
     }
   }
 

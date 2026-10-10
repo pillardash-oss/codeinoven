@@ -59,6 +59,15 @@ export type GitOperation =
   | 'pr-update'
   | 'pr-metadata'
   | 'pr-catalog'
+  | 'issue-list'
+  | 'issue-detail'
+  | 'issue-create'
+  | 'issue-update'
+  | 'issue-state'
+  | 'issue-comment'
+  | 'issue-comment-edit'
+  | 'issue-comment-delete'
+  | 'issue-metadata'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -199,6 +208,29 @@ export function prReactionBusyKey(nodeId: string, content: string): GitOperation
 /** Cache key for one pull request's detail bundle. */
 export function prBundleKey(owner: string, repo: string, pullNumber: number): string {
   return `${owner}/${repo}#${pullNumber}`
+}
+
+/**
+ * Cache key for one page of a repository's issue list.
+ *
+ * The filter and sort are part of the key, not just the state: "open, mine, newest
+ * first" and "open, everything, newest first" are different listings, and a page
+ * cached under one must never be served for the other.
+ */
+export function issuePageKey(
+  owner: string,
+  repo: string,
+  state: string,
+  filter: string,
+  sort: string,
+  page: number
+): string {
+  return `${owner}/${repo}#issues:${state}:${filter}:${sort}:${page}`
+}
+
+/** Cache key for one issue's detail bundle. */
+export function issueBundleKey(owner: string, repo: string, issueNumber: number): string {
+  return `${owner}/${repo}#issue/${issueNumber}`
 }
 
 /** Cache key for one repository's deployment overview. */

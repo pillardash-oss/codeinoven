@@ -13,6 +13,7 @@ import type {
   GitHubWorkflowRun,
   Project,
   PullRequestCheck,
+  IssueSummary,
   PullRequestSummary
 } from '$shared/types'
 import type { PrCommentChatSubject } from './git-status-panel-prompts'
@@ -23,6 +24,7 @@ import {
   prTriagePrompt,
   conflictResolutionPrompt,
   deploymentJobDiagnosisPrompt,
+  issueWorkPrompt,
   workflowJobDiagnosisPrompt
 } from './git-status-panel-prompts'
 
@@ -260,8 +262,36 @@ export async function assignAgentToCheck(
   workspaceState.openThread(thread, project)
 }
 
-/** Reopen the thread that owns a pull request's agent assignment. */
-export async function openAgentThread(projectId: string, threadId: string): Promise<void> {
+/**
+ * Hand a GitHub issue to an agent as the work to do.
+ *
+ * A fresh thread seeded with the issue's own text, rather than the report-file
+ * assignment the pull request surfaces use: an issue is a request for a change, so
+ * the thread is where that change is made and reported, and the pull request stays
+ * the user's own step once the change is reviewed.
+ */
+export async function assignAgentToIssue(
+  projectId: string,
+  issue: IssueSummary,
+  repository: string,
+  body: string | null
+): Promise<void> {
+  const project = await invoke('project:get', projectId).catch(() => null)
+  if (!project) return
+  const thread = await createAssignmentThread(
+    projectId,
+    project.path,
+    `Work on issue #${issue.number}`
+  )
+  if (!thread) return
+  rendererRecovery.setDraft(projectId, thread.id, issueWorkPrompt(issue, repository, body), [], [])
+  workspaceState.openThread(thread, project)
+}
+
+/** Reopen the thread that owns a pull request's agent assignment. */ export async function openAgentThread(
+  projectId: string,
+  threadId: string
+): Promise<void> {
   const [project, thread] = await Promise.all([
     invoke('project:get', projectId).catch(() => null),
     invoke('thread:get', projectId, threadId).catch(() => null)

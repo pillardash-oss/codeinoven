@@ -4,6 +4,13 @@ import type {
   GitHubDeploymentOverview,
   GitHubWorkflowRunDetail,
   GitRepositoryIdentity,
+  IssueDetail,
+  IssueListFilter,
+  IssueListSort,
+  IssuePage,
+  IssueReference,
+  IssueUpdateInput,
+  NewIssueInput,
   PrCommentKind,
   PrDraft,
   PrListFilter,
@@ -73,6 +80,81 @@ export interface PullRequestTarget {
   owner: string
   repo: string
   pullNumber: number
+}
+
+/**
+ * List issues for a repository, optionally filtered by state. State `all` asks
+ * for both open and closed, which is the only way to read a closed issue.
+ */
+export interface ListIssuesInput {
+  owner: string
+  repo: string
+  state?: PrState
+}
+
+/** One page of an issue listing, with the viewer relationship and ordering. */
+export interface ListIssuePageInput extends ListIssuesInput {
+  /** 1-based page number. */
+  page: number
+  /** Items per page; providers cap this. */
+  perPage: number
+  /** Which of the viewer's relationships to the issue to keep. */
+  filter: IssueListFilter
+  /** Newest-first ordering. */
+  sort: IssueListSort
+  /**
+   * Where to continue from, as the previous page reported it. Null asks for the
+   * first page; a provider that pages by number instead ignores it.
+   */
+  cursor: string | null
+}
+
+/** Address one issue in a repository. */
+export interface IssueTarget {
+  owner: string
+  repo: string
+  issueNumber: number
+}
+
+/** A new issue as the provider is asked to create one. */
+export interface CreateIssueInput extends NewIssueInput {
+  owner: string
+  repo: string
+}
+
+/** Rewrite the fields an existing issue allows editing. */
+export interface UpdateIssueInput extends IssueTarget, IssueUpdateInput {}
+
+/**
+ * Settle or reopen an issue.
+ *
+ * Closing carries GitHub's optional reason, which is how a dismissal is told
+ * apart from a resolution; reopening carries none, because GitHub clears the
+ * reason itself when an issue is brought back.
+ */
+export interface SetIssueStateInput extends IssueTarget {
+  state: 'open' | 'closed'
+  stateReason?: 'completed' | 'not_planned'
+}
+
+/** Post an issue comment (the same collection a pull request conversation uses). */
+export interface CreateIssueCommentInput extends IssueTarget {
+  body: string
+}
+
+/** Rewrite an already-posted issue comment's body. Only the author may do this. */
+export interface UpdateIssueCommentInput {
+  owner: string
+  repo: string
+  commentId: number
+  body: string
+}
+
+/** Permanently delete an issue comment. Only the author may do this. */
+export interface IssueCommentTarget {
+  owner: string
+  repo: string
+  commentId: number
 }
 
 /** Post an issue comment on a pull request. */
@@ -166,6 +248,32 @@ export interface GitProvider {
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>
+  /**
+   * One page of the repository's issues, narrowed by the viewer's relationship
+   * and ordered the way the sidebar draws it.
+   *
+   * Search-backed for the same reason the pull request listing is: `author:@me`
+   * and `mentions:@me` are questions only the search index can answer. A page
+   * carries the labels, assignee accounts, milestone and comment count the row
+   * draws, so no follow-up request is made per row.
+   */
+  listIssuePage(input: ListIssuePageInput): Promise<IssuePage>
+  /** One issue's full detail. Rejects a number that names a pull request. */
+  getIssue(input: IssueTarget): Promise<IssueDetail>
+  /** Open a new issue on the repository. */
+  createIssue(input: CreateIssueInput): Promise<IssueReference>
+  /** Rewrite an issue's title and/or body. */
+  updateIssue(input: UpdateIssueInput): Promise<IssueReference>
+  /** Close or reopen an issue, optionally recording why it was closed. */
+  setIssueState(input: SetIssueStateInput): Promise<IssueReference>
+  /** The issue's conversation comments, oldest first as GitHub returns them. */
+  listIssueComments(input: IssueTarget): Promise<PullRequestComment[]>
+  /** Post a comment on an issue. */
+  createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment>
+  /** Rewrite an issue comment's body. Only the author may do this. */
+  updateIssueComment(input: UpdateIssueCommentInput): Promise<PullRequestComment>
+  /** Permanently delete an issue comment. Only the author may do this. */
+  deleteIssueComment(input: IssueCommentTarget): Promise<void>
   getPullRequest(input: PullRequestTarget): Promise<PullRequestDetail>
   listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]>
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>

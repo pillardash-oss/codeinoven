@@ -7,6 +7,7 @@ import type {
   GitHubDeploymentJob,
   GitHubDeploymentJobLog,
   GitHubWorkflowRun,
+  IssueSummary,
   PullRequestCheck,
   PullRequestSummary
 } from '$shared/types'
@@ -238,6 +239,72 @@ export function prTriagePrompt(pr: PullRequestSummary, reportPath: string): stri
     '- Whether the checks already on the pull request agree with what you find.',
     '- Whether it is a duplicate, a superseded change, or something that should be closed instead.'
   ])
+}
+
+/**
+ * The brief a GitHub issue handed to an agent receives.
+ *
+ * An issue is a request to change the code, not a review of a proposed change, so
+ * the brief asks for the change itself: read the issue, restate the problem,
+ * reproduce it where practical, implement the smallest correct fix in an isolated
+ * scope, test it, and report. Nothing is pushed and no pull request is opened on
+ * the user's behalf, so the change can be reviewed first and the pull request stays
+ * linked to the issue when the user opens it.
+ */
+export function issueWorkPrompt(
+  issue: IssueSummary,
+  repository: string,
+  body: string | null
+): string {
+  return [
+    `Work on GitHub issue #${issue.number} in ${repository}: "${issue.title}".`,
+    `Issue link: ${issue.url}`,
+    `Reported by @${issue.authorLogin}, currently ${issue.state}.`,
+    ...(issue.labels && issue.labels.length > 0
+      ? [`Labels: ${issue.labels.map((label) => label.name).join(', ')}`]
+      : []),
+    ...(body
+      ? ['', 'The issue, verbatim:', fenceFor(body), body.trim(), fenceFor(body)]
+      : [
+          '',
+          'The issue body was not supplied here, so read it at the link above before you change anything.'
+        ]),
+    '',
+    'Work out what the issue is actually asking for before you touch the code:',
+    '- Restate the problem in your own words: what is broken or missing, who hits it, and what the',
+    '  reporter expects to happen instead. If the body is ambiguous about any of that, say which',
+    '  reading you took and why.',
+    '- Find the code responsible and cite the exact project-relative path and line you read. Never',
+    '  describe a file or a line you have not opened.',
+    '- Reproduce the problem first where it is practical to do so, so the fix is measured against a',
+    '  real failure rather than a guess.',
+    ...(issue.state === 'closed'
+      ? [
+          '- This issue is closed. Say so up front and confirm with me whether you should still work on',
+          '  it before making any change.'
+        ]
+      : []),
+    '',
+    'Work in isolation so my current working tree is never touched. Set up an app-managed worktree',
+    `scope: call \`${UTILITY_SEARCH_TOOL_NAME}\` with query "${SCOPE_CAPABILITY_SEARCH_QUERY}",`,
+    `activate the \`${APP_SCOPE_UTILITY_ID}\` result, then invoke it with \`${UTILITY_INVOKE_TOOL_NAME}\``,
+    `operation "create" and input { "title": "Issue #${issue.number}" } so the scope owns the`,
+    'checkout and this thread moves into it. Never run `git worktree` yourself.',
+    '',
+    'Then implement the smallest correct change that resolves the issue:',
+    '- Follow the repository conventions you find next to the code you are changing.',
+    '- Run the project checks that cover the changed files, and say in your report whether they pass.',
+    '- Do not expand the change beyond what the issue asks for; note unrelated problems instead of',
+    '  fixing them silently.',
+    '',
+    'Finish with a report I can act on:',
+    '- What you changed, file by file, and why.',
+    '- How you verified it, and what you could not verify.',
+    '- The exact command or steps to reproduce the fix, so I can check it myself.',
+    '',
+    'Do not push, and do not open a pull request: I will review the change and open the pull request',
+    'myself from the issue, so it stays linked and I write the description.'
+  ].join('\n')
 }
 
 /**

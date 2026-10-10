@@ -1,4 +1,4 @@
-import { GitHubProvider, ProviderHttpError } from '../../providers/github-provider'
+import { ProviderHttpError } from '../../providers/github-provider'
 import { isNetworkError } from '../../util/network-error'
 import {
   MAX_GITHUB_NUMERIC_ID,
@@ -20,24 +20,13 @@ import {
   validatePrState,
   validateWorkflowRerunMode
 } from '../ipc-validation'
-import { canonicalGitHubBranch, runGitHubMutation } from './shared'
+import { canonicalGitHubBranch, resolveGitHubRemoteIdentity, runGitHubMutation } from './shared'
+import { GITHUB_REPOSITORY_ACCESS_MESSAGE, GITHUB_TRANSIENT_MESSAGE } from './shared'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { GitHubDeploymentOverview } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 const PR_PAGE_SIZE = 20
-const GITHUB_REPOSITORY_ACCESS_MESSAGE =
-  'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
-/**
- * Returned instead of a raw fetch failure when GitHub could not be reached at
- * all   offline, or a request that outlived the provider's own deadline.
- *
- * It is a transient state rather than a broken feature, so the page says so
- * instead of rejecting the IPC call, which is also what keeps a network blip
- * out of the main process's handler-error log.
- */
-const GITHUB_TRANSIENT_MESSAGE =
-  'GitHub could not be reached right now. Pull requests will refresh automatically.'
 
 export function registerPrHandlers(ctx: IpcHandlerContext): void {
   const {
@@ -52,17 +41,11 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
   const remoteIdentity = async (
     projectId: string,
     scopeBucketId?: string
-  ): Promise<{ owner: string; repo: string }> => {
-    const remoteUrl = await repositoryService.getRemoteOrigin(
+  ): Promise<{ owner: string; repo: string }> =>
+    resolveGitHubRemoteIdentity(
+      repositoryService,
       await resolveProjectPath(projectId, scopeBucketId)
     )
-    const provider = new GitHubProvider('')
-    const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
-    if (!identity) {
-      throw new Error('No GitHub remote (origin) is configured for this project')
-    }
-    return identity
-  }
   ipcMain.handle(
     'pr:create',
     async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown) => {
