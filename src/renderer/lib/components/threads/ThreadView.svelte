@@ -1740,6 +1740,10 @@
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
+    // The harness's own session-cumulative spend (pi reports it on every usage
+    // refresh). Preferred over the per-message sum when present, because the
+    // loaded transcript can be a page while this covers the whole session.
+    let latestSessionCostUsd: number | undefined
 
     const emptyTokens: NonNullable<AgentContextUsage['tokens']> = {
       input: 0,
@@ -1776,6 +1780,7 @@
         0
       )
       costUsd += message.cost ?? stepCost
+      if (message.sessionCostUsd !== undefined) latestSessionCostUsd = message.sessionCostUsd
       // Prefer the message-level (whole-turn) usage the harness reports; while
       // a turn is still streaming, sum every completed step so the indicator
       // grows monotonically instead of bouncing between per-step token counts
@@ -1848,13 +1853,14 @@
       latestReportedContextUsed === undefined && latestEstimatedContextUsed !== undefined
     const contextUsed =
       latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
+    const displayCostUsd = latestSessionCostUsd ?? costUsd
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
       latestCredits === undefined &&
-      costUsd <= 0
+      displayCostUsd <= 0
     ) {
       return undefined
     }
@@ -1865,7 +1871,7 @@
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
-      costUsd,
+      costUsd: displayCostUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
       rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
