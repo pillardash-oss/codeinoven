@@ -187,6 +187,7 @@ import {
 } from './browser-service/browser-types'
 import {
   isAbortedNavigation,
+  rejectedLoadIsNotAFailure,
   RESTORE_SETTLE_TIMEOUT_MS,
   restoreNeedsFallbackLoad
 } from './browser-service/browser-navigation-outcome'
@@ -5501,6 +5502,19 @@ export class BrowserService {
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
+          // A media document commits and plays without ever reporting a finished
+          // load, so Electron rejects `loadURL` with `ERR_FAILED` over a page that
+          // is already on screen. The rejection is read against what the tab
+          // recorded before it is allowed to become an error card.
+          if (
+            rejectedLoadIsNotAFailure({
+              reportedFailure: this.tabs.get(tabId)?.navigationFailure ?? null,
+              loading: !contents.isDestroyed() && contents.isLoading(),
+              url: contents.isDestroyed() ? '' : contents.getURL()
+            })
+          ) {
+            return
+          }
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
           const reason = error instanceof Error && error.message ? error.message : String(error)
           this.setTabLoadError(tabId, {
