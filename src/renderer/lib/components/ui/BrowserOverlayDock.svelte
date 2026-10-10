@@ -8,6 +8,7 @@
   } from '$shared/native-dock'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { patchNativeDockChildren } from '$lib/native-dock-dom'
+  import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { onMount } from 'svelte'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
     $props()
@@ -22,6 +23,7 @@
   let modalRoot: HTMLDivElement | null = null
   let lastScroll: { target: string; top: number } | null = null
   let images: Record<string, string> = {}
+  let assignedFocus = false
   function report(report: NativeDockInteraction): void {
     void invoke('browser:overlayDockInteract', report).catch(() => {})
   }
@@ -62,6 +64,10 @@
         row.dataset.nativeModalRow = ''
       }
       highlight(element, hoveredAction ?? selectedAction)
+      if (!assignedFocus && !element.querySelector('[data-native-dock-key]')) {
+        assignedFocus = true
+        findPanelPrimaryAction(element)?.focus({ preventScroll: true })
+      }
     }
     void invoke('browser:overlayDockDrawn', {
       id: current.id,
@@ -152,7 +158,28 @@
   }
   function keydown(event: KeyboardEvent): void {
     if (dock.modal) {
-      event.preventDefault()
+      if (
+        modalRoot?.querySelector('[data-native-dock-key]') ||
+        event.key === 'Escape' ||
+        ((event.ctrlKey || event.metaKey) && event.key === 'Enter')
+      )
+        event.preventDefault()
+      else if (
+        (event.key === 'Enter' || event.key === ' ') &&
+        event.target instanceof HTMLButtonElement &&
+        event.target.hasAttribute('data-native-dock-action')
+      ) {
+        event.preventDefault()
+        if (!event.repeat && !event.target.disabled) event.target.click()
+      } else if (event.key === 'Tab' && modalRoot) {
+        const buttons = [...modalRoot.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
+        const next = event.shiftKey ? buttons.at(-1) : buttons[0]
+        const edge = event.shiftKey ? buttons[0] : buttons.at(-1)
+        if (document.activeElement === edge && next) {
+          event.preventDefault()
+          next.focus()
+        }
+      }
       return
     }
     if (!(event.target instanceof Element) || !event.target.closest('[data-native-dock-handle]'))
@@ -248,8 +275,8 @@
       tabindex={-1}
       data-native-modal-backdrop
       class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
-      aria-label="Dismiss switcher"
-      title="Dismiss switcher"
+      aria-label="Dismiss dialog"
+      title="Dismiss dialog"
       onclick={() => report({ id: dock.id, kind: 'dismiss' })}
     ></button>
   {/if}
@@ -264,6 +291,9 @@
 </div>
 
 <style>
+  :global([data-native-overlay-dock] button[data-native-dock-action]:not(:disabled)) {
+    cursor: pointer;
+  }
   :global([data-native-modal-row]),
   :global([data-native-modal-row] *) {
     cursor: pointer;

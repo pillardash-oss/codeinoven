@@ -443,7 +443,7 @@ export class BrowserOverlayWindow {
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
     popup.webContents.on('before-input-event', (_event, input) => {
-      const modal = [...this.docks.values()].find((dock) => dock.modal)
+      const modal = [...this.docks.values()].findLast((dock) => dock.modal)
       if (!modal || (input.type !== 'keyDown' && input.type !== 'keyUp')) return
       sendToRenderer(this.parent.webContents, 'browser:overlay:dockKey', {
         id: modal.id,

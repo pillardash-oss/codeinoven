@@ -99,7 +99,7 @@
       case 'bottom':
         return 'max-h-[90dvh] w-full rounded-t-2xl border-t bg-surface pb-[env(safe-area-inset-bottom)]'
       case 'fullscreen':
-        return 'h-full w-full'
+        return 'h-dvh w-dvw max-h-none max-w-none rounded-none'
       default:
         return `w-full max-h-full rounded-2xl border bg-surface ${fill ? 'h-full' : ''}`
     }
@@ -109,7 +109,7 @@
     open: boolean
     /** Nonmodal browser peek leaves the surrounding app interactive. */
     modal?: boolean
-    /** Optional viewport rectangle limiting the shell to a page frame. */
+    /** Optional viewport rectangle limiting a non-fullscreen shell to a page frame. */
     bounds?: BrowserViewBounds | null
     /** The panel's accessible name. Rendered in the canonical header, or
      *  screen-reader-only when the surface draws its own header. */
@@ -177,7 +177,8 @@
     blocksBrowserView?: boolean
     /** Render above browser page shells and Peek flight animations. */
     abovePage?: boolean
-    /** Present this canonical shell in the native overlay without parking pages. */
+    /** Stable identity for a custom native presentation, such as the switcher.
+     * Otherwise complete button dialogs automatically use native presentation. */
     nativeOverlay?: string
     nativeReady?: boolean
     nativeFailed?: boolean
@@ -227,6 +228,13 @@
     panelEl = $bindable(null)
   }: Props = $props()
 
+  const suppressionKey = `modal-${crypto.randomUUID()}`
+  const nativeId = $derived(
+    nativeOverlay ??
+      (modal && blocksBrowserView && placement !== 'fullscreen' ? suppressionKey : undefined)
+  )
+  const frameBounds = $derived(placement === 'fullscreen' ? null : bounds)
+
   function nativePanel(id: string): Attachment<HTMLElement> {
     return (panel) => {
       nativeReady = false
@@ -237,7 +245,9 @@
       }
       const controller = new NativeDockController(id, () => {}, bounds, false, {
         onHover: (button) => onNativeHover?.(button),
-        onDismiss: () => onClose(),
+        onDismiss: () => {
+          if (closeOnBackdrop) onClose()
+        },
         onCommit: (key) => onNativeCommit?.(key),
         onReady: () => {
           nativeReady = true
@@ -245,6 +255,17 @@
         onFailure: () => {
           nativeReady = false
           nativeFailed = true
+        },
+        requireCompleteProjection: !nativeOverlay,
+        onKey: (event) => {
+          if (event.type === 'keydown' && event.key === 'Escape') {
+            onEscapeKeydown?.(event)
+            if (escapeCloses && !event.defaultPrevented) onClose()
+            return true
+          }
+          // Ordinary button navigation belongs to the native document. Only
+          // application shortcuts go back to the source window for these dialogs.
+          return !nativeOverlay && !event.metaKey && !event.ctrlKey && !event.altKey
         }
       })
       const cleanup = controller.mount(panel)
@@ -283,12 +304,11 @@
   // `blocksBrowserView` is false for the full screen browser, which displays the
   // native view itself: suppressing it there leaves the surface empty. Its own
   // panel claims the view through the store, so nothing else is left uncovered.
-  const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
   $effect(() =>
     browserVisibility.hideWhile(
       suppressionKey,
       'fullscreen-surface',
-      open && (nativeOverlay ? nativeFailed : blocksBrowserView)
+      open && (nativeId ? nativeFailed : blocksBrowserView)
     )
   )
 
@@ -338,15 +358,17 @@
       <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
     {/if}
     <div
-      class="pointer-events-none fixed {stackingClass} flex {bounds ? '' : 'inset-0'} {alignment}"
+      class="pointer-events-none fixed {stackingClass} flex {frameBounds
+        ? ''
+        : 'inset-0'} {alignment}"
       style:opacity={nativeReady ? 0 : undefined}
-      style={bounds
-        ? `left: ${bounds.x}px; top: ${bounds.y}px; width: ${bounds.width}px; height: ${bounds.height}px;`
+      style={frameBounds
+        ? `left: ${frameBounds.x}px; top: ${frameBounds.y}px; width: ${frameBounds.width}px; height: ${frameBounds.height}px;`
         : undefined}
     >
       <Dialog.Content
         bind:ref={panelEl}
-        {trapFocus}
+        trapFocus={trapFocus && !nativeReady}
         preventScroll={modal}
         preventOverflowTextSelection={modal}
         onOpenAutoFocus={focusInitialElement}
@@ -368,11 +390,7 @@
         class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
       >
         {#snippet child({ props })}
-          <div
-            {...props}
-            aria-modal={modal}
-            {@attach nativeOverlay ? nativePanel(nativeOverlay) : undefined}
-          >
+          <div {...props} aria-modal={modal} {@attach nativeId ? nativePanel(nativeId) : undefined}>
             {#if chrome}
               <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
                 <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>

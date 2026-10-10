@@ -301,7 +301,7 @@
   >
     <div
       role="presentation"
-      class="relative flex flex-1 items-center justify-center"
+      class="relative flex min-h-0 flex-1 items-center justify-center"
       onclick={requestClose}
       onkeydown={(e: KeyboardEvent) => {
         if (keymapState.matches('ui-activate', e)) requestClose()
@@ -309,9 +309,7 @@
     >
       <div
         role="presentation"
-        class="relative flex flex-col items-center {kind === 'image'
-          ? 'max-h-[90vh] max-w-[90vw]'
-          : 'h-[85vh] w-[85vw]'}"
+        class="relative flex h-full min-h-0 w-full flex-col items-center"
         onclick={(e: MouseEvent) => e.stopPropagation()}
       >
         {#if kind === 'image' && src}
@@ -319,7 +317,7 @@
             {@attach imageViewportAttachment}
             role="group"
             class={[
-              'flex touch-none items-center justify-center overflow-hidden',
+              'flex min-h-0 w-full flex-1 touch-none items-center justify-center overflow-hidden',
               panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
             ]}
             onwheel={panZoom.onWheel}
@@ -334,32 +332,24 @@
               {src}
               alt={filename}
               draggable="false"
-              class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
+              class="max-h-full max-w-full object-contain"
               style={panZoom.transform}
             />
           </div>
         {:else if kind === 'video' && src}
-          <video
-            {src}
-            controls
-            preload="metadata"
-            class="max-h-[75vh] max-w-[85vw] rounded-lg shadow-2xl"
-          >
+          <video {src} controls preload="metadata" class="min-h-0 w-full flex-1 object-contain">
             <track kind="captions" />
           </video>
         {:else if kind === 'audio' && src}
           <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
         {:else if kind === 'pdf' && src}
-          <iframe
-            {src}
-            class="h-full w-full rounded-lg border-0 shadow-2xl"
-            title={`Preview ${filename}`}
+          <iframe {src} class="min-h-0 w-full flex-1 border-0" title={`Preview ${filename}`}
           ></iframe>
         {:else if kind === 'document' && documentSrcdoc}
           <iframe
             srcdoc={documentSrcdoc}
             sandbox=""
-            class="h-full w-full rounded-lg border-0 bg-[#eceff1] shadow-2xl"
+            class="min-h-0 w-full flex-1 border-0 bg-surface"
             title={`Preview ${filename}`}
           ></iframe>
         {:else if kind === 'document' && documentLoading}
@@ -387,7 +377,7 @@
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
-        <div class="mt-3 flex items-center gap-3">
+        <div class="mt-3 flex shrink-0 items-center gap-3">
           <span class="max-w-full truncate text-xs text-muted">{filename}</span>
         </div>
       </div>

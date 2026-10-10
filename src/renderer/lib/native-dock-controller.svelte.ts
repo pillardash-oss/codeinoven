@@ -13,6 +13,7 @@ import {
 } from '$shared/native-dock'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
+import { supportsNativeModal } from '$lib/native-modal-capability'
 
 /** The original controls remain the owners of their actions and live updates. */
 export class NativeDockController {
@@ -45,6 +46,8 @@ export class NativeDockController {
       onCommit: (key: string) => void
       onReady?: () => void
       onFailure?: () => void
+      requireCompleteProjection?: boolean
+      onKey?: (event: KeyboardEvent) => boolean
     }
   ) {}
 
@@ -76,19 +79,18 @@ export class NativeDockController {
     })
     const unsubscribeKey = subscribe('browser:overlay:dockKey', (input) => {
       if (!this.active || input.id !== this.id || !this.modalOptions) return
-      window.dispatchEvent(
-        new KeyboardEvent(input.type, {
-          key: input.key,
-          code: input.code,
-          ctrlKey: input.control,
-          shiftKey: input.shift,
-          altKey: input.alt,
-          metaKey: input.meta,
-          repeat: input.isAutoRepeat,
-          bubbles: true,
-          cancelable: true
-        })
-      )
+      const event = new KeyboardEvent(input.type, {
+        key: input.key,
+        code: input.code,
+        ctrlKey: input.control,
+        shiftKey: input.shift,
+        altKey: input.alt,
+        metaKey: input.meta,
+        repeat: input.isAutoRepeat,
+        bubbles: true,
+        cancelable: true
+      })
+      if (!this.modalOptions.onKey?.(event)) window.dispatchEvent(event)
     })
     const unsubscribeEvent = subscribe('browser:overlay:dockEvent', (report) => {
       if (!this.active || report.id !== this.id) return
@@ -253,6 +255,10 @@ export class NativeDockController {
 
   private publish(): void {
     if (!this.root || !this.bounds || !this.active) return
+    if (this.modalOptions?.requireCompleteProjection && !supportsNativeModal(this.root)) {
+      this.refuse()
+      return
+    }
     try {
       const rect = this.root.getBoundingClientRect()
       this.bounds = this.measuredBounds(rect.width, rect.height)
