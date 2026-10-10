@@ -45,12 +45,6 @@ const HOVER_GRACE_MS = 260
 
 class BrowserStripOverlayState {
   /**
-   * True while the overlay window is drawing the strip, which is exactly when
-   * the app window must not draw it as well.
-   */
-  live = $state(false)
-
-  /**
    * Whether the overlay's reports can reach this window at all.
    *
    * The reports travel over IPC channels the preload has to expose, and a preload
@@ -178,7 +172,6 @@ class BrowserStripOverlayState {
     const token = (this.requestToken += 1)
     if (strip === null) {
       this.stopAckWatch()
-      this.live = false
       this.pointerInside = false
       void invoke('browser:setStripOverlay', null).catch(() => {})
       return
@@ -197,7 +190,6 @@ class BrowserStripOverlayState {
         this.abandon('its window could not be created')
         return
       }
-      this.live = true
     } catch {
       if (token !== this.requestToken) return
       this.abandon('a request to draw the strip was refused')
@@ -217,7 +209,6 @@ class BrowserStripOverlayState {
     this.stopAckWatch()
     if (this.unavailable) return
     this.unavailable = true
-    this.live = false
     logRendererError(
       `The native browser overlay was abandoned for the floating tab strip: ${reason}. The panel is drawn in the app window again, and a browser page it covers is parked for as long as it is open.`
     )

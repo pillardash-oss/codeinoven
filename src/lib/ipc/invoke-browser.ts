@@ -245,6 +245,16 @@ export const invokeBrowserContract = {
    */
   'browser:setStripOverlay': {} as Contract<[request: BrowserStripOverlayRequest | null], boolean>,
   /**
+   * Load or release the bounded host that draws the floating browser sidebar.
+   *
+   * The panel is revealed by a pointer reaching the window edge, so its renderer
+   * is loaded while a browser view is on screen instead of on that hover: a host
+   * created by the gesture spends its first frames loading, which reads as the
+   * panel arriving late. `false` releases it for the idle reclaim it would get
+   * after a hide.
+   */
+  'browser:warmStripOverlay': {} as Contract<[warm: boolean], boolean>,
+  /**
    * Everything on display in the overlay, asked for by the overlay document
    * itself once its listener is bound. First delivery is a pull here because a
    * push straight after `loadURL` loses the same race the permission popup

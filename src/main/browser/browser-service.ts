@@ -1210,6 +1210,9 @@ export class BrowserService {
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
       this.nativeStrip.apply(validateBrowserStripOverlayRequest(rawRequest))
     )
+    replaceHandler('browser:warmStripOverlay', (_event, warm) =>
+      this.nativeStrip.setWarm(warm === true)
+    )
     replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
       const id = validateNativeDockId(rawId)
       const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)

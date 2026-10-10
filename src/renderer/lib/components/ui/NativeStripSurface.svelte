@@ -57,12 +57,6 @@
     )
     dock = { ...incoming, nodes, bounds: { ...incoming.bounds, x: 0, y: 0 } }
   }
-  let pointerInside = false
-  function pointer(over: boolean): void {
-    if (pointerInside === over) return
-    pointerInside = over
-    void invoke('browser:overlayStripInteract', { kind: 'pointer', over }).catch(() => {})
-  }
   onMount(() => {
     const off = subscribe('browser:overlay:strip', apply)
     const offDocks = subscribe('browser:overlay:docks', applyDocks)
@@ -79,16 +73,13 @@
   })
 </script>
 
-<svelte:window
-  onmousemove={() => pointer(true)}
-  onmouseout={(event) => {
-    // A second, independent signal for the same fact: `mouseleave` on the
-    // document is the primary one, and this catches a host that only reports
-    // the pointer leaving through the element tree.
-    if (!event.relatedTarget) pointer(false)
-  }}
-/>
-<svelte:document onmouseenter={() => pointer(true)} onmouseleave={() => pointer(false)} />
+<!--
+  The pointer is measured in the main process against this host's own rectangle,
+  not reported from here. A view attached under a cursor that never moved gets no
+  enter event, and the leave Chromium synthesises for the surface it replaced
+  reads as the pointer walking away, which closed the panel the moment it
+  arrived. `NativeStripView.reportPointer` owns that answer now.
+-->
 {#if dock}
   <div
     data-overlay-strip

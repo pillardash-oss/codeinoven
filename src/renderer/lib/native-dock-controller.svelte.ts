@@ -377,12 +377,13 @@ export class NativeDockController {
       })
       clearTimeout(this.timer)
       // A modal shares the always-warm full-window overlay, so two seconds is
-      // enough for it to prove it drew. A bounded panel host (the browser
-      // sidebar) may be loading its renderer for the first time, which in a
-      // development build outlasts that; a slow cold start is not a failure.
+      // enough for it to prove it drew. A bounded panel host is loaded while the
+      // browser view is up, but a reveal can still land while that load is in
+      // flight, and nothing is drawn in the app window while it waits: five
+      // seconds bounds that wait without turning a slow start into a fallback.
       this.timer = setTimeout(
         () => this.refuse('its host never confirmed the panel it was given'),
-        this.passive || this.modalOptions?.panel ? OVERLAY_ACK_TIMEOUT_MS : 2000
+        this.passive ? OVERLAY_ACK_TIMEOUT_MS : this.modalOptions?.panel ? 5000 : 2000
       )
       void invoke('browser:setDockOverlay', this.id, request)
         .then((accepted) => {

@@ -71,7 +71,20 @@
      *     the page, and the overlay mirrors the very frame that would vanish;
      *   - `live`: the overlay is drawing it, so the DOM panel steps aside.
      */
-    overlayPhase?: 'none' | 'pending' | 'live'
+    /**
+     * Whether a native host is drawing this floating panel.
+     *
+     * `true` means the panel this component renders is the projection source
+     * only: it must never paint, because the host that draws it is already on
+     * screen or arriving. Painting it first and hiding it when the host
+     * confirms would show the same panel twice, once in each skin, and the user
+     * would watch it fly in and get replaced.
+     *
+     * `false` is the DOM panel's own path: it draws, and it publishes its
+     * rectangle so a page underneath parks rather than covering it. That is the
+     * fallback when no host can draw it at all.
+     */
+    nativeHost?: boolean
     /** Project the canonical panel into a native host while it floats. */
     panel?: Attachment<HTMLElement>
     /** Whether a native host currently holds the pointer, so the panel must stay
@@ -98,7 +111,7 @@
     footer,
     scroller = $bindable(null),
     fileDrop = undefined,
-    overlayPhase = 'none',
+    nativeHost = false,
     children,
     panel,
     holdOpen,
@@ -225,12 +238,12 @@
       data-region={region}
       aria-label={label}
       style="width: {sidebarState.width}px"
-      class:invisible={overlayPhase === 'live'}
-      class:pointer-events-none={overlayPhase === 'live'}
-      transition:fly={{ x: -16, duration: overlayPhase === 'none' ? motionDuration(140) : 0 }}
+      class:invisible={nativeHost}
+      class:pointer-events-none={nativeHost}
+      transition:fly={{ x: -16, duration: nativeHost ? 0 : motionDuration(140) }}
       onmouseenter={onOverlayEnter}
       onmouseleave={onOverlayLeave}
-      {@attach trackOcclusion && overlayPhase === 'none' ? trackBrowserOcclusion : undefined}
+      {@attach trackOcclusion && !nativeHost ? trackBrowserOcclusion : undefined}
     >
       {#if !hideHeader}
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
