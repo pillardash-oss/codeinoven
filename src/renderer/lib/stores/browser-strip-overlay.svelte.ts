@@ -1,7 +1,6 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   OVERLAY_ACK_TIMEOUT_MS,
-  TOAST_OVERLAY_TOP,
   type BrowserOverlayAck,
   type BrowserStripOverlayAction,
   type BrowserStripOverlayInteraction,
@@ -296,16 +295,16 @@ class BrowserStripOverlayState {
           browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon, tab.boxId)
         return
       case 'open-site-menu':
-        // The overlay document's own point, translated into the app window's
-        // content space: the overlay window starts TOAST_OVERLAY_TOP below it.
-        // The box comes along because the padlock clears the jar it was opened
-        // from, which for the global browser is the active tab's own box.
+        // The overlay document shares the app window's content coordinates, so
+        // the point is already in the app renderer's own space. The box comes
+        // along because the padlock clears the jar it was opened from, which for
+        // the global browser is the active tab's own box.
         void openBrowserSiteMenuAt(
           GLOBAL_BROWSER_PROJECT_ID,
           browserSiteHost(tab.url),
           browserSiteOrigin(tab.url),
           x,
-          y + TOAST_OVERLAY_TOP,
+          y,
           globalBrowser.activeTabBoxId,
           globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
         )

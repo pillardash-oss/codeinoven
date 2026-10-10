@@ -9,7 +9,6 @@
   } from './tooltip-manager.svelte'
   import ShortcutHint from './ShortcutHint.svelte'
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
-  import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
 
   let { nativeOverlay = true }: { nativeOverlay?: boolean } = $props()
 
@@ -81,10 +80,6 @@
 
     x = clamp(x, padding, Math.max(padding, viewportWidth - width - padding))
     y = clamp(y, padding, Math.max(padding, viewportHeight - height - padding))
-
-    // The shared native overlay starts beneath the app header. Keep header
-    // tooltips inside that frame instead of clipping their upper half.
-    if (nativeOverlay) y = Math.max(TOAST_OVERLAY_TOP + padding, y)
 
     container.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`
     side = resolved

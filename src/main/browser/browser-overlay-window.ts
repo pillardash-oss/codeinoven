@@ -186,6 +186,9 @@ export class BrowserOverlayWindow {
       images[imageId] = source
     }
     this.docks.set(id, { ...request, images: validateNativeDockImages(images) })
+    // A dock that joins or leaves can change whether a modal owns the window, so
+    // re-derive the click-through state before the window is shown for it.
+    this.applyClickThrough()
     this.reveal(popup)
     this.publish(popup)
     return true
@@ -279,6 +282,9 @@ export class BrowserOverlayWindow {
   private settle(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
+    // A dock that just left may have been the modal that owned the whole window,
+    // so the click-through state is settled before the empty case is.
+    this.applyClickThrough()
     this.publish(popup)
     if (this.hasContent()) return
     this.pointerOverContent = false
@@ -300,10 +306,23 @@ export class BrowserOverlayWindow {
   private applyClickThrough(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    const ignore = !(this.pointerOverContent && this.hasContent())
+    // A modal dock (the thread switcher) owns the whole window: its backdrop is
+    // meant to swallow every press, so the window accepts the mouse everywhere
+    // instead of arming and disarming click-through as the pointer crosses drawn
+    // pixels. That arming is a race the pointer can win: the first hover, the
+    // cursor and the first press could land on the page underneath before the
+    // document had reported where the pointer was. Every other region stays
+    // click-through outside the pixels it actually paints.
+    const ignore = !(this.hasContent() && (this.hasModalDock() || this.pointerOverContent))
     if (ignore === this.ignoringMouse) return
     this.ignoringMouse = ignore
     popup.setIgnoreMouseEvents(ignore, { forward: true })
+  }
+
+  /** Whether a modal dock is on display, which owns the whole window. */
+  private hasModalDock(): boolean {
+    for (const dock of this.docks.values()) if (dock.modal) return true
+    return false
   }
 
   /** Whether anything is on screen in this window to be seen or pressed. */

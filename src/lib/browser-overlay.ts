@@ -33,40 +33,30 @@ export const TOAST_STACK_RIGHT = 24
 export const TOAST_STACK_TOP = 56
 
 /**
- * Clearance above the stack, which is deliberately small.
+ * The toaster's own top offset inside the overlay document.
  *
- * It sets the window's top edge, and the window is placed at
- * `TOAST_STACK_TOP - this` below the window content's top, so it opens exactly
- * at the application header's bottom edge: the overlay never covers a pixel of
- * the header, not even for the frame before its click-through is armed. The
- * shadow above a card is the one thing this clips, and svelte-sonner's own
- * shadow is cast downward.
+ * The overlay window now spans the whole window content, so the document's own
+ * top edge is the content's top edge and this lands a card exactly at
+ * `TOAST_STACK_TOP`. It used to subtract a header offset because the window
+ * opened below the header, which is what left the top band of the app undimmed
+ * under a modal backdrop.
  */
-export const TOAST_OVERLAY_TOP_PAD = 8
-
-/** The overlay window's top edge, as an offset from the top of the window content. */
-export const TOAST_OVERLAY_TOP = TOAST_STACK_TOP - TOAST_OVERLAY_TOP_PAD
-
-/** The toaster's own top offset inside the overlay document, which lands a
- *  card's top edge at `TOAST_STACK_TOP` in the window's own coordinates. */
-export const TOAST_OVERLAY_INNER_TOP = TOAST_STACK_TOP - TOAST_OVERLAY_TOP
+export const TOAST_OVERLAY_INNER_TOP = TOAST_STACK_TOP
 
 /**
  * Where the overlay window sits for a window content of `content`.
  *
- * The window spans the whole content area below the application header. It has
- * to reach both the top right corner the cards occupy and the left band a
- * floating tab strip occupies, and it is transparent and click-through outside
- * whatever it is actually drawing, so its size costs nothing to those surfaces.
+ * The window spans the whole content area, the application header included, so
+ * the overlay document shares the app window's own content coordinates and every
+ * region places itself with the numbers the app renderer measured. Nothing is
+ * drawn over the header: the window is transparent and click-through outside
+ * what a region actually paints, so covering it costs the header nothing. The
+ * one surface that needs the whole window is a modal dock (the thread switcher),
+ * whose backdrop is meant to dim and hold every pixel the way its DOM
+ * counterpart does.
  */
 export function browserOverlayWindowBounds(content: BrowserViewBounds): BrowserViewBounds {
-  const top = Math.min(TOAST_OVERLAY_TOP, Math.max(0, content.height))
-  return {
-    x: content.x,
-    y: content.y + top,
-    width: content.width,
-    height: Math.max(0, content.height - top)
-  }
+  return { x: content.x, y: content.y, width: content.width, height: content.height }
 }
 
 /**

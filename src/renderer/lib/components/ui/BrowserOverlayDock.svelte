@@ -6,7 +6,6 @@
     type NativeDockRequest,
     type NativeDockInteraction
   } from '$shared/native-dock'
-  import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
@@ -216,7 +215,7 @@
     dock.passive && 'pointer-events-none'
   ]}
   style:left={dock.modal ? undefined : `${dock.bounds.x}px`}
-  style:top={dock.modal ? undefined : `${dock.bounds.y - TOAST_OVERLAY_TOP}px`}
+  style:top={dock.modal ? undefined : `${dock.bounds.y}px`}
   {@attach events}
 >
   {#if dock.modal}
@@ -232,7 +231,7 @@
   <div
     class={dock.modal ? 'absolute flex flex-col' : 'flex min-w-0 items-stretch gap-1.5'}
     style:left={dock.modal ? `${dock.bounds.x}px` : undefined}
-    style:top={dock.modal ? `${dock.bounds.y - TOAST_OVERLAY_TOP}px` : undefined}
+    style:top={dock.modal ? `${dock.bounds.y}px` : undefined}
     style:width={dock.modal ? `${dock.bounds.width}px` : undefined}
     style:height={dock.modal ? `${dock.bounds.height}px` : undefined}
     {@attach draw}
