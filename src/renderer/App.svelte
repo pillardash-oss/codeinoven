@@ -84,6 +84,7 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { getRoutineIcon } from '$lib/routine-icons'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
@@ -477,6 +478,17 @@
     // when it comes up, and this covers every theme change after that.
     if (isBrowserLoaded()) publishBrowserScrollbarTheme()
   }
+
+  // The file surface changes shells through lazy imports. Its visibility lease
+  // belongs to this stable owner, so neither the import gap nor an outro can
+  // reveal the page between the docked and fullscreen modes.
+  $effect(() =>
+    browserVisibility.hideWhile(
+      'standalone-file-surface',
+      'fullscreen-surface',
+      standaloneFiles.open && !standaloneFiles.minimized
+    )
+  )
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
   $effect(() => {

@@ -91,8 +91,9 @@
                     {descriptor.description}
                   </span>
                 </span>
-                <div class="w-32 shrink-0">
+                <div class="w-48 shrink-0">
                   <EnumSelect
+                    inline
                     options={STATE_OPTIONS}
                     value={stateFor(descriptor.id)}
                     onChange={(action) => choose(descriptor.id, action)}

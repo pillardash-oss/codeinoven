@@ -38,11 +38,14 @@ window.addEventListener('pagehide', stopTypography, { once: true })
 
 const target = document.getElementById('browser-overlay')
 if (target) {
-  const toasts = new URLSearchParams(window.location.search).get('surface') === 'toasts'
+  const mode = new URLSearchParams(window.location.search).get('surface')
+  const toasts = mode === 'toasts'
   document.documentElement.toggleAttribute('data-native-toasts', toasts)
   const surface = toasts
     ? import('$lib/components/ui/NativeToastSurface.svelte')
-    : import('$lib/components/ui/BrowserOverlaySurface.svelte')
+    : mode === 'strip'
+      ? import('$lib/components/ui/NativeStripSurface.svelte')
+      : import('$lib/components/ui/BrowserOverlaySurface.svelte')
   void surface
     .then(({ default: component }) => mount(component, { target }))
     .catch((error) => logRendererError('The native overlay could not load', error))

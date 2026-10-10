@@ -106,6 +106,7 @@ import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
 import { NativeToastView } from './native-toast-view'
+import { NativeStripView } from './native-strip-view'
 import { browserStatusOverlayPlacement, type BrowserStatusOverlay } from '../../lib/browser-overlay'
 import {
   BrowserDownloadManager,
@@ -534,6 +535,7 @@ export class BrowserService {
    */
   private readonly overlay: BrowserOverlayWindow
   private readonly nativeToasts: NativeToastView
+  private readonly nativeStrip: NativeStripView
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
@@ -763,6 +765,7 @@ export class BrowserService {
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
     this.nativeToasts = new NativeToastView(window)
+    this.nativeStrip = new NativeStripView(window)
     this.overlay = new BrowserOverlayWindow(window, undefined, (host) =>
       this.nativeToasts.setHost(host ?? window)
     )
@@ -1205,13 +1208,15 @@ export class BrowserService {
       this.nativeToasts.setHeight(rawHeight)
     })
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
-      this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
+      this.nativeStrip.apply(validateBrowserStripOverlayRequest(rawRequest))
     )
     replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
       const id = validateNativeDockId(rawId)
       const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
       if (request && request.id !== id) throw new TypeError('Native dock identities differ')
-      return this.overlay.applyDock(id, request)
+      return id === 'browser-tab-strip'
+        ? this.nativeStrip.applyDock(request)
+        : this.overlay.applyDock(id, request)
     })
     replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
       sendToRenderer(
@@ -1236,7 +1241,14 @@ export class BrowserService {
     replaceHandler('browser:overlayReady', (event) =>
       this.nativeToasts.owns(event.sender.id)
         ? { stack: this.nativeToasts.currentStack(), docks: [], strip: null, status: null }
-        : this.overlay.currentState()
+        : this.nativeStrip.owns(event.sender.id)
+          ? {
+              stack: null,
+              docks: this.nativeStrip.currentDocks(),
+              strip: this.nativeStrip.currentStrip(),
+              status: null
+            }
+          : this.overlay.currentState()
     )
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
@@ -1698,6 +1710,7 @@ export class BrowserService {
     this.promptWindow.dispose()
     this.overlay.dispose()
     this.nativeToasts.dispose()
+    this.nativeStrip.dispose()
     this.screenShare.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
@@ -6298,6 +6311,7 @@ export class BrowserService {
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
+    this.nativeStrip.raise()
     this.nativeToasts.raise()
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }

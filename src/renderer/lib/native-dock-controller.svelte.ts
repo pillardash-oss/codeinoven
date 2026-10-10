@@ -15,6 +15,17 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
 import { supportsNativeModal } from '$lib/native-modal-capability'
 
+/** One line naming why a native projection was refused, for the durable log. */
+function describeRefusal(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
 /** The original controls remain the owners of their actions and live updates. */
 export class NativeDockController {
   ready = $state(false)
@@ -24,6 +35,9 @@ export class NativeDockController {
   private revision = 0
   private frame: ReturnType<typeof setTimeout> | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
+  private fields = new SvelteMap<string, HTMLInputElement | HTMLTextAreaElement>()
+  private fieldIds = new WeakMap<Element, string>()
+  private fieldVersions = new WeakMap<Element, number>()
   private buttons = new WeakMap<Element, string>()
   private actions = new SvelteMap<string, HTMLButtonElement>()
   private scrollTargets = new SvelteMap<string, HTMLElement>()
@@ -45,8 +59,9 @@ export class NativeDockController {
       onDismiss: () => void
       onCommit: (key: string) => void
       onReady?: () => void
-      onFailure?: () => void
+      onFailure?: (reason?: string) => void
       requireCompleteProjection?: boolean
+      panel?: boolean
       onKey?: (event: KeyboardEvent) => boolean
     }
   ) {}
@@ -73,7 +88,7 @@ export class NativeDockController {
         this.modalOptions?.onReady?.()
         // Publish readiness in the source before transferring native focus,
         // so its blur handler recognises the handover to its own modal.
-        if (firstDraw && this.modalOptions)
+        if (firstDraw && this.modalOptions && !this.modalOptions.panel)
           void invoke('browser:focusDockOverlay', this.id).catch(() => {})
       }
     })
@@ -94,6 +109,32 @@ export class NativeDockController {
     })
     const unsubscribeEvent = subscribe('browser:overlay:dockEvent', (report) => {
       if (!this.active || report.id !== this.id) return
+      if (report.kind === 'field') {
+        const field = this.fields.get(report.field)
+        if (!field || !root.contains(field) || field.disabled || field.readOnly) return
+        this.fieldVersions.set(field, report.version)
+        field.value = report.value
+        field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+        this.schedule()
+        return
+      }
+      if (report.kind === 'fieldKey') {
+        const field = this.fields.get(report.field)
+        if (!field || !root.contains(field) || field.disabled) return
+        const event = new KeyboardEvent(report.type, {
+          key: report.key,
+          code: report.code,
+          ctrlKey: report.control,
+          shiftKey: report.shift,
+          altKey: report.alt,
+          metaKey: report.meta,
+          repeat: report.isAutoRepeat,
+          bubbles: true,
+          cancelable: true
+        })
+        field.dispatchEvent(event)
+        return
+      }
       if (report.kind === 'dismiss') {
         this.modalOptions?.onDismiss()
         return
@@ -104,7 +145,10 @@ export class NativeDockController {
       }
       if (report.kind === 'hover') {
         const button = this.actions.get(report.action)
-        if (button && root.contains(button) && !button.disabled) this.modalOptions?.onHover(button)
+        if (button && root.contains(button) && !button.disabled) {
+          button.dispatchEvent(new MouseEvent('mouseenter'))
+          this.modalOptions?.onHover(button)
+        }
         return
       }
       if (report.kind === 'scroll') {
@@ -113,13 +157,26 @@ export class NativeDockController {
           target.scrollTop = report.top
         return
       }
-      if (report.kind !== 'click') {
+      if (report.kind !== 'click' && report.kind !== 'context') {
         this.interact(report)
         return
       }
       const button = this.actions.get(report.action)
       if (button && root.contains(button) && !button.disabled) {
-        button.click()
+        const rect = button.getBoundingClientRect()
+        button.dispatchEvent(
+          new MouseEvent(report.kind === 'context' ? 'contextmenu' : 'click', {
+            bubbles: true,
+            cancelable: true,
+            ctrlKey: report.control,
+            shiftKey: report.shift,
+            metaKey: report.meta,
+            altKey: report.alt,
+            button: report.kind === 'context' ? 2 : 0,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2
+          })
+        )
         return
       }
       // A press the source can no longer resolve   the row left the list, or the
@@ -143,6 +200,7 @@ export class NativeDockController {
       this.root = null
       this.active = false
       this.actions.clear()
+      this.fields.clear()
       this.scrollTargets.clear()
       this.imageSources.clear()
       this.deliveredImages.clear()
@@ -244,6 +302,20 @@ export class NativeDockController {
       attributes['data-native-dock-action'] = action
       this.actions.set(action, node)
     }
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+      let id = this.fieldIds.get(node)
+      if (!id) {
+        id = `field-${++this.actionCounter}`
+        this.fieldIds.set(node, id)
+      }
+      this.fields.set(id, node)
+      attributes['data-native-dock-field'] = id
+      if (node === document.activeElement) attributes['data-native-dock-focus'] = ''
+      attributes['data-native-dock-value'] = node.value
+      attributes['data-native-dock-version'] = String(this.fieldVersions.get(node) ?? 0)
+      if (node.value && node.selectionStart === 0 && node.selectionEnd === node.value.length)
+        attributes['data-native-dock-select'] = ''
+    }
     return {
       tag: node.localName,
       attributes,
@@ -256,13 +328,14 @@ export class NativeDockController {
   private publish(): void {
     if (!this.root || !this.bounds || !this.active) return
     if (this.modalOptions?.requireCompleteProjection && !supportsNativeModal(this.root)) {
-      this.refuse()
+      this.refuse('its content cannot be projected completely')
       return
     }
     try {
       const rect = this.root.getBoundingClientRect()
       this.bounds = this.measuredBounds(rect.width, rect.height)
       this.actions.clear()
+      this.fields.clear()
       this.scrollTargets.clear()
       this.nodeCount = 0
       this.frameImages = {}
@@ -272,7 +345,8 @@ export class NativeDockController {
       const content = {
         bounds: this.bounds,
         passive: this.passive,
-        modal: Boolean(this.modalOptions),
+        modal: Boolean(this.modalOptions && !this.modalOptions.panel),
+        panel: Boolean(this.modalOptions?.panel),
         typography: this.typography(),
         selectedAction:
           [...this.actions].find(
@@ -302,22 +376,29 @@ export class NativeDockController {
         revision: ++this.revision
       })
       clearTimeout(this.timer)
-      this.timer = setTimeout(() => this.refuse(), this.passive ? OVERLAY_ACK_TIMEOUT_MS : 2000)
+      // A modal shares the always-warm full-window overlay, so two seconds is
+      // enough for it to prove it drew. A bounded panel host (the browser
+      // sidebar) may be loading its renderer for the first time, which in a
+      // development build outlasts that; a slow cold start is not a failure.
+      this.timer = setTimeout(
+        () => this.refuse('its host never confirmed the panel it was given'),
+        this.passive || this.modalOptions?.panel ? OVERLAY_ACK_TIMEOUT_MS : 2000
+      )
       void invoke('browser:setDockOverlay', this.id, request)
         .then((accepted) => {
-          if (!accepted && this.active) this.refuse()
+          if (!accepted && this.active) this.refuse('its host could not take the projection')
           if (accepted && this.active) {
             for (const id of Object.keys(images)) {
               if (id in this.frameImages) this.deliveredImages.add(id)
             }
           }
         })
-        .catch(() => {
-          if (this.active) this.refuse()
+        .catch((error: unknown) => {
+          if (this.active) this.refuse(describeRefusal(error))
         })
     } catch (error) {
       logRendererError('The native dock could not project its controls', error)
-      this.refuse()
+      this.refuse(describeRefusal(error))
     }
   }
 
@@ -330,9 +411,11 @@ export class NativeDockController {
     }
   }
 
-  private refuse(): void {
+  private refuse(reason?: string): void {
     this.failed = true
-    this.modalOptions?.onFailure?.()
+    if (reason)
+      logRendererError(`The native dock '${this.id}' fell back to the app window: ${reason}`)
+    this.modalOptions?.onFailure?.(reason)
     this.ready = false
     this.active = false
     clearTimeout(this.timer)

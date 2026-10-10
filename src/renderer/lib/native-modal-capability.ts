@@ -7,11 +7,15 @@ export function supportsNativeModal(root: HTMLElement): boolean {
     if (++count > MAX_NATIVE_DOCK_NODES || depth > 24) return false
     if (!(node instanceof Element)) return true
     if (node.classList.contains('hidden') || node.hasAttribute('hidden')) return true
+    const field = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
     if (
       !NATIVE_DOCK_TAGS.has(node.localName) ||
+      (node instanceof HTMLInputElement &&
+        !['text', 'search', 'url', 'email', 'tel'].includes(node.type)) ||
       node.hasAttribute('contenteditable') ||
       (node.hasAttribute('aria-haspopup') && node.getAttribute('aria-haspopup') !== 'false') ||
-      (node.localName !== 'button' &&
+      (!field &&
+        node.localName !== 'button' &&
         (node.getAttribute('role') === 'button' ||
           (node.hasAttribute('tabindex') && Number(node.getAttribute('tabindex')) >= 0)))
     )

@@ -72,6 +72,12 @@
      *   - `live`: the overlay is drawing it, so the DOM panel steps aside.
      */
     overlayPhase?: 'none' | 'pending' | 'live'
+    /** Project the canonical panel into a native host while it floats. */
+    panel?: Attachment<HTMLElement>
+    /** Publish this panel's rectangle as a browser occlusion while it floats.
+     *  Off for a caller that owns the decision itself, so the parked/attached
+     *  handover never depends on an attachment being re-evaluated mid-flight. */
+    trackOcclusion?: boolean
     children: Snippet
   }
 
@@ -90,7 +96,9 @@
     scroller = $bindable(null),
     fileDrop = undefined,
     overlayPhase = 'none',
-    children
+    children,
+    panel,
+    trackOcclusion = true
   }: Props = $props()
 
   let resizing = $state(false)
@@ -128,6 +136,7 @@
 {#if docked}
   <!-- Docked sidebar: occupies layout, resizable -->
   <aside
+    {@attach panel}
     class="relative flex h-full shrink-0 flex-col bg-surface"
     data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
     data-region={region}
@@ -200,6 +209,7 @@
   <!-- Floating overlay -->
   {#if sidebarState.hoverOpen}
     <aside
+      {@attach panel}
       class="fixed top-12 bottom-0 left-0 z-50 flex flex-col bg-surface shadow-2xl"
       data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
       data-region={region}
@@ -207,10 +217,10 @@
       style="width: {sidebarState.width}px"
       class:invisible={overlayPhase === 'live'}
       class:pointer-events-none={overlayPhase === 'live'}
-      transition:fly={{ x: -sidebarState.width, duration: 180 }}
+      transition:fly={{ x: -16, duration: overlayPhase === 'none' ? motionDuration(140) : 0 }}
       onmouseenter={onOverlayEnter}
       onmouseleave={onOverlayLeave}
-      {@attach overlayPhase === 'none' && trackBrowserOcclusion}
+      {@attach trackOcclusion && overlayPhase === 'none' ? trackBrowserOcclusion : undefined}
     >
       {#if !hideHeader}
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">

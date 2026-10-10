@@ -10,6 +10,8 @@
   import { patchNativeDockChildren } from '$lib/native-dock-dom'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { onMount } from 'svelte'
+  import { fly, fade } from 'svelte/transition'
+  import { prefersReducedMotion } from 'svelte/motion'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
     $props()
   let origin: { x: number; y: number } | null = null
@@ -36,6 +38,8 @@
     for (const [name, value] of Object.entries(node.attributes)) element.setAttribute(name, value)
     const imageId = node.attributes['data-native-dock-image']
     if (imageId && images[imageId]) element.setAttribute('src', images[imageId])
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+      element.value = node.attributes['data-native-dock-value'] ?? ''
     for (const child of node.children) element.appendChild(create(child, inSvg))
     return element
   }
@@ -59,6 +63,12 @@
     for (const target of element.querySelectorAll<HTMLElement>('[data-native-dock-scroll]')) {
       target.scrollTop = Number(target.dataset.nativeDockScrollTop ?? 0)
     }
+    if (current.panel) {
+      const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        '[data-native-dock-focus]'
+      )
+      if (field && document.activeElement !== field) field.focus({ preventScroll: true })
+    }
     if (current.modal) {
       for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
         row.dataset.nativeModalRow = ''
@@ -66,7 +76,11 @@
       highlight(element, hoveredAction ?? selectedAction)
       if (!assignedFocus && !element.querySelector('[data-native-dock-key]')) {
         assignedFocus = true
-        findPanelPrimaryAction(element)?.focus({ preventScroll: true })
+        const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+          'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])'
+        )
+        ;(field ?? findPanelPrimaryAction(element))?.focus({ preventScroll: true })
+        if (field?.hasAttribute('data-native-dock-select')) field.select()
       }
     }
     void invoke('browser:overlayDockDrawn', {
@@ -79,6 +93,8 @@
   }
   const events: Attachment<HTMLDivElement> = (element) => {
     element.addEventListener('click', click)
+    element.addEventListener('input', input)
+    element.addEventListener('keyup', fieldKey)
     element.addEventListener('contextmenu', contextmenu)
     element.addEventListener('keydown', keydown)
     element.addEventListener('pointerdown', down)
@@ -95,6 +111,8 @@
     }
     return () => {
       element.removeEventListener('click', click)
+      element.removeEventListener('input', input)
+      element.removeEventListener('keyup', fieldKey)
       element.removeEventListener('contextmenu', contextmenu)
       element.removeEventListener('keydown', keydown)
       element.removeEventListener('pointerdown', down)
@@ -145,19 +163,89 @@
       report({ id: dock.id, kind: 'commit', key })
       return
     }
-    if (action && !button?.disabled) report({ id: dock.id, kind: 'click', action })
+    if (action && !button?.disabled)
+      report({
+        id: dock.id,
+        kind: 'click',
+        action,
+        control: event.ctrlKey,
+        shift: event.shiftKey,
+        meta: event.metaKey,
+        alt: event.altKey
+      })
   }
   function contextmenu(event: MouseEvent): void {
     // macOS turns a left press with Control held into a context menu instead
     // of a click. Ctrl+Tab users are still holding that modifier when picking.
+    if (dock.panel && event.target instanceof Element) {
+      const button = event.target.closest<HTMLButtonElement>('button[data-native-dock-action]')
+      const action = button?.dataset.nativeDockAction
+      if (action && !button.disabled) {
+        event.preventDefault()
+        report({ id: dock.id, kind: 'context', action })
+      }
+      return
+    }
     if (!dock.modal || !event.ctrlKey || event.button !== 0) return
     event.preventDefault()
     if (event.target instanceof Element && event.target.closest('[data-native-modal-backdrop]'))
       report({ id: dock.id, kind: 'dismiss' })
     else click(event)
   }
+  function input(event: Event): void {
+    const field = event.target
+    if (
+      !(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) ||
+      !field.dataset.nativeDockField
+    )
+      return
+    const version = Number(field.dataset.nativeDockVersion ?? 0) + 1
+    field.dataset.nativeDockVersion = String(version)
+    field.dataset.nativeDockValue = field.value
+    report({
+      id: dock.id,
+      kind: 'field',
+      field: field.dataset.nativeDockField,
+      value: field.value,
+      version
+    })
+  }
+  function fieldKey(event: KeyboardEvent): boolean {
+    const field = event.target
+    if (
+      !(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) ||
+      !field.dataset.nativeDockField
+    )
+      return false
+    if (event.ctrlKey || event.metaKey) return true
+    // Native text editing, clipboard and composition stay in this document.
+    // Field-specific handlers receive the same key against the canonical field.
+    report({
+      id: dock.id,
+      kind: 'fieldKey',
+      field: field.dataset.nativeDockField,
+      type: event.type as 'keydown' | 'keyup',
+      key: event.key,
+      code: event.code,
+      control: event.ctrlKey,
+      shift: event.shiftKey,
+      alt: event.altKey,
+      meta: event.metaKey,
+      isAutoRepeat: event.repeat
+    })
+    if (
+      event.type === 'keydown' &&
+      ((event.key === 'Enter' && field instanceof HTMLInputElement) ||
+        field.dataset.nativeDockKeys?.split(' ').includes(event.key))
+    )
+      event.preventDefault()
+    return true
+  }
   function keydown(event: KeyboardEvent): void {
+    const textKey = fieldKey(event)
+    if (textKey && !dock.modal) return
     if (dock.modal) {
+      if (textKey && event.key !== 'Escape' && event.key !== 'Tab') return
       if (
         modalRoot?.querySelector('[data-native-dock-key]') ||
         event.key === 'Escape' ||
@@ -172,7 +260,11 @@
         event.preventDefault()
         if (!event.repeat && !event.target.disabled) event.target.click()
       } else if (event.key === 'Tab' && modalRoot) {
-        const buttons = [...modalRoot.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
+        const buttons = [
+          ...modalRoot.querySelectorAll<HTMLElement>(
+            'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), textarea:not([disabled])'
+          )
+        ]
         const next = event.shiftKey ? buttons.at(-1) : buttons[0]
         const edge = event.shiftKey ? buttons[0] : buttons.at(-1)
         if (document.activeElement === edge && next) {
@@ -274,6 +366,7 @@
       type="button"
       tabindex={-1}
       data-native-modal-backdrop
+      transition:fade|global={{ duration: prefersReducedMotion.current ? 0 : 140 }}
       class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
       aria-label="Dismiss dialog"
       title="Dismiss dialog"
@@ -286,6 +379,11 @@
     style:top={dock.modal ? `${dock.bounds.y}px` : undefined}
     style:width={dock.modal ? `${dock.bounds.width}px` : undefined}
     style:height={dock.modal ? `${dock.bounds.height}px` : undefined}
+    data-native-modal-panel={dock.modal || undefined}
+    transition:fly|global={{
+      duration: dock.modal && !prefersReducedMotion.current ? 140 : 0,
+      y: 4
+    }}
     {@attach draw}
   ></div>
 </div>

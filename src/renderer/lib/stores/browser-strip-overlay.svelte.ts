@@ -169,6 +169,7 @@ class BrowserStripOverlayState {
     this.pointerInside = true
     const revision = (this.nextRevision += 1)
     try {
+      this.armAckWatch(revision)
       const available = await invoke('browser:setStripOverlay', { ...strip, revision })
       if (token !== this.requestToken) return
       if (!available) {
@@ -176,7 +177,6 @@ class BrowserStripOverlayState {
         return
       }
       this.live = true
-      this.armAckWatch(revision)
     } catch {
       if (token !== this.requestToken) return
       this.abandon('a request to draw the strip was refused')

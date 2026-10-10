@@ -13,6 +13,8 @@ export interface NativeDockRequest {
   passive?: boolean
   /** A canonical Modal panel, with a native backdrop and hover selection. */
   modal?: boolean
+  /** A complete bounded native panel without a modal backdrop. */
+  panel?: boolean
   /** The source row selected by keyboard navigation. */
   selectedAction?: string | null
   typography?: { fontFamily: string; fontSize: number; fontWeight: number }
@@ -44,7 +46,17 @@ export interface NativeDockKey {
   isAutoRepeat: boolean
 }
 export type NativeDockInteraction =
-  | { id: string; kind: 'click'; action: string }
+  | { id: string; kind: 'field'; field: string; value: string; version: number }
+  | (NativeDockKey & { kind: 'fieldKey'; field: string })
+  | {
+      id: string
+      kind: 'click' | 'context'
+      action: string
+      control?: boolean
+      shift?: boolean
+      meta?: boolean
+      alt?: boolean
+    }
   | { id: string; kind: 'hover'; action: string }
   | { id: string; kind: 'commit'; key: string }
   | { id: string; kind: 'dismiss' }
@@ -54,6 +66,7 @@ export type NativeDockInteraction =
 
 export const NATIVE_DOCK_TAGS = new Set([
   'div',
+  'aside',
   'span',
   'kbd',
   'button',
@@ -90,7 +103,10 @@ export const NATIVE_DOCK_TAGS = new Set([
   'dt',
   'dd',
   'br',
-  'hr'
+  'hr',
+  'label',
+  'input',
+  'textarea'
 ])
 export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'class',
@@ -131,6 +147,11 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'data-native-dock-handle',
   'data-popover-drag-handle',
   'aria-selected',
+  'aria-current',
+  'aria-pressed',
+  'aria-expanded',
+  'draggable',
+  'data-browser-tab-id',
   'aria-modal',
   'aria-disabled',
   'aria-checked',
@@ -145,7 +166,19 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'data-native-dock-scroll',
   'data-native-dock-scroll-top',
   'data-native-dock-key',
-  'data-native-dock-image'
+  'data-native-dock-image',
+  'for',
+  'placeholder',
+  'maxlength',
+  'readonly',
+  'spellcheck',
+  'autocomplete',
+  'data-native-dock-field',
+  'data-native-dock-focus',
+  'data-native-dock-value',
+  'data-native-dock-version',
+  'data-native-dock-select',
+  'data-native-dock-keys'
 ])
 export const MAX_NATIVE_DOCK_NODES = 4096
 const MAX_TEXT = 48_000
@@ -237,11 +270,14 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
   const bounds = record(input.bounds)
   let count = 0
   let text = 0
-  const textLimit = input.modal === true ? 256_000 : MAX_TEXT
+  // A modal or a bounded panel is a full surface of its own: both carry a whole
+  // canonical panel's markup, so both get the modal-sized budgets.
+  const fullSurface = input.modal === true || input.panel === true
+  const textLimit = fullSurface ? 256_000 : MAX_TEXT
   const nodes = (value: unknown, depth = 0): Array<NativeDockNode | string> => {
     if (!Array.isArray(value) || depth > 24) throw new TypeError('Invalid native dock tree')
     return value.map((item: unknown) => {
-      if (++count > (input.modal === true ? MAX_NATIVE_DOCK_NODES : 512))
+      if (++count > (fullSurface ? MAX_NATIVE_DOCK_NODES : 512))
         throw new TypeError('Native dock tree is too large')
       if (typeof item === 'string') {
         text += item.length
@@ -250,11 +286,11 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
       }
       const node = record(item)
       if (typeof node.tag !== 'string' || !NATIVE_DOCK_TAGS.has(node.tag))
-        throw new TypeError('Invalid native dock tag')
+        throw new TypeError(`Invalid native dock tag: ${String(node.tag).slice(0, 32)}`)
       const attributes: Record<string, string> = {}
       for (const [key, value] of Object.entries(record(node.attributes))) {
         if (!NATIVE_DOCK_ATTRIBUTES.has(key) || typeof value !== 'string')
-          throw new TypeError('Invalid native dock attribute')
+          throw new TypeError(`Invalid native dock attribute: ${String(key).slice(0, 48)}`)
         if (key === 'data-native-dock-image' && !NATIVE_DOCK_IMAGE_ID.test(value))
           throw new TypeError('Invalid native dock image reference')
         text += value.length
@@ -295,6 +331,7 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
     nodes: nodes(input.nodes),
     passive: input.passive === true,
     modal: input.modal === true,
+    panel: input.panel === true,
     selectedAction,
     typography,
     images: validateNativeDockImages(input.images ?? {})
@@ -303,7 +340,58 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
 export function validateNativeDockInteraction(value: unknown): NativeDockInteraction {
   const input = record(value)
   const id = identifier(input.id)
-  if (input.kind === 'click') return { id, kind: 'click', action: identifier(input.action) }
+  if (input.kind === 'field') {
+    if (
+      typeof input.value !== 'string' ||
+      input.value.length > 64_000 ||
+      !Number.isSafeInteger(input.version) ||
+      Number(input.version) < 0
+    )
+      throw new TypeError('Invalid native field value')
+    return {
+      id,
+      kind: 'field',
+      field: identifier(input.field),
+      value: input.value,
+      version: Number(input.version)
+    }
+  }
+  if (input.kind === 'fieldKey') {
+    if (
+      !['keydown', 'keyup'].includes(String(input.type)) ||
+      typeof input.key !== 'string' ||
+      input.key.length > 64 ||
+      typeof input.code !== 'string' ||
+      input.code.length > 64 ||
+      ['control', 'shift', 'alt', 'meta', 'isAutoRepeat'].some(
+        (key) => typeof input[key] !== 'boolean'
+      )
+    )
+      throw new TypeError('Invalid native field key')
+    return {
+      id,
+      kind: 'fieldKey',
+      field: identifier(input.field),
+      type: input.type as 'keydown' | 'keyup',
+      key: input.key,
+      code: input.code,
+      control: input.control as boolean,
+      shift: input.shift as boolean,
+      alt: input.alt as boolean,
+      meta: input.meta as boolean,
+      isAutoRepeat: input.isAutoRepeat as boolean
+    }
+  }
+  if (input.kind === 'click' || input.kind === 'context')
+    return {
+      id,
+      kind: input.kind,
+      action: identifier(input.action),
+      control: input.control === true,
+      shift: input.shift === true,
+      meta: input.meta === true,
+      alt: input.alt === true
+    }
   if (input.kind === 'hover') return { id, kind: 'hover', action: identifier(input.action) }
   if (input.kind === 'commit') return { id, kind: 'commit', key: identifier(input.key) }
   if (input.kind === 'dismiss') return { id, kind: 'dismiss' }

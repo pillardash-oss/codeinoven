@@ -4,6 +4,8 @@
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { fade, fly } from 'svelte/transition'
+  import { prefersReducedMotion } from 'svelte/motion'
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -228,6 +230,13 @@
     panelEl = $bindable(null)
   }: Props = $props()
 
+  let panelPresent = $state(false)
+  const trackPresentation: Attachment<HTMLElement> = () => {
+    panelPresent = true
+    return () => {
+      panelPresent = false
+    }
+  }
   const suppressionKey = `modal-${crypto.randomUUID()}`
   const nativeId = $derived(
     nativeOverlay ??
@@ -308,7 +317,7 @@
     browserVisibility.hideWhile(
       suppressionKey,
       'fullscreen-surface',
-      open && (nativeId ? nativeFailed : blocksBrowserView)
+      (open || panelPresent) && (nativeId ? nativeFailed : blocksBrowserView)
     )
   )
 
@@ -350,86 +359,106 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
-  <Dialog.Portal>
-    <!-- Only an open dialog may paint a scrim: a scrim rendered on the way out
+  {#if open}
+    <Dialog.Portal>
+      <!-- Only an open dialog may paint a scrim: a scrim rendered on the way out
          would be inserted into a portal that is already leaving the document and
          would stay behind covering the whole window. -->
-    {#if scrim && open && !nativeReady}
-      <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
-    {/if}
-    <div
-      class="pointer-events-none fixed {stackingClass} flex {frameBounds
-        ? ''
-        : 'inset-0'} {alignment}"
-      style:opacity={nativeReady ? 0 : undefined}
-      style={frameBounds
-        ? `left: ${frameBounds.x}px; top: ${frameBounds.y}px; width: ${frameBounds.width}px; height: ${frameBounds.height}px;`
-        : undefined}
-    >
-      <Dialog.Content
-        bind:ref={panelEl}
-        trapFocus={trapFocus && !nativeReady}
-        preventScroll={modal}
-        preventOverflowTextSelection={modal}
-        onOpenAutoFocus={focusInitialElement}
-        {onCloseAutoFocus}
-        onEscapeKeydown={(event) => {
-          onEscapeKeydown?.(event)
-          if (!escapeCloses) event.preventDefault()
-        }}
-        onInteractOutside={(event) => {
-          // A toast is drawn above this modal (svelte-sonner stacks at
-          // `z-index: 999999999`) and stays interactive there, so a press that
-          // lands on one is not a backdrop press. Without this the pointerdown
-          // bubbled to the dismissible layer and dismissed the modal as well as
-          // the toast it was aimed at: pressing a toast's close button threw the
-          // full screen surface away behind it.
-          if (isWithinToastLayer(event.target)) event.preventDefault()
-          if (!closeOnBackdrop) event.preventDefault()
-        }}
-        class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
+      {#if scrim && !nativeReady}
+        <Dialog.Overlay forceMount>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              class="{OVERLAY_CLASS} {stackingClass}"
+              transition:fade|global={{ duration: prefersReducedMotion.current ? 0 : 140 }}
+            ></div>
+          {/snippet}
+        </Dialog.Overlay>
+      {/if}
+      <div
+        class="pointer-events-none fixed {stackingClass} flex {frameBounds
+          ? ''
+          : 'inset-0'} {alignment}"
+        style:opacity={nativeReady ? 0 : undefined}
+        style={frameBounds
+          ? `left: ${frameBounds.x}px; top: ${frameBounds.y}px; width: ${frameBounds.width}px; height: ${frameBounds.height}px;`
+          : undefined}
       >
-        {#snippet child({ props })}
-          <div {...props} aria-modal={modal} {@attach nativeId ? nativePanel(nativeId) : undefined}>
-            {#if chrome}
-              <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
-                <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+        <Dialog.Content
+          forceMount
+          bind:ref={panelEl}
+          trapFocus={trapFocus && !nativeReady}
+          preventScroll={modal}
+          preventOverflowTextSelection={modal}
+          onOpenAutoFocus={focusInitialElement}
+          {onCloseAutoFocus}
+          onEscapeKeydown={(event) => {
+            onEscapeKeydown?.(event)
+            if (!escapeCloses) event.preventDefault()
+          }}
+          onInteractOutside={(event) => {
+            // A toast is drawn above this modal (svelte-sonner stacks at
+            // `z-index: 999999999`) and stays interactive there, so a press that
+            // lands on one is not a backdrop press. Without this the pointerdown
+            // bubbled to the dismissible layer and dismissed the modal as well as
+            // the toast it was aimed at: pressing a toast's close button threw the
+            // full screen surface away behind it.
+            if (isWithinToastLayer(event.target)) event.preventDefault()
+            if (!closeOnBackdrop) event.preventDefault()
+          }}
+          class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
+        >
+          {#snippet child({ props })}
+            <div
+              {...props}
+              aria-modal={modal}
+              {@attach trackPresentation}
+              {@attach nativeId ? nativePanel(nativeId) : undefined}
+              transition:fly|global={{
+                duration: prefersReducedMotion.current || (nativeId && !nativeFailed) ? 0 : 140,
+                y: placement === 'fullscreen' ? 0 : 4
+              }}
+            >
+              {#if chrome}
+                <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                  <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+                  {#if description}
+                    <Dialog.Description class="sr-only">{description}</Dialog.Description>
+                  {/if}
+                  <Dialog.Close
+                    class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    <X size={16} />
+                  </Dialog.Close>
+                </div>
+
+                <div class="min-h-0 flex-1 {contentClass}">
+                  {@render children()}
+                </div>
+
+                {#if footer}
+                  <div
+                    class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+                    data-modal-footer
+                  >
+                    {@render footer()}
+                  </div>
+                {/if}
+              {:else}
+                <!-- A surface with its own header still needs a dialog name, so the
+               title is rendered here, out of sight, exactly once. -->
+                <Dialog.Title class="sr-only">{title}</Dialog.Title>
                 {#if description}
                   <Dialog.Description class="sr-only">{description}</Dialog.Description>
                 {/if}
-                <Dialog.Close
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label="Close"
-                  title="Close"
-                >
-                  <X size={16} />
-                </Dialog.Close>
-              </div>
-
-              <div class="min-h-0 flex-1 {contentClass}">
                 {@render children()}
-              </div>
-
-              {#if footer}
-                <div
-                  class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
-                  data-modal-footer
-                >
-                  {@render footer()}
-                </div>
               {/if}
-            {:else}
-              <!-- A surface with its own header still needs a dialog name, so the
-               title is rendered here, out of sight, exactly once. -->
-              <Dialog.Title class="sr-only">{title}</Dialog.Title>
-              {#if description}
-                <Dialog.Description class="sr-only">{description}</Dialog.Description>
-              {/if}
-              {@render children()}
-            {/if}
-          </div>
-        {/snippet}
-      </Dialog.Content>
-    </div>
-  </Dialog.Portal>
+            </div>
+          {/snippet}
+        </Dialog.Content>
+      </div>
+    </Dialog.Portal>
+  {/if}
 </Dialog.Root>

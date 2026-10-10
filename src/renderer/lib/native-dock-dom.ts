@@ -25,6 +25,7 @@ function nodeKey(node: Node): string | null {
   if (!(node instanceof Element)) return null
   return (
     node.getAttribute('data-native-dock-key') ??
+    node.getAttribute('data-native-dock-field') ??
     node.getAttribute('data-native-dock-action') ??
     node.getAttribute('data-native-dock-scroll')
   )
@@ -42,15 +43,29 @@ function compatible(current: Node, next: Node): boolean {
 
 function patch(current: Node, next: Node): Node {
   if (current instanceof Element && next instanceof Element) {
+    const field = current instanceof HTMLInputElement || current instanceof HTMLTextAreaElement
+    const pending =
+      field &&
+      Number(current.getAttribute('data-native-dock-version')) >
+        Number(next.getAttribute('data-native-dock-version'))
     for (const attribute of [...current.attributes]) {
       if (!next.hasAttribute(attribute.name) && attribute.name !== 'data-native-modal-row')
         current.removeAttribute(attribute.name)
     }
     for (const attribute of next.attributes) {
+      if (
+        pending &&
+        ['data-native-dock-value', 'data-native-dock-version'].includes(attribute.name)
+      )
+        continue
       if (current.getAttribute(attribute.name) !== attribute.value)
         current.setAttribute(attribute.name, attribute.value)
     }
     patchNativeDockChildren(current, [...next.childNodes])
+    if (field && !pending) {
+      const value = next.getAttribute('data-native-dock-value') ?? ''
+      if (current.value !== value) current.value = value
+    }
   } else if (current.nodeValue !== next.nodeValue) {
     current.nodeValue = next.nodeValue
   }

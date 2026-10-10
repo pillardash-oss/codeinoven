@@ -67,6 +67,7 @@ export class BrowserOverlayWindow {
    *  never part of the click-through decision. */
   private status: BrowserStatusOverlay | null = null
   private docks = new Map<string, NativeDockRequest>()
+  private leavingDocks = new Map<string, { modal: boolean; timer: ReturnType<typeof setTimeout> }>()
   private deliveredDockImages = new Map<string, Set<string>>()
   /** True while the document has finished loading and may be sent content. */
   private ready = false
@@ -167,12 +168,25 @@ export class BrowserOverlayWindow {
 
   /** Dock chips share this window with toasts and the floating browser strip. */
   applyDock(id: string, request: NativeDockRequest | null): boolean {
+    const leaving = this.leavingDocks.get(id)
+    if (request === null && leaving && !this.docks.has(id)) return true
+    if (leaving) clearTimeout(leaving.timer)
+    this.leavingDocks.delete(id)
     if (request === null) {
+      const previous = this.docks.get(id)
       this.docks.delete(id)
       this.deliveredDockImages.delete(id)
+      if (previous?.modal) {
+        // Publish the removal now so the native document runs its outro. Keep
+        // its host above the browser only for that bounded transition window.
+        const timer = setTimeout(() => {
+          this.leavingDocks.delete(id)
+          this.settle()
+          if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.dispose()
+        }, 160)
+        this.leavingDocks.set(id, { modal: true, timer })
+      }
       this.settle()
-      // Keep the one tooltip overlay warm between hovers instead of creating
-      // and destroying a renderer for every title. It stays hidden and inert.
       if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.dispose()
       return true
     }
@@ -263,6 +277,8 @@ export class BrowserOverlayWindow {
     this.strip = null
     this.status = null
     this.docks.clear()
+    for (const dock of this.leavingDocks.values()) clearTimeout(dock.timer)
+    this.leavingDocks.clear()
     this.deliveredDockImages.clear()
     this.ready = false
     this.pointerOverContent = false
@@ -349,6 +365,7 @@ export class BrowserOverlayWindow {
   /** Whether a modal dock is on display, which owns the whole window. */
   private hasModalDock(): boolean {
     for (const dock of this.docks.values()) if (dock.modal) return true
+    for (const dock of this.leavingDocks.values()) if (dock.modal) return true
     return false
   }
 
@@ -358,7 +375,8 @@ export class BrowserOverlayWindow {
       (this.stack !== null && this.stack.toasts.length > 0) ||
       this.strip !== null ||
       this.status !== null ||
-      this.docks.size > 0
+      this.docks.size > 0 ||
+      this.leavingDocks.size > 0
     )
   }
 
