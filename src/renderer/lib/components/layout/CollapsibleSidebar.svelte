@@ -74,6 +74,9 @@
     overlayPhase?: 'none' | 'pending' | 'live'
     /** Project the canonical panel into a native host while it floats. */
     panel?: Attachment<HTMLElement>
+    /** Whether a native host currently holds the pointer, so the panel must stay
+     *  open through the `mouseleave` the handover itself produced. */
+    holdOpen?: () => boolean
     /** Publish this panel's rectangle as a browser occlusion while it floats.
      *  Off for a caller that owns the decision itself, so the parked/attached
      *  handover never depends on an attachment being re-evaluated mid-flight. */
@@ -98,6 +101,7 @@
     overlayPhase = 'none',
     children,
     panel,
+    holdOpen,
     trackOcclusion = true
   }: Props = $props()
 
@@ -128,7 +132,13 @@
   function onOverlayLeave(): void {
     overlayHovered = false
     hideTimeout = setTimeout(() => {
-      if (!overlayHovered) sidebarState.hoverOpen = false
+      if (overlayHovered) return
+      // A native host draws the panel above this window, so it takes the pointer
+      // the moment it appears: the leave this window sees is the handover, not
+      // the user walking away. Whether the pointer is still on the panel is the
+      // host's report to make, and it closes on its own schedule when it goes.
+      if (holdOpen?.()) return
+      sidebarState.hoverOpen = false
     }, 260)
   }
 </script>

@@ -82,9 +82,13 @@
 <svelte:window
   onmousemove={() => pointer(true)}
   onmouseout={(event) => {
+    // A second, independent signal for the same fact: `mouseleave` on the
+    // document is the primary one, and this catches a host that only reports
+    // the pointer leaving through the element tree.
     if (!event.relatedTarget) pointer(false)
   }}
 />
+<svelte:document onmouseenter={() => pointer(true)} onmouseleave={() => pointer(false)} />
 {#if dock}
   <div
     data-overlay-strip

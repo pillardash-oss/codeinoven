@@ -495,6 +495,7 @@
         onCommit: () => {},
         onReady: () => {
           browserStripOverlay.live = true
+          browserStripOverlay.holdOpen()
         },
         onFailure: () => {
           browserStripOverlay.live = false
@@ -722,6 +723,7 @@
     overlayPhase={stripPhase}
     panel={captureNativePanel}
     trackOcclusion={false}
+    holdOpen={() => browserStripOverlay.pointerHeld}
     {chrome}
   >
     {#if searchGroupId === null && pinned.length > 0}

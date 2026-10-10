@@ -68,6 +68,27 @@ class BrowserStripOverlayState {
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
 
+  /** Whether a native panel host is holding the pointer this window gave up.
+   *  The panel is drawn in a bounded view above the app window, so the app's own
+   *  panel sees the pointer leave the instant the host appears under it. */
+  get pointerHeld(): boolean {
+    return this.pointerInside
+  }
+
+  /**
+   * Take ownership of the pointer for the panel that was just handed over.
+   *
+   * The reveal gesture ends inside the panel's own band, so the pointer starts
+   * out over it: the host reports the pointer's real position from its first
+   * move, and until then the panel must not read the `mouseleave` the handover
+   * itself produced as the user walking away.
+   */
+  holdOpen(): void {
+    this.pointerInside = true
+    if (this.closeTimer !== undefined) clearTimeout(this.closeTimer)
+    this.closeTimer = undefined
+  }
+
   /** The revision stamped on the next strip this window publishes. */
   private nextRevision = 0
 
