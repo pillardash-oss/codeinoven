@@ -709,7 +709,12 @@
         projectId={tabProjectId}
         threadId={tabThreadId}
         boxId={tabBoxId}
+        scopeLabel={contextSidebarState.browserScopeBoxLabel(tabProjectId, tabThreadId)}
         onNavigate={navigate}
+        onSelectBox={(nextBoxId) => {
+          const replacementId = contextSidebarState.setBrowserTabBox(tabId, nextBoxId)
+          if (replacementId) onTabReplaced?.(replacementId)
+        }}
       />
     {/if}
   </div>
