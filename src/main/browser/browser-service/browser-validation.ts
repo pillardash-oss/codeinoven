@@ -837,6 +837,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
   const bookmarkAvailable = record['bookmarkAvailable']
   const bookmarked = record['bookmarked']
   const pinned = record['pinned']
+  const hibernated = record['hibernated']
+  const active = record['active']
   const canReopenClosedTab = record['canReopenClosedTab']
   const groupId = record['groupId']
   const boxId = validateOptionalBoxId(record['boxId'])
@@ -846,6 +848,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     typeof bookmarkAvailable !== 'boolean' ||
     typeof bookmarked !== 'boolean' ||
     typeof pinned !== 'boolean' ||
+    typeof hibernated !== 'boolean' ||
+    typeof active !== 'boolean' ||
     typeof canReopenClosedTab !== 'boolean'
   ) {
     throw new TypeError('Browser tab context menu flags are invalid')
@@ -901,6 +905,8 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     bookmarkAvailable,
     bookmarked,
     pinned,
+    hibernated,
+    active,
     groupId,
     boxId,
     canReopenClosedTab,

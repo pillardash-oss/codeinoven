@@ -382,7 +382,8 @@ the partial file out of Chromium's reach.
 
 A tab's Back/Forward stack lives in its `WebContentsView`, and the view is
 deliberately destroyed rather than kept alive: hibernation frees a tab idle past
-its window, parking takes a page off screen, and a quit closes every view. Each of
+its window (and for a tab put to sleep by hand, immediately), parking takes a page
+off screen, and a quit closes every view. Each of
 those took the stack with it, so Back was always disabled on the tab the user came
 back to. The stack is written down now.
 

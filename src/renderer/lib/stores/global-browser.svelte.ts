@@ -73,6 +73,7 @@ import {
   MAX_REOPENED_BROWSER_TABS,
   browserTabLabel,
   browserTabTitleForUrl,
+  canHibernateTab,
   isBlankBrowserAddress,
   isSameBrowserLoadError,
   DEFAULT_BOX_ID,
@@ -2188,6 +2189,34 @@ export class GlobalBrowserState {
   }
 
   /**
+   * Release one tab's page now, keeping its row in the strip.
+   *
+   * The idle sweep's own move, available on demand from the tab's menu. Which
+   * tabs may be released is `canHibernateTab`'s answer and nobody else's, so the
+   * menu, this method and the sweep can never disagree about it.
+   */
+  hibernate(tabId: string): boolean {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || !canHibernateTab(tab, this.activeTabId)) return false
+    this.releasePage(tab)
+    return true
+  }
+
+  /**
+   * Drop a tab's live page and write the change down.
+   *
+   * Only the page is released: the row stays in the strip, so main writes the
+   * tab's stack down before the view goes and the next visit restores it.
+   */
+  private releasePage(tab: GlobalBrowserTab): void {
+    tab.hibernated = true
+    this.runtime.delete(tab.id)
+    browserAudio.forget(tab.id)
+    void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
+    this.persist()
+  }
+
+  /**
    * Release the page of every tab idle past the window.
    *
    * The active tab, a tab playing audio, and a tab holding a capture are never
@@ -2198,25 +2227,17 @@ export class GlobalBrowserState {
    */
   sweepIdleTabs(now: number = Date.now()): void {
     const windowMs = this.hibernationWindowMs
-    let changed = false
+    // A sweep that released nothing touches nothing: the write lives inside
+    // `releasePage`, so the minute-long clock never rewrites the file for its own
+    // sake and a run of releases coalesces into one write.
     for (const tab of this.tabs) {
       if (tab.id === this.activeTabId) continue
-      if (tab.url === '') continue
       const runtime = this.runtimeFor(tab.id)
       if (runtime.audible && !runtime.muted) continue
       if (runtime.capturing) continue
       if (!isTabIdlePastWindow(tab, now, windowMs)) continue
-      tab.hibernated = true
-      changed = true
-      this.runtime.delete(tab.id)
-      browserAudio.forget(tab.id)
-      // Only the page is released: the row stays in the strip, so main writes the
-      // tab's stack down before the view goes and the next visit restores it.
-      void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
+      this.releasePage(tab)
     }
-    // A sweep that released nothing leaves the stored list untouched, so the
-    // minute-long clock never rewrites the file for its own sake.
-    if (changed) this.persist()
   }
 
   /** Close the oldest idle tabs when the strip is at its cap. A pinned tab is

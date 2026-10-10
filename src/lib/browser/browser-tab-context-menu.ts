@@ -13,6 +13,11 @@ export interface BrowserTabContextMenuInput {
   bookmarkAvailable: boolean
   bookmarked: boolean
   pinned: boolean
+  /** Whether the tab's page is already released. */
+  hibernated: boolean
+  /** Whether this tab is the one its surface has on screen. A tab in view is
+   *  never slept: its page is what the user is looking at. */
+  active: boolean
   groupId: string | null
   boxId: string | null
   canReopenClosedTab: boolean
@@ -23,6 +28,7 @@ export interface BrowserTabContextMenuInput {
 export type BrowserTabContextMenuChoice =
   | { action: 'edit' }
   | { action: 'togglePin' }
+  | { action: 'sleep' }
   | { action: 'toggleBookmark' }
   | { action: 'duplicate' }
   | { action: 'newBefore' }

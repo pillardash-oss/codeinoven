@@ -68,6 +68,10 @@ export class WorkspaceBrowserController {
           bookmarkAvailable: Boolean(tab.url),
           bookmarked: browserBookmarks.isBookmarked(tab.url, tab.boxId),
           pinned: false,
+          // A thread's browser tabs are never hibernated (the whole surface goes
+          // with its thread), so the menu's sleep item is off for them either way.
+          hibernated: false,
+          active: contextSidebarState.activeBrowserTabId === tabId,
           groupId: null,
           boxId: tab.boxId,
           canReopenClosedTab: true,

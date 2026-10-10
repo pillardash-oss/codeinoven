@@ -37,6 +37,12 @@ export function showBrowserTabContextMenu(
       input.bookmarkAvailable
     )
     append('Duplicate tab', { action: 'duplicate' })
+    // Releasing a page is a global browser's own move: a thread's browser tabs
+    // are never hibernated, and neither is a tab already asleep, a pinned tab, an
+    // address-less one, or the tab the surface has on screen. The label stays put
+    // and the item greys out, the way the bookmark and reopen items already do,
+    // so the menu does not change shape under the pointer.
+    append('Put tab to sleep', { action: 'sleep' }, canSleepTab(input))
     appendSeparator()
     append('New tab before this tab', { action: 'newBefore' })
     append('New tab', { action: 'newTab' })
@@ -166,4 +172,18 @@ export function showBrowserTabContextMenu(
     append('Close tab', { action: 'close' })
     menu.popup({ window, x, y, callback: () => resolve(choice) })
   })
+}
+
+/**
+ * Whether this tab has a page to release.
+ *
+ * A thread's browser tabs are never hibernated (they go with their thread), a
+ * tab already asleep has nothing left to release, a pinned tab stays live on
+ * purpose, a tab with no address has no page at all, and the tab the surface has
+ * on screen is what the user is looking at. The renderer refuses the same list,
+ * so a menu that somehow offers the action still cannot take a page away.
+ */
+function canSleepTab(input: BrowserTabContextMenuInput): boolean {
+  if (input.threadScoped === true || input.hibernated || input.pinned) return false
+  return input.url !== '' && !input.active
 }
