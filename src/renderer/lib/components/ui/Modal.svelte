@@ -257,7 +257,12 @@
         observer.disconnect()
         window.removeEventListener('resize', update)
         cleanup()
-        nativeReady = false
+        // `nativeReady` is deliberately left alone here. Clearing it while the
+        // dialog tears down flips the scrim's condition back on, and the overlay
+        // that condition renders is inserted into the portal after the portal's
+        // own node has already left the document: it survives as an orphan
+        // full-window scrim that swallows every click until the app reloads. The
+        // next mount clears it again before the panel is shown.
       }
     }
   }
@@ -326,7 +331,10 @@
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
   <Dialog.Portal>
-    {#if scrim && !nativeReady}
+    <!-- Only an open dialog may paint a scrim: a scrim rendered on the way out
+         would be inserted into a portal that is already leaving the document and
+         would stay behind covering the whole window. -->
+    {#if scrim && open && !nativeReady}
       <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
     {/if}
     <div
