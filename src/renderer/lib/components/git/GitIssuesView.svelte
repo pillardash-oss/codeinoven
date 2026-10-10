@@ -354,6 +354,7 @@
   open={confirmingClose !== null}
   title="Close issue #{confirmingClose?.number ?? ''}?"
   confirmLabel="Close as completed"
+  size="lg"
   variant="primary"
   busy={stateBusy}
   secondaryAction={{
