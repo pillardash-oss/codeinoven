@@ -121,9 +121,21 @@ export function showBrowserTabContextMenu(
         append('Edit tab group', { action: 'editGroup' })
         append('Remove from group', { action: 'removeFromGroup' })
       }
-      for (const group of input.groups.filter((candidate) => candidate.id !== input.groupId)) {
-        append(`Move to ${group.name}`, { action: 'moveToGroup', groupId: group.id })
+      const movePlacement = new Menu()
+      const moveTargets = input.groups.filter((candidate) => candidate.id !== input.groupId)
+      if (moveTargets.length === 0) {
+        movePlacement.append(new MenuItem({ label: 'No other groups', enabled: false }))
+      } else {
+        for (const group of moveTargets) {
+          movePlacement.append(
+            new MenuItem({
+              label: group.name,
+              click: () => choose({ action: 'moveToGroup', groupId: group.id })
+            })
+          )
+        }
       }
+      menu.append(new MenuItem({ label: 'Move tab to group', submenu: movePlacement }))
     }
 
     if (input.boxes.length > 0 || input.boxId !== null) {
