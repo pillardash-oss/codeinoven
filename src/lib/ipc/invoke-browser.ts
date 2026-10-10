@@ -75,6 +75,7 @@ export const invokeBrowserContract = {
   'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
   'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   'browser:commitDockOverlay': {} as Contract<[request: NativeDockCommit], boolean>,
+  'browser:focusDockOverlay': {} as Contract<[id: string], boolean>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's

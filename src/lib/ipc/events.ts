@@ -1,6 +1,7 @@
 import type {
   NativeDockAck,
   NativeDockCommit,
+  NativeDockKey,
   NativeDockInteraction,
   NativeDockRequest
 } from '../native-dock'
@@ -56,6 +57,7 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   'browser:overlay:dockCommit': [] as unknown as [request: NativeDockCommit],
+  'browser:overlay:dockKey': [] as unknown as [input: NativeDockKey],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**

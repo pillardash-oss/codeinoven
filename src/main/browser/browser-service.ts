@@ -1228,6 +1228,9 @@ export class BrowserService {
     replaceHandler('browser:commitDockOverlay', (_event, rawRequest) =>
       this.overlay.commitDock(validateNativeDockCommit(rawRequest))
     )
+    replaceHandler('browser:focusDockOverlay', (_event, rawId) =>
+      this.overlay.focusDock(validateNativeDockId(rawId))
+    )
     replaceHandler('browser:overlayReady', () => this.overlay.currentState())
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about

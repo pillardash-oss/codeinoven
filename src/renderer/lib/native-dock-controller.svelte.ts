@@ -65,9 +65,30 @@ export class NativeDockController {
     const unsubscribeAck = subscribe('browser:overlay:dockDrawn', (ack) => {
       if (this.active && ack.id === this.id && ack.revision === this.revision) {
         clearTimeout(this.timer)
+        const firstDraw = !this.ready
         this.ready = true
         this.modalOptions?.onReady?.()
+        // Publish readiness in the source before transferring native focus,
+        // so its blur handler recognises the handover to its own modal.
+        if (firstDraw && this.modalOptions)
+          void invoke('browser:focusDockOverlay', this.id).catch(() => {})
       }
+    })
+    const unsubscribeKey = subscribe('browser:overlay:dockKey', (input) => {
+      if (!this.active || input.id !== this.id || !this.modalOptions) return
+      window.dispatchEvent(
+        new KeyboardEvent(input.type, {
+          key: input.key,
+          code: input.code,
+          ctrlKey: input.control,
+          shiftKey: input.shift,
+          altKey: input.alt,
+          metaKey: input.meta,
+          repeat: input.isAutoRepeat,
+          bubbles: true,
+          cancelable: true
+        })
+      )
     })
     const unsubscribeEvent = subscribe('browser:overlay:dockEvent', (report) => {
       if (!this.active || report.id !== this.id) return
@@ -112,6 +133,7 @@ export class NativeDockController {
       observer.disconnect()
       themeObserver.disconnect()
       unsubscribeAck()
+      unsubscribeKey()
       unsubscribeEvent()
       root.removeEventListener('scroll', scrolled, true)
       clearTimeout(this.frame)

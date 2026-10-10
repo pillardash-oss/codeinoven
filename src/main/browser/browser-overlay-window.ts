@@ -31,7 +31,7 @@ import {
  * moves into this window: same place, same content, same state, and the page
  * stays live and interactive underneath.
  *
- * The window spans the whole content area below the application header, because
+ * The window spans the whole application content area, because
  * it hosts more than one region: the toast stack in the top right corner, and the
  * tab strip down the left band when it floats. Only the pixels a region paints
  * are opaque; everywhere else the window passes clicks through to the page.
@@ -42,9 +42,8 @@ import {
  *   - it is parented to the app window, follows it, and is hidden with it when
  *     the app window is minimized, so it can never outlive or float away from
  *     what it belongs to;
- *   - it never takes the keyboard (`focusable: false`), so pressing a card's
- *     action or a tab row never pulls focus out of the page the user was typing
- *     in;
+ *   - passive surfaces never take the keyboard; a painted modal takes native
+ *     focus and routes keyboard input to its canonical source handlers;
  *   - it swallows a click only where drawn content actually is. Everywhere else,
  *     which is most of the window, `setIgnoreMouseEvents` passes the click
  *     through to the page below, so the strip of screen it covers stays usable.
@@ -77,6 +76,7 @@ export class BrowserOverlayWindow {
    *  ever told about a change: a needless call re-evaluates the window under
    *  the pointer and hands the document an event it would misread. */
   private ignoringMouse = true
+  private parentThrottling: boolean | null = null
 
   constructor(
     private readonly parent: BrowserWindow,
@@ -213,6 +213,20 @@ export class BrowserOverlayWindow {
     return true
   }
 
+  /** A painted modal needs key-window status for native macOS hover and cursors. */
+  focusDock(id: string): boolean {
+    const popup = this.popup
+    if (!popup || popup.isDestroyed() || !this.ready || !this.docks.get(id)?.modal) return false
+    popup.setFocusable(true)
+    if (this.parentThrottling === null) {
+      this.parentThrottling = this.parent.webContents.getBackgroundThrottling()
+      this.parent.webContents.setBackgroundThrottling(false)
+    }
+    if (!popup.isFocused()) popup.focus()
+    popup.webContents.focus()
+    return true
+  }
+
   /** Whether the pointer is over drawn content, which decides click-through. */
   setPointerOverContent(over: boolean): void {
     this.pointerOverContent = over
@@ -239,6 +253,7 @@ export class BrowserOverlayWindow {
   }
 
   dispose(): void {
+    this.restoreParentThrottling()
     const popup = this.popup
     this.popup = null
     this.stack = null
@@ -282,6 +297,14 @@ export class BrowserOverlayWindow {
   private settle(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
+    if (!this.hasModalDock() && popup.isFocusable()) {
+      const restoreFocus = popup.isFocused()
+      popup.setFocusable(false)
+      // Only return focus after our own selection/dismissal. Closing because
+      // another app became active must never activate this app again.
+      if (restoreFocus && !this.parent.isDestroyed()) this.parent.focus()
+      this.restoreParentThrottling()
+    }
     // A dock that just left may have been the modal that owned the whole window,
     // so the click-through state is settled before the empty case is.
     this.applyClickThrough()
@@ -388,10 +411,10 @@ export class BrowserOverlayWindow {
       maximizable: false,
       fullscreenable: false,
       skipTaskbar: true,
-      // Never key: pressing a card or a tab row is handled without taking the
+      // Initially non-key: pressing a card or a tab row does not take the
       // keyboard away from the page underneath, and `acceptFirstMouse` makes that
       // first click press the control instead of being spent activating the
-      // window.
+      // window. A painted modal opts into focus through focusDock instead.
       focusable: false,
       acceptFirstMouse: true,
       parent: this.parent,
@@ -402,6 +425,7 @@ export class BrowserOverlayWindow {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
+        backgroundThrottling: false,
         devTools: false
       }
     })
@@ -414,6 +438,30 @@ export class BrowserOverlayWindow {
     this.ignoringMouse = true
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
+    popup.webContents.on('before-input-event', (_event, input) => {
+      const modal = [...this.docks.values()].find((dock) => dock.modal)
+      if (!modal || (input.type !== 'keyDown' && input.type !== 'keyUp')) return
+      sendToRenderer(this.parent.webContents, 'browser:overlay:dockKey', {
+        id: modal.id,
+        type: input.type === 'keyDown' ? 'keydown' : 'keyup',
+        key: input.key,
+        code: input.code,
+        control: input.control,
+        shift: input.shift,
+        alt: input.alt,
+        meta: input.meta,
+        isAutoRepeat: input.isAutoRepeat
+      })
+    })
+    popup.on('blur', () => {
+      for (const dock of this.docks.values()) {
+        if (dock.modal)
+          sendToRenderer(this.parent.webContents, 'browser:overlay:dockEvent', {
+            id: dock.id,
+            kind: 'dismiss'
+          })
+      }
+    })
     popup.webContents.on('did-finish-load', () => {
       // A new overlay document has no resource cache yet, including after HMR.
       this.deliveredDockImages.clear()
@@ -442,6 +490,13 @@ export class BrowserOverlayWindow {
     this.trackParent(popup)
     void loadRendererDocument(popup, 'browser-overlay.html', { theme: resolveAppTheme() })
     return popup
+  }
+
+  private restoreParentThrottling(): void {
+    if (this.parentThrottling === null) return
+    if (!this.parent.isDestroyed())
+      this.parent.webContents.setBackgroundThrottling(this.parentThrottling)
+    this.parentThrottling = null
   }
 
   /** Keep the overlay glued to the app window: it moves with it, hides while it

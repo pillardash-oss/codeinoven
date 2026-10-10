@@ -15,6 +15,7 @@
   let pending: NativeDockInteraction | null = null
   let frame = 0
   let pointerOrigin: { x: number; y: number } | null = null
+  let pointerMoved = false
   let hoveredAction: string | null = null
   let hoveredAt = 0
   let selectedAction: string | null = null
@@ -72,6 +73,7 @@
   }
   const events: Attachment<HTMLDivElement> = (element) => {
     element.addEventListener('click', click)
+    element.addEventListener('contextmenu', contextmenu)
     element.addEventListener('keydown', keydown)
     element.addEventListener('pointerdown', down)
     element.addEventListener('pointermove', move)
@@ -87,6 +89,7 @@
     }
     return () => {
       element.removeEventListener('click', click)
+      element.removeEventListener('contextmenu', contextmenu)
       element.removeEventListener('keydown', keydown)
       element.removeEventListener('pointerdown', down)
       element.removeEventListener('pointermove', move)
@@ -138,7 +141,20 @@
     }
     if (action && !button?.disabled) report({ id: dock.id, kind: 'click', action })
   }
+  function contextmenu(event: MouseEvent): void {
+    // macOS turns a left press with Control held into a context menu instead
+    // of a click. Ctrl+Tab users are still holding that modifier when picking.
+    if (!dock.modal || !event.ctrlKey || event.button !== 0) return
+    event.preventDefault()
+    if (event.target instanceof Element && event.target.closest('[data-native-modal-backdrop]'))
+      report({ id: dock.id, kind: 'dismiss' })
+    else click(event)
+  }
   function keydown(event: KeyboardEvent): void {
+    if (dock.modal) {
+      event.preventDefault()
+      return
+    }
     if (!(event.target instanceof Element) || !event.target.closest('[data-native-dock-handle]'))
       return
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
@@ -163,11 +179,12 @@
       pointerOrigin ??= { x: event.clientX, y: event.clientY }
       const dx = event.clientX - pointerOrigin.x
       const dy = event.clientY - pointerOrigin.y
+      if (dx * dx + dy * dy > 16) pointerMoved = true
       const row = event.target.closest<HTMLButtonElement>(
         'button[aria-selected][data-native-dock-action]'
       )
       const action = row?.dataset.nativeDockAction
-      if (action && !row.disabled && dx * dx + dy * dy > 16) {
+      if (action && !row.disabled && pointerMoved) {
         hoveredAt = performance.timeOrigin + performance.now()
         if (action !== hoveredAction) {
           hoveredAction = action
@@ -229,6 +246,7 @@
     <button
       type="button"
       tabindex={-1}
+      data-native-modal-backdrop
       class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
       aria-label="Dismiss switcher"
       title="Dismiss switcher"

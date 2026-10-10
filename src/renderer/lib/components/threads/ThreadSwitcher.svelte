@@ -115,7 +115,11 @@
     if (index < 0) return false
     const row = contentElement?.querySelector<HTMLElement>(`[data-entry-index="${index}"]`)
     if (!row) return false
-    row.focus()
+    if (nativeReady && !nativeFailed) {
+      // The native window owns focus. Focusing its hidden source row would
+      // activate the parent again and dismiss the native modal on hover.
+      row.scrollIntoView({ block: 'nearest' })
+    } else row.focus()
     return true
   }
 
@@ -292,6 +296,9 @@
   }
 
   function handleWindowBlur(): void {
+    // Native presentation owns keyboard focus until it closes. Its own blur
+    // report dismisses the switcher when the user leaves the application.
+    if (nativeReady && !nativeFailed) return
     cancel()
   }
 </script>

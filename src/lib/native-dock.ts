@@ -31,6 +31,18 @@ export interface NativeDockCommit {
   selectedKey: string | null
   keyboardAt: number
 }
+/** Native keyboard input routed back to the canonical modal's handlers. */
+export interface NativeDockKey {
+  id: string
+  type: 'keydown' | 'keyup'
+  key: string
+  code: string
+  control: boolean
+  shift: boolean
+  alt: boolean
+  meta: boolean
+  isAutoRepeat: boolean
+}
 export type NativeDockInteraction =
   | { id: string; kind: 'click'; action: string }
   | { id: string; kind: 'hover'; action: string }
