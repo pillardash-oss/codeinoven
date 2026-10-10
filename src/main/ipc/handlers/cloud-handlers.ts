@@ -1294,7 +1294,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       // what it addresses. Optional like the threads, for the same reason   a
       // comment list is worth showing even when its reactions could not be read.
       const reactions = await provider
-        .listPullRequestReactions(reactionSubjects(detail, comments, reviews, reviewComments))
+        .listReactions(reactionSubjects(detail, comments, reviews, reviewComments))
         .catch((): PrReactionMap => ({}))
       return {
         detail,
@@ -1531,7 +1531,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       const reaction = validatePrReactionContent(content)
       const adding = validateBoolean(add, 'Add reaction')
       return runGitHubMutation(target.owner, target.repo, () =>
-        provider.setPullRequestReaction({ nodeId, content: reaction, add: adding })
+        provider.setReaction({ nodeId, content: reaction, add: adding })
       )
     }
   )

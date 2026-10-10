@@ -7,6 +7,7 @@ import type {
   IssuePage,
   IssueStateReason,
   IssueSummary,
+  PrReactionGroup,
   PrState,
   RepositoryMentionUser
 } from '$shared/types'
@@ -159,6 +160,31 @@ export class GitIssueCache {
         [bundleKey]: { ...bundle, detail: { ...bundle.detail, ...patch } }
       }
     }
+  }
+
+  /**
+   * Replace one subject's reactions in the cached bundle.
+   *
+   * A reaction write answers with the subject's reactions as the server now holds
+   * them, so the reader corrects what it is showing instead of refetching a
+   * conversation that is already on screen. A subject that now holds no reactions
+   * drops out of the map, which is the shape the initial read uses for a subject
+   * nobody has reacted to.
+   */
+  patchBundleReactions(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    nodeId: string,
+    groups: PrReactionGroup[]
+  ): void {
+    const key = issueBundleKey(owner, repo, issueNumber)
+    const bundle = this.bundles[key]
+    if (!bundle) return
+    const reactions = { ...bundle.reactions }
+    if (groups.length === 0) delete reactions[nodeId]
+    else reactions[nodeId] = groups
+    this.bundles = { ...this.bundles, [key]: { ...bundle, reactions } }
   }
 
   /** Load every page up to `page`, serving cache first. */

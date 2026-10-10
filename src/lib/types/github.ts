@@ -333,13 +333,13 @@ export interface PrReactionGroup {
 }
 
 /**
- * Every reaction on a pull request's conversation, keyed by the GraphQL node id
- * of the comment it belongs to.
+ * Every reaction on a conversation, keyed by the GraphQL node id of the subject
+ * it belongs to.
  *
- * Keyed rather than attached to each comment because GitHub answers reactions per
- * subject, not per comment list: one batched read covers the description, the
- * issue comments, the reviews and the inline comments alike, and the renderer
- * looks a row up by the node id it already carries.
+ * Keyed rather than attached to each subject because GitHub answers reactions per
+ * subject, not per comment list: one batched read covers a pull request's
+ * description, comments, reviews and inline comments alike, and an issue with its
+ * comments, and the renderer looks a row up by the node id it already carries.
  */
 export type PrReactionMap = Record<string, PrReactionGroup[]>
 
@@ -733,6 +733,12 @@ export interface IssueDetail extends IssueSummary {
 export interface IssueBundle {
   detail: IssueDetail
   comments: IssueComment[]
+  /**
+   * Reactions on the issue and its comments, keyed by the node id of the subject
+   * they are on. Empty when the read could not be made: the conversation is worth
+   * showing even when its reactions are not.
+   */
+  reactions: PrReactionMap
   /** Epoch ms this bundle was fetched, for cache staleness display. */
   fetchedAt: number
 }

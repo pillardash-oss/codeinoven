@@ -1,8 +1,10 @@
 import { ProviderHttpError } from '../../providers/github-provider'
 import { isNetworkError } from '../../util/network-error'
 import {
+  validateBoolean,
   validateBoundedString,
   validateEntityId,
+  validateGraphqlNodeId,
   validateIssueListRequest,
   validateIssueNumber,
   validateIssueState,
@@ -15,6 +17,7 @@ import {
   validatePrLabelNames,
   validatePrMilestoneNumber,
   validatePrPage,
+  validatePrReactionContent,
   validatePrState
 } from '../ipc-validation'
 import {
@@ -26,6 +29,7 @@ import {
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { GitProvider } from '../../git/git-provider.interface'
 import type { IpcHandlerContext } from './context'
+import type { PrReactionMap } from '../../../lib/types'
 
 const ISSUE_PAGE_SIZE = 20
 
@@ -125,7 +129,18 @@ export function registerIssueHandlers(ctx: IpcHandlerContext): void {
         provider.getIssue(target),
         provider.listIssueComments(target).catch(() => [])
       ])
-      return { detail, comments, fetchedAt: Date.now() }
+      // Reactions are one batched read over both reactable subjects the reader
+      // draws: the issue itself and each of its comments. Their node ids are what
+      // it addresses, so it follows the comments rather than racing them, and it is
+      // optional like the comments   the conversation is worth showing even when
+      // its reactions could not be read.
+      const subjects = [detail.nodeId, ...comments.map((comment) => comment.nodeId)].filter(
+        (id): id is string => id !== null
+      )
+      const reactions = await provider
+        .listReactions([...new Set(subjects)])
+        .catch((): PrReactionMap => ({}))
+      return { detail, comments, reactions, fetchedAt: Date.now() }
     }
   )
 
@@ -347,6 +362,33 @@ export function registerIssueHandlers(ctx: IpcHandlerContext): void {
             repo: target.repo,
             pullNumber: target.issueNumber,
             milestone: safeMilestone
+          }),
+        ISSUE_WRITE_ACCESS
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'issue:react',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      issueNumber: unknown,
+      subjectNodeId: unknown,
+      content: unknown,
+      add: unknown
+    ) => {
+      const { provider, ...target } = await issueContext(projectId, owner, repo, issueNumber)
+      return runGitHubMutation(
+        target.owner,
+        target.repo,
+        () =>
+          provider.setReaction({
+            nodeId: validateGraphqlNodeId(subjectNodeId),
+            content: validatePrReactionContent(content),
+            add: validateBoolean(add, 'Add reaction')
           }),
         ISSUE_WRITE_ACCESS
       )

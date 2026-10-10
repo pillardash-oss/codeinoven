@@ -503,6 +503,28 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string, issueNumber: number, milestone: number | null],
     GitHubMutationResult<IssueMilestone | null>
   >,
+  /**
+   * Add or take back the signed-in account's reaction on an issue or one of its
+   * comments.
+   *
+   * Addressed by the subject's GraphQL node id because that is the one handle every
+   * reactable thing shares and GitHub exposes reactions on GraphQL only. The answer
+   * is the subject's reactions as the server now holds them, so the caller corrects
+   * what it is showing without refetching the conversation.
+   */
+  'issue:react': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      issueNumber: number,
+      subjectNodeId: string,
+      content: PrReactionContent,
+      /** True to react, false to take the reaction back. */
+      add: boolean
+    ],
+    GitHubMutationResult<PrReactionGroup[]>
+  >,
   'deployment:overview': {} as Contract<
     [projectId: string, owner: string, repo: string],
     GitHubDeploymentOverviewResult

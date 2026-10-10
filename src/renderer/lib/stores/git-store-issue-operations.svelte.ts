@@ -6,9 +6,11 @@ import type {
   IssueMilestone,
   IssueReference,
   NewIssueInput,
+  PrReactionContent,
+  PrReactionGroup,
   RepositoryMentionUser
 } from '$shared/types'
-import { errorMessage, type GitOperation } from './git-store-helpers'
+import { errorMessage, prReactionBusyKey, type GitOperation } from './git-store-helpers'
 import type { CachedIssuePatch } from './git-store-issues.svelte'
 
 /** One metadata write's outcome: what the provider stored, or why it did not. */
@@ -22,6 +24,14 @@ export interface GitIssueOperationAccess {
   setGitHubPermission(permission: GitHubPermissionRequired | null): void
   /** Rewrite a cached row after a successful write, so the list shows the truth. */
   patchIssue(owner: string, repo: string, issueNumber: number, patch: CachedIssuePatch): void
+  /** Replace one subject's reactions in the cached bundle, from the write's answer. */
+  patchBundleReactions(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    nodeId: string,
+    groups: PrReactionGroup[]
+  ): void
 }
 
 /** Online issue operations, backed by the store's shared state. */
@@ -242,6 +252,47 @@ export class GitIssueOperations {
       'The milestone could not be saved',
       (value) => this.access.patchIssue(owner, repo, issueNumber, { milestone: value })
     )
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on the issue or one of its
+   * comments.
+   *
+   * The write answers with the subject's reactions as they now stand, so the
+   * cached bundle is corrected from that rather than refetched: a refetch would
+   * blank the conversation the reader is looking at for the round trip.
+   */
+  async setIssueReaction(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    nodeId: string,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<boolean> {
+    const busyKey = prReactionBusyKey(nodeId, content)
+    this.access.markBusy(busyKey, true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      const groups = this.resolveMutation(
+        await invoke('issue:react', projectId, owner, repo, issueNumber, nodeId, content, add)
+      )
+      if (groups === null) return false
+      this.access.patchBundleReactions(owner, repo, issueNumber, nodeId, groups)
+      return true
+    } catch (reason) {
+      this.access.setError(
+        errorMessage(
+          reason,
+          add ? 'The reaction could not be added' : 'The reaction could not be removed'
+        )
+      )
+      return false
+    } finally {
+      this.access.markBusy(busyKey, false)
+    }
   }
 
   private async writeMetadata<T>(

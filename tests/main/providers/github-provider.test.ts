@@ -587,4 +587,130 @@ describe('GitHubProvider', () => {
     const { url } = captureRequest()
     expect(url).toBe('http://localhost:9999/repos/a/b/pulls')
   })
+
+  it('reads reactions for an issue and its comments through one batched nodes(ids:) query', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          nodes: [
+            {
+              id: 'I_issue',
+              reactionGroups: [
+                {
+                  content: 'THUMBS_UP',
+                  viewerHasReacted: true,
+                  reactors: {
+                    totalCount: 2,
+                    nodes: [
+                      {
+                        __typename: 'User',
+                        login: 'octocat',
+                        avatarUrl: 'https://avatars.example/octocat.png'
+                      },
+                      { __typename: 'Bot', login: 'dependabot[bot]', avatarUrl: null }
+                    ]
+                  }
+                },
+                // A group with no reactors is not a reaction, and must not become one.
+                {
+                  content: 'HEART',
+                  viewerHasReacted: false,
+                  reactors: { totalCount: 0, nodes: [] }
+                }
+              ]
+            },
+            // An issue comment nobody has reacted to answers with no groups, and the
+            // subject the read could not resolve answers as null.
+            { id: 'IC_comment', reactionGroups: [] },
+            null
+          ]
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const reactions = await provider.listReactions(['I_issue', 'IC_comment', 'I_missing'])
+
+    const { url, init } = captureRequest()
+    expect(url).toBe('https://api.github.com/graphql')
+    const body = JSON.parse(String(init.body)) as {
+      query: string
+      variables: Record<string, unknown>
+    }
+    expect(body.query).toContain('nodes(ids: $ids)')
+    expect(body.query).toContain('... on Reactable')
+    expect(body.variables['ids']).toEqual(['I_issue', 'IC_comment', 'I_missing'])
+
+    // Only the subject that actually carries a reaction is in the map.
+    expect(Object.keys(reactions)).toEqual(['I_issue'])
+    expect(reactions['I_issue']).toEqual([
+      {
+        content: 'THUMBS_UP',
+        viewerHasReacted: true,
+        count: 2,
+        actors: [
+          { login: 'octocat', avatarUrl: 'https://avatars.example/octocat.png' },
+          { login: 'dependabot[bot]', avatarUrl: null }
+        ]
+      }
+    ])
+  })
+
+  it('adds a reaction on one subject and reads the groups back from the answer', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          addReaction: {
+            subject: {
+              reactionGroups: [
+                {
+                  content: 'ROCKET',
+                  viewerHasReacted: true,
+                  reactors: {
+                    totalCount: 1,
+                    nodes: [{ __typename: 'User', login: 'octocat', avatarUrl: null }]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const groups = await provider.setReaction({ nodeId: 'I_issue', content: 'ROCKET', add: true })
+
+    const { url, init } = captureRequest()
+    expect(url).toBe('https://api.github.com/graphql')
+    const body = JSON.parse(String(init.body)) as {
+      query: string
+      variables: Record<string, unknown>
+    }
+    expect(body.query).toContain('mutation SetReaction')
+    expect(body.query).toContain('addReaction(input: { subjectId: $subjectId, content: $content })')
+    expect(body.variables).toEqual({ subjectId: 'I_issue', content: 'ROCKET' })
+    expect(groups).toEqual([
+      {
+        content: 'ROCKET',
+        viewerHasReacted: true,
+        count: 1,
+        actors: [{ login: 'octocat', avatarUrl: null }]
+      }
+    ])
+  })
+
+  it('takes a reaction back through removeReaction', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ data: { removeReaction: { subject: { reactionGroups: [] } } } })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const groups = await provider.setReaction({ nodeId: 'I_issue', content: 'ROCKET', add: false })
+
+    const { init } = captureRequest()
+    const body = JSON.parse(String(init.body)) as { query: string }
+    expect(body.query).toContain('removeReaction(input:')
+    expect(groups).toEqual([])
+  })
 })

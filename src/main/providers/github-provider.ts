@@ -953,7 +953,7 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
-   * Read the reactions on many comments at once.
+   * Read the reactions on many subjects at once.
    *
    * Reactions hang off the subject rather than off a comment list, and GitHub
    * answers `nodes(ids:)` for up to a hundred subjects per request, so a whole
@@ -962,7 +962,7 @@ export class GitHubProvider implements GitProvider {
    * resolved comes back as a null entry, and the id it was asked under is what
    * keeps the rest of the batch placeable.
    */
-  async listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap> {
+  async listReactions(subjectNodeIds: string[]): Promise<PrReactionMap> {
     const unique = [...new Set(subjectNodeIds.filter((id) => id.length > 0))]
     if (unique.length === 0) return {}
     const batches: string[][] = []
@@ -999,7 +999,7 @@ export class GitHubProvider implements GitProvider {
    * comment it is showing from the server's answer instead of refetching a
    * conversation that is already on screen.
    */
-  async setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]> {
+  async setReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]> {
     const field = input.add ? 'addReaction' : 'removeReaction'
     const data = await this.runGraphql(
       `mutation SetReaction($subjectId: ID!, $content: ReactionContent!) { ${field}(input: { subjectId: $subjectId, content: $content }) { subject { ... on Reactable { ${REACTION_GROUP_SELECTION} } } } }`,
@@ -1008,7 +1008,7 @@ export class GitHubProvider implements GitProvider {
     const mutation = this.readRecord(data, field)
     const subject = mutation ? this.readRecord(mutation, 'subject') : null
     if (!subject) {
-      throw new Error('The provider did not answer with the comment that was reacted to')
+      throw new Error('The provider did not answer with the subject that was reacted to')
     }
     return this.toReactionGroups(subject)
   }

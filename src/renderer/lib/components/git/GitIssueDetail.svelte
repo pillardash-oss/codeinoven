@@ -23,8 +23,10 @@
   import BotBadge from './BotBadge.svelte'
   import { issueStateIcon, issueStateReasonLabel, issueStateToneClass } from './issue-view'
   import { prLabelStyle, type PrMetadataMode } from './pr-view'
+  import PrReactionPicker from './PrReactionPicker.svelte'
+  import PrReactionChips from './PrReactionChips.svelte'
   import type { GithubRepoContext } from '$lib/github-references'
-  import type { IssueComment, IssueSummary } from '$shared/types'
+  import type { IssueComment, IssueSummary, PrReactionContent } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -72,6 +74,27 @@
 
   const StateIcon = $derived(issueStateIcon(subject))
   const reasonLabel = $derived(issueStateReasonLabel(subject.stateReason))
+
+  /** Reactions on the issue and its comments, keyed by the subject's node id. */
+  const reactions = $derived(bundle?.reactions ?? {})
+  /** The issue's own node id, or null for a payload that carried none. */
+  const issueNodeId = $derived(detail?.nodeId ?? null)
+  /** The reactions on the issue itself, which the chip row draws. */
+  const issueReactions = $derived(issueNodeId ? (reactions[issueNodeId] ?? []) : [])
+
+  /** Add or take back the reader's reaction on one subject of this conversation. */
+  function reactTo(nodeId: string | null, content: PrReactionContent, add: boolean): void {
+    if (!nodeId) return
+    void gitState.setIssueReaction(
+      projectId,
+      identity.owner,
+      identity.repo,
+      issue.number,
+      nodeId,
+      content,
+      add
+    )
+  }
 
   async function load(force = false): Promise<void> {
     await gitState.ensureIssueBundle(projectId, identity.owner, identity.repo, issue.number, force)
@@ -285,8 +308,8 @@
       </div>
 
       <!-- The issue body, rendered as the author wrote it. -->
-      <div class="mt-2 rounded-lg border border-border bg-surface/60 p-2.5">
-        <div class="mb-1.5 flex items-center gap-1.5">
+      <div class="mt-2 rounded-lg border border-border bg-surface/60">
+        <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
           <PrAvatar login={subject.authorLogin} avatarUrl={subject.authorAvatarUrl} />
           <span class="text-[0.625rem] font-medium text-foreground"
             >{githubDisplayLogin(subject.authorLogin)}</span
@@ -295,11 +318,28 @@
             <BotBadge />
           {/if}
           <span class="text-[0.5625rem] text-dimmed">opened {relativeTime(subject.createdAt)}</span>
+          <span class="flex-1"></span>
+          {#if issueNodeId}
+            <PrReactionPicker
+              nodeId={issueNodeId}
+              groups={issueReactions}
+              onToggle={(content, add) => reactTo(issueNodeId, content, add)}
+            />
+          {/if}
         </div>
-        {#if detail?.body}
-          <MarkdownView text={detail.body} allowHtml {repository} />
-        {:else}
-          <p class="text-[0.625rem] italic text-dimmed">This issue has no description.</p>
+        <div class="px-2.5 py-2">
+          {#if detail?.body}
+            <MarkdownView text={detail.body} allowHtml {repository} />
+          {:else}
+            <p class="text-[0.625rem] italic text-dimmed">This issue has no description.</p>
+          {/if}
+        </div>
+        {#if issueNodeId && issueReactions.length > 0}
+          <PrReactionChips
+            nodeId={issueNodeId}
+            groups={issueReactions}
+            onToggle={(content, add) => reactTo(issueNodeId, content, add)}
+          />
         {/if}
       </div>
 
@@ -312,8 +352,9 @@
       </div>
 
       {#each comments as comment (comment.id)}
-        <div class="mt-2 rounded-lg border border-border bg-surface/60 p-2.5">
-          <div class="mb-1.5 flex items-center gap-1.5">
+        {@const commentReactions = reactions[comment.nodeId ?? ''] ?? []}
+        <div class="mt-2 rounded-lg border border-border bg-surface/60">
+          <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
             <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
             <span class="text-[0.625rem] font-medium text-foreground"
               >{githubDisplayLogin(comment.authorLogin)}</span
@@ -326,6 +367,13 @@
               <span class="text-[0.5625rem] text-dimmed">· edited</span>
             {/if}
             <span class="flex-1"></span>
+            {#if comment.nodeId}
+              <PrReactionPicker
+                nodeId={comment.nodeId}
+                groups={commentReactions}
+                onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
+              />
+            {/if}
             {#if isOwnComment(comment)}
               {#if editingId === comment.id}
                 <button
@@ -370,42 +418,60 @@
             {/if}
           </div>
           {#if editingId === comment.id}
-            <textarea
-              class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
-              aria-label="Edit comment"
-              bind:value={editingBody}></textarea>
+            <div class="px-2.5 py-2">
+              <textarea
+                class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
+                aria-label="Edit comment"
+                bind:value={editingBody}></textarea>
+            </div>
           {:else}
-            <MarkdownView text={comment.body} allowHtml {repository} />
+            <div class="px-2.5 py-2">
+              <MarkdownView text={comment.body} allowHtml {repository} />
+            </div>
+          {/if}
+          {#if comment.nodeId && commentReactions.length > 0}
+            <PrReactionChips
+              nodeId={comment.nodeId}
+              groups={commentReactions}
+              onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
+            />
           {/if}
         </div>
       {/each}
-
-      <!-- The composer: the one place a comment is written. -->
-      <div class="mt-3 rounded-lg border border-border bg-surface/60 p-2">
-        <textarea
-          class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Leave a comment…"
-          aria-label="Comment on this issue"
-          bind:value={draft}
-          onkeydown={onComposerKeydown}></textarea>
-        <div class="mt-1.5 flex items-center justify-end gap-2">
-          <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
-          <button
-            type="button"
-            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={posting || draft.trim().length === 0}
-            onclick={() => void submitComment()}
-          >
-            {#if posting}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            <Send size={12} />
-            Comment
-          </button>
-        </div>
-      </div>
     {/if}
   </div>
+
+  <!--
+    The composer is a footer rather than the last row of the scroll: it is the one
+    control a reader reaches for from anywhere in a long conversation, and burying
+    it under the comments would mean scrolling to the bottom before every reply.
+    This is the same shape the pull request reader uses for its own composer.
+  -->
+  {#if !loading}
+    <div class="shrink-0 border-t border-border bg-surface/60 p-2">
+      <textarea
+        class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        placeholder="Leave a comment…"
+        aria-label="Comment on this issue"
+        bind:value={draft}
+        onkeydown={onComposerKeydown}></textarea>
+      <div class="mt-1.5 flex items-center justify-end gap-2">
+        <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
+        <button
+          type="button"
+          class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={posting || draft.trim().length === 0}
+          onclick={() => void submitComment()}
+        >
+          {#if posting}
+            <Loader2 size={12} class="animate-spin" />
+          {/if}
+          <Send size={12} />
+          Comment
+        </button>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <ConfirmDialog

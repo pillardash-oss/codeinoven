@@ -306,14 +306,16 @@ export interface GitProvider {
   /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
   setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
   /**
-   * Read the reactions on many comments at once, keyed by their node ids.
+   * Read the reactions on many subjects at once, keyed by their node ids.
    *
-   * GitHub answers reactions per subject, so a conversation of eighty comments
-   * would otherwise be eighty requests. Subjects with no reactions are absent
-   * from the answer, and a subject the read could not resolve is absent too
-   * rather than reported as unreacted.
+   * GitHub answers reactions per `Reactable` subject, so a conversation of eighty
+   * comments would otherwise be eighty requests. Any reactable node works here: a
+   * pull request's description, comments, reviews and inline comments, or an
+   * issue and its comments. Subjects with no reactions are absent from the
+   * answer, and a subject the read could not resolve is absent too rather than
+   * reported as unreacted.
    */
-  listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap>
+  listReactions(subjectNodeIds: string[]): Promise<PrReactionMap>
   /**
    * Add or take back the signed-in account's reaction, answering with the
    * subject's reactions as they now stand.
@@ -322,7 +324,7 @@ export interface GitProvider {
    * the subject, so the caller corrects its own view from the server's answer
    * instead of refetching the conversation it is already showing.
    */
-  setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]>
+  setReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>

@@ -314,7 +314,9 @@ export class GitState {
     setError: (message) => (this.error = message),
     setGitHubPermission: (permission) => (this.githubPermission = permission),
     patchIssue: (owner, repo, issueNumber, patch) =>
-      this.issues.patchIssue(owner, repo, issueNumber, patch)
+      this.issues.patchIssue(owner, repo, issueNumber, patch),
+    patchBundleReactions: (owner, repo, issueNumber, nodeId, groups) =>
+      this.issues.patchBundleReactions(owner, repo, issueNumber, nodeId, groups)
   } satisfies GitIssueOperationAccess)
 
   get status(): GitStatus | null {
@@ -1610,6 +1612,27 @@ export class GitState {
     milestone: number | null
   ) {
     return this.issueOps.setIssueMilestone(projectId, owner, repo, issueNumber, milestone)
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on an issue or one of its
+   * comments.
+   *
+   * Addressed by the subject's GraphQL node id, which is the handle the issue and
+   * its comments share with every other reactable thing. The store corrects the
+   * cached bundle from the write's own answer, so a chip changes without the
+   * conversation refetching.
+   */
+  setIssueReaction(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    nodeId: string,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<boolean> {
+    return this.issueOps.setIssueReaction(projectId, owner, repo, issueNumber, nodeId, content, add)
   }
 
   // Cached issue listings and detail bundles.
