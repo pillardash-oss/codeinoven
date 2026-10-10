@@ -18,7 +18,7 @@ import {
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
-import { GitIssueCache } from './git-store-issues.svelte'
+import { GitIssueCache, type CachedIssueTimeline } from './git-store-issues.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
 import { GitIssueOperations } from './git-store-issue-operations.svelte'
@@ -445,6 +445,10 @@ export class GitState {
 
   get issueBundles(): Record<string, IssueBundle> {
     return this.issues.bundles
+  }
+
+  get issueTimelines(): Record<string, CachedIssueTimeline> {
+    return this.issues.timelines
   }
 
   get prAgentReports(): Record<string, PrAgentReport[]> {
@@ -1656,6 +1660,28 @@ export class GitState {
     force = false
   ): Promise<void> {
     return this.issues.ensureIssueBundle(projectId, owner, repo, issueNumber, force)
+  }
+
+  /**
+   * Read one issue's history, which the reader draws after the issue itself.
+   *
+   * Kept apart from `ensureIssueBundle` so a slow history never delays the
+   * description and the conversation. Silent on failure, like the warm-ups: the
+   * issue reads the same without it.
+   */
+  ensureIssueTimeline(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.ensureIssueTimeline(projectId, owner, repo, issueNumber, force)
+  }
+
+  /** Forget an issue's cached history, so a state change is read back with its event. */
+  invalidateIssueTimeline(owner: string, repo: string, issueNumber: number): void {
+    this.issues.invalidateIssueTimeline(owner, repo, issueNumber)
   }
 
   /** Warm the issue under the pointer, so the click that follows renders from cache. */

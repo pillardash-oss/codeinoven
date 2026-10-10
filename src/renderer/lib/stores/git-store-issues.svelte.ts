@@ -7,6 +7,7 @@ import type {
   IssuePage,
   IssueStateReason,
   IssueSummary,
+  IssueTimelineEvent,
   PrReactionGroup,
   PrState,
   RepositoryMentionUser
@@ -44,6 +45,18 @@ export interface CachedIssuePage {
 }
 
 /**
+ * One cached issue history, held apart from its bundle.
+ *
+ * Apart because the two are read separately: the bundle is what the reader draws
+ * on open, and the history is a larger, slower payload that arrives after it.
+ * Caching them together would mean one freshness clock for two different jobs.
+ */
+export interface CachedIssueTimeline {
+  events: IssueTimelineEvent[]
+  fetchedAt: number
+}
+
+/**
  * Cached issue listings and detail bundles.
  *
  * The sidebar tab is unmounted every time the user switches tabs, so without a
@@ -57,6 +70,7 @@ export interface CachedIssuePage {
 export class GitIssueCache {
   pages: Record<string, CachedIssuePage> = $state({})
   bundles: Record<string, IssueBundle> = $state({})
+  timelines: Record<string, CachedIssueTimeline> = $state({})
 
   /**
    * Epoch ms of the last failure per cache key. Deliberately plain (not `$state`)
@@ -70,6 +84,17 @@ export class GitIssueCache {
 
   /** One `issue:bundle` request per key, so a warm-up and the click are one round trip. */
   private bundleRequests: Record<string, Promise<IssueBundle> | undefined> = {}
+
+  /** One `issue:timeline` request per key, so two mounted readers are one round trip. */
+  private timelineRequests: Record<string, Promise<void> | undefined> = {}
+
+  /**
+   * Epoch ms of the last failed history read per key. Plain rather than `$state`,
+   * as it only gates fetching: a history that could not be read is usually one the
+   * provider could not answer in time, so it is retried after the error cooldown
+   * rather than on every render, and the reader never shows an error for it.
+   */
+  private timelineFailures: Record<string, number> = {}
 
   /**
    * Warm-ups that failed, per key. Plain rather than `$state` because nothing
@@ -354,6 +379,63 @@ export class GitIssueCache {
     } finally {
       this.markBusy('issue-detail', false)
     }
+  }
+
+  /**
+   * Read one issue's history into the cache, apart from the bundle it belongs to.
+   *
+   * Deliberately silent: no busy state and no error banner. A history is what the
+   * issue already did, so a read that fails costs the reader nothing they had, and
+   * the issue stays fully readable without it. That is also why it is not part of
+   * the bundle request: a heavily referenced issue answers its history slowly, and
+   * making the reader wait on that would hold back the description itself.
+   */
+  async ensureIssueTimeline(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    if (!projectId || !owner || !repo || issueNumber <= 0) return
+    const key = issueBundleKey(owner, repo, issueNumber)
+    if (!force) {
+      const cached = this.timelines[key]
+      if (cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+      const failedAt = this.timelineFailures[key]
+      if (failedAt !== undefined && Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return
+      delete this.timelineFailures[key]
+    }
+    const existing = this.timelineRequests[key]
+    if (existing && !force) return existing
+    const request = invoke('issue:timeline', projectId, owner, repo, issueNumber)
+      .then((events) => {
+        this.timelines = { ...this.timelines, [key]: { events, fetchedAt: Date.now() } }
+        delete this.timelineFailures[key]
+      })
+      .catch(() => {
+        this.timelineFailures[key] = Date.now()
+      })
+      .finally(() => {
+        if (this.timelineRequests[key] === request) delete this.timelineRequests[key]
+      })
+    this.timelineRequests[key] = request
+    return request
+  }
+
+  /**
+   * Forget one issue's history, so the next read goes to the provider.
+   *
+   * A state change writes an event onto the history, so a cached copy would keep
+   * claiming the issue was never closed. Dropping the entry is enough: the next
+   * read finds nothing cached and asks the provider again.
+   */
+  invalidateIssueTimeline(owner: string, repo: string, issueNumber: number): void {
+    const key = issueBundleKey(owner, repo, issueNumber)
+    if (!this.timelines[key]) return
+    const next = { ...this.timelines }
+    delete next[key]
+    this.timelines = next
   }
 
   /** Warm one issue's detail bundle so the click that opens it renders from cache. */

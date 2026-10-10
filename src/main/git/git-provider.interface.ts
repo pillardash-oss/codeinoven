@@ -9,6 +9,7 @@ import type {
   IssueListSort,
   IssuePage,
   IssueReference,
+  IssueTimelineEvent,
   IssueUpdateInput,
   NewIssueInput,
   PrCommentKind,
@@ -268,6 +269,16 @@ export interface GitProvider {
   setIssueState(input: SetIssueStateInput): Promise<IssueReference>
   /** The issue's conversation comments, oldest first as GitHub returns them. */
   listIssueComments(input: IssueTarget): Promise<PullRequestComment[]>
+  /**
+   * The issue's history: what happened to it, oldest first as GitHub returns it.
+   *
+   * Read from the timeline endpoint rather than the issue's events endpoint,
+   * because only the timeline includes the cross-references and references that
+   * tie the issue to the commits and pull requests that mention it. Comment
+   * events are filtered out: the comments themselves come from
+   * `listIssueComments`, which carries the fields a comment row draws.
+   */
+  listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]>
   /** Post a comment on an issue. */
   createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment>
   /** Rewrite an issue comment's body. Only the author may do this. */

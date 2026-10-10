@@ -114,20 +114,33 @@
     })
   }
 
-  async function applyState(issue: IssueSummary, state: 'open' | 'closed'): Promise<void> {
+  /**
+   * Settle the issue on GitHub.
+   *
+   * A close carries GitHub's own reason, so a dismissal is recorded apart from a
+   * resolution. The reader follows the subject it opened on, so a state change
+   * updates the open issue's header rather than leaving it claiming the old state.
+   */
+  async function applyState(
+    issue: IssueSummary,
+    state: 'open' | 'closed',
+    stateReason?: 'completed' | 'not_planned'
+  ): Promise<void> {
     if (!identity) return
     const reference = await gitState.setIssueState(
       projectId,
       identity.owner,
       identity.repo,
       issue.number,
-      state
+      state,
+      stateReason
     )
     if (!reference) return
-    // The reader follows the subject it opened on, so a state change updates the
-    // open issue's header rather than leaving it claiming the old state.
+    // The write became an event on the issue's history, so the cached history is
+    // now behind the truth and is dropped for the reader to read back.
+    gitState.invalidateIssueTimeline(identity.owner, identity.repo, issue.number)
     if (selectedIssue?.number === issue.number) {
-      patch({ selectedIssue: { ...selectedIssue, state, stateReason: null } })
+      patch({ selectedIssue: { ...selectedIssue, state, stateReason: stateReason ?? null } })
     }
   }
 
@@ -214,7 +227,8 @@
       onWorkOn={(issue) => void workOn(issue)}
       onCreatePr={createPullRequest}
       onEditMetadata={(mode, issue) => (metadata = { mode, issue })}
-      onStateChange={(issue, state) => void applyState(issue, state)}
+      onRequestClose={(issue) => (confirmingClose = issue)}
+      onReopen={(issue) => void applyState(issue, 'open')}
       onOpenInBrowser={(issue) => void openInBrowser(issue.url)}
     />
   </div>
@@ -337,17 +351,31 @@
 <ConfirmDialog
   open={confirmingClose !== null}
   title="Close issue #{confirmingClose?.number ?? ''}?"
-  confirmLabel="Close issue"
+  confirmLabel="Close as completed"
   variant="primary"
   busy={stateBusy}
+  secondaryAction={{
+    label: 'Close as not planned',
+    onSelect: () => {
+      const issue = confirmingClose
+      confirmingClose = null
+      if (issue) void applyState(issue, 'closed', 'not_planned')
+    }
+  }}
   onCancel={() => (confirmingClose = null)}
   onConfirm={() => {
     const issue = confirmingClose
     confirmingClose = null
-    if (issue) void applyState(issue, 'closed')
+    if (issue) void applyState(issue, 'closed', 'completed')
   }}
 >
   <p class="text-xs leading-relaxed text-muted">
-    The issue is closed on GitHub as completed. It stays readable and can be reopened.
+    The issue is closed on GitHub. It stays readable and can be reopened.
+  </p>
+  <p class="mt-2 text-[0.6875rem] leading-relaxed text-dimmed">
+    <strong class="text-foreground">Completed</strong> records it as done, closed, fixed or
+    resolved.
+    <strong class="text-foreground">Not planned</strong> records it as won't fix, cannot reproduce, or
+    stale.
   </p>
 </ConfirmDialog>

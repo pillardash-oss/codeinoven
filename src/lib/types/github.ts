@@ -651,11 +651,12 @@ export type IssueReference = PullRequestReference
 /**
  * Why an issue was closed, as GitHub's `state_reason` reports it.
  *
- * `completed` is a resolved issue, `not_planned` is one dismissed on purpose, and
- * `reopened` is what GitHub keeps while an issue carries no closure reason
- * because it was brought back. Null when the payload carries none.
+ * `completed` is a resolved issue, `not_planned` is one dismissed on purpose,
+ * `duplicate` is one superseded by another, and `reopened` is what GitHub keeps
+ * while an issue carries no closure reason because it was brought back. Null when
+ * the payload carries none.
  */
-export type IssueStateReason = 'completed' | 'not_planned' | 'reopened'
+export type IssueStateReason = 'completed' | 'not_planned' | 'duplicate' | 'reopened'
 
 /**
  * One issue as shown in the sidebar list.
@@ -728,6 +729,88 @@ export interface IssueDetail extends IssueSummary {
   /** When the issue was closed, or null while it is open. */
   closedAt: string | null
 }
+
+/**
+ * One thing that happened to an issue, as GitHub's timeline reports it.
+ *
+ * A conversation is only the comments on it; the timeline is everything else, the
+ * labels added and taken back, the assignments, the closes and reopens, the
+ * renames, and the issues, pull requests and commits that referenced it. Read
+ * together they are the issue's history, which is why the reader interleaves them.
+ */
+export interface IssueTimelineEvent {
+  /** GitHub's own event id, which is what the row is keyed by. */
+  id: string
+  kind: IssueTimelineEventKind
+  /** Who performed it. GitHub reports an account per event, never an absence. */
+  actorLogin: string
+  actorAvatarUrl: string | null
+  /** True for app accounts, so the row can draw GitHub's `Bot` badge. */
+  actorIsBot: boolean
+  createdAt: string
+  /** The label a labeling event carried. Null on every other kind. */
+  label?: PullRequestLabel | null
+  /** The account an assignment event named, assigned or unassigned alike. */
+  assigneeLogin?: string | null
+  /** Why a close happened, as the event's own `state_reason` reports it. */
+  closeReason?: IssueStateReason | null
+  /** The titles a rename moved between. */
+  rename?: { from: string; to: string } | null
+  /** The milestone a milestone event named, absent when the payload omitted it. */
+  milestoneTitle?: string | null
+  /** The commit a reference event named. */
+  commitId?: string | null
+  /** What a cross-reference pointed at, in this repository or another. */
+  reference?: IssueTimelineReference | null
+  /** GitHub's word for why a conversation was locked, when it carried one. */
+  lockReason?: string | null
+}
+
+/**
+ * The subject a cross-reference event names.
+ *
+ * Carries the full repository rather than assuming the issue's own, because a
+ * reference from another repository is the common case: GitHub's timeline reports
+ * a link from anywhere, and an app that dropped the owner would mislabel it.
+ */
+export interface IssueTimelineReference {
+  url: string
+  number: number
+  title: string
+  /** `owner/repo` the reference lives in, to tell a cross-repository link apart. */
+  repository: string
+  /** True when the reference is a pull request rather than an issue. */
+  isPullRequest: boolean
+}
+
+/**
+ * What a timeline event is, for the reader that turns it into a sentence.
+ *
+ * A curated set rather than GitHub's whole vocabulary: these are the events
+ * github.com itself renders, each one a state change a reader can be told about.
+ * The events it hides (`subscribed`, `mentioned`) are left out so the history
+ * reads as the issue's own story instead of as a notification log.
+ */
+export type IssueTimelineEventKind =
+  | 'labeled'
+  | 'unlabeled'
+  | 'assigned'
+  | 'unassigned'
+  | 'closed'
+  | 'reopened'
+  | 'renamed'
+  | 'milestoned'
+  | 'demilestoned'
+  | 'locked'
+  | 'unlocked'
+  | 'pinned'
+  | 'unpinned'
+  | 'referenced'
+  | 'cross-referenced'
+  | 'marked_as_duplicate'
+  | 'connected'
+  /** A change to the issue's own custom fields, which GitHub reports opaquely. */
+  | 'fields'
 
 /** Everything the issue detail view renders, fetched in one round trip. */
 export interface IssueBundle {

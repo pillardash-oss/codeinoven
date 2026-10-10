@@ -713,4 +713,207 @@ describe('GitHubProvider', () => {
     expect(body.query).toContain('removeReaction(input:')
     expect(groups).toEqual([])
   })
+
+  /**
+   * The timeline mapper, against payloads captured from GitHub itself.
+   *
+   * Every shape below was read from a live response rather than written from
+   * memory, because a guessed key is exactly what fails silently: the row would
+   * simply never appear, or appear saying nothing.
+   */
+  it('maps an issue timeline, keeping the rendered events and dropping the noise', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          id: 32958988993,
+          event: 'labeled',
+          actor: { login: 'mrprotocoll', avatar_url: 'https://x/l.png', type: 'User' },
+          label: { name: 'bug', color: 'D73A4A' },
+          created_at: '2026-10-10T09:24:21Z'
+        },
+        {
+          id: 1,
+          event: 'assigned',
+          actor: { login: 'pillardash', type: 'User' },
+          assignee: { login: 'leonardosahon' },
+          created_at: '2026-10-10T21:24:52Z'
+        },
+        {
+          id: 2,
+          event: 'closed',
+          actor: { login: 'leonardosahon', type: 'User' },
+          state_reason: 'not_planned',
+          created_at: '2026-10-10T21:29:28Z'
+        },
+        {
+          id: 3,
+          event: 'renamed',
+          actor: { login: 'brunobarrientos', type: 'User' },
+          rename: { from: 'old title', to: 'new title' },
+          created_at: '2026-10-09T07:45:07Z'
+        },
+        {
+          id: 4,
+          event: 'referenced',
+          actor: { login: 'goodtune', type: 'User' },
+          commit_id: 'bb8967ed597dd166492418eb12c22c28e4e7be65',
+          created_at: '2026-09-19T02:59:11Z'
+        },
+        {
+          id: 5,
+          event: 'cross-referenced',
+          actor: { login: 'drogers0', type: 'User' },
+          source: {
+            issue: {
+              number: 56,
+              title: 'Tracking: native upload',
+              html_url: 'https://github.com/drogers0/gh-image/issues/56',
+              repository: { full_name: 'drogers0/gh-image' }
+            }
+          },
+          created_at: '2026-09-01T15:57:11Z'
+        },
+        {
+          id: 6,
+          event: 'cross-referenced',
+          actor: { login: 'coderabbitai', type: 'Bot' },
+          source: {
+            issue: {
+              number: 228,
+              title: 'Fix the thing',
+              html_url: 'https://github.com/acme/app/pull/228',
+              repository: { full_name: 'acme/app' },
+              pull_request: { url: 'https://api.github.com/pulls/228' }
+            }
+          },
+          created_at: '2026-07-13T02:31:16Z'
+        },
+        {
+          id: 7,
+          event: 'marked_as_duplicate',
+          actor: { login: 'williammartin', type: 'User' },
+          created_at: '2026-10-08T08:20:54Z'
+        },
+        {
+          id: 8,
+          event: 'issue_field_added',
+          actor: { login: 'pillardash', type: 'User' },
+          created_at: '2026-10-10T21:25:01Z'
+        },
+        // The two the renderer must never show: notification plumbing github.com
+        // itself hides, plus a comment whose row belongs to the comment list.
+        {
+          id: 9,
+          event: 'subscribed',
+          actor: { login: 'someone', type: 'User' },
+          created_at: '2026-10-10T09:24:22Z'
+        },
+        {
+          id: 10,
+          event: 'mentioned',
+          actor: { login: 'someone', type: 'User' },
+          created_at: '2026-10-10T09:24:23Z'
+        },
+        {
+          id: 11,
+          event: 'commented',
+          actor: { login: 'pullfrog[bot]', type: 'Bot' },
+          created_at: '2026-10-10T09:24:24Z'
+        }
+      ])
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const timeline = await provider.listIssueTimeline({
+      owner: 'acme',
+      repo: 'app',
+      issueNumber: 209
+    })
+
+    const { url } = captureRequest()
+    expect(url).toBe('https://api.github.com/repos/acme/app/issues/209/timeline?per_page=100')
+    expect(timeline.map((event) => event.kind)).toEqual([
+      'labeled',
+      'assigned',
+      'closed',
+      'renamed',
+      'referenced',
+      'cross-referenced',
+      'cross-referenced',
+      'marked_as_duplicate',
+      'fields'
+    ])
+    expect(timeline[0]).toMatchObject({
+      id: '32958988993',
+      actorLogin: 'mrprotocoll',
+      actorIsBot: false,
+      label: { name: 'bug', color: 'D73A4A' }
+    })
+    expect(timeline[1]).toMatchObject({ actorLogin: 'pillardash', assigneeLogin: 'leonardosahon' })
+    expect(timeline[2]).toMatchObject({ closeReason: 'not_planned' })
+    expect(timeline[3]).toMatchObject({ rename: { from: 'old title', to: 'new title' } })
+    expect(timeline[4]).toMatchObject({ commitId: 'bb8967ed597dd166492418eb12c22c28e4e7be65' })
+    expect(timeline[5]).toMatchObject({
+      actorIsBot: false,
+      reference: {
+        number: 56,
+        repository: 'drogers0/gh-image',
+        isPullRequest: false,
+        url: 'https://github.com/drogers0/gh-image/issues/56'
+      }
+    })
+    expect(timeline[6]).toMatchObject({
+      actorIsBot: true,
+      reference: { number: 228, repository: 'acme/app', isPullRequest: true }
+    })
+  })
+
+  it('reads a close reason of duplicate and a bot actor from a timeline event', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          id: 42,
+          event: 'closed',
+          actor: { login: 'cli-triage[bot]', type: 'Bot' },
+          state_reason: 'duplicate',
+          created_at: '2026-10-08T08:20:54Z'
+        }
+      ])
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const timeline = await provider.listIssueTimeline({
+      owner: 'acme',
+      repo: 'app',
+      issueNumber: 1
+    })
+
+    expect(timeline).toHaveLength(1)
+    expect(timeline[0]).toMatchObject({
+      kind: 'closed',
+      closeReason: 'duplicate',
+      actorIsBot: true
+    })
+  })
+
+  it('reads a duplicate close reason from an issue summary and its detail', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        number: 7,
+        title: 'Projects classic',
+        html_url: 'https://github.com/acme/app/issues/7',
+        state: 'closed',
+        state_reason: 'duplicate',
+        user: { login: 'acme', type: 'User' },
+        created_at: '2026-10-01T00:00:00Z',
+        updated_at: '2026-10-02T00:00:00Z',
+        comments: 1
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const detail = await provider.getIssue({ owner: 'acme', repo: 'app', issueNumber: 7 })
+
+    expect(detail.stateReason).toBe('duplicate')
+  })
 })

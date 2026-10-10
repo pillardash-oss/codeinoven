@@ -14,6 +14,9 @@ import type {
   IssueReference,
   IssueStateReason,
   IssueSummary,
+  IssueTimelineEvent,
+  IssueTimelineEventKind,
+  IssueTimelineReference,
   PrAuthorAssociation,
   PrCommentKind,
   PrDraft,
@@ -677,6 +680,26 @@ export class GitHubProvider implements GitProvider {
     return items.flatMap((item): PullRequestComment[] => {
       const comment = this.toComment(item)
       return comment ? [comment] : []
+    })
+  }
+
+  /**
+   * The issue's history, from the timeline endpoint.
+   *
+   * A hundred events is one request, which covers a conversation of any ordinary
+   * length. Comment events are dropped because the comments themselves arrive
+   * from `listIssueComments` with the fields a comment row draws; an event this
+   * provider does not map is dropped too, so an event type GitHub adds later is
+   * simply absent rather than rendered as a row saying nothing.
+   */
+  async listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]> {
+    const response = await this.request(`${this.issuePath(input)}/timeline?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): IssueTimelineEvent[] => {
+      const event = this.toTimelineEvent(item)
+      return event ? [event] : []
     })
   }
 
@@ -2234,8 +2257,152 @@ export class GitHubProvider implements GitProvider {
         return 'completed'
       case 'NOT_PLANNED':
         return 'not_planned'
+      case 'DUPLICATE':
+        return 'duplicate'
       case 'REOPENED':
         return 'reopened'
+      default:
+        return null
+    }
+  }
+
+  /**
+   * One timeline event, or null when it is not one the reader renders.
+   *
+   * The endpoint is GitHub's own event log, which includes notification plumbing
+   * github.com itself hides (`subscribed`, `mentioned`) alongside the comment
+   * events the conversation already covers. Those are filtered here rather than in
+   * the renderer, so the renderer's history is exactly the issue's own story. An
+   * event type with no case below is likewise dropped: showing a row that cannot
+   * say what happened would be worse than the omission.
+   */
+  private toTimelineEvent(payload: unknown): IssueTimelineEvent | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+    const record = payload as Record<string, unknown>
+    const kind = this.toTimelineKind(this.readString(record, 'event'))
+    if (!kind) return null
+    const id = this.readNumber(record, 'id')
+    const actor = this.toAuthor(this.readRecord(record, 'actor'))
+    const event: IssueTimelineEvent = {
+      id: id > 0 ? String(id) : `${kind}:${this.readString(record, 'created_at') ?? ''}`,
+      kind,
+      actorLogin: actor.authorLogin,
+      actorAvatarUrl: actor.authorAvatarUrl,
+      actorIsBot: actor.authorIsBot,
+      createdAt: this.readString(record, 'created_at') ?? ''
+    }
+    switch (kind) {
+      case 'labeled':
+      case 'unlabeled':
+        return { ...event, label: this.readTimelineLabel(record) }
+      case 'assigned':
+      case 'unassigned':
+        return {
+          ...event,
+          assigneeLogin: this.readString(this.readRecord(record, 'assignee') ?? {}, 'login')
+        }
+      case 'closed':
+        return {
+          ...event,
+          closeReason: this.toStateReason(this.readString(record, 'state_reason'))
+        }
+      case 'renamed': {
+        const rename = this.readRecord(record, 'rename')
+        return {
+          ...event,
+          rename: rename
+            ? {
+                from: this.readString(rename, 'from') ?? '',
+                to: this.readString(rename, 'to') ?? ''
+              }
+            : null
+        }
+      }
+      case 'milestoned':
+      case 'demilestoned':
+        return {
+          ...event,
+          milestoneTitle: this.readString(this.readRecord(record, 'milestone') ?? {}, 'title')
+        }
+      case 'locked':
+        return { ...event, lockReason: this.readString(record, 'lock_reason') }
+      case 'referenced':
+        return { ...event, commitId: this.readString(record, 'commit_id') }
+      case 'cross-referenced':
+        return { ...event, reference: this.toTimelineReference(record) }
+      default:
+        return event
+    }
+  }
+
+  /**
+   * The label a labeling event carried, or null when the payload omitted it.
+   *
+   * The event carries the label's own colour, so the chip the reader draws is the
+   * same colour github.com draws without a catalog read.
+   */
+  private readTimelineLabel(record: Record<string, unknown>): PullRequestLabel | null {
+    const label = this.readRecord(record, 'label')
+    if (!label) return null
+    const name = this.readString(label, 'name')
+    if (!name) return null
+    return { name, color: this.readString(label, 'color') ?? '' }
+  }
+
+  /**
+   * What a cross-reference pointed at.
+   *
+   * GitHub nests the subject under `source.issue` for both kinds of link, with
+   * `pull_request` present only when the subject is a pull request. The repository
+   * is read from the subject itself, so a link that came from another repository
+   * is labelled with the repository it lives in rather than with the issue's own.
+   */
+  private toTimelineReference(record: Record<string, unknown>): IssueTimelineReference | null {
+    const source = this.readRecord(record, 'source')
+    const issue = source ? this.readRecord(source, 'issue') : null
+    if (!issue) return null
+    const number = this.readNumber(issue, 'number')
+    const url = this.readString(issue, 'html_url')
+    if (number <= 0 || !url) return null
+    return {
+      url,
+      number,
+      title: this.readString(issue, 'title') ?? `#${number}`,
+      repository: this.readString(this.readRecord(issue, 'repository') ?? {}, 'full_name') ?? '',
+      isPullRequest: this.readRecord(issue, 'pull_request') !== null
+    }
+  }
+
+  /**
+   * The event kind the reader knows, or null for one it does not render.
+   *
+   * `issue_field_added` is GitHub's own opaque report of a change to an issue's
+   * custom fields: the payload names neither the field nor its value, so it is
+   * mapped to a field event that says a field changed without pretending to know
+   * which one.
+   */
+  private toTimelineKind(raw: string | null): IssueTimelineEventKind | null {
+    switch (raw) {
+      case 'labeled':
+      case 'unlabeled':
+      case 'assigned':
+      case 'unassigned':
+      case 'closed':
+      case 'reopened':
+      case 'renamed':
+      case 'milestoned':
+      case 'demilestoned':
+      case 'locked':
+      case 'unlocked':
+      case 'pinned':
+      case 'unpinned':
+      case 'referenced':
+      case 'cross-referenced':
+      case 'marked_as_duplicate':
+      case 'connected':
+        return raw
+      case 'issue_field_added':
+        return 'fields'
       default:
         return null
     }

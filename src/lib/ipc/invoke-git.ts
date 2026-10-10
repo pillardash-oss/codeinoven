@@ -34,6 +34,7 @@ import type {
   IssueMilestone,
   IssuePage,
   IssueReference,
+  IssueTimelineEvent,
   MergeSummary,
   NewIssueInput,
   PrCommentKind,
@@ -438,6 +439,20 @@ export const invokeGitContract = {
   'issue:bundle': {} as Contract<
     [projectId: string, owner: string, repo: string, issueNumber: number],
     IssueBundle
+  >,
+  /**
+   * One issue's history: the labels, assignments, closes, renames and references
+   * that happened to it.
+   *
+   * Read apart from `issue:bundle` rather than inside it because a bushy issue's
+   * history is a large and slow payload: an issue referenced from many places
+   * carries a whole nested issue and repository per reference. The reader draws
+   * the description and the conversation immediately and lets the history arrive
+   * after, so a slow history can never hold the issue itself back.
+   */
+  'issue:timeline': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNumber: number],
+    IssueTimelineEvent[]
   >,
   /** Open a new issue on the repository (owner/repo resolve from the origin). */
   'issue:create': {} as Contract<

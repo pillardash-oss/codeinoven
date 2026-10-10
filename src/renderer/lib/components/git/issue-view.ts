@@ -7,7 +7,15 @@
  * not the other is exactly the drift this module prevents.
  */
 import { CircleCheck, CircleDot, CircleSlash, CircleX } from '@lucide/svelte'
-import type { IssueListFilter, IssueListSort, IssueStateReason, IssueSummary } from '$shared/types'
+import type {
+  IssueListFilter,
+  IssueListSort,
+  IssueStateReason,
+  IssueSummary,
+  IssueTimelineEvent,
+  IssueTimelineReference,
+  PullRequestLabel
+} from '$shared/types'
 
 /**
  * The relationships an issue listing can narrow to, in the order the menu lists
@@ -78,7 +86,107 @@ export function issueStateToneClass(issue: Pick<IssueSummary, 'state'>): string 
 export function issueStateReasonLabel(reason: IssueStateReason | null): string | null {
   if (reason === 'completed') return 'Completed'
   if (reason === 'not_planned') return 'Not planned'
+  if (reason === 'duplicate') return 'Duplicate'
   return null
+}
+
+/**
+ * A timeline row as the sentence it reads as.
+ *
+ * The row is one line: whoever did it, then what they did. Some of those actions
+ * carry something a reader wants to click or recognise, so they are handed back
+ * as parts rather than as one string: a label keeps its own chip and colour, and a
+ * cross-reference stays a link instead of becoming text that merely looks like
+ * one. `lead` is the wording that precedes the part, `trail` whatever follows it.
+ */
+export interface IssueTimelineLine {
+  lead: string
+  /** The label a labeling event carried, drawn as its own chip. */
+  label?: PullRequestLabel | null
+  /** The issue or pull request a cross-reference named, drawn as a link. */
+  reference?: IssueTimelineReference | null
+  /** Wording that follows the inline part, empty when nothing follows. */
+  trail?: string
+}
+
+/**
+ * The sentence one timeline event reads as.
+ *
+ * The wording follows github.com row for row, so a reader who knows the issue on
+ * the site reads the same story here. Every kind is answered even when the event
+ * carried less than the row would like: a milestone event whose payload omitted
+ * the title still says a milestone changed, because an event that happened is
+ * never worth hiding behind an empty row.
+ */
+export function issueTimelineLine(event: IssueTimelineEvent): IssueTimelineLine {
+  switch (event.kind) {
+    case 'labeled':
+      return { lead: 'added the', label: event.label ?? null, trail: 'label' }
+    case 'unlabeled':
+      return { lead: 'removed the', label: event.label ?? null, trail: 'label' }
+    case 'assigned':
+      return { lead: `assigned ${event.assigneeLogin ?? 'someone'}` }
+    case 'unassigned':
+      return { lead: `unassigned ${event.assigneeLogin ?? 'someone'}` }
+    case 'closed': {
+      const reason = issueStateReasonLabel(event.closeReason ?? null)
+      return { lead: reason ? `closed this as ${reason.toLowerCase()}` : 'closed this' }
+    }
+    case 'reopened':
+      return { lead: 'reopened this' }
+    case 'renamed':
+      return event.rename
+        ? { lead: `changed the title from "${event.rename.from}" to "${event.rename.to}"` }
+        : { lead: 'changed the title' }
+    case 'milestoned':
+      return {
+        lead: event.milestoneTitle
+          ? `added this to the ${event.milestoneTitle} milestone`
+          : 'added this to a milestone'
+      }
+    case 'demilestoned':
+      return {
+        lead: event.milestoneTitle
+          ? `removed this from the ${event.milestoneTitle} milestone`
+          : 'removed this from a milestone'
+      }
+    case 'locked':
+      return {
+        lead: event.lockReason
+          ? `locked this conversation as ${event.lockReason.replace(/[-_]/gu, ' ')}`
+          : 'locked this conversation'
+      }
+    case 'unlocked':
+      return { lead: 'unlocked this conversation' }
+    case 'pinned':
+      return { lead: 'pinned this issue' }
+    case 'unpinned':
+      return { lead: 'unpinned this issue' }
+    case 'referenced':
+      return {
+        lead: event.commitId
+          ? `referenced this in commit ${event.commitId.slice(0, 7)}`
+          : 'referenced this'
+      }
+    case 'cross-referenced':
+      return { lead: 'mentioned this in', reference: event.reference ?? null }
+    case 'marked_as_duplicate':
+      return { lead: 'marked this as a duplicate' }
+    case 'connected':
+      return { lead: 'linked this to a branch or pull request' }
+    case 'fields':
+      return { lead: "updated the issue's fields" }
+  }
+}
+
+/**
+ * The reference as one label: `owner/repo#number`, or `#number` when it lives in
+ * the repository the reader is already in.
+ */
+export function issueReferenceLabel(reference: IssueTimelineReference, repository: string): string {
+  return reference.repository && reference.repository !== repository
+    ? `${reference.repository}#${reference.number}`
+    : `#${reference.number}`
 }
 
 /**

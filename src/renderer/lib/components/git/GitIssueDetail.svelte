@@ -16,17 +16,46 @@
   } from '@lucide/svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { githubDisplayLogin } from '$lib/format/github-login'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { GitState, gitState } from '$lib/stores/git.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import PrAvatar from './PrAvatar.svelte'
   import BotBadge from './BotBadge.svelte'
-  import { issueStateIcon, issueStateReasonLabel, issueStateToneClass } from './issue-view'
+  import {
+    issueReferenceLabel,
+    issueStateIcon,
+    issueStateReasonLabel,
+    issueStateToneClass,
+    issueTimelineLine,
+    type IssueTimelineLine
+  } from './issue-view'
   import { prLabelStyle, type PrMetadataMode } from './pr-view'
   import PrReactionPicker from './PrReactionPicker.svelte'
   import PrReactionChips from './PrReactionChips.svelte'
   import type { GithubRepoContext } from '$lib/github-references'
-  import type { IssueComment, IssueSummary, PrReactionContent } from '$shared/types'
+  import type {
+    IssueComment,
+    IssueSummary,
+    IssueTimelineEvent,
+    PrReactionContent
+  } from '$shared/types'
+
+  /**
+   * One row of the issue's stream: a comment, or one thing that happened to it.
+   *
+   * A discriminated pair rather than one shape with optional halves, so the row
+   * that draws a comment cannot be handed an event and read a missing body.
+   */
+  type IssueFlowItem =
+    | { kind: 'comment'; key: string; at: string; comment: IssueComment }
+    | {
+        kind: 'event'
+        key: string
+        at: string
+        event: IssueTimelineEvent
+        line: IssueTimelineLine
+      }
 
   interface Props {
     projectId: string
@@ -36,7 +65,14 @@
     onWorkOn: (issue: IssueSummary) => void
     onCreatePr: (issue: IssueSummary) => void
     onEditMetadata: (mode: PrMetadataMode, issue: IssueSummary) => void
-    onStateChange: (issue: IssueSummary, state: 'open' | 'closed') => void
+    /**
+     * Ask to close the issue. The view owns the confirmation and the reason, so
+     * every entry point   this button and the list row menu   raises the one
+     * dialog instead of each drawing its own copy of it.
+     */
+    onRequestClose: (issue: IssueSummary) => void
+    /** Bring a closed issue back, which needs no confirmation: it adds state back. */
+    onReopen: (issue: IssueSummary) => void
     onOpenInBrowser: (issue: IssueSummary) => void
   }
 
@@ -48,7 +84,8 @@
     onWorkOn,
     onCreatePr,
     onEditMetadata,
-    onStateChange,
+    onRequestClose,
+    onReopen,
     onOpenInBrowser
   }: Props = $props()
 
@@ -66,6 +103,12 @@
    */
   const subject = $derived(detail ?? issue)
   const comments = $derived(bundle?.comments ?? [])
+  /**
+   * The issue's history, from its own cache entry: read after the bundle rather
+   * than with it, so a heavily referenced issue's slow timeline never holds back
+   * the description and the conversation the reader came for.
+   */
+  const timeline = $derived(gitState.issueTimelines[bundleKey]?.events ?? [])
   const loading = $derived(gitState.isBusy('issue-detail') && bundle === null)
   const posting = $derived(gitState.isBusy('issue-comment'))
   const busyCommentId = $derived(
@@ -74,6 +117,36 @@
 
   const StateIcon = $derived(issueStateIcon(subject))
   const reasonLabel = $derived(issueStateReasonLabel(subject.stateReason))
+
+  /**
+   * The issue's history, merged with its comments into the one stream GitHub
+   * shows: the description above, then everything that happened after it in the
+   * order it happened. The events carry their own wording already, so the row does
+   * no work beyond drawing it.
+   */
+  const flow = $derived.by((): IssueFlowItem[] => {
+    const items: IssueFlowItem[] = [
+      ...comments.map((comment): IssueFlowItem => ({
+        kind: 'comment',
+        key: `comment:${comment.id}`,
+        at: comment.createdAt,
+        comment
+      })),
+      ...timeline.map((event): IssueFlowItem => ({
+        kind: 'event',
+        key: `event:${event.id}`,
+        at: event.createdAt,
+        event,
+        line: issueTimelineLine(event)
+      }))
+    ]
+    // ISO timestamps compare correctly as strings, so no date arithmetic is needed
+    // to put the stream in order.
+    return items.sort((left, right) => (left.at < right.at ? -1 : left.at > right.at ? 1 : 0))
+  })
+
+  /** `owner/repo`, for telling a cross-repository reference from a local one. */
+  const repositoryName = $derived(`${identity.owner}/${identity.repo}`)
 
   /** Reactions on the issue and its comments, keyed by the subject's node id. */
   const reactions = $derived(bundle?.reactions ?? {})
@@ -108,6 +181,9 @@
     void owner
     void repo
     void gitState.ensureIssueBundle(projectId, owner, repo, number, false)
+    // The history is a second, independent read. Nothing in the reader waits on it,
+    // and a history the provider cannot answer in time leaves the issue readable.
+    void gitState.ensureIssueTimeline(projectId, owner, repo, number, false)
   })
 
   let draft = $state('')
@@ -232,7 +308,7 @@
           type="button"
           class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10"
           title="Close this issue"
-          onclick={() => onStateChange(subject, 'closed')}
+          onclick={() => onRequestClose(subject)}
         >
           <X size={11} />
           Close
@@ -242,7 +318,7 @@
           type="button"
           class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Reopen this issue"
-          onclick={() => onStateChange(subject, 'open')}
+          onclick={() => onReopen(subject)}
         >
           <RotateCcw size={11} />
           Reopen
@@ -351,92 +427,140 @@
         </span>
       </div>
 
-      {#each comments as comment (comment.id)}
-        {@const commentReactions = reactions[comment.nodeId ?? ''] ?? []}
-        <div class="mt-2 rounded-lg border border-border bg-surface/60">
-          <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
-            <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
-            <span class="text-[0.625rem] font-medium text-foreground"
-              >{githubDisplayLogin(comment.authorLogin)}</span
-            >
-            {#if comment.authorIsBot}
-              <BotBadge />
+      <!--
+        The stream: every comment and every change to the issue, in the order they
+        happened. Keeping them together is the point   a close with no assignment or
+        label in sight is a history a reader cannot follow.
+      -->
+      {#each flow as item (item.key)}
+        {#if item.kind === 'comment'}
+          {@const comment = item.comment}
+          {@const commentReactions = reactions[comment.nodeId ?? ''] ?? []}
+          <div class="mt-2 rounded-lg border border-border bg-surface/60">
+            <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
+              <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
+              <span class="text-[0.625rem] font-medium text-foreground"
+                >{githubDisplayLogin(comment.authorLogin)}</span
+              >
+              {#if comment.authorIsBot}
+                <BotBadge />
+              {/if}
+              <span class="text-[0.5625rem] text-dimmed">{relativeTime(comment.createdAt)}</span>
+              {#if comment.updatedAt}
+                <span class="text-[0.5625rem] text-dimmed">· edited</span>
+              {/if}
+              <span class="flex-1"></span>
+              {#if comment.nodeId}
+                <PrReactionPicker
+                  nodeId={comment.nodeId}
+                  groups={commentReactions}
+                  onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
+                />
+              {/if}
+              {#if isOwnComment(comment)}
+                {#if editingId === comment.id}
+                  <button
+                    type="button"
+                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    onclick={() => {
+                      editingId = null
+                      editingBody = ''
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    disabled={busyCommentId || editingBody.trim().length === 0}
+                    onclick={() => void saveEdit()}
+                  >
+                    Save
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    title="Edit your comment"
+                    onclick={() => {
+                      editingId = comment.id
+                      editingBody = comment.body
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+                    title="Delete your comment"
+                    onclick={() => (confirmingDelete = comment)}
+                  >
+                    Delete
+                  </button>
+                {/if}
+              {/if}
+            </div>
+            {#if editingId === comment.id}
+              <div class="px-2.5 py-2">
+                <textarea
+                  class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
+                  aria-label="Edit comment"
+                  bind:value={editingBody}></textarea>
+              </div>
+            {:else}
+              <div class="px-2.5 py-2">
+                <MarkdownView text={comment.body} allowHtml {repository} />
+              </div>
             {/if}
-            <span class="text-[0.5625rem] text-dimmed">{relativeTime(comment.createdAt)}</span>
-            {#if comment.updatedAt}
-              <span class="text-[0.5625rem] text-dimmed">· edited</span>
-            {/if}
-            <span class="flex-1"></span>
-            {#if comment.nodeId}
-              <PrReactionPicker
+            {#if comment.nodeId && commentReactions.length > 0}
+              <PrReactionChips
                 nodeId={comment.nodeId}
                 groups={commentReactions}
                 onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
               />
             {/if}
-            {#if isOwnComment(comment)}
-              {#if editingId === comment.id}
+          </div>
+        {:else}
+          <!--
+            One change to the issue. Drawn lighter than a comment because it has no
+            body to read: the avatar says who, the sentence says what.
+          -->
+          <div class="mt-2 flex items-start gap-1.5 px-0.5">
+            <PrAvatar login={item.event.actorLogin} avatarUrl={item.event.actorAvatarUrl} />
+            <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
+              <span class="font-medium text-foreground"
+                >{githubDisplayLogin(item.event.actorLogin)}</span
+              >
+              {#if item.event.actorIsBot}
+                <BotBadge />
+              {/if}
+              <span> {item.line.lead}</span>
+              {#if item.line.label}
+                <span
+                  class="mx-1 inline-block max-w-[14ch] truncate rounded-full px-1.5 py-0.5 align-middle text-[0.5625rem] font-medium leading-none"
+                  style={prLabelStyle(item.line.label.color)}
+                >
+                  {item.line.label.name}
+                </span>
+              {/if}
+              {#if item.line.reference}
+                {@const reference = item.line.reference}
                 <button
                   type="button"
-                  class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  onclick={() => {
-                    editingId = null
-                    editingBody = ''
-                  }}
+                  class="mx-1 cursor-pointer text-[0.625rem] font-medium text-primary hover:underline"
+                  title={`Open ${issueReferenceLabel(reference, repositoryName)} on GitHub`}
+                  onclick={() => void openInBrowser(reference.url)}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  disabled={busyCommentId || editingBody.trim().length === 0}
-                  onclick={() => void saveEdit()}
-                >
-                  Save
-                </button>
-              {:else}
-                <button
-                  type="button"
-                  class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Edit your comment"
-                  onclick={() => {
-                    editingId = comment.id
-                    editingBody = comment.body
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
-                  title="Delete your comment"
-                  onclick={() => (confirmingDelete = comment)}
-                >
-                  Delete
+                  {issueReferenceLabel(reference, repositoryName)}
                 </button>
               {/if}
-            {/if}
+              {#if item.line.trail}
+                <span> {item.line.trail}</span>
+              {/if}
+              <span class="text-dimmed"> · {relativeTime(item.at)}</span>
+            </p>
           </div>
-          {#if editingId === comment.id}
-            <div class="px-2.5 py-2">
-              <textarea
-                class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
-                aria-label="Edit comment"
-                bind:value={editingBody}></textarea>
-            </div>
-          {:else}
-            <div class="px-2.5 py-2">
-              <MarkdownView text={comment.body} allowHtml {repository} />
-            </div>
-          {/if}
-          {#if comment.nodeId && commentReactions.length > 0}
-            <PrReactionChips
-              nodeId={comment.nodeId}
-              groups={commentReactions}
-              onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
-            />
-          {/if}
-        </div>
+        {/if}
       {/each}
     {/if}
   </div>
