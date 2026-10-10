@@ -329,7 +329,14 @@ class BrowserVisibilityState {
   }
 }
 
-export const browserVisibility = new BrowserVisibilityState()
+// Hot updates and lazy imports can evaluate timestamped copies of this module.
+// Keep one development owner so a modal never blocks a different page store.
+const devOwners = globalThis as typeof globalThis & {
+  __cioBrowserVisibility?: BrowserVisibilityState
+}
+export const browserVisibility =
+  (import.meta.hot && devOwners.__cioBrowserVisibility) || new BrowserVisibilityState()
+if (import.meta.hot) devOwners.__cioBrowserVisibility = browserVisibility
 
 let occlusionSequence = 0
 
@@ -341,12 +348,25 @@ let occlusionSequence = 0
  * (sheets, side panels). A surface the user can drag   the dockable panel, a
  * minimized dock row, the computer-use PiP   must publish from its position state
  * instead, because moving an element does not resize it and no observer would fire.
+ *
+ * A mounted panel is not automatically a painted one: the app keeps every global
+ * sidebar mounted across view switches, and they all share one `hoverOpen`, so a
+ * hidden sibling lays out at the floating sidebar's own rectangle. Publishing
+ * that rectangle would park the page behind a panel nobody can see, so an
+ * occlusion is only ever published for an element that actually paints.
  */
 export const trackBrowserOcclusion: Attachment<HTMLElement> = (element) => {
   const key = `occlusion-${++occlusionSequence}`
+  const paints = (): boolean =>
+    typeof element.checkVisibility !== 'function' ||
+    element.checkVisibility({
+      checkOpacity: true,
+      checkVisibilityCSS: true,
+      contentVisibilityAuto: true
+    })
   const measure = (): void => {
     const rect = element.getBoundingClientRect()
-    if (rect.width >= 1 && rect.height >= 1) {
+    if (paints() && rect.width >= 1 && rect.height >= 1) {
       browserVisibility.publishOcclusion(key, {
         x: rect.x,
         y: rect.y,

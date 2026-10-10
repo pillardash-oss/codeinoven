@@ -1,5 +1,6 @@
 <script lang="ts">
   import ContextSidebar from './ContextSidebar.svelte'
+  import { appPanelSlot } from '$lib/app-panel-portal'
   import { contextSidebarState, type ContextSidebarTab } from '$lib/stores/context-sidebar.svelte'
 
   let activePanelTab = $derived.by(() => {
@@ -9,16 +10,11 @@
   let tabs: ContextSidebarTab[] = $derived(activePanelTab ? [activePanelTab] : [])
 </script>
 
+<!-- The panel body is provided by the single `AppPanelHost` at the app shell;
+     this rail only offers the slot it fills, so the panel survives a view
+     switch instead of being rebuilt here. -->
 {#snippet panelContent()}
-  {#if activePanelTab?.kind === 'notifications'}
-    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-      <NotificationPanel />
-    {/await}
-  {:else if activePanelTab?.kind === 'sticky-notes'}
-    {#await import('$lib/components/notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
-      <StickyNotesPanel />
-    {/await}
-  {/if}
+  <div class="h-full" {@attach appPanelSlot}></div>
 {/snippet}
 
 {#if contextSidebarState.sidebarVisible && activePanelTab}
@@ -36,8 +32,7 @@
       onClose={(id) => contextSidebarState.close(id)}
       onWidthChange={(width) => contextSidebarState.setWidth(width)}
       onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-      onTerminalPlacementChange={(placement) =>
-        contextSidebarState.setTerminalPlacement(placement)}
+      onTerminalPlacementChange={(placement) => contextSidebarState.setTerminalPlacement(placement)}
     />
   </div>
 {/if}

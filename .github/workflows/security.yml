@@ -1,16 +1,21 @@
 name: Security
 
-# Same policy as quality.yml: the suite runs once per change on the nightly
-# side. Nightly -> main promotion PRs skip the scan jobs (identical content
-# was just scanned on the nightly push), and pushes to main are excluded
-# because main only ever receives nightly promotion merges.
+# Same policy as quality.yml: the suite runs once per change, on the pull
+# request that is the last gate before the content lands.
 #
-# This workflow owns `bun audit`. quality.yml ran the identical command as a
-# separate job, so every push paid for the same audit twice.
+# There is no `push: nightly` trigger. The dev -> nightly promotion PR runs the
+# full scan and merges only with its required checks green, and the merge commit
+# that lands on nightly holds exactly the tree that PR scanned, so the former
+# push trigger could only re-scan identical content. Nightly -> main promotion
+# PRs skip the scan jobs too (identical content was just scanned on the promotion
+# PR), and pushes to main are excluded because main only ever receives nightly
+# promotion merges.
+#
+# This workflow owns `bun audit`. quality.yml's required "Release verification"
+# gate also runs the audit script (this workflow is not a required check), so the
+# two share exactly one accepted-advisory list through the `audit` script in
+# package.json.
 on:
-  push:
-    branches:
-      - nightly
   pull_request:
   workflow_dispatch:
 

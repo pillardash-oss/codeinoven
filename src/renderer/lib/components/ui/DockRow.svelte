@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
-  import { TOAST_OVERLAY_TOP } from '$shared/browser-overlay'
   import type { NativeDockInteraction } from '$shared/native-dock'
   import type { Attachment } from 'svelte/attachments'
   import PopoverDragHandle from './PopoverDragHandle.svelte'
@@ -61,18 +60,13 @@
       if (size.width !== width || size.height !== height) size = { width, height }
       return {
         ...placementBox,
-        y: Math.max(TOAST_OVERLAY_TOP, placementBox.y),
         width,
         height
       }
     }
   )
   const nativeEnabled = $derived(browserVisibility.canUseNativeDock && !native.failed)
-  const box = $derived(
-    nativeEnabled
-      ? { ...placementBox, y: Math.max(TOAST_OVERLAY_TOP, placementBox.y) }
-      : placementBox
-  )
+  const box = $derived(placementBox)
 
   function onNativeInteraction(report: NativeDockInteraction): void {
     if (report.kind === 'edge') {

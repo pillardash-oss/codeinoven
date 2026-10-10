@@ -49,11 +49,25 @@ export const COMPOSER_BUILT_IN_TAGS: readonly ComposerBuiltInTag[] = [
   },
   {
     id: 'cio-orchestrate',
-    token: '@cio-orchestrate',
-    kindLabel: 'Built-in orchestration session',
-    description: 'Name a machine, harness, model and account, and set the work running on it.',
-    chipLabel: 'orchestrate',
-    keywords: ['orchestrate', 'dispatch', 'oven', 'machine', 'model', 'run', 'delegate', 'route']
+    token: '@cio-hey',
+    kindLabel: 'Built-in workstation control session',
+    description:
+      'Name a machine, harness, model and account, or drive the app itself: panels, rails, browser and settings.',
+    chipLabel: 'hey',
+    keywords: [
+      'hey',
+      'orchestrate',
+      'dispatch',
+      'oven',
+      'machine',
+      'model',
+      'run',
+      'delegate',
+      'route',
+      'app',
+      'panel',
+      'rail'
+    ]
   }
 ]
 

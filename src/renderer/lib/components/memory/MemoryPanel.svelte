@@ -33,6 +33,7 @@
   import { locationScopeOf, memoryScopeSummary } from '$shared/memory/memory-scopes'
   import { memoryScopeOptions } from './memory-scope-options.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
   import type { Thread } from '$shared/types'
@@ -95,6 +96,8 @@
   let filterPriority = $state<MemoryPriority | ''>('')
   let settingsSection = $state<'active' | 'inactive'>('active')
   let lastAddedId = $state<string | null>(null)
+  let showAssistantMemories = $state(true)
+  let pendingDeleteId = $state<string | null>(null)
 
   const categoryLabels: Record<MemoryCategory, string> = {
     behavioral: 'Behavioral',
@@ -190,6 +193,9 @@
 
   let filteredEntries = $derived.by(() => {
     let result = sectionEntries
+    if (variant === 'settings' && !showAssistantMemories) {
+      result = result.filter((entry) => !entry.scopes.includes('assistant'))
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
       result = result.filter(
@@ -544,8 +550,20 @@
     }
   }
 
-  function removeEntry(index: number): void {
+  let pendingDeleteEntry = $derived(
+    pendingDeleteId === null ? null : (entries.find((entry) => entry.id === pendingDeleteId) ?? null)
+  )
+
+  function requestRemoveEntry(index: number): void {
+    pendingDeleteId = entries[index]?.id ?? null
+  }
+
+  function removeEntry(): void {
+    const id = pendingDeleteId
+    if (!id || !entries.some((entry) => entry.id === id)) return
+    const index = entries.findIndex((entry) => entry.id === id)
     entries = entries.filter((_, i) => i !== index)
+    pendingDeleteId = null
     cacheDraft()
   }
 
@@ -728,6 +746,17 @@
               title="When off, saved chat entries stay here but are not sent to agents"
             />
             Chat memory
+          </label>
+          <label class="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Switch
+              checked={showAssistantMemories}
+              onchange={(checked) => (showAssistantMemories = checked)}
+              aria-label={showAssistantMemories
+                ? 'Hide assistant memories from this list'
+                : 'Show assistant memories in this list'}
+              title="Show or hide assistant-scoped memory entries in this list"
+            />
+            Assistant
           </label>
         </div>
         {#if allowTransfer}
@@ -984,7 +1013,7 @@
             threadsLoading={threadsLoadingForEntry(entry)}
             initiallyExpanded={entry.id === lastAddedId}
             onUpdate={updateEntry}
-            onRemove={removeEntry}
+            onRemove={requestRemoveEntry}
           />
         {/each}
       </div>
@@ -998,6 +1027,20 @@
     </div>
   {/if}
 </div>
+
+<ConfirmDialog
+  open={pendingDeleteEntry !== null}
+  title="Delete memory?"
+  confirmLabel="Delete memory"
+  cancelLabel="Keep memory"
+  onCancel={() => (pendingDeleteId = null)}
+  onConfirm={removeEntry}
+>
+  <p>
+    Delete “{pendingDeleteEntry?.label || 'Untitled memory'}” from this memory list?
+  </p>
+  <p>This change will be saved when you select Save.</p>
+</ConfirmDialog>
 
 <style>
   .memory-panel {

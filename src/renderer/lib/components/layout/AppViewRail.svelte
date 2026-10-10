@@ -67,13 +67,15 @@
         activity.counts,
         activity.unreadCounts,
         activity.browserTransfers,
-        activity.browserAssistant
+        activity.browserAssistant,
+        activity.audio
       )}
       <AppRailButton
         label={option.label}
         icon={option.icon}
         active={isActive(option.id)}
         shortcut={option.keys}
+        playing={badges.playing}
         onSelect={option.select}
         onHover={() => onOptionHover(option.id)}
       >

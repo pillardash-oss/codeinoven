@@ -151,7 +151,12 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
   })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
     const safeQuery = requireString(query, 'Search query')
-    const safeOptions: { projectId?: string; limit?: number } = {}
+    const safeOptions: {
+      projectId?: string
+      limit?: number
+      family?: 'projects' | 'chats' | 'assistant'
+      routineId?: string
+    } = {}
     if (options !== undefined) {
       if (!isRecord(options)) throw new TypeError('Search options must be an object')
       if (options.projectId !== undefined) {
@@ -159,6 +164,19 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       }
       if (options.limit !== undefined) {
         safeOptions.limit = validateBoundedInteger(options.limit, 'Search limit', 1, 100)
+      }
+      if (options.family !== undefined) {
+        if (
+          options.family !== 'projects' &&
+          options.family !== 'chats' &&
+          options.family !== 'assistant'
+        ) {
+          throw new TypeError('Search family must be projects, chats, or assistant')
+        }
+        safeOptions.family = options.family
+      }
+      if (options.routineId !== undefined) {
+        safeOptions.routineId = validateEntityId(options.routineId, 'Routine ID')
       }
     }
     return threadManager.searchThreads(safeQuery, safeOptions)

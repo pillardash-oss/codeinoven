@@ -13,9 +13,25 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ScopeProject } from '$lib/stores/scope.svelte'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
+  import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
   import Modal from '$lib/components/ui/Modal.svelte'
+
+  /**
+   * The optional footer filter: a search screen's own sub-container picker. The
+   * palette is entity agnostic, so a project search, a routine search, and a
+   * browser-group search all drive the same picker from a description instead of
+   * a component per entity.
+   */
+  export interface PaletteFooterFilter {
+    options: readonly MultiSelectOption[]
+    selectedIds: readonly string[]
+    onChange: (ids: string[]) => void
+    allLabel: string
+    ariaLabel: string
+    searchPlaceholder?: string
+    emptyMessage?: string
+  }
 
   interface Props {
     open: boolean
@@ -48,11 +64,8 @@
     serverFiltered?: boolean
     /** Render a < Back button in the footer to return to a previous surface. */
     onBack?: () => void
-    /** When provided, the footer shows a project scope picker (empty selection = all projects). */
-    projects?: readonly ScopeProject[]
-    /** Currently scoped project ids; an empty array means all projects. */
-    selectedProjectIds?: readonly string[]
-    onSelectedProjectsChange?: (projectIds: string[]) => void
+    /** When provided, the footer shows a sub-container filter (empty selection = all). */
+    filter?: PaletteFooterFilter | null
   }
 
   export type CommandPaletteProps = Props
@@ -78,9 +91,7 @@
     headerIconBadgeClass = '',
     serverFiltered = false,
     onBack,
-    projects,
-    selectedProjectIds = [],
-    onSelectedProjectsChange
+    filter = null
   }: Props = $props()
 
   // The dialog-mode palette is a `Modal`, which publishes the full-window
@@ -465,15 +476,16 @@
         {/if}
         <span class="tabular-nums">{visibleActions.length} actions</span>
       </span>
-      {#if projects && onSelectedProjectsChange}
-        <ProjectSwitch
-          multiSelect
+      {#if filter}
+        <MultiSelectPicker
           compact
-          {projects}
-          selectedIds={selectedProjectIds}
-          onSelectionChange={onSelectedProjectsChange}
-          allLabel="All Projects"
-          ariaLabel="Scope search to projects"
+          options={filter.options}
+          selectedIds={filter.selectedIds}
+          onSelectionChange={filter.onChange}
+          allLabel={filter.allLabel}
+          ariaLabel={filter.ariaLabel}
+          {...filter.searchPlaceholder ? { searchPlaceholder: filter.searchPlaceholder } : {}}
+          {...filter.emptyMessage ? { emptyMessage: filter.emptyMessage } : {}}
         />
       {:else}
         <span class="shrink-0">↑↓ Navigate · Enter Run</span>

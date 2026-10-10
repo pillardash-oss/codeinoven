@@ -98,6 +98,10 @@ import {
   type DarkReaderTabState
 } from '../../../lib/browser/browser-darkreader-control'
 import { materializeUserScriptFiles } from './browser-extension-user-scripts'
+import {
+  BITWARDEN_EXTENSION_ID,
+  refreshBitwardenNotificationScripts
+} from './browser-extension-bitwarden'
 
 /** How often progress reaches the renderer. A download reports per chunk and the
  *  install worker per phase, so without a gate a large package would send hundreds
@@ -1353,6 +1357,9 @@ export class BrowserExtensionService {
   ): Promise<void> {
     if (record.injected === 'none') return
     try {
+      if (record.id === BITWARDEN_EXTENSION_ID) {
+        await refreshBitwardenNotificationScripts(directory)
+      }
       const manifest = await readManifestObject(directory)
       const outcome = await ensureInjectionCurrent(directory, manifest, preambleSource)
       if (outcome === 'rewritten') {

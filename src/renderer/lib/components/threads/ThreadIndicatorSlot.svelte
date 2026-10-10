@@ -24,6 +24,8 @@
   <VoiceSendIndicator stage="send" label="Transcribing: will send when ready" />
 {:else if indicator === 'transcribing-steer'}
   <VoiceSendIndicator stage="steer" label="Transcribing: will steer the running turn" />
+{:else if indicator === 'browser-audio'}
+  <SpeakingIndicator label="A browser tab on this thread is playing sound" />
 {:else}
   <ComputerUseIndicator label="Agent using the computer" />
 {/if}

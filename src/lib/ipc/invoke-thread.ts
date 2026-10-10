@@ -82,7 +82,15 @@ export const invokeThreadContract = {
     HistoryEntry[]
   >,
   'threads:search': {} as Contract<
-    [query: string, options?: { projectId?: string; limit?: number }],
+    [
+      query: string,
+      options?: {
+        projectId?: string
+        limit?: number
+        family?: 'projects' | 'chats' | 'assistant'
+        routineId?: string
+      }
+    ],
     import('../types').ThreadSearchResult[]
   >,
   'history:append': {} as Contract<

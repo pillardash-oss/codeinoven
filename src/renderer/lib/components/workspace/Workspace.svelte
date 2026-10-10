@@ -3243,54 +3243,6 @@
     void hydrateThreadsViewGuarantees()
   })
 
-  /** The chat a Chats view with nothing to restore should land on: the last chat
-   *  the user actually visited (`recentThreadVisits` is persisted visit order),
-   *  else the family's most recently active thread. `allThreads` order is not
-   *  visit recency, so it is only ever the activity fallback. */
-  function lastChatToLandOn(): Thread | null {
-    const chats = allThreads.filter((t) => !t.archived && t.projectId === INBOX_PROJECT_ID)
-    const byVisit = new Map(chats.map((t) => [threadVisitKey(t), t]))
-    return (
-      workspaceState.recentThreadVisits
-        .map((key) => byVisit.get(key))
-        .find((t) => t !== undefined) ??
-      chats.sort((a, b) => b.lastActivity - a.lastActivity)[0] ??
-      null
-    )
-  }
-
-  /** True once the Chats view has been shown, so the entry guarantee below runs
-   *  once per entry instead of on every reactive pass while the view stays open.
-   *  Clearing the thread for a fresh chat must not immediately create another. */
-  let chatViewEntered = false
-
-  // The Chats view is thread-backed: its composer, its conversation and its
-  // right rail all belong to a thread, so showing it with nothing selected must
-  // still land on one. The shell restores a chat the user visited this session;
-  // when that leaves nothing (a first visit, or a session holding chats it has
-  // never opened) the view lands on the most recently active chat, and only a
-  // family with no thread at all falls through to creating the empty draft chat
-  // it would otherwise create on the first keystroke. Without this the view
-  // opened on its thread-less welcome composer, and the right rail had no thread
-  // to belong to. `loading` keeps it from racing the startup thread restore.
-  $effect(() => {
-    if (!active || mode !== 'chats' || loading) {
-      chatViewEntered = false
-      return
-    }
-    if (chatViewEntered) return
-    chatViewEntered = true
-    if (workspaceState.selectedThread) return
-    const existing = lastChatToLandOn()
-    if (existing) {
-      workspaceState.openThread(existing, inboxProject())
-      return
-    }
-    // Nothing to land on: open the blank chat row the view is built around, so
-    // it never paints the thread-less welcome composer (and never loses its rail).
-    openNewChatThread()
-  })
-
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
    *  project filter can render far fewer than 200 rows even though matching
    *  threads exist beyond the window. The filter must replace hidden rows with

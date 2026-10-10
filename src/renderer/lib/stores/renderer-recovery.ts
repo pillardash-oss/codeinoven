@@ -345,6 +345,13 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
+/** The view a string names, or null when the app has no such view. Reuses the
+ *  same membership test the recovery parser applies, so an agent-named view is
+ *  validated exactly like a restored one. */
+export function mainViewFor(value: string): MainView | null {
+  return normalizeMainView(value)
+}
+
 function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' | 'assistant' {
   if (value === 'projects' || value === 'chats' || value === 'threads' || value === 'assistant') {
     return value

@@ -107,7 +107,18 @@ function isUsagelessAssistantStatsError(error: unknown): boolean {
   )
 }
 
-/** Sum the per-message cost mirrored into a session's assistant messages so
+/** The cost pi reported for ONE response, taken from the preserved provider
+ *  evidence (`usage.cost.total`) and falling back to the mirrored `cost`.
+ *  The evidence is preferred because it cannot have been overwritten by the
+ *  session-cumulative reading, so this sum can never feed back on itself. */
+function responseReportedCost(message: AgentMessage): number | undefined {
+  const cost = record(record(message.normalizedUsage?.rawProviderUsage)?.['cost'])
+  const reported = numberValue(cost?.['total'])
+  if (reported !== undefined) return reported
+  return typeof message.cost === 'number' ? message.cost : undefined
+}
+
+/** Sum the per-response cost mirrored into a session's assistant messages so
  *  sessions with a broken native stats RPC still receive cumulative cost. */
 function mirroredSessionCost(session: PersistentCliSession): number | undefined {
   let total: number | undefined
@@ -124,7 +135,8 @@ function mirroredSessionCost(session: PersistentCliSession): number | undefined 
         total = (total ?? 0) + part.state.cost
       }
     }
-    if (typeof message.cost === 'number') total = (total ?? 0) + message.cost
+    const reported = responseReportedCost(message)
+    if (reported !== undefined) total = (total ?? 0) + reported
     else unmirrored = true
   }
   // Costless assistant turns (aborted, errored, or pre-usage mirrors) make a

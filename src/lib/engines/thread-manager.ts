@@ -16,7 +16,8 @@ import {
 } from '../../main/database/repositories/agent-message-repo'
 import {
   RECENT_THREADS_PER_PROJECT,
-  ThreadRepo
+  ThreadRepo,
+  type ThreadSearchOptions
 } from '../../main/database/repositories/thread-repo'
 import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
@@ -1601,7 +1602,7 @@ export class ThreadManager {
    */
   async searchThreads(
     query: string,
-    options: { projectId?: string; limit?: number } = {}
+    options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
   }

@@ -83,6 +83,36 @@ export function restoreNeedsFallbackLoad(page: SettledPage, fallbackUrl: string)
   return page.url !== fallbackUrl
 }
 
+/**
+ * What the browser recorded about the navigation a rejected `loadURL` belonged to.
+ */
+export interface RejectedLoadReport {
+  /** The failure the page itself reported for this navigation, or null when it reported none. */
+  reportedFailure: { kind: string } | null
+  /** Whether the page is still loading when the rejection is read. */
+  loading: boolean
+  /** The address the page has committed to, or an empty string when it committed nothing. */
+  url: string
+}
+
+/**
+ * Whether a rejected `loadURL` is a navigation that did not fail at all.
+ *
+ * Electron settles `loadURL` on a load that finished or one that failed, and a
+ * top-level navigation to a media file satisfies neither in the shape the promise
+ * expects: the media document commits (and starts playing), but Chromium reports
+ * no load-finished event for it, so the promise rejects with `ERR_FAILED` over a
+ * page that is already on screen. The rejection cannot be read on its own, so it
+ * is read against what the browser itself recorded: a page that reported no
+ * failure, has stopped loading and committed a document is a page that arrived,
+ * and the error card must not cover it. Every other rejection stands.
+ */
+export function rejectedLoadIsNotAFailure(report: RejectedLoadReport): boolean {
+  if (report.reportedFailure !== null) return false
+  if (report.loading) return false
+  return hasCommittedDocument(report.url)
+}
+
 /** Whether an address is a document the page actually committed. An empty address
  *  is a view that committed nothing, and `about:blank` is the placeholder every
  *  `WebContentsView` starts on: neither is a page to leave a user looking at. */

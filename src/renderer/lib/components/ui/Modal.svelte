@@ -3,6 +3,10 @@
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { fade, fly } from 'svelte/transition'
+  import { prefersReducedMotion } from 'svelte/motion'
+  import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import {
@@ -45,7 +49,9 @@
   export type ModalSize = 'md' | 'lg' | 'xl' | 'full'
 
   const INPUT_FIELD_SELECTOR = [
-    'input:not([type="hidden"]):not([disabled]):not([readonly])',
+    // A colour well is a control, not a field: it must not take the initial
+    // focus away from the first real entry the user has to make.
+    'input:not([type="hidden"]):not([type="color"]):not([disabled]):not([readonly])',
     'textarea:not([disabled]):not([readonly])',
     'select:not([disabled])',
     '[contenteditable="true"]:not([aria-disabled="true"])'
@@ -97,7 +103,7 @@
       case 'bottom':
         return 'max-h-[90dvh] w-full rounded-t-2xl border-t bg-surface pb-[env(safe-area-inset-bottom)]'
       case 'fullscreen':
-        return 'h-full w-full'
+        return 'h-dvh w-dvw max-h-none max-w-none rounded-none'
       default:
         return `w-full max-h-full rounded-2xl border bg-surface ${fill ? 'h-full' : ''}`
     }
@@ -107,7 +113,7 @@
     open: boolean
     /** Nonmodal browser peek leaves the surrounding app interactive. */
     modal?: boolean
-    /** Optional viewport rectangle limiting the shell to a page frame. */
+    /** Optional viewport rectangle limiting a non-fullscreen shell to a page frame. */
     bounds?: BrowserViewBounds | null
     /** The panel's accessible name. Rendered in the canonical header, or
      *  screen-reader-only when the surface draws its own header. */
@@ -175,6 +181,13 @@
     blocksBrowserView?: boolean
     /** Render above browser page shells and Peek flight animations. */
     abovePage?: boolean
+    /** Stable identity for a custom native presentation, such as the switcher.
+     * Otherwise complete button dialogs automatically use native presentation. */
+    nativeOverlay?: string
+    nativeReady?: boolean
+    nativeFailed?: boolean
+    onNativeHover?: (button: HTMLButtonElement) => void
+    onNativeCommit?: (key: string) => void
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
     /** Runs as the panel closes, before focus is restored. Call
@@ -209,10 +222,109 @@
     scrim = true,
     blocksBrowserView = true,
     abovePage = false,
+    nativeOverlay,
+    nativeReady = $bindable(false),
+    nativeFailed = $bindable(false),
+    onNativeHover,
+    onNativeCommit,
     claimInitialFocus,
     onCloseAutoFocus,
     panelEl = $bindable(null)
   }: Props = $props()
+
+  let panelPresent = $state(false)
+  const trackPresentation: Attachment<HTMLElement> = () => {
+    panelPresent = true
+    return () => {
+      panelPresent = false
+    }
+  }
+  const suppressionKey = `modal-${crypto.randomUUID()}`
+  const nativeId = $derived(
+    nativeOverlay ??
+      (modal && blocksBrowserView && placement !== 'fullscreen' ? suppressionKey : undefined)
+  )
+  const frameBounds = $derived(placement === 'fullscreen' ? null : bounds)
+
+  /**
+   * Whether the native host, not this component's own DOM panel, is the
+   * presentation on screen.
+   *
+   * A modal the host can draw is projected into the overlay window, which sits
+   * above the browser's native page view. Painting the DOM panel as well shows
+   * it *behind* that page: the panel and its scrim land in the app window's DOM,
+   * which the page composites over, so the user sees the dimmed chrome around the
+   * page, then the panel vanish and reappear the moment the host takes over.
+   *
+   * The DOM panel is therefore the projection source only while the host can draw
+   * it, and becomes the presentation the moment it cannot. Nothing else decides
+   * this: a half-drawn handover is exactly the double appearance.
+   */
+  const nativeProjected = $derived(nativeId !== undefined && !nativeFailed)
+  const domPresented = $derived(!nativeProjected)
+
+  /**
+   * Whether this component's own DOM must be kept out of reach.
+   *
+   * While the native document draws the panel it owns the pointer and the
+   * keyboard, and before it draws the panel is not on screen at all. Either way
+   * nothing here may be focused or pressed, so Tab cannot wander into a copy the
+   * user cannot see.
+   */
+  const sourceInert = $derived(nativeProjected || nativeReady)
+
+  function nativePanel(id: string): Attachment<HTMLElement> {
+    return (panel) => {
+      nativeReady = false
+      nativeFailed = false
+      const bounds = (): BrowserViewBounds => {
+        const rect = panel.getBoundingClientRect()
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      }
+      const controller = new NativeDockController(id, () => {}, bounds, false, {
+        onHover: (button) => onNativeHover?.(button),
+        onDismiss: () => {
+          if (closeOnBackdrop) onClose()
+        },
+        onCommit: (key) => onNativeCommit?.(key),
+        onReady: () => {
+          nativeReady = true
+        },
+        onFailure: () => {
+          nativeReady = false
+          nativeFailed = true
+        },
+        requireCompleteProjection: !nativeOverlay,
+        onKey: (event) => {
+          if (event.type === 'keydown' && event.key === 'Escape') {
+            onEscapeKeydown?.(event)
+            if (escapeCloses && !event.defaultPrevented) onClose()
+            return true
+          }
+          // Ordinary button navigation belongs to the native document. Only
+          // application shortcuts go back to the source window for these dialogs.
+          return !nativeOverlay && !event.metaKey && !event.ctrlKey && !event.altKey
+        }
+      })
+      const cleanup = controller.mount(panel)
+      const update = (): void => controller.update(true, bounds())
+      const observer = new ResizeObserver(update)
+      observer.observe(panel)
+      window.addEventListener('resize', update)
+      queueMicrotask(update)
+      return () => {
+        observer.disconnect()
+        window.removeEventListener('resize', update)
+        cleanup()
+        // `nativeReady` is deliberately left alone here. Clearing it while the
+        // dialog tears down flips the scrim's condition back on, and the overlay
+        // that condition renders is inserted into the portal after the portal's
+        // own node has already left the document: it survives as an orphan
+        // full-window scrim that swallows every click until the app reloads. The
+        // next mount clears it again before the panel is shown.
+      }
+    }
+  }
 
   const stackingClass = $derived(abovePage ? 'z-80' : 'z-60')
   let alignment = $derived(ALIGNMENTS[placement])
@@ -230,9 +342,12 @@
   // `blocksBrowserView` is false for the full screen browser, which displays the
   // native view itself: suppressing it there leaves the surface empty. Its own
   // panel claims the view through the store, so nothing else is left uncovered.
-  const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
   $effect(() =>
-    browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open && blocksBrowserView)
+    browserVisibility.hideWhile(
+      suppressionKey,
+      'fullscreen-surface',
+      (open || panelPresent) && (nativeId ? nativeFailed : blocksBrowserView)
+    )
   )
 
   $effect(() => {
@@ -273,80 +388,109 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
-  <Dialog.Portal>
-    {#if scrim}
-      <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
-    {/if}
-    <div
-      class="pointer-events-none fixed {stackingClass} flex {bounds ? '' : 'inset-0'} {alignment}"
-      style={bounds
-        ? `left: ${bounds.x}px; top: ${bounds.y}px; width: ${bounds.width}px; height: ${bounds.height}px;`
-        : undefined}
-    >
-      <Dialog.Content
-        bind:ref={panelEl}
-        {trapFocus}
-        preventScroll={modal}
-        preventOverflowTextSelection={modal}
-        onOpenAutoFocus={focusInitialElement}
-        {onCloseAutoFocus}
-        onEscapeKeydown={(event) => {
-          onEscapeKeydown?.(event)
-          if (!escapeCloses) event.preventDefault()
-        }}
-        onInteractOutside={(event) => {
-          // A toast is drawn above this modal (svelte-sonner stacks at
-          // `z-index: 999999999`) and stays interactive there, so a press that
-          // lands on one is not a backdrop press. Without this the pointerdown
-          // bubbled to the dismissible layer and dismissed the modal as well as
-          // the toast it was aimed at: pressing a toast's close button threw the
-          // full screen surface away behind it.
-          if (isWithinToastLayer(event.target)) event.preventDefault()
-          if (!closeOnBackdrop) event.preventDefault()
-        }}
-        class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
+  {#if open}
+    <Dialog.Portal>
+      <!-- Only an open dialog may paint a scrim: a scrim rendered on the way out
+         would be inserted into a portal that is already leaving the document and
+         would stay behind covering the whole window. -->
+      {#if scrim && domPresented}
+        <Dialog.Overlay forceMount>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              class="{OVERLAY_CLASS} {stackingClass}"
+              transition:fade|global={{ duration: prefersReducedMotion.current ? 0 : 140 }}
+            ></div>
+          {/snippet}
+        </Dialog.Overlay>
+      {/if}
+      <div
+        inert={sourceInert || undefined}
+        class="pointer-events-none fixed {stackingClass} flex {frameBounds
+          ? ''
+          : 'inset-0'} {alignment}"
+        style:opacity={domPresented ? undefined : 0}
+        style={frameBounds
+          ? `left: ${frameBounds.x}px; top: ${frameBounds.y}px; width: ${frameBounds.width}px; height: ${frameBounds.height}px;`
+          : undefined}
       >
-        {#snippet child({ props })}
-          <div {...props} aria-modal={modal}>
-            {#if chrome}
-              <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
-                <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+        <Dialog.Content
+          forceMount
+          bind:ref={panelEl}
+          trapFocus={trapFocus && domPresented}
+          preventScroll={modal}
+          preventOverflowTextSelection={modal}
+          onOpenAutoFocus={focusInitialElement}
+          {onCloseAutoFocus}
+          onEscapeKeydown={(event) => {
+            onEscapeKeydown?.(event)
+            if (!escapeCloses) event.preventDefault()
+          }}
+          onInteractOutside={(event) => {
+            // A toast is drawn above this modal (svelte-sonner stacks at
+            // `z-index: 999999999`) and stays interactive there, so a press that
+            // lands on one is not a backdrop press. Without this the pointerdown
+            // bubbled to the dismissible layer and dismissed the modal as well as
+            // the toast it was aimed at: pressing a toast's close button threw the
+            // full screen surface away behind it.
+            if (isWithinToastLayer(event.target)) event.preventDefault()
+            if (!closeOnBackdrop) event.preventDefault()
+          }}
+          class="{PANEL_BASE} {layout} {widthClass} {panelClass} {domPresented
+            ? ''
+            : 'pointer-events-none'}"
+        >
+          {#snippet child({ props })}
+            <div
+              {...props}
+              aria-modal={modal}
+              {@attach trackPresentation}
+              {@attach nativeId ? nativePanel(nativeId) : undefined}
+              transition:fly|global={{
+                duration: prefersReducedMotion.current || nativeProjected ? 0 : 140,
+                y: placement === 'fullscreen' ? 0 : 4
+              }}
+            >
+              {#if chrome}
+                <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                  <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+                  {#if description}
+                    <Dialog.Description class="sr-only">{description}</Dialog.Description>
+                  {/if}
+                  <Dialog.Close
+                    class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    <X size={16} />
+                  </Dialog.Close>
+                </div>
+
+                <div class="min-h-0 flex-1 {contentClass}">
+                  {@render children()}
+                </div>
+
+                {#if footer}
+                  <div
+                    class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+                    data-modal-footer
+                  >
+                    {@render footer()}
+                  </div>
+                {/if}
+              {:else}
+                <!-- A surface with its own header still needs a dialog name, so the
+               title is rendered here, out of sight, exactly once. -->
+                <Dialog.Title class="sr-only">{title}</Dialog.Title>
                 {#if description}
                   <Dialog.Description class="sr-only">{description}</Dialog.Description>
                 {/if}
-                <Dialog.Close
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label="Close"
-                  title="Close"
-                >
-                  <X size={16} />
-                </Dialog.Close>
-              </div>
-
-              <div class="min-h-0 flex-1 {contentClass}">
                 {@render children()}
-              </div>
-
-              {#if footer}
-                <div
-                  class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
-                  data-modal-footer
-                >
-                  {@render footer()}
-                </div>
               {/if}
-            {:else}
-              <!-- A surface with its own header still needs a dialog name, so the
-               title is rendered here, out of sight, exactly once. -->
-              <Dialog.Title class="sr-only">{title}</Dialog.Title>
-              {#if description}
-                <Dialog.Description class="sr-only">{description}</Dialog.Description>
-              {/if}
-              {@render children()}
-            {/if}
-          </div>
-        {/snippet}
-      </Dialog.Content>
-    </div>
-  </Dialog.Portal>
+            </div>
+          {/snippet}
+        </Dialog.Content>
+      </div>
+    </Dialog.Portal>
+  {/if}
 </Dialog.Root>

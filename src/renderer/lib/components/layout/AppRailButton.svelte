@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Volume2 } from '@lucide/svelte'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -18,6 +19,8 @@
     tone?: 'default' | 'primary' | 'danger' | 'accent'
     /** Spins the icon, for in-flight states such as a download. */
     spin?: boolean
+    /** Corner mark saying a browser behind this item is playing sound. */
+    playing?: boolean
     onSelect: () => void
     onHover?: () => void
     /** Corner content, e.g. an activity badge. */
@@ -32,6 +35,7 @@
     shortcut = [],
     tone = 'default',
     spin = false,
+    playing = false,
     onSelect,
     onHover,
     badge
@@ -69,5 +73,19 @@
   onclick={onSelect}
 >
   <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
+  {#if playing}
+    <!-- The speaker rides the opposite corner from the badge stack, so a view can
+         say "working" and "playing sound" at the same time without either mark
+         hiding the other. It is a status, not a control: the mute toggle lives
+         on the tab row the sound actually belongs to. -->
+    <span
+      class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border bg-elevated text-info shadow-sm"
+      role="status"
+      aria-label={`${label} is playing audio`}
+      title={`${label} is playing audio`}
+    >
+      <Volume2 size={9} strokeWidth={2.6} aria-hidden="true" />
+    </span>
+  {/if}
   {@render badge?.()}
 </button>

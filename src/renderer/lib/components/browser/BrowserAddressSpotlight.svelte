@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Attachment } from 'svelte/attachments'
   import { Globe, Lock, LockOpen } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
@@ -59,7 +60,13 @@
    *  rather than left to the shared "first text field" rule so the address is
    *  selected too, which is what the gesture promises: the address to replace, not
    *  just a caret at one end of it. */
-  let addressInput = $state<HTMLInputElement | null>(null)
+  let addressInput: HTMLInputElement | null = null
+  const captureAddress: Attachment<HTMLInputElement> = (element) => {
+    addressInput = element
+    return () => {
+      addressInput = null
+    }
+  }
 
   const suggestions = $derived(
     browserHistory.suggestionsFor(
@@ -144,7 +151,8 @@
       <Globe size={15} class="shrink-0 text-dimmed" />
     {/if}
     <input
-      bind:this={addressInput}
+      {@attach captureAddress}
+      data-native-dock-keys="ArrowDown ArrowUp Enter"
       type="text"
       class="h-10 min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
       placeholder="Search or enter an address"

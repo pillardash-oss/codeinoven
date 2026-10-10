@@ -72,22 +72,26 @@ describe('buildThreadSwitcherEntries', () => {
   })
 
   it('interleaves threads and browser tabs in one recency order', () => {
-    const older = makeThread('a', 1)
-    const newer = makeThread('b', 2)
-    const tab = makeTab('browser:1', 3)
+    const thread = makeThread('t0', 1)
+    const tabs = Array.from({ length: 10 }, (_, index) => makeTab(`browser:${index}`, 2 + index))
+    const tabKeys = tabs.map((tab) => browserTabVisitKey(tab.id))
+    const fiveTabs = tabKeys.slice(0, 5)
 
-    const entries = buildThreadSwitcherEntries({
-      visits: [threadVisitKey(newer), browserTabVisitKey(tab.id), threadVisitKey(older)],
-      threads: [older, newer],
-      tabs: [tab],
-      currentBrowserTabId: null
-    })
+    for (const visits of [
+      [...fiveTabs, threadVisitKey(thread)],
+      [threadVisitKey(thread), ...fiveTabs],
+      [fiveTabs[0], threadVisitKey(thread), ...fiveTabs.slice(1)],
+      [...tabKeys, threadVisitKey(thread)]
+    ]) {
+      const entries = buildThreadSwitcherEntries({
+        visits,
+        threads: [thread],
+        tabs,
+        currentBrowserTabId: null
+      })
 
-    expect(keys(entries).slice(0, 3)).toEqual([
-      threadVisitKey(newer),
-      browserTabVisitKey(tab.id),
-      threadVisitKey(older)
-    ])
+      expect(keys(entries)).toEqual(visits.slice(0, 10))
+    }
   })
 
   it('lets newer thread visits push older browser tabs off the end of the one list', () => {

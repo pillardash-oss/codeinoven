@@ -71,7 +71,29 @@
      *     the page, and the overlay mirrors the very frame that would vanish;
      *   - `live`: the overlay is drawing it, so the DOM panel steps aside.
      */
-    overlayPhase?: 'none' | 'pending' | 'live'
+    /**
+     * Whether a native host is drawing this floating panel.
+     *
+     * `true` means the panel this component renders is the projection source
+     * only: it must never paint, because the host that draws it is already on
+     * screen or arriving. Painting it first and hiding it when the host
+     * confirms would show the same panel twice, once in each skin, and the user
+     * would watch it fly in and get replaced.
+     *
+     * `false` is the DOM panel's own path: it draws, and it publishes its
+     * rectangle so a page underneath parks rather than covering it. That is the
+     * fallback when no host can draw it at all.
+     */
+    nativeHost?: boolean
+    /** Project the canonical panel into a native host while it floats. */
+    panel?: Attachment<HTMLElement>
+    /** Whether a native host currently holds the pointer, so the panel must stay
+     *  open through the `mouseleave` the handover itself produced. */
+    holdOpen?: () => boolean
+    /** Publish this panel's rectangle as a browser occlusion while it floats.
+     *  Off for a caller that owns the decision itself, so the parked/attached
+     *  handover never depends on an attachment being re-evaluated mid-flight. */
+    trackOcclusion?: boolean
     children: Snippet
   }
 
@@ -89,8 +111,11 @@
     footer,
     scroller = $bindable(null),
     fileDrop = undefined,
-    overlayPhase = 'none',
-    children
+    nativeHost = false,
+    children,
+    panel,
+    holdOpen,
+    trackOcclusion = true
   }: Props = $props()
 
   let resizing = $state(false)
@@ -120,7 +145,13 @@
   function onOverlayLeave(): void {
     overlayHovered = false
     hideTimeout = setTimeout(() => {
-      if (!overlayHovered) sidebarState.hoverOpen = false
+      if (overlayHovered) return
+      // A native host draws the panel above this window, so it takes the pointer
+      // the moment it appears: the leave this window sees is the handover, not
+      // the user walking away. Whether the pointer is still on the panel is the
+      // host's report to make, and it closes on its own schedule when it goes.
+      if (holdOpen?.()) return
+      sidebarState.hoverOpen = false
     }, 260)
   }
 </script>
@@ -128,6 +159,7 @@
 {#if docked}
   <!-- Docked sidebar: occupies layout, resizable -->
   <aside
+    {@attach panel}
     class="relative flex h-full shrink-0 flex-col bg-surface"
     data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
     data-region={region}
@@ -200,17 +232,18 @@
   <!-- Floating overlay -->
   {#if sidebarState.hoverOpen}
     <aside
+      {@attach panel}
       class="fixed top-12 bottom-0 left-0 z-50 flex flex-col bg-surface shadow-2xl"
       data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
       data-region={region}
       aria-label={label}
       style="width: {sidebarState.width}px"
-      class:invisible={overlayPhase === 'live'}
-      class:pointer-events-none={overlayPhase === 'live'}
-      transition:fly={{ x: -sidebarState.width, duration: 180 }}
+      class:invisible={nativeHost}
+      class:pointer-events-none={nativeHost}
+      transition:fly={{ x: -16, duration: nativeHost ? 0 : motionDuration(140) }}
       onmouseenter={onOverlayEnter}
       onmouseleave={onOverlayLeave}
-      {@attach overlayPhase === 'none' && trackBrowserOcclusion}
+      {@attach trackOcclusion && !nativeHost ? trackBrowserOcclusion : undefined}
     >
       {#if !hideHeader}
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">

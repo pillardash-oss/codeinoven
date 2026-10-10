@@ -2,9 +2,40 @@
  * Permission bookkeeping for the embedded browser: how a site's origin and
  * permission map to a remembered key, and how a user decision affects what the
  * browser keeps.
+ *
+ * The catalog that maps the human-facing permissions onto ledger keys, and the
+ * pure key/state helpers, live in the shared `src/lib/browser/site-permissions`
+ * module so the renderer's Site Permissions modal and the prompt read the very
+ * same definitions. This module keeps only what is process-local: the resolution
+ * table and the live-ledger lookup.
  */
 
-import type { BrowserPermissionDecision, BrowserPermissionRequest } from '../../../lib/ipc-contract'
+import type { BrowserPermissionDecision } from '../../../lib/ipc-contract'
+
+export {
+  SCREEN_CAPTURE_PERMISSION,
+  SITE_PERMISSION_CATALOG,
+  SITE_PERMISSION_GROUPS,
+  descriptorForPermission,
+  isScreenCaptureRequest,
+  permissionCheckKey,
+  permissionGrantKeys,
+  permissionKey,
+  permissionKeysForRequest,
+  permissionOrigin,
+  rememberedPermissionOutcome,
+  screenCaptureDeniedInLedger,
+  sitePermissionDescriptor,
+  sitePermissionRequestSummary,
+  sitePermissionState
+} from '../../../lib/browser/site-permissions'
+export type {
+  RememberedPermissionOutcome,
+  SitePermissionDescriptor,
+  SitePermissionGroup,
+  SitePermissionGroupId,
+  SitePermissionState
+} from '../../../lib/browser/site-permissions'
 
 /** How a permission reply affects what the browser remembers. */
 export interface PermissionResolution {
@@ -47,104 +78,4 @@ export function permissionLedgerForPartition(
   const created = new Set<string>()
   ledger.set(partition, created)
   return created
-}
-
-export function permissionOrigin(value: string): string | null {
-  try {
-    const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null
-  } catch {
-    return null
-  }
-}
-
-export function permissionKey(origin: string, permission: string, scope = ''): string {
-  return `${origin}\n${permission}\n${scope}`
-}
-
-export function permissionGrantKeys(request: BrowserPermissionRequest): string[] {
-  if (request.permission === 'media' && request.mediaTypes.length > 0) {
-    return [...new Set(request.mediaTypes)].map((mediaType) =>
-      permissionKey(request.origin, request.permission, mediaType)
-    )
-  }
-  return [permissionKey(request.origin, request.permission)]
-}
-
-/** The key a synchronous permission check uses. Electron reports the media
- *  scope as `mediaType` on checks and as `mediaTypes` on requests, so both
- *  paths have to reduce to the same key for a remembered decision to apply. */
-export function permissionCheckKey(origin: string, permission: string, mediaType: unknown): string {
-  return permissionKey(origin, permission, typeof mediaType === 'string' ? mediaType : '')
-}
-
-/** What a request needs from the browser's remembered decisions. */
-export type RememberedPermissionOutcome = 'grant' | 'deny' | 'ask'
-/**
- * How a request resolves against what the user already decided.
- *
- * Electron calls the permission *request* handler for every web API call, even
- * when the synchronous check handler already answered, so this is the only
- * place a remembered decision can actually spare the user a prompt. A
- * remembered "Don't allow" wins; a decision that covers every scope of the
- * request grants silently; anything else still needs the user.
- */
-export function rememberedPermissionOutcome(
-  keys: readonly string[],
-  grants: ReadonlySet<string> | undefined,
-  denies: ReadonlySet<string> | undefined
-): RememberedPermissionOutcome {
-  if (keys.some((key) => denies?.has(key) === true)) return 'deny'
-  if (keys.length > 0 && keys.every((key) => grants?.has(key) === true)) return 'grant'
-  return 'ask'
-}
-
-/** One site permission the padlock menu can set manually, without waiting for
- *  the page to ask. The keys are exactly the ledger keys the prompt path reads
- *  and writes, so a manual decision and a prompt decision are the same thing. */
-export interface SitePermissionDescriptor {
-  id: 'camera' | 'microphone' | 'location' | 'notifications'
-  /** Menu label for the submenu, e.g. "Camera". */
-  label: string
-  /** Ledger keys one origin's decision covers. */
-  keysFor: (origin: string) => string[]
-}
-
-export const SITE_PERMISSION_DESCRIPTORS: readonly SitePermissionDescriptor[] = [
-  {
-    id: 'camera',
-    label: 'Camera',
-    keysFor: (origin) => [permissionKey(origin, 'media', 'video')]
-  },
-  {
-    id: 'microphone',
-    label: 'Microphone',
-    keysFor: (origin) => [permissionKey(origin, 'media', 'audio')]
-  },
-  {
-    id: 'location',
-    label: 'Location',
-    keysFor: (origin) => [permissionKey(origin, 'geolocation', '')]
-  },
-  {
-    id: 'notifications',
-    label: 'Notifications',
-    keysFor: (origin) => [permissionKey(origin, 'notifications', '')]
-  }
-]
-
-/** The padlock menu's reading of one descriptor for one origin. */
-export type SitePermissionState = 'allowed' | 'blocked' | 'ask'
-
-/** Read one descriptor's state from the live ledgers. A remembered refusal
- *  wins over a grant, mirroring {@link rememberedPermissionOutcome}. */
-export function sitePermissionState(
-  keys: readonly string[],
-  grants: ReadonlySet<string> | undefined,
-  denies: ReadonlySet<string> | undefined
-): SitePermissionState {
-  const outcome = rememberedPermissionOutcome(keys, grants, denies)
-  if (outcome === 'grant') return 'allowed'
-  if (outcome === 'deny') return 'blocked'
-  return 'ask'
 }

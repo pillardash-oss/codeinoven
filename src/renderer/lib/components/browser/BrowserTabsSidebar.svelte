@@ -30,7 +30,7 @@
   import { browserStripOverlay } from '$lib/stores/browser-strip-overlay.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { projectStripChrome, projectStripTabs } from '$lib/browser-strip-overlay-bridge'
+  import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import {
     browserTabLabel,
     DEFAULT_BOX_NAME,
@@ -47,7 +47,12 @@
   import BrowserTabModal from './BrowserTabModal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
-  import { browserSiteHost, browserSiteOrigin, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
+  import {
+    browserSiteHost,
+    browserSiteOrigin,
+    openBrowserPageMenu,
+    openBrowserSiteMenu
+  } from './browser-chrome-menus'
 
   interface Props {
     /** Summon the address spotlight, which is how Cmd/Ctrl+L also opens it. */
@@ -406,59 +411,99 @@
   })
 
   const floating = $derived(!sidebarState.docked && sidebarState.hoverOpen)
-  const pageCoversStrip = $derived(browserVisibility.overlapsNative(stripBand))
   /** Whether the overlay may be used for the floating panel at all: the panel has
    *  to be floating, and the window has to be able to hear and draw it. */
   const overlayAvailable = $derived(floating && !browserStripOverlay.unavailable)
-  /**
-   * Whether the strip belongs in the overlay right now.
-   *
-   * `pageCoversStrip` alone is not enough. A tab switch remounts the page frame
-   * (`BrowserView` keys `BrowserWorkspace` by tab), and the new frame only
-   * publishes its rectangle after a `tick`, so the coverage reading dips false
-   * for a flush. Releasing the strip on that dip both flashed the panel and let
-   * the DOM panel publish an occlusion over the page frame the switch was about
-   * to attach, which parked the new page and left the panel showing. Keeping the
-   * overlay while it is already live bridges the dip; a genuine full-window
-   * surface (a modal) is the signal that actually ends the handover.
-   */
-  const overlayWanted = $derived(
-    overlayAvailable &&
-      (pageCoversStrip || browserStripOverlay.live) &&
-      !browserVisibility.hasFullWindowSurface
-  )
 
   /**
-   * What the sidebar is told about its floating panel: `none` leaves everything
-   * to the DOM panel, `pending` means the overlay is loading so the panel must
-   * keep drawing but must not occlude, and `live` means the overlay owns it.
+   * Whether a native host draws the floating panel.
    *
-   * While the panel floats and the overlay is usable the DOM panel never falls
-   * back to `none`, even when no page covers its band this instant. Publishing an
-   * occlusion there is what detached the page and left the overlay mirroring a
-   * frame that no longer existed; `pending` keeps the panel drawable without
-   * occluding, so the page can always attach underneath it.
+   * This is the whole decision, and it is deliberately not "has the host
+   * confirmed yet": the host is warmed while this component is mounted, so by
+   * the time a pointer reaches the edge it is loaded and answers in a frame. The
+   * DOM panel is the projection source and nothing else, so it never paints
+   * while a host can draw it. Painting it as a placeholder and hiding it on the
+   * host's confirmation is exactly the double reveal this replaced.
+   *
+   * A full-window surface (a modal) keeps the panel down: the host's view sits
+   * above every DOM surface, so it must not be raised over a dialog. It comes
+   * back with its own transition when that surface goes.
    */
-  const stripPhase = $derived<'none' | 'pending' | 'live'>(
-    overlayAvailable && !browserVisibility.hasFullWindowSurface
-      ? browserStripOverlay.live
-        ? 'live'
-        : 'pending'
-      : 'none'
-  )
+  const nativeHost = $derived(overlayAvailable && !browserVisibility.hasFullWindowSurface)
 
+  /** The floating panel's box, as the attachment that projects it sees it. */
+  let panelElement = $state<HTMLElement | null>(null)
+  let nativePanel = $state<NativeDockController | null>(null)
+  /**
+   * The floating panel's own occlusion key.
+   *
+   * The panel is a native host over a live page, so it only parks that page when
+   * the native path is genuinely unavailable. Owning the key here   rather than
+   * letting an attachment be re-evaluated while the panel flies in   is what
+   * guarantees the page is attached again the moment the native host takes over:
+   * a stale rectangle would keep it parked behind the sidebar forever.
+   */
+  const PANEL_OCCLUSION_KEY = 'browser-sidebar-panel'
   $effect(() => {
-    if (!overlayWanted) {
-      void browserStripOverlay.publish(null)
+    const element = panelElement
+    if (!element || !floating || nativeHost) {
+      browserVisibility.clearOcclusion(PANEL_OCCLUSION_KEY)
       return
     }
-    void browserStripOverlay.publish({
-      width: sidebarState.width,
-      top: stripTop,
-      theme: browserStripOverlay.theme,
-      chrome: projectStripChrome(),
-      tabs: projectStripTabs()
-    })
+    const measure = (): void => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width >= 1 && rect.height >= 1)
+        browserVisibility.publishOcclusion(PANEL_OCCLUSION_KEY, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height
+        })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+      browserVisibility.clearOcclusion(PANEL_OCCLUSION_KEY)
+    }
+  })
+  const captureNativePanel: Attachment<HTMLElement> = (element) => {
+    // A fresh host is a fresh attempt: a panel that fell back once may simply
+    // have met a slow or busy renderer, and the user must never have to reload
+    // the app to get the native sidebar back.
+    browserStripOverlay.unavailable = false
+    panelElement = element
+    const controller = new NativeDockController(
+      'browser-tab-strip',
+      () => {},
+      () => stripBand,
+      false,
+      {
+        panel: true,
+        onHover: () => {},
+        onDismiss: () => {},
+        onCommit: () => {},
+        onReady: () => {
+          browserStripOverlay.holdOpen()
+        },
+        onFailure: () => {
+          browserStripOverlay.unavailable = true
+        }
+      }
+    )
+    nativePanel = controller
+    const cleanup = controller.mount(element)
+    return () => {
+      cleanup()
+      if (nativePanel === controller) nativePanel = null
+      if (panelElement === element) panelElement = null
+    }
+  }
+  $effect(() => {
+    nativePanel?.update(nativeHost, stripBand)
   })
 
   onMount(() => {
@@ -466,6 +511,16 @@
       viewport = { width: window.innerWidth, height: window.innerHeight }
     }
     window.addEventListener('resize', trackViewport)
+    // Load the host now rather than on the first hover: the reveal gesture ends
+    // at the window edge and the panel has to be there in a frame, so the
+    // renderer that draws it must already be up. Released with this component,
+    // because the sidebar it draws is nothing without it.
+    void invoke('browser:warmStripOverlay', true).catch(() => {})
+    // The native modals (the address palette, the tab and group editors, the
+    // permission prompt) draw in the shared overlay window over this view, so
+    // its document is loaded with the same intent and released with this
+    // component.
+    void invoke('browser:warmOverlayWindow', true).catch(() => {})
     // Wire the overlay's reports before anything can publish a strip, so a
     // window that cannot hear it never hands it the panel in the first place.
     const stopOverlay = browserStripOverlay.start()
@@ -474,6 +529,8 @@
       // Leaving the view drops the panel with it: the page it was drawn over is
       // going away in the same breath.
       void browserStripOverlay.publish(null)
+      void invoke('browser:warmStripOverlay', false).catch(() => {})
+      void invoke('browser:warmOverlayWindow', false).catch(() => {})
       stopOverlay()
     }
   })
@@ -664,7 +721,10 @@
     onboardingAnchor={false}
     label="Browser tabs"
     region="browser-sidebar"
-    overlayPhase={stripPhase}
+    {nativeHost}
+    panel={captureNativePanel}
+    trackOcclusion={false}
+    holdOpen={() => browserStripOverlay.pointerHeld}
     {chrome}
   >
     {#if searchGroupId === null && pinned.length > 0}

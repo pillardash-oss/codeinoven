@@ -142,5 +142,8 @@
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
+  },
+  "patchedDependencies": {
+    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch"
   }
 }

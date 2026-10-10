@@ -13,7 +13,11 @@ export default defineConfig({
     // global headroom keeps CI green; genuinely hung tests still fail, just
     // more slowly.
     testTimeout: 30_000,
-    hookTimeout: 30_000
+    hookTimeout: 30_000,
+    // Browser APIs jsdom does not implement (`matchMedia` above all) have to
+    // exist before a test file's module graph is imported, so they are installed
+    // for every test file here rather than repeated inside each jsdom suite.
+    setupFiles: ['./tests/setup/jsdom-dom-shims.ts']
   },
   resolve: {
     conditions: ['browser'],

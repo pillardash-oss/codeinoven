@@ -1,0 +1,25 @@
+diff --git a/dist/toast-state.svelte.d.ts b/dist/toast-state.svelte.d.ts
+index aeb99e1b0b2a356b82af935e9ab1cb8581ae3816..3c2976a06c1c7a7e132c540c844a1e0d57bf0373 100644
+--- a/dist/toast-state.svelte.d.ts
++++ b/dist/toast-state.svelte.d.ts
+@@ -68,6 +68,8 @@ export declare const toast: typeof toastFunction & {
+     promise: <ToastData>(promise: PromiseT<ToastData>, data?: PromiseData<ToastData> | undefined) => string | number | undefined;
+     dismiss: (id?: number | string) => string | number | undefined;
+     loading: <T extends AnyComponent>(message: string | T, data?: ExternalToast<T> | undefined) => string | number;
++    /** Remove retained state when a native host owns dismissal animations. */
++    remove: (id?: number | string) => string | number | undefined;
+     getActiveToasts: () => ToastT[];
+ };
+ export {};
+diff --git a/dist/toast-state.svelte.js b/dist/toast-state.svelte.js
+index 259d49a07df65ee914a47e7314986022f41fd7af..81812b6c86ddb098f2f85aaa5c3050c10775b5be 100644
+--- a/dist/toast-state.svelte.js
++++ b/dist/toast-state.svelte.js
+@@ -296,6 +296,7 @@ export const toast = Object.assign(basicToast, {
+     message: toastState.message,
+     promise: toastState.promise,
+     dismiss: toastState.dismiss,
++    remove: toastState.remove,
+     loading: toastState.loading,
+     getActiveToasts: () => {
+         return toastState.toasts.filter((toast) => !toast.dismiss);

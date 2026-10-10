@@ -98,14 +98,17 @@ class WorkspaceState {
    * showing. Switching views restores the family's own thread instead of a
    * single global selection, so leaving Assistant for Projects never costs the
    * project thread that was open, and vice versa. In-memory only: a restart
-   * re-selects from the recovery snapshot and the recent-visit list.
+   * re-selects from the recovery snapshot and the recent-visit list. Undefined
+   * means unvisited; null remembers a deliberate close or deletion.
    */
-  private contentViewThreadRefs: Record<ContentThreadFamily, SelectedThreadReference | null> =
-    $state({
-      projects: null,
-      chats: null,
-      assistant: null
-    })
+  private contentViewThreadRefs: Record<
+    ContentThreadFamily,
+    SelectedThreadReference | null | undefined
+  > = $state({
+    projects: undefined,
+    chats: undefined,
+    assistant: undefined
+  })
 
   // ─── Terminal ──────────────────────────────────────────────────────────
   /** True only while a view that hosts a terminal panel is mounted. */
@@ -227,7 +230,11 @@ class WorkspaceState {
 
   /** The thread a content-view family was last showing, if any. */
   contentViewThreadRef(family: ContentThreadFamily): SelectedThreadReference | null {
-    return this.contentViewThreadRefs[family]
+    return this.contentViewThreadRefs[family] ?? null
+  }
+
+  contentViewIsEmpty(family: ContentThreadFamily): boolean {
+    return this.contentViewThreadRefs[family] === null
   }
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
@@ -538,7 +545,13 @@ class WorkspaceState {
   /** A project added externally (e.g. from Scope view) that Workspace needs to pick up. */
   pendingAddedProject: Project | null = $state(null)
 
-  clearThread(): void {
+  clearThread(rememberEmpty = true): void {
+    if (rememberEmpty && this.selectedThread) {
+      // Closing or deleting remembers the family's empty view. Recent visits
+      // must not turn that deliberate deselection into another open thread.
+      const family = contentThreadFamily(this.selectedThread)
+      this.contentViewThreadRefs = { ...this.contentViewThreadRefs, [family]: null }
+    }
     this.sourceProcessCountRequestId += 1
     this.selectedThread = null
     this.activeProject = null

@@ -180,7 +180,7 @@ export class ThreadMessagesEvents {
     contextWindow?: number,
     contextUsed?: number,
     contextEstimated?: boolean,
-    cost?: number,
+    sessionCostUsd?: number,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits'],
     bankedResets?: AgentMessage['bankedResets'],
@@ -196,7 +196,10 @@ export class ThreadMessagesEvents {
     if (contextWindow !== undefined) message.contextWindow = contextWindow
     if (contextUsed !== undefined) message.contextUsed = contextUsed
     if (contextEstimated !== undefined) message.contextEstimated = contextEstimated
-    if (cost !== undefined) message.cost = cost
+    // `usage.updated.cost` is the session's cumulative spend, not this
+    // response's own cost; keep it off `cost` so per-message cost stays
+    // summable.
+    if (sessionCostUsd !== undefined) message.sessionCostUsd = sessionCostUsd
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
     if (bankedResets) message.bankedResets = bankedResets

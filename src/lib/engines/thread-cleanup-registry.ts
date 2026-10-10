@@ -34,6 +34,7 @@ export const THREAD_SCOPED_TABLES: ThreadScopedTable[] = [
   // redundant belt-and-suspenders delete since they're the highest-volume
   // tables (message/usage history) and were historically deleted manually.
   { table: 'agent_messages', threadColumn: 'thread_id' },
+  { table: 'usage_events', threadColumn: 'thread_id' },
   { table: 'harness_usage', threadColumn: 'thread_id' },
   { table: 'harness_usage_messages', threadColumn: 'thread_id' },
   { table: 'harness_usage_models', threadColumn: 'thread_id' }
