@@ -1,8 +1,8 @@
 import './app.css'
 import { mount } from 'svelte'
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, subscribe } from '$lib/ipc.svelte'
 import { applyAppTypography } from '$lib/app-typography'
-import BrowserOverlaySurface from '$lib/components/ui/BrowserOverlaySurface.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 
 /**
  * The entry for the browser overlay window.
@@ -31,5 +31,19 @@ void invoke('config:get')
   .then((config) => applyAppTypography(document.documentElement, config))
   .catch(() => {})
 
+const stopTypography = subscribe('config:changed', (config) =>
+  applyAppTypography(document.documentElement, config)
+)
+window.addEventListener('pagehide', stopTypography, { once: true })
+
 const target = document.getElementById('browser-overlay')
-if (target) mount(BrowserOverlaySurface, { target })
+if (target) {
+  const toasts = new URLSearchParams(window.location.search).get('surface') === 'toasts'
+  document.documentElement.toggleAttribute('data-native-toasts', toasts)
+  const surface = toasts
+    ? import('$lib/components/ui/NativeToastSurface.svelte')
+    : import('$lib/components/ui/BrowserOverlaySurface.svelte')
+  void surface
+    .then(({ default: component }) => mount(component, { target }))
+    .catch((error) => logRendererError('The native overlay could not load', error))
+}

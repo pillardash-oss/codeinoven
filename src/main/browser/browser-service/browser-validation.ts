@@ -4,6 +4,7 @@
  * validators before the service touches it.
  */
 
+import { validateNativeDockTypography } from '../../../lib/native-dock'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
@@ -1278,9 +1279,11 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
       title,
       description: overlayText(entry['description']),
       duration:
-        typeof duration === 'number' && Number.isFinite(duration) && duration > 0
-          ? Math.min(duration, 60_000)
-          : undefined,
+        duration === Infinity
+          ? Infinity
+          : typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+            ? Math.min(duration, 60_000)
+            : undefined,
       style: overlayText(entry['style']),
       closeButton: entry['closeButton'] === true ? true : undefined,
       dismissible: typeof entry['dismissible'] === 'boolean' ? entry['dismissible'] : undefined,
@@ -1291,6 +1294,10 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
   return {
     toasts,
     theme: stack['theme'] === 'dark' ? 'dark' : 'light',
+    typography:
+      stack['typography'] === undefined
+        ? undefined
+        : validateNativeDockTypography(stack['typography']),
     // The revision the overlay echoes back once these cards are drawn. A request
     // without one is not rejected: revision 0 simply never matches what the
     // renderer waits for, so the stack falls back rather than being trusted.

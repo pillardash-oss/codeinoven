@@ -257,17 +257,8 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
   if (input.modal !== undefined && typeof input.modal !== 'boolean')
     throw new TypeError('Invalid native modal flag')
   const selectedAction = input.selectedAction == null ? null : identifier(input.selectedAction)
-  let typography: NativeDockRequest['typography']
-  if (input.typography !== undefined) {
-    const font = record(input.typography)
-    if (typeof font.fontFamily !== 'string' || font.fontFamily.length > 512)
-      throw new TypeError('Invalid native font family')
-    const fontSize = finite(font.fontSize)
-    const fontWeight = finite(font.fontWeight)
-    if (fontSize < 8 || fontSize > 64 || fontWeight < 1 || fontWeight > 1000)
-      throw new TypeError('Invalid native typography')
-    typography = { fontFamily: font.fontFamily, fontSize, fontWeight }
-  }
+  const typography =
+    input.typography === undefined ? undefined : validateNativeDockTypography(input.typography)
   return {
     ...ack,
     bounds: rect,
@@ -319,3 +310,17 @@ export function validateNativeDockCommit(value: unknown): NativeDockCommit {
   }
 }
 export { identifier as validateNativeDockId }
+
+/** Appearance values shared by native modal and notification documents. */
+export function validateNativeDockTypography(
+  value: unknown
+): NonNullable<NativeDockRequest['typography']> {
+  const font = record(value)
+  if (typeof font.fontFamily !== 'string' || font.fontFamily.length > 512)
+    throw new TypeError('Invalid native font family')
+  const fontSize = finite(font.fontSize)
+  const fontWeight = finite(font.fontWeight)
+  if (fontSize < 8 || fontSize > 64 || fontWeight < 1 || fontWeight > 1000)
+    throw new TypeError('Invalid native typography')
+  return { fontFamily: font.fontFamily, fontSize, fontWeight }
+}

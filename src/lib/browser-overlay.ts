@@ -128,6 +128,7 @@ export interface ToastOverlayToast {
 export interface ToastOverlayStack {
   toasts: ToastOverlayToast[]
   theme: 'light' | 'dark'
+  typography?: NativeDockRequest['typography']
 }
 
 /**

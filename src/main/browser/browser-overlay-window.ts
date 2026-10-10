@@ -80,7 +80,8 @@ export class BrowserOverlayWindow {
 
   constructor(
     private readonly parent: BrowserWindow,
-    private readonly preloadPath: string = resolveChildWindowPreload()
+    private readonly preloadPath: string = resolveChildWindowPreload(),
+    private readonly onModalHostChanged: (host: BrowserWindow | null) => void = () => {}
   ) {}
 
   /**
@@ -186,6 +187,7 @@ export class BrowserOverlayWindow {
       images[imageId] = source
     }
     this.docks.set(id, { ...request, images: validateNativeDockImages(images) })
+    if (request.modal) this.onModalHostChanged(popup)
     // A dock that joins or leaves can change whether a modal owns the window, so
     // re-derive the click-through state before the window is shown for it.
     this.applyClickThrough()
@@ -253,6 +255,7 @@ export class BrowserOverlayWindow {
   }
 
   dispose(): void {
+    this.onModalHostChanged(null)
     this.restoreParentThrottling()
     const popup = this.popup
     this.popup = null
@@ -297,6 +300,7 @@ export class BrowserOverlayWindow {
   private settle(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
+    if (!this.hasModalDock()) this.onModalHostChanged(null)
     if (!this.hasModalDock() && popup.isFocusable()) {
       const restoreFocus = popup.isFocused()
       popup.setFocusable(false)

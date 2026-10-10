@@ -105,6 +105,7 @@ import {
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
+import { NativeToastView } from './native-toast-view'
 import { browserStatusOverlayPlacement, type BrowserStatusOverlay } from '../../lib/browser-overlay'
 import {
   BrowserDownloadManager,
@@ -532,6 +533,7 @@ export class BrowserService {
    * raises a toast and never hovers the strip never pays for a second renderer.
    */
   private readonly overlay: BrowserOverlayWindow
+  private readonly nativeToasts: NativeToastView
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
@@ -760,7 +762,10 @@ export class BrowserService {
     private readonly downloads: BrowserDownloadManager
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
-    this.overlay = new BrowserOverlayWindow(window)
+    this.nativeToasts = new NativeToastView(window)
+    this.overlay = new BrowserOverlayWindow(window, undefined, (host) =>
+      this.nativeToasts.setHost(host ?? window)
+    )
     // Chromium drops its own status bubble when the window loses the pointer's
     // context; so does this.
     window.on('blur', () => this.dismissStatusOverlay())
@@ -1193,14 +1198,11 @@ export class BrowserService {
     })
     replaceHandler('browser:setToastOverlay', (_event, rawRequest) => {
       const request = validateToastOverlayRequest(rawRequest)
-      // Null is the renderer saying no page covers the toaster's corner any
-      // more, so the stack belongs back in the app's own DOM. The window itself
-      // only goes when nothing else is drawing in it.
-      if (request === null) {
-        this.overlay.releaseStack()
-        return true
-      }
-      return this.overlay.applyStack(request)
+      return this.nativeToasts.apply(request)
+    })
+    replaceHandler('browser:toastOverlayHeight', (event, rawHeight) => {
+      if (!this.nativeToasts.owns(event.sender.id)) return
+      this.nativeToasts.setHeight(rawHeight)
     })
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
       this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
@@ -1231,7 +1233,11 @@ export class BrowserService {
     replaceHandler('browser:focusDockOverlay', (_event, rawId) =>
       this.overlay.focusDock(validateNativeDockId(rawId))
     )
-    replaceHandler('browser:overlayReady', () => this.overlay.currentState())
+    replaceHandler('browser:overlayReady', (event) =>
+      this.nativeToasts.owns(event.sender.id)
+        ? { stack: this.nativeToasts.currentStack(), docks: [], strip: null, status: null }
+        : this.overlay.currentState()
+    )
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
       // what the user did: the app renderer owns the toast and runs its handler.
@@ -1691,6 +1697,7 @@ export class BrowserService {
     this.stage.dispose()
     this.promptWindow.dispose()
     this.overlay.dispose()
+    this.nativeToasts.dispose()
     this.screenShare.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
@@ -6291,6 +6298,7 @@ export class BrowserService {
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
+    this.nativeToasts.raise()
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)

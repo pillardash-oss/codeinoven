@@ -234,6 +234,7 @@ export const invokeBrowserContract = {
    * invisible behind it.
    */
   'browser:setToastOverlay': {} as Contract<[request: ToastOverlayRequest], boolean>,
+  'browser:toastOverlayHeight': {} as Contract<[height: number], void>,
   /**
    * Point the native overlay at the browser's floating tab strip, or take it
    * down with null because the panel closed or no page covers its band.
