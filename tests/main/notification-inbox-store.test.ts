@@ -244,7 +244,10 @@ describe('NotificationInboxStore family grouping', () => {
     const cases: Array<[Partial<AgentNotificationPayload>, NotificationFamily]> = [
       [{ source: 'project', projectId: 'p' }, 'project'],
       [{ source: 'chat', projectId: INBOX_PROJECT_ID }, 'chat'],
-      [{ source: 'temporary-chat', projectId: 'p' }, 'chat'],
+      // A side chat groups by the entity that spawned it, never by its source.
+      [{ source: 'temporary-chat', projectId: 'p' }, 'project'],
+      [{ source: 'temporary-chat', projectId: INBOX_PROJECT_ID }, 'chat'],
+      [{ source: 'temporary-chat', projectId: ASSISTANT_SPACE_ID }, 'assistant'],
       // A payload that predates the chat source still reads as a chat by project.
       [{ source: 'project', projectId: INBOX_PROJECT_ID }, 'chat'],
       [{ source: 'assistant', projectId: ASSISTANT_SPACE_ID }, 'assistant'],

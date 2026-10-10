@@ -702,10 +702,10 @@
         case 'approval':
           return { kind: 'attention', animated: true }
         case 'temporary-unread':
-          // Same circular dot as the primary unread badge but in the working
-          // colour (the temporary-chat tab icon colour) so the user reads it
-          // as "side chat waiting", not as an unread primary thread.
-          return { stage: 'unread', color: 'var(--color-thread-working)' }
+          // Same circular dot as the primary unread badge but in the
+          // temporary-chat colour so the user reads it as "side chat waiting",
+          // not as an unread primary thread.
+          return { stage: 'unread', color: 'var(--color-temporary-chat)' }
         case 'error':
           return { kind: 'error' }
         default:
@@ -814,7 +814,7 @@
     <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
          side chat is visible from the list that spawned it. -->
     <span
-      class="flex shrink-0 items-center text-info"
+      class="flex shrink-0 items-center text-temporary-chat"
       role="img"
       aria-label={temporaryChatLabel}
       title={temporaryChatLabel}

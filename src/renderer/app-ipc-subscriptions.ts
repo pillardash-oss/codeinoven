@@ -135,10 +135,11 @@ function showAgentNotification(
     }
   }
 
-  const chatResponseToastStyle =
-    '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
-    ' --success-border: var(--color-chat-success);' +
-    ' --success-text: var(--color-chat-success);'
+  // A temporary (side) chat completion wears the side chat's own indicator
+  // colour, not the chat teal: `chat-completed` is raised only by a side chat,
+  // and the branded toast stylesheet derives its border, wash, title and icon
+  // from `--status`, so overriding it here recolours the whole card.
+  const temporaryChatToastStyle = '--status: var(--color-temporary-chat);'
   // The assistant surface carries its own accent colour (the assistant space's
   // colour, on every assistant payload), so a completed run brands its toast
   // with that colour instead of reading as a generic success. The branded toast
@@ -151,7 +152,7 @@ function showAgentNotification(
   } else if (payload.kind === 'completed') {
     toast.success(payload.title, options)
   } else if (payload.kind === 'chat-completed') {
-    toast.success(payload.title, { ...options, style: chatResponseToastStyle })
+    toast.success(payload.title, { ...options, style: temporaryChatToastStyle })
   } else if (payload.kind === 'attention') {
     // A thread waiting for input is a status notice owned by the panel's
     // Attention tab, never an app error/warning entry.

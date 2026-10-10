@@ -335,7 +335,7 @@
       case 'completed':
         return 'Project complete'
       case 'chat-completed':
-        return 'Chat response available'
+        return 'Temporary chat response'
       case 'attention':
         return 'Needs attention'
       case 'spec':
@@ -439,7 +439,7 @@
             <span class="shrink-0">·</span>
             <MessageCircleDashed
               size={10}
-              class="shrink-0 text-info"
+              class="shrink-0 text-temporary-chat"
               title="Temporary chat"
               aria-hidden="true"
             />
