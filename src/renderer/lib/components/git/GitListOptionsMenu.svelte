@@ -25,6 +25,12 @@
     current: string
     /** Whether a non-default choice is active, so the trigger shows it. */
     narrowed: boolean
+    /**
+     * Whether the filter section is drawn. The notification panel turns it off
+     * for its Saved and Done views, which are not a filtered live listing and
+     * only have an ordering.
+     */
+    showFilter?: boolean
   }
 
   let {
@@ -36,7 +42,8 @@
     onSortChange,
     label,
     current,
-    narrowed
+    narrowed,
+    showFilter = true
   }: Props = $props()
 
   const itemClass =
@@ -83,20 +90,22 @@
       collisionPadding={8}
       class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
     >
-      <p class={sectionClass}>Show</p>
-      <DropdownMenu.RadioGroup value={filter} onValueChange={handleFilterChange}>
-        {#each filterOptions as option (option.id)}
-          <DropdownMenu.RadioItem value={option.id} class={itemClass} title={option.hint}>
-            <span class="min-w-0 flex-1 truncate">{option.label}</span>
-            <Check
-              size={12}
-              class={['shrink-0', option.id === filter ? 'text-primary' : 'invisible']}
-              aria-hidden="true"
-            />
-          </DropdownMenu.RadioItem>
-        {/each}
-      </DropdownMenu.RadioGroup>
-      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      {#if showFilter}
+        <p class={sectionClass}>Show</p>
+        <DropdownMenu.RadioGroup value={filter} onValueChange={handleFilterChange}>
+          {#each filterOptions as option (option.id)}
+            <DropdownMenu.RadioItem value={option.id} class={itemClass} title={option.hint}>
+              <span class="min-w-0 flex-1 truncate">{option.label}</span>
+              <Check
+                size={12}
+                class={['shrink-0', option.id === filter ? 'text-primary' : 'invisible']}
+                aria-hidden="true"
+              />
+            </DropdownMenu.RadioItem>
+          {/each}
+        </DropdownMenu.RadioGroup>
+        <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      {/if}
       <p class={sectionClass}>Order by</p>
       <DropdownMenu.RadioGroup value={sort} onValueChange={handleSortChange}>
         {#each sortOptions as option (option.id)}

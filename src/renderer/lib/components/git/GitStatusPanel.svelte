@@ -11,6 +11,7 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
+  import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
@@ -48,6 +49,7 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
+    Bell,
     Bot,
     Check,
     ChevronDown,
@@ -89,6 +91,7 @@
   import BranchPicker from './BranchPicker.svelte'
   import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
+  import GitNotificationsPanel from './GitNotificationsPanel.svelte'
   import GitStatusPanelBranchesView from './GitStatusPanelBranchesView.svelte'
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
@@ -933,6 +936,9 @@
   function selectTab(id: GitPanelTabId): void {
     activeTab = id
     if (id === 'history') void loadHistory()
+    // Notifications arrive from GitHub rather than the repository, so the view
+    // asks for its own data the first time it is shown.
+    if (id === 'notifications') void githubNotifications.ensureLoaded()
   }
 
   /**
@@ -1855,7 +1861,7 @@
    * The row's remote actions apply to the branch you are standing on, which is
    * what the Deploys view is not about.
    */
-  const remoteActionsApply = $derived(activeTab !== 'deployments')
+  const remoteActionsApply = $derived(activeTab !== 'deployments' && activeTab !== 'notifications')
   /**
    * Unresolved conflicts hand the row to the controls that end them, so the
    * remote buttons step out of the way and reappear in the git actions menu.
@@ -2565,6 +2571,17 @@
       { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null },
       { id: 'issues', label: 'Issues', icon: CircleDot, count: null }
     ]
+    // Notifications are account-wide, so the view earns a place only once a
+    // GitHub account is signed in. Its badge is the unread count of what the
+    // panel has loaded, since GitHub has no total-count endpoint.
+    if (githubConnected) {
+      list.push({
+        id: 'notifications',
+        label: 'Notifications',
+        icon: Bell,
+        count: githubNotifications.counts.inbox > 0 ? githubNotifications.counts.inbox : null
+      })
+    }
     // Stash is just shelved work   it earns a tab only once something is shelved.
     if (gitState.stashes.length > 0) {
       list.push({
@@ -3400,6 +3417,7 @@
           {primaryRemote}
           onSignIn={() => githubSignIn.start()}
           onSignOut={() => void signOutGitHub()}
+          onOpenNotifications={() => selectTab('notifications')}
         />
       {/if}
       {#if repoState === 'git' && gitState.branches.length > 0}
@@ -3848,6 +3866,10 @@
               {githubConnected}
               onSignIn={() => githubSignIn.start()}
             />
+          </div>
+        {:else if activeTab === 'notifications'}
+          <div class="h-full min-h-0">
+            <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor

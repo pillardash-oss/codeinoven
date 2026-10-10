@@ -1181,3 +1181,99 @@ export type WorkflowRerunResult = GitHubMutationResult<null>
  * the run that owns it.
  */
 export type WorkflowCancelResult = GitHubMutationResult<null>
+
+/**
+ * Which of GitHub's notification views a listing reads.
+ *
+ * `inbox` is served live by the REST API. `saved` and `done` have no REST
+ * endpoint: GitHub exposes no way to list archived ("done") threads, and its
+ * "Saved" view is not reachable from the public API at all, so those two views
+ * are owned by the app, which persists a snapshot of each thread the user saves
+ * or marks done. The real action still goes to GitHub (a done marks the thread
+ * read and removes it from the inbox), so the two stay in step.
+ */
+export type GitHubNotificationTab = 'inbox' | 'saved' | 'done'
+
+/**
+ * The filters GitHub's own notification list offers.
+ *
+ * GitHub's REST listing accepts only `all` and `participating` as query
+ * parameters; every other filter narrows on the `reason` field of each returned
+ * thread. That is exactly how github.com maps its filters onto reasons, so the
+ * membership sets below are read straight off the reason table in the docs.
+ */
+export type GitHubNotificationFilter =
+  | 'default'
+  | 'all'
+  | 'assigned'
+  | 'participating'
+  | 'mentioned'
+  | 'team-mentioned'
+  | 'review-requested'
+  | 'security'
+  | 'ci'
+
+/** The order a notification listing is drawn in. */
+export type GitHubNotificationSort = 'newest' | 'oldest'
+
+/** How a notification listing is grouped into sections. */
+export type GitHubNotificationGroup = 'date' | 'repository'
+
+/** One GitHub notification thread, flattened for the panel. */
+export interface GitHubNotification {
+  /** Thread id, as a decimal string. */
+  id: string
+  /** Whether the thread is still unread on GitHub. */
+  unread: boolean
+  /** GitHub's `reason` string (`assign`, `mention`, `review_requested`, …). */
+  reason: string
+  /** When the thread last changed, ISO 8601. */
+  updatedAt: string
+  /** Subject kind, e.g. `PullRequest`, `Issue`, `Discussion`, `Commit`, `Release`. */
+  subjectType: string
+  /** Subject title as GitHub reports it. */
+  title: string
+  /** Browsable github.com URL for the subject, when one can be derived. */
+  url: string | null
+  repositoryName: string
+  repositoryFullName: string
+  repositoryUrl: string
+  repositoryPrivate: boolean
+  actorLogin: string | null
+  /** True when the user saved this thread in the app. */
+  saved: boolean
+  /** True when the user marked this thread done in the app. */
+  done: boolean
+}
+
+/** Per-view counts drawn on the panel's tabs. */
+export interface GitHubNotificationTabCounts {
+  /**
+   * Unread threads in the listing GitHub just returned. GitHub exposes no
+   * total-count endpoint for notifications, so this is the count of what was
+   * fetched, never an invented total.
+   */
+  inbox: number
+  /** Saved threads the app holds. */
+  saved: number
+  /** Done threads the app holds. */
+  done: number
+}
+
+/** One page of a notification listing, as the renderer receives it. */
+export interface GitHubNotificationPage {
+  items: GitHubNotification[]
+  /** Whether another page of the same query exists. */
+  hasMore: boolean
+  counts: GitHubNotificationTabCounts
+}
+
+/** A notification listing request. */
+export interface GitHubNotificationPageInput {
+  tab: GitHubNotificationTab
+  filter: GitHubNotificationFilter
+  /** 1-based page number. */
+  page: number
+  /** Items per page; the provider caps this. */
+  perPage: number
+}

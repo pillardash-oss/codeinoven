@@ -9,7 +9,14 @@ import type {
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
 export type GitPanelTabId =
-  'changes' | 'history' | 'branches' | 'pulls' | 'issues' | 'deployments' | 'stashes'
+  | 'changes'
+  | 'history'
+  | 'branches'
+  | 'pulls'
+  | 'issues'
+  | 'notifications'
+  | 'deployments'
+  | 'stashes'
 
 export interface GitPanelViewState {
   activeTab: GitPanelTabId

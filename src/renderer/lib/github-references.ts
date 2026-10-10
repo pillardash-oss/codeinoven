@@ -68,6 +68,22 @@ export function githubAppInstallUrl(): string {
   return 'https://github.com/apps/codeinoven/installations/new'
 }
 
+/**
+ * GitHub's notification settings.
+ *
+ * The panel offers this so a reader who needs more than the inbox filter   per
+ * organization, per repository, watching and custom routing   can go deeper on
+ * github.com instead of the app growing a settings surface of its own.
+ */
+export function githubNotificationSettingsUrl(): string {
+  return 'https://github.com/settings/notifications'
+}
+
+/** GitHub's inbox, the page the panel mirrors. */
+export function githubNotificationsUrl(): string {
+  return 'https://github.com/notifications'
+}
+
 // ─── Reference extension ────────────────────────────────────────────────────
 
 /** Token type emitted for every resolved reference. */

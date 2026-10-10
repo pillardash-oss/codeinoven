@@ -14,6 +14,9 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubDeviceCode,
   GitHubMutationResult,
+  GitHubNotificationPage,
+  GitHubNotificationPageInput,
+  GitHubNotificationTabCounts,
   GitHubPollResult,
   GitHubWorkflowRunDetail,
   GitIdentity,
@@ -975,5 +978,30 @@ export const invokeGitContract = {
    * the same CSP reason. Only `https:` is accepted, and main additionally refuses
    * literal private hosts because it is the side that opens the connection.
    */
-  'github:image': {} as Contract<[urls: string[]], Record<string, string | null>>
+  'github:image': {} as Contract<[urls: string[]], Record<string, string | null>>,
+  /**
+   * One page of the signed-in user's GitHub notifications. `inbox` is live from
+   * the API; `saved` and `done` read the app's own snapshots, because GitHub's
+   * REST API cannot list archived threads and exposes no save at all.
+   */
+  'githubNotification:page': {} as Contract<
+    [input: GitHubNotificationPageInput],
+    GitHubNotificationPage
+  >,
+  /** Mark one thread read on GitHub. */
+  'githubNotification:markRead': {} as Contract<[threadId: string], void>,
+  /** Mark every notification read on GitHub. */
+  'githubNotification:markAllRead': {} as Contract<[], void>,
+  /** Subscribe (watch) or unsubscribe (ignore) a thread on GitHub. */
+  'githubNotification:setSubscribed': {} as Contract<[threadId: string, subscribed: boolean], void>,
+  /** Save or unsave a thread in the app. Returns the fresh view counts. */
+  'githubNotification:setSaved': {} as Contract<
+    [threadId: string, saved: boolean],
+    GitHubNotificationTabCounts
+  >,
+  /** Mark a thread done on GitHub, or restore it to the app's inbox. */
+  'githubNotification:setDone': {} as Contract<
+    [threadId: string, done: boolean],
+    GitHubNotificationTabCounts
+  >
 }

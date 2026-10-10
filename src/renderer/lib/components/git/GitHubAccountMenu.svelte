@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ExternalLink, GitFork, LogOut, User } from '@lucide/svelte'
+  import { Bell, ExternalLink, GitFork, LogOut, Settings, User } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -12,9 +12,11 @@
     primaryRemote: { name: string; url: string } | null
     onSignIn: () => void
     onSignOut: () => void
+    /** Take the Git panel to its Notifications view. */
+    onOpenNotifications: () => void
   }
 
-  let { github, primaryRemote, onSignIn, onSignOut }: Props = $props()
+  let { github, primaryRemote, onSignIn, onSignOut, onOpenNotifications }: Props = $props()
 
   let open = $state(false)
 
@@ -44,6 +46,7 @@
    */
   const profileUrl = $derived(`https://github.com/${user?.login ?? ''}`)
   const myPullRequestsUrl = 'https://github.com/pulls'
+  const notificationSettingsUrl = 'https://github.com/settings/notifications'
 </script>
 
 {#if github.connected && user}
@@ -113,6 +116,24 @@
           >
             <GitFork size={12} class="shrink-0 text-dimmed" />
             My pull requests
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+            onSelect={() => {
+              open = false
+              onOpenNotifications()
+            }}
+          >
+            <Bell size={12} class="shrink-0 text-dimmed" />
+            Notifications
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+            data-external-url={notificationSettingsUrl}
+            onSelect={() => void openUrl(notificationSettingsUrl)}
+          >
+            <Settings size={12} class="shrink-0 text-dimmed" />
+            Notification settings
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="my-1 h-px bg-border" />
           <DropdownMenu.Item

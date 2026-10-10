@@ -69,6 +69,7 @@ import { registerGitHandlers } from './handlers/git-handlers'
 import { registerGitRemoteHandlers } from './handlers/git-remote-handlers'
 import { registerMergeHandlers } from './handlers/merge-handlers'
 import { registerPrHandlers } from './handlers/pr-handlers'
+import { registerGitHubNotificationHandlers } from './handlers/github-notification-handlers'
 import { registerIssueHandlers } from './handlers/issue-handlers'
 import { registerCloudHandlers } from './handlers/cloud-handlers'
 import { registerEditorsHandlers } from './handlers/editors-handlers'
@@ -511,6 +512,7 @@ export function registerIpcHandlers(
   registerGitRemoteHandlers(ctx)
   registerMergeHandlers(ctx)
   registerPrHandlers(ctx)
+  registerGitHubNotificationHandlers(ctx)
   registerIssueHandlers(ctx)
   registerCloudHandlers(ctx)
   registerEditorsHandlers(ctx)
