@@ -1680,6 +1680,33 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven workstation control session   the slash spelling of the
+    // @cio-hey composer tag. Selecting sends the tag (plus any typed
+    // arguments) through the normal send path, so the main-process
+    // orchestration contract owns the tooling that goes with it.
+    actions.push({
+      id: 'command:cio-orchestrate',
+      title: '/cio-hey',
+      description:
+        'Start a workstation control turn: run work on a machine, model and account, or drive the app itself',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: [
+        'hey',
+        'cio',
+        'orchestrate',
+        'workstation',
+        'oven',
+        'machine',
+        'model',
+        'app',
+        'panel',
+        'rail'
+      ],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -6478,6 +6505,15 @@
     sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
   }
 
+  /** Open a workstation control session   the slash spelling of the @cio-hey
+   *  composer tag. The main process owns the orchestration contract and the
+   *  tools that go with it, so this only has to send the tag and whatever the
+   *  user typed after it. */
+  function triggerCioOrchestrateTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-hey ${request}` : '@cio-hey', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -6789,6 +6825,10 @@
       triggerCioVideoTurn(args)
       return
     }
+    if (commandId === 'command:cio-orchestrate') {
+      triggerCioOrchestrateTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6907,6 +6947,7 @@
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
       action.id === 'command:cio-video' ||
+      action.id === 'command:cio-orchestrate' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')

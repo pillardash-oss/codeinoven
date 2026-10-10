@@ -51,8 +51,12 @@ import type {
   ToastOverlayInteractionReport,
   ToastOverlayRequestStack
 } from '../browser-overlay'
+import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  /** One app call for the renderer to perform on the agent's behalf. The
+   *  renderer answers on the `appControl:respond` invoke with the request id. */
+  'appControl:request': [] as unknown as [request: AppControlRequest],
   'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
   'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],

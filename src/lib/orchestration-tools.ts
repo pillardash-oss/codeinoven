@@ -25,7 +25,7 @@ import { MODEL_PROFILE_INFERENCE_MODES, MODEL_PROFILE_PERMISSION_LEVELS } from '
  *    from the read tool's result.
  *
  * Gating is the gateway's, not prose's: the tools are only placed on a turn
- * that carries the `@cio-orchestrate` tag, and a turn without it cannot reach
+ * that carries the `@cio-hey` tag, and a turn without it cannot reach
  * a route that is not there.
  */
 
@@ -172,7 +172,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
     inputSchema: TARGETS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-targets',
-    sentWhen: 'An @cio-orchestrate turn, before dispatching work to a machine or a model'
+    sentWhen: 'An @cio-hey turn, before dispatching work to a machine or a model'
   },
   {
     name: ORCHESTRATION_DISPATCH_TOOL_NAME,
@@ -181,7 +181,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
     inputSchema: DISPATCH_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-dispatch',
-    sentWhen: 'An @cio-orchestrate turn once every dispatch field is resolved or confirmed'
+    sentWhen: 'An @cio-hey turn once every dispatch field is resolved or confirmed'
   },
   {
     name: ORCHESTRATION_STATUS_TOOL_NAME,
@@ -190,6 +190,6 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
     inputSchema: STATUS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-status',
-    sentWhen: 'An @cio-orchestrate follow-up about work already dispatched'
+    sentWhen: 'An @cio-hey follow-up about work already dispatched'
   }
 ]

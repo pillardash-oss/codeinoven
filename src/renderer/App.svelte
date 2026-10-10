@@ -26,6 +26,8 @@
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
+  import { startAppControlResponder } from '$lib/app-control/app-control-responder'
+  import { registerShellNavigationActions } from '$lib/app-control/app-control-actions'
   import {
     rendererRecovery,
     flushAllDraftCommits,
@@ -1744,6 +1746,11 @@
     window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
     const uninstallComposerFocusShortcut = initComposerFocusShortcut()
+
+    // The renderer half of the app-control bridge, plus the shell-owned
+    // navigation actions. Both are idempotent: a remount re-registers nothing.
+    startAppControlResponder()
+    registerShellNavigationActions((view) => navigate(view as View))
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
     const unsubscribeIpc = installAppIpcSubscriptions({

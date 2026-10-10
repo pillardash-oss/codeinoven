@@ -46,6 +46,11 @@ import {
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../lib/orchestration-tools'
+import {
+  APP_CONTROL_CALL_TOOL_NAME,
+  APP_CONTROL_CATALOG_TOOL_NAME,
+  isAppControlTool
+} from '../../lib/app-control-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
@@ -200,7 +205,7 @@ export interface UtilityTurnRequest {
   videoSession?: VideoSessionMode
   /**
    * Whether this turn belongs to an orchestration session the user opened with
-   * `@cio-orchestrate`. It is the gate for the workstation tools: only a turn
+   * `@cio-hey`. It is the gate for the workstation tools: only a turn
    * that carries this contract is offered the targets, dispatch and status
    * operations, so an ordinary chat can never start a run on a machine.
    */
@@ -427,7 +432,7 @@ export interface UtilitySuggestionContext {
   harnessId: string
 }
 
-/** Whether a turn is inside an orchestration session opened by `@cio-orchestrate`. */
+/** Whether a turn is inside an orchestration session opened by `@cio-hey`. */
 export type OrchestrationSessionMode = 'off' | 'start' | 'continue'
 
 /**
@@ -452,6 +457,26 @@ export interface OrchestrationToolContext {
 }
 
 export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
+
+/** The two app-control operations, mirrored from the tool catalog. */
+export type AppControlOperation = 'catalog' | 'call'
+
+/** The turn an app-control call came from. */
+export interface AppControlContext {
+  projectId: string
+  projectPath: string | null
+  threadId: string
+}
+
+/**
+ * Runs one app-control tool for the turn that asked for it: it lists the app
+ * surface or performs one app call through the renderer. The chat engine
+ * supplies it because the app-control bridge lives beside the turn lifecycle.
+ */
+export interface AppControlExecutor {
+  catalog: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+  call: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+}
 
 interface TurnState {
   id: string
@@ -556,6 +581,7 @@ export class UtilityOrchestrationService {
   private secretRequestExecutor: SecretRequestExecutor | null = null
   private utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   private orchestrationExecutor: OrchestrationExecutor | null = null
+  private appControlExecutor: AppControlExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -647,6 +673,10 @@ export class UtilityOrchestrationService {
         return (state, input) => this.orchestrate(state, input, 'dispatch')
       case ORCHESTRATION_STATUS_TOOL_NAME:
         return (state, input) => this.orchestrate(state, input, 'status')
+      case APP_CONTROL_CATALOG_TOOL_NAME:
+        return (state, input) => this.appControl(state, input, 'catalog')
+      case APP_CONTROL_CALL_TOOL_NAME:
+        return (state, input) => this.appControl(state, input, 'call')
       default:
         return null
     }
@@ -785,6 +815,40 @@ export class UtilityOrchestrationService {
    */
   setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
     this.orchestrationExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-control tools. Driving the app's own
+   * rails, panels and settings is an app capability: the executor owns the IPC
+   * surface and the renderer bridge. The chat engine supplies it.
+   */
+  setAppControlExecutor(executor: AppControlExecutor | null): void {
+    this.appControlExecutor = executor
+  }
+
+  /**
+   * Run one app-control operation for the turn that asked for it.
+   *
+   * The executor owns the channel list and the guardrails, so this handler only
+   * forwards the operation with the turn it belongs to. A missing executor means
+   * the app was built without app control, reported plainly rather than as an
+   * empty result.
+   */
+  private async appControl(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: AppControlOperation
+  ): Promise<unknown> {
+    const executor = this.appControlExecutor
+    if (!executor) throw new Error('App control is unavailable in this deployment')
+    const context = {
+      projectId: state.request.projectId,
+      projectPath: state.request.projectPath,
+      threadId: state.request.threadId
+    }
+    return operation === 'catalog'
+      ? executor.catalog(input, context)
+      : executor.call(input, context)
   }
 
   /**
@@ -986,6 +1050,12 @@ export class UtilityOrchestrationService {
       // to start real work on a machine, so an ordinary turn is offered none of
       // them, and the gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
+        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+      }
+      // The app-control tools are granted by the same session tag: they let a
+      // `@cio-hey` turn drive the app itself, so an ordinary turn is offered
+      // none of them and the gateway refuses a route it never received.
+      if (isAppControlTool(name)) {
         return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
       }
       return hasOnDemand

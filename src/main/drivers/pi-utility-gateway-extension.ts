@@ -51,6 +51,10 @@ import {
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../lib/orchestration-tools'
+import {
+  APP_CONTROL_CALL_TOOL_NAME,
+  APP_CONTROL_CATALOG_TOOL_NAME
+} from '../../lib/app-control-tools'
 
 /** The gateway tools the extension registers as first-class Pi tools. */
 export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
@@ -64,7 +68,9 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_SUGGEST_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
-  ORCHESTRATION_STATUS_TOOL_NAME
+  ORCHESTRATION_STATUS_TOOL_NAME,
+  APP_CONTROL_CATALOG_TOOL_NAME,
+  APP_CONTROL_CALL_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -84,6 +90,8 @@ const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
 const orchestrationTargetsTool = gatewayTool(ORCHESTRATION_TARGETS_TOOL_NAME)
 const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
 const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
+const appCatalogTool = gatewayTool(APP_CONTROL_CATALOG_TOOL_NAME)
+const appCallTool = gatewayTool(APP_CONTROL_CALL_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -587,7 +595,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
 
   // Workstation tools: registered without a promptSnippet so they stay out of
   // the always-on system prompt, and callable only on a turn that carries the
-  // @cio-orchestrate contract, which is also what places their routes on the
+  // @cio-hey contract, which is also what places their routes on the
   // gateway. The gateway refuses a route the turn never received.
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(orchestrationTargetsTool.name)},
@@ -657,6 +665,49 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       const result = await callGateway(${JSON.stringify(orchestrationStatusTool.route)}, {
         threadId: params.threadId,
         ...(params.projectId !== undefined ? { projectId: params.projectId } : {})
+      })
+      return textResult(result)
+    }
+  })
+
+  // App-control tools: the same tag gates them, so an agent on an @cio-hey turn
+  // can operate the app itself   the real IPC surface and the renderer's own
+  // navigation and panel actions   instead of reaching for screen control.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(appCatalogTool.name)},
+    label: 'Read the CodeInOven app surface',
+    description: ${JSON.stringify(appCatalogTool.description)},
+    parameters: Type.Object({
+      domain: Type.Optional(Type.String({ description: 'Limit the channel list to one domain.' })),
+      includeChannels: Type.Optional(Type.Boolean({ description: 'Include the channel names. Defaults to true.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const body = {}
+      if (params.domain !== undefined) body.domain = params.domain
+      if (params.includeChannels !== undefined) body.includeChannels = params.includeChannels
+      const result = await callGateway(${JSON.stringify(appCatalogTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(appCallTool.name)},
+    label: 'Do something in the CodeInOven app',
+    description: ${JSON.stringify(appCallTool.description)},
+    parameters: Type.Object({
+      channel: Type.Optional(Type.String({ description: 'Exact app IPC channel to invoke.' })),
+      args: Type.Optional(Type.Array(Type.Unknown(), { description: 'Positional channel arguments.' })),
+      action: Type.Optional(Type.String({ description: 'Renderer UI action id to run.' })),
+      params: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: 'Named UI action parameters.' })),
+      destructiveConfirmed: Type.Optional(Type.Boolean({ description: 'True only after the user agreed to a destructive operation.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(appCallTool.route)}, {
+        ...(params.channel !== undefined ? { channel: params.channel } : {}),
+        ...(params.args !== undefined ? { args: params.args } : {}),
+        ...(params.action !== undefined ? { action: params.action } : {}),
+        ...(params.params !== undefined ? { params: params.params } : {}),
+        ...(params.destructiveConfirmed !== undefined ? { destructiveConfirmed: params.destructiveConfirmed } : {})
       })
       return textResult(result)
     }

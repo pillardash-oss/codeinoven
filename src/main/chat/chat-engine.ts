@@ -194,6 +194,7 @@ import {
   type OrchestrationRuntime,
   type PendingOrchestrationDispatch
 } from './chat-engine-orchestration'
+import { createAppControlExecutor } from '../app-control/app-control-executor'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { OvenRegistry } from '../ovens/oven-registry'
 import { OvenService } from '../ovens/oven-service'
@@ -1545,7 +1546,7 @@ export class ChatEngine {
   private cioVideoThreads = new Map<string, true>()
 
   /** Threads whose user has opened an orchestration session with
-   *  @cio-orchestrate (current turn or history). The session is what grants the
+   *  @cio-hey (current turn or history). The session is what grants the
    *  workstation tools, so it stays active for every later turn of the thread
    *  rather than for one message. */
   private cioOrchestrateThreads = new Map<string, true>()
@@ -1684,6 +1685,10 @@ export class ChatEngine {
     // and dispatching real work onto a chosen machine. The engine owns every
     // piece a dispatch needs, so it supplies the executor to the same gateway.
     this.attachOrchestrationRuntime()
+    // The app-control tools: driving the app's own rails, panels, browser and
+    // settings through the same gateway. The engine owns the gateway, so it
+    // supplies this executor too.
+    this.utilityOrchestration.setAppControlExecutor(createAppControlExecutor())
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -3950,7 +3955,7 @@ export class ChatEngine {
     videoSession: VideoSessionMode = 'off',
     /**
      * Whether this turn belongs to an orchestration session the user opened
-     * with `@cio-orchestrate`. `start` is the turn that typed the tag,
+     * with `@cio-hey`. `start` is the turn that typed the tag,
      * `continue` is every later turn of the same thread. Both grant the
      * workstation tools and add the matching dispatch contract.
      */
@@ -9724,7 +9729,7 @@ export class ChatEngine {
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
     const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
     // An orchestration session is user-started on the same terms. It is what
-    // grants the workstation tools, so the turn that types @cio-orchestrate
+    // grants the workstation tools, so the turn that types @cio-hey
     // gets the dispatch contract and every later turn of the thread keeps the
     // tools reachable.
     const orchestrationRequested = origin === 'user' && isCioOrchestrateRequest(text)
