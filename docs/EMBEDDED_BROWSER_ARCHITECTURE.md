@@ -417,6 +417,21 @@ The global browser's list is durable (`browser:loadHistory` /
 when its last tab closes, so a thread's browsing never reaches app storage and
 never outlives the browser that made it.
 
+### Closing a tab that is asleep
+
+The close chord belongs to the tab strip, and the strip is the renderer's. A
+sleeping tab, a blank one, or one whose view the main process has not created yet
+has no page, but it still has a row, so `Cmd/Ctrl+W` has to reach the renderer for
+it exactly as it does for a live page. Two decisions make that true:
+`consumeChromeShortcut` in `src/main/browser/browser-service.ts` claims the
+strip's own actions (close, new, reopen, focus the address, find, toggle notes)
+for a claimed tab even when main holds no view for it, and `handleCloseShortcut`
+in `src/renderer/App.svelte` closes the browser's active tab while the standalone
+browser view is the surface on screen. Without the first the chord fell through to
+the application menu's "Close Window" and closed the app; without the second it
+did nothing at all. Repeated presses empty the strip, and the view drops to its
+empty state when the last tab goes.
+
 ### Bookmarks
 
 A bookmark is the user's own record rather than something the browser observed, so

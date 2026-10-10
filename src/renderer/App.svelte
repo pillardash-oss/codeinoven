@@ -1368,9 +1368,9 @@
 
   /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
-   * a sidebar panel, or the open thread. When nothing is active the shortcut is
-   * intentionally a no-op; application shutdown is reserved for explicit quit
-   * actions and the native window close control.
+   * the browser tab on screen, a sidebar panel, or the open thread. When nothing
+   * is active the shortcut is intentionally a no-op; application shutdown is
+   * reserved for explicit quit actions and the native window close control.
    */
   function handleCloseShortcut(): void {
     // The spotlight is one surface: the close chord closes it whole, whichever
@@ -1386,6 +1386,24 @@
     // On a Settings page: leave back to the previous view.
     if (isSettingsView(activeView)) {
       navigate(lastViewBeforeSettings)
+      return
+    }
+    // The standalone browser view answers the chord with the page it is showing:
+    // the tab closes, exactly as a page closes in a browser. A sleeping tab and a
+    // blank one close the same way, so repeated presses empty the strip and land
+    // on the browser's own empty state. The claim store names the tab main routes
+    // browser keys to, which is the one the user is working in; the active tab is
+    // the fallback for the moment before that claim lands.
+    if (activeView === 'browser') {
+      const claimed = browserKeyboardFocus.tabId
+      void withBrowser((store) => {
+        // A claim names the surface the user is working in. When it names a tab
+        // this store does not hold (a Peek preview owns its own tab, which is
+        // not a strip tab) there is no tab of ours to close. With no claim at
+        // all, the view's active tab is the one the chord means.
+        const tab = claimed ? store.tabById(claimed) : store.activeTab
+        if (tab) store.close(tab.id)
+      })
       return
     }
     // Focus inside the context sidebar: close the active tab of the surface that

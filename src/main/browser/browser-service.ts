@@ -305,6 +305,20 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
 }
 
 /**
+ * Whether a browser action is answered by the renderer rather than a page.
+ *
+ * The tab strip, the address field and the find bar are DOM chrome, so these
+ * actions reach the renderer even for a tab this process holds no page for: a
+ * sleeping tab, a blank one, or one whose view has not been created yet. Page
+ * actions (`reload`, `back`, zooming) have nothing to act on in that state.
+ */
+function isRendererAnsweredAction(
+  action: BrowserShortcutAction
+): action is keyof typeof PANEL_SHORTCUT_TARGETS {
+  return action in PANEL_SHORTCUT_TARGETS
+}
+
+/**
  * Browser chords a popup window deliberately leaves unclaimed.
  *
  * Find is the chrome's own tool: its bar is a row of the surface that shows the
@@ -2876,6 +2890,14 @@ export class BrowserService {
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
     if (this.forwardNavigationShortcut(action)) return
+    // The strip, the address field and the find bar are the renderer's, so their
+    // actions are forwarded before this process looks for a page to act on. A
+    // claimed tab with no view (a sleeping or blank tab) still has a row the
+    // renderer owns, and that row is what these actions act on.
+    if (isRendererAnsweredAction(action)) {
+      this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
+      return
+    }
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
     const contents = tab.view.webContents
@@ -2906,16 +2928,6 @@ export class BrowserService {
         return
       case 'savePage':
         void this.savePage(contents)
-        return
-      case 'focusAddress':
-      case 'closeTab':
-      case 'newTab':
-      case 'reopenTab':
-      case 'toggleNotes':
-      case 'find':
-      case 'findNext':
-      case 'findPrevious':
-        this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }
   }
@@ -2973,13 +2985,16 @@ export class BrowserService {
    */
   consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
     const tabId = this.focusedChromeTabId
-    // The claim can name a tab this process has not created yet (a view claims the
-    // keyboard as it mounts, before the show that creates its page), and a tab it
-    // no longer has is one whose keys belong to the app again, so the match is what
-    // decides.
-    if (!tabId || !this.tabs.has(tabId)) return false
+    if (!tabId) return false
     const action = matchBrowserShortcut(input, this.shortcutBindings)
     if (!action) return false
+    // A claim can name a tab this process holds no page for: a sleeping tab, a
+    // blank one, or a tab whose view is still being created. Its row is the
+    // renderer's regardless, so the strip's own actions are still claimed here.
+    // Claiming them is what keeps Cmd/Ctrl+W on a sleeping tab from falling
+    // through to the application menu's "Close Window" and closing the app. A
+    // page action has nothing to act on without a page, so it is left alone.
+    if (!this.tabs.has(tabId) && !isRendererAnsweredAction(action)) return false
     event.preventDefault()
     this.runBrowserShortcut(tabId, action)
     return true
