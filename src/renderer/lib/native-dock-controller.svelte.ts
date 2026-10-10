@@ -4,7 +4,9 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   NATIVE_DOCK_TAGS,
   NATIVE_DOCK_ATTRIBUTES,
+  NATIVE_DOCK_STYLE_PROPERTIES,
   MAX_NATIVE_DOCK_NODES,
+  nativeDockColor,
   nativeDockStyleAllowed,
   validateNativeDockImages,
   validateNativeDockRequest,
@@ -256,21 +258,15 @@ export class NativeDockController {
         attributes[attribute.name] = attribute.value
     }
     if (node instanceof HTMLElement || node instanceof SVGElement) {
-      const sizing = [
-        'width',
-        'height',
-        'font-size',
-        'color',
-        'background',
-        'background-color',
-        'border-top-color',
-        'border-right-color'
-      ]
-        .map((property) => {
-          const value = node.style.getPropertyValue(property)
-          const declaration = `${property}: ${value};`
-          return value && nativeDockStyleAllowed(declaration) ? declaration : ''
-        })
+      // One list, one colour form, one guard: what this builds is exactly what
+      // `nativeDockStyleAllowed` accepts, so an inline style can never be
+      // projected in a shape the validator then refuses.
+      const sizing = NATIVE_DOCK_STYLE_PROPERTIES.map((property) => {
+        const value = nativeDockColor(node.style.getPropertyValue(property))
+        const declaration = `${property}: ${value};`
+        return value && nativeDockStyleAllowed(declaration) ? declaration : ''
+      })
+        .filter(Boolean)
         .join(' ')
       if (sizing.trim()) attributes.style = sizing.trim()
     }

@@ -170,6 +170,9 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'for',
   'placeholder',
   'maxlength',
+  'min',
+  'max',
+  'step',
   'readonly',
   'spellcheck',
   'autocomplete',
@@ -221,24 +224,110 @@ export function nativeDockImageIds(nodes: readonly (NativeDockNode | string)[]):
   return ids
 }
 
-/** Copy only inert sizing and badge colours, never arbitrary CSS or URLs. */
+/**
+ * The size and paint properties a projected element may carry, in the one order
+ * both the projection and the validator read them. Sizing and paint only: never
+ * layout, never positioning, never anything that can reach the network.
+ */
+export const NATIVE_DOCK_STYLE_PROPERTIES = [
+  'width',
+  'height',
+  'font-size',
+  'color',
+  'accent-color',
+  'background',
+  'background-color',
+  'border-color',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color'
+] as const
+
+const DOCK_SIZE_PROPERTIES = new Set(['width', 'height', 'max-height', 'font-size'])
+const DOCK_PAINT_PROPERTIES = new Set<string>(NATIVE_DOCK_STYLE_PROPERTIES)
+
+/**
+ * CSS functions an inert paint value may call. Colour maths and gradients paint
+ * pixels; everything else can reference a resource, a variable outside the theme,
+ * or an environment detail the native document must not read.
+ */
+const DOCK_PAINT_FUNCTIONS = new Set([
+  'rgb',
+  'rgba',
+  'hsl',
+  'hsla',
+  'hwb',
+  'lab',
+  'lch',
+  'oklab',
+  'oklch',
+  'color',
+  'color-mix',
+  'calc',
+  'min',
+  'max',
+  'clamp',
+  'linear-gradient',
+  'radial-gradient',
+  'conic-gradient',
+  'repeating-linear-gradient',
+  'repeating-radial-gradient',
+  'repeating-conic-gradient'
+])
+
+function hexByte(value: number): string {
+  return Math.round(Math.min(255, Math.max(0, value)))
+    .toString(16)
+    .padStart(2, '0')
+}
+
+/**
+ * Return a colour in the one form the dock accepts.
+ *
+ * Chromium serialises an inline hex, named or `hsl()` colour to `rgb()`/`rgba()`,
+ * so a swatch that was given `#6366f1` reads back as `rgb(99, 102, 241)`. Passed
+ * through unchanged that value fails the paint guard and the swatch is projected
+ * with no colour at all: a blank square. Put it back into hex instead.
+ */
+export function nativeDockColor(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === 'initial' || trimmed === 'unset') return ''
+  if (trimmed === 'transparent') return '#00000000'
+  const channels = trimmed.match(
+    /^rgba?\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*(?:,\s*(0|1|0?\.\d+)\s*)?\)$/
+  )
+  if (!channels) return trimmed
+  const rgb = [channels[1], channels[2], channels[3]].map((part) => hexByte(Number(part))).join('')
+  const alpha = channels[4] === undefined ? 1 : Number(channels[4])
+  return `#${rgb}${alpha >= 1 ? '' : hexByte(alpha * 255)}`
+}
+
+/** Every function an inert paint value calls must be a known colour or gradient. */
+function paintValueAllowed(value: string): boolean {
+  // No escapes, no quotes, no semicolons: the characters an injected
+  // declaration or a smuggled identifier would need are simply absent here.
+  if (!/^[a-zA-Z0-9#%.,()\s/_+*-]+$/.test(value)) return false
+  for (const call of value.matchAll(/([a-zA-Z-]+)\s*\(/g)) {
+    const name = (call[1] ?? '').toLowerCase()
+    if (name === 'var') continue
+    if (!DOCK_PAINT_FUNCTIONS.has(name)) return false
+  }
+  for (const variable of value.matchAll(/var\(\s*([^)]*)\)/g)) {
+    if (!/^--color-[a-z0-9-]+$/.test((variable[1] ?? '').trim())) return false
+  }
+  return true
+}
+
+/** Copy only inert sizing and paint, never arbitrary CSS or URLs. */
 export function nativeDockStyleAllowed(style: string): boolean {
   return style.split(';').every((declaration) => {
     if (!declaration.trim()) return true
     const separator = declaration.indexOf(':')
     const property = declaration.slice(0, separator).trim()
     const value = declaration.slice(separator + 1).trim()
-    if (['width', 'height', 'max-height', 'font-size'].includes(property))
-      return /^[0-9.]+(?:px|rem|em|%)$/.test(value)
-    return (
-      [
-        'color',
-        'background',
-        'background-color',
-        'border-top-color',
-        'border-right-color'
-      ].includes(property) && /^(?:var\(--color-[a-z0-9-]+\)|#[a-fA-F0-9]{3,8})$/.test(value)
-    )
+    if (DOCK_SIZE_PROPERTIES.has(property)) return /^[0-9.]+(?:px|rem|em|%)$/.test(value)
+    return DOCK_PAINT_PROPERTIES.has(property) && paintValueAllowed(value)
   })
 }
 

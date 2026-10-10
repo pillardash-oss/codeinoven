@@ -49,7 +49,9 @@
   export type ModalSize = 'md' | 'lg' | 'xl' | 'full'
 
   const INPUT_FIELD_SELECTOR = [
-    'input:not([type="hidden"]):not([disabled]):not([readonly])',
+    // A colour well is a control, not a field: it must not take the initial
+    // focus away from the first real entry the user has to make.
+    'input:not([type="hidden"]):not([type="color"]):not([disabled]):not([readonly])',
     'textarea:not([disabled]):not([readonly])',
     'select:not([disabled])',
     '[contenteditable="true"]:not([aria-disabled="true"])'

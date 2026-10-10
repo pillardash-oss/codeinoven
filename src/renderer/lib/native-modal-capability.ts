@@ -11,7 +11,7 @@ export function supportsNativeModal(root: HTMLElement): boolean {
     if (
       !NATIVE_DOCK_TAGS.has(node.localName) ||
       (node instanceof HTMLInputElement &&
-        !['text', 'search', 'url', 'email', 'tel'].includes(node.type)) ||
+        !['text', 'search', 'url', 'email', 'tel', 'range', 'color'].includes(node.type)) ||
       node.hasAttribute('contenteditable') ||
       (node.hasAttribute('aria-haspopup') && node.getAttribute('aria-haspopup') !== 'false') ||
       (!field &&
