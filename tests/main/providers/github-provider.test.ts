@@ -1004,6 +1004,91 @@ describe('GitHubProvider', () => {
     )
   })
 
+  it('searches issue candidates with the typed text and reads their node ids', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                __typename: 'Issue',
+                number: 209,
+                title: 'Mouse click stops working',
+                url: 'https://github.com/acme/app/issues/209',
+                state: 'OPEN',
+                stateReason: null,
+                createdAt: '2026-10-10T09:24:21Z',
+                updatedAt: '2026-10-10T21:29:30Z',
+                author: { login: 'mrprotocoll', avatarUrl: null },
+                labels: { nodes: [] },
+                assignees: { nodes: [] },
+                milestone: null,
+                id: 'I_kwDOTtc8bM8AAAABWRuRrA',
+                comments: { totalCount: 2 }
+              },
+              // A pull request node the issue search still returns: it must be dropped,
+              // and it is the reason the mapper checks `__typename`.
+              { __typename: 'PullRequest', number: 12, title: 'A pull request' }
+            ]
+          }
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const candidates = await provider.searchIssueCandidates({
+      owner: 'acme',
+      repo: 'app',
+      text: 'mouse'
+    })
+
+    const { init } = captureRequest()
+    const body = JSON.parse(String(init.body)) as { query: string; variables: { q: string } }
+    expect(body.variables.q).toBe('is:issue repo:acme/app mouse sort:updated-desc')
+    expect(candidates).toHaveLength(1)
+    // The node id is what the relationship writes accept, so it has to survive the
+    // mapper that both the listing and the picker share.
+    expect(candidates[0]).toMatchObject({
+      number: 209,
+      nodeId: 'I_kwDOTtc8bM8AAAABWRuRrA'
+    })
+  })
+
+  it('sends each relationship mutation with the two node ids it is given', async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(jsonResponse({ data: { addSubIssue: { issue: { id: 'I_parent' } } } }))
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+    const link = { owner: 'acme', repo: 'app', issueNodeId: 'I_parent', relatedNodeId: 'I_child' }
+
+    await provider.addIssueSubIssue(link)
+    await provider.removeIssueSubIssue(link)
+    await provider.addIssueBlockedBy(link)
+    await provider.removeIssueBlockedBy(link)
+
+    const bodies = fetchMock.mock.calls.map((call) => {
+      const init = (call[1] ?? {}) as RequestInit
+      return JSON.parse(String(init.body)) as { query: string; variables: Record<string, string> }
+    })
+    expect(bodies.map((body) => body.variables)).toEqual([
+      { issueId: 'I_parent', subIssueId: 'I_child' },
+      { issueId: 'I_parent', subIssueId: 'I_child' },
+      { issueId: 'I_parent', blockingIssueId: 'I_child' },
+      { issueId: 'I_parent', blockingIssueId: 'I_child' }
+    ])
+    // The dependency pair addresses its second side as `blockingIssueId`, not
+    // `subIssueId`: the two mutations take different input fields for the same idea.
+    expect(bodies[0].query).toContain(
+      'addSubIssue(input: { issueId: $issueId, subIssueId: $subIssueId })'
+    )
+    expect(bodies[1].query).toContain('removeSubIssue(input:')
+    expect(bodies[2].query).toContain(
+      'addBlockedBy(input: { issueId: $issueId, blockingIssueId: $blockingIssueId })'
+    )
+    expect(bodies[3].query).toContain('removeBlockedBy(input:')
+  })
+
   it('reads a duplicate close reason from an issue summary and its detail', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

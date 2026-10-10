@@ -10,6 +10,7 @@ import type {
   IssuePage,
   IssueReference,
   IssueRelationships,
+  IssueSummary,
   IssueTimelineEvent,
   IssueUpdateInput,
   NewIssueInput,
@@ -159,6 +160,33 @@ export interface IssueCommentTarget {
   commentId: number
 }
 
+/** Search a repository's issues by text, for the relationship picker. */
+export interface SearchIssueCandidatesInput {
+  owner: string
+  repo: string
+  /**
+   * Free text in GitHub's own search syntax. Empty lists the most recently updated
+   * issues, which is what a picker shows before anything is typed.
+   */
+  text: string
+}
+
+/**
+ * One relationship write, with both sides addressed by GraphQL node id.
+ *
+ * There is no issue number here on purpose: GitHub's sub-issue and dependency
+ * mutations accept node ids only, and a number would have to be resolved to one
+ * anyway, which is a second request for a caller that already has the id.
+ */
+export interface IssueLinkInput {
+  owner: string
+  repo: string
+  /** The issue that holds the relationship: the parent, or the blocked issue. */
+  issueNodeId: string
+  /** The issue on the other side: the sub-issue, or the issue that blocks. */
+  relatedNodeId: string
+}
+
 /** Post an issue comment on a pull request. */
 export interface CreatePrCommentInput extends PullRequestTarget {
   body: string
@@ -289,6 +317,27 @@ export interface GitProvider {
    * item rather than assuming from the issue being read.
    */
   listIssueRelationships(input: IssueTarget): Promise<IssueRelationships>
+  /**
+   * Search the repository's issues for a relationship picker.
+   *
+   * Search-backed, sharing the listing's query and its mapper, so a candidate is
+   * read exactly the way a listed issue is read. Each candidate carries its node id,
+   * which is the only handle the relationship writes accept.
+   */
+  searchIssueCandidates(input: SearchIssueCandidatesInput): Promise<IssueSummary[]>
+  /**
+   * Make `relatedNodeId` a sub-issue of `issueNodeId`.
+   *
+   * The direction matters: the issue named first becomes the parent, so setting a
+   * parent is this same call with the roles the other way round.
+   */
+  addIssueSubIssue(input: IssueLinkInput): Promise<void>
+  /** Detach a sub-issue from its parent. */
+  removeIssueSubIssue(input: IssueLinkInput): Promise<void>
+  /** Record that `relatedNodeId` blocks `issueNodeId`. */
+  addIssueBlockedBy(input: IssueLinkInput): Promise<void>
+  /** Remove a blocking relationship between two issues. */
+  removeIssueBlockedBy(input: IssueLinkInput): Promise<void>
   /** Post a comment on an issue. */
   createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment>
   /** Rewrite an issue comment's body. Only the author may do this. */

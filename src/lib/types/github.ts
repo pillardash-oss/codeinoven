@@ -690,6 +690,14 @@ export interface IssueSummary {
   assignees?: RepositoryMentionUser[]
   /** The milestone the issue belongs to, or null when it has none. */
   milestone?: IssueMilestone | null
+  /**
+   * GraphQL global id, when the payload carried one.
+   *
+   * A listing row never needs it, but a relationship write does: sub-issue and
+   * dependency mutations address issues by node id and by nothing else, so a
+   * candidate the picker offers has to arrive with one.
+   */
+  nodeId?: string | null
 }
 
 /** One page of issues, with a cursor the UI can advance. */
@@ -728,6 +736,13 @@ export interface IssueRelationshipItem {
   stateReason: IssueStateReason | null
   /** `owner/repo` the item lives in, which is not always this issue's own. */
   repository: string
+  /**
+   * GraphQL global id, or null when the payload omitted it.
+   *
+   * Read because a relationship is removable: undoing a link addresses both issues by
+   * node id, and an item without one cannot be offered a remove control that works.
+   */
+  nodeId: string | null
 }
 
 /**
@@ -862,6 +877,17 @@ export interface IssueBundle {
   /** Epoch ms this bundle was fetched, for cache staleness display. */
   fetchedAt: number
 }
+
+/**
+ * What an add or remove on the relationship block is about.
+ *
+ * The four are the same set the picker offers, and each names the relationship rather
+ * than the direction, because the direction is derivable: the issue the reader has
+ * open holds one side and the item holds the other, and which one differs per mode.
+ * Keeping the mode in the protocol means the caller does not have to re-decide it from
+ * the group it was rendered in.
+ */
+export type IssueRelationshipMode = 'sub-issue' | 'parent' | 'blocked-by' | 'blocking'
 
 /** A new issue as the renderer asks for one; owner/repo resolve from the origin. */
 export interface NewIssueInput {

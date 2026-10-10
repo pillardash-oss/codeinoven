@@ -805,6 +805,28 @@ describe('git IPC', () => {
     expect(handlers.has('git:checkout')).toBe(true)
   })
 
+  /*
+   * The issue side panel's channels, which a rename or a dropped registration would
+   * otherwise only show as a dead control at runtime.
+   */
+  it('exposes the issue detail, history and relationship channels', async () => {
+    const storage = new StorageEngine()
+    registerIpcHandlers(storage, database)
+    for (const channel of [
+      'issue:page',
+      'issue:bundle',
+      'issue:timeline',
+      'issue:relationships',
+      'issue:candidates',
+      'issue:addSubIssue',
+      'issue:removeSubIssue',
+      'issue:addBlockedBy',
+      'issue:removeBlockedBy'
+    ]) {
+      expect(handlers.has(channel)).toBe(true)
+    }
+  })
+
   it('vaults a git token and returns presence-only over IPC', async () => {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-git-cred-'))
     const storage = new StorageEngine(storageRoot)

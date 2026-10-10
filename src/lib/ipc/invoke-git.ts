@@ -35,6 +35,7 @@ import type {
   IssuePage,
   IssueReference,
   IssueRelationships,
+  IssueSummary,
   IssueTimelineEvent,
   MergeSummary,
   NewIssueInput,
@@ -465,6 +466,36 @@ export const invokeGitContract = {
   'issue:relationships': {} as Contract<
     [projectId: string, owner: string, repo: string, issueNumber: number],
     IssueRelationships
+  >,
+  /**
+   * Search the repository's issues for the relationship picker.
+   *
+   * Each candidate carries its GraphQL node id, because that is the only handle the
+   * relationship mutations below accept.
+   */
+  'issue:candidates': {} as Contract<
+    [projectId: string, owner: string, repo: string, text: string],
+    IssueSummary[]
+  >,
+  /** Make one issue a sub-issue of another. Both sides are node ids. */
+  'issue:addSubIssue': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNodeId: string, relatedNodeId: string],
+    GitHubMutationResult<null>
+  >,
+  /** Detach a sub-issue from its parent. */
+  'issue:removeSubIssue': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNodeId: string, relatedNodeId: string],
+    GitHubMutationResult<null>
+  >,
+  /** Record that one issue blocks another. */
+  'issue:addBlockedBy': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNodeId: string, relatedNodeId: string],
+    GitHubMutationResult<null>
+  >,
+  /** Remove a blocking relationship between two issues. */
+  'issue:removeBlockedBy': {} as Contract<
+    [projectId: string, owner: string, repo: string, issueNodeId: string, relatedNodeId: string],
+    GitHubMutationResult<null>
   >,
   /** Open a new issue on the repository (owner/repo resolve from the origin). */
   'issue:create': {} as Contract<

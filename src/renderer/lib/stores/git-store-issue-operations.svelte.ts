@@ -5,6 +5,7 @@ import type {
   IssueLabel,
   IssueMilestone,
   IssueReference,
+  IssueSummary,
   NewIssueInput,
   PrReactionContent,
   PrReactionGroup,
@@ -32,6 +33,15 @@ export interface GitIssueOperationAccess {
     nodeId: string,
     groups: PrReactionGroup[]
   ): void
+  /**
+   * Drop an issue's now-stale deferred reads and read them back.
+   *
+   * A relationship write changes the relationship list and usually writes a history
+   * event as well, so both cached answers are wrong the moment it lands. Dropping
+   * and re-reading is enough: neither read is expensive, and a partly corrected view
+   * would be worse than a fresh one.
+   */
+  refreshIssueLinks(projectId: string, owner: string, repo: string, issueNumber: number): void
 }
 
 /** Online issue operations, backed by the store's shared state. */
@@ -236,6 +246,137 @@ export class GitIssueOperations {
       () => invoke('issue:setAssignees', projectId, owner, repo, issueNumber, logins),
       'The assignees could not be saved',
       (value) => this.access.patchIssue(owner, repo, issueNumber, { assignees: value })
+    )
+  }
+
+  /**
+   * Search the repository's issues for the relationship picker.
+   *
+   * Busy rather than silent, unlike the deferred reads: the reader is waiting on this
+   * one to choose from, so the picker shows it is working.
+   */
+  async searchIssueCandidates(
+    projectId: string,
+    owner: string,
+    repo: string,
+    text: string
+  ): Promise<IssueSummary[]> {
+    this.access.markBusy('issue-candidates', true)
+    this.access.setError(null)
+    try {
+      return await invoke('issue:candidates', projectId, owner, repo, text)
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'Issues could not be searched'))
+      return []
+    } finally {
+      this.access.markBusy('issue-candidates', false)
+    }
+  }
+
+  /**
+   * Write one relationship, then re-read the issue the reader has open.
+   *
+   * `issueNumber` names the issue being read, not the one being linked to: it is the
+   * cache key the refresh needs, while the write itself addresses both sides by node
+   * id. Returns whether the write landed, so a picker can close on success and stay
+   * open with an error when it did not.
+   */
+  private async writeRelationship(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    write: () => Promise<GitHubMutationResult<null>>,
+    failure: string
+  ): Promise<boolean> {
+    this.access.markBusy('issue-relationship', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      const landed = this.resolveMutation(await write()) !== undefined
+      if (landed) this.access.refreshIssueLinks(projectId, owner, repo, issueNumber)
+      return landed
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, failure))
+      return false
+    } finally {
+      this.access.markBusy('issue-relationship', false)
+    }
+  }
+
+  /** Make one issue a sub-issue of another. */
+  addSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.writeRelationship(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      () => invoke('issue:addSubIssue', projectId, owner, repo, issueNodeId, relatedNodeId),
+      'The sub-issue could not be added'
+    )
+  }
+
+  /** Detach a sub-issue from its parent. */
+  removeSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.writeRelationship(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      () => invoke('issue:removeSubIssue', projectId, owner, repo, issueNodeId, relatedNodeId),
+      'The sub-issue could not be removed'
+    )
+  }
+
+  /** Record that one issue blocks another. */
+  addBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.writeRelationship(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      () => invoke('issue:addBlockedBy', projectId, owner, repo, issueNodeId, relatedNodeId),
+      'The blocking issue could not be added'
+    )
+  }
+
+  /** Remove a blocking relationship between two issues. */
+  removeBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.writeRelationship(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      () => invoke('issue:removeBlockedBy', projectId, owner, repo, issueNodeId, relatedNodeId),
+      'The blocking issue could not be removed'
     )
   }
 

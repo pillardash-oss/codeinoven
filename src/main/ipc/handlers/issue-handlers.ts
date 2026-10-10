@@ -27,7 +27,7 @@ import {
   runGitHubMutation
 } from './shared'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { GitProvider } from '../../git/git-provider.interface'
+import type { GitProvider, IssueLinkInput } from '../../git/git-provider.interface'
 import type { IpcHandlerContext } from './context'
 import type { PrReactionMap } from '../../../lib/types'
 
@@ -158,6 +158,71 @@ export function registerIssueHandlers(ctx: IpcHandlerContext): void {
       const { provider, ...target } = await issueContext(projectId, owner, repo, issueNumber)
       return provider.listIssueRelationships(target)
     }
+  )
+
+  ipcMain.handle(
+    'issue:candidates',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, text: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to browse issues')
+      return provider.searchIssueCandidates({
+        owner: validateBoundedString(owner, 'Issue owner', 1, 128),
+        repo: validateBoundedString(repo, 'Issue repository', 1, 128),
+        text: validateBoundedString(text, 'Search text', 0, 256)
+      })
+    }
+  )
+
+  /**
+   * Register one relationship write.
+   *
+   * All four take the same pair of node ids and differ only in the mutation they
+   * call, so the provider resolution, the id validation and the permission mapping
+   * live here instead of four times over. The ids are the only handles these
+   * mutations accept, which is why they are validated as node ids and not numbers.
+   */
+  const relationshipWrite = (
+    channel:
+      'issue:addSubIssue' | 'issue:removeSubIssue' | 'issue:addBlockedBy' | 'issue:removeBlockedBy',
+    mutation: (provider: GitProvider, input: IssueLinkInput) => Promise<void>
+  ): void => {
+    ipcMain.handle(
+      channel,
+      async (
+        _,
+        projectId: unknown,
+        owner: unknown,
+        repo: unknown,
+        issueNodeId: unknown,
+        relatedNodeId: unknown
+      ) => {
+        const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+        if (!provider) throw new Error('Sign in to GitHub to change issue relationships')
+        const targetOwner = validateBoundedString(owner, 'Issue owner', 1, 128)
+        const targetRepo = validateBoundedString(repo, 'Issue repository', 1, 128)
+        const link: IssueLinkInput = {
+          owner: targetOwner,
+          repo: targetRepo,
+          issueNodeId: validateGraphqlNodeId(issueNodeId),
+          relatedNodeId: validateGraphqlNodeId(relatedNodeId)
+        }
+        return runGitHubMutation(
+          targetOwner,
+          targetRepo,
+          () => mutation(provider, link),
+          ISSUE_WRITE_ACCESS
+        )
+      }
+    )
+  }
+
+  relationshipWrite('issue:addSubIssue', (provider, input) => provider.addIssueSubIssue(input))
+  relationshipWrite('issue:removeSubIssue', (provider, input) =>
+    provider.removeIssueSubIssue(input)
+  )
+  relationshipWrite('issue:addBlockedBy', (provider, input) => provider.addIssueBlockedBy(input))
+  relationshipWrite('issue:removeBlockedBy', (provider, input) =>
+    provider.removeIssueBlockedBy(input)
   )
 
   ipcMain.handle('issue:create', async (_, projectId: unknown, input: unknown) => {

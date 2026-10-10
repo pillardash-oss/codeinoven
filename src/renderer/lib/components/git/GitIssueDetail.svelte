@@ -34,10 +34,12 @@
   import PrReactionPicker from './PrReactionPicker.svelte'
   import PrReactionChips from './PrReactionChips.svelte'
   import IssueRelationships from './IssueRelationships.svelte'
+  import IssueRelationshipPicker from './IssueRelationshipPicker.svelte'
   import type { GithubRepoContext } from '$lib/github-references'
   import type {
     IssueComment,
     IssueRelationshipItem,
+    IssueRelationshipMode,
     IssueSummary,
     IssueTimelineEvent,
     PrReactionContent
@@ -199,6 +201,73 @@
   let editingId = $state<number | null>(null)
   let editingBody = $state('')
   let confirmingDelete = $state<IssueComment | null>(null)
+  /** The relationship being added, or null while the picker is closed. */
+  let linking = $state<IssueRelationshipMode | null>(null)
+  /** The link being undone, which is confirmed before anything is written. */
+  let unlinking = $state<{ mode: IssueRelationshipMode; item: IssueRelationshipItem } | null>(null)
+  const unlinkBusy = $derived(gitState.isBusy('issue-relationship'))
+
+  /**
+   * The issue numbers already related, so the picker does not offer them again.
+   *
+   * Every group is pooled into one list: the same issue cannot usefully be both a
+   * sub-issue and a blocker of this one, and a picker that offered it twice would be
+   * inviting a link GitHub would reject.
+   */
+  const relatedNumbers = $derived(
+    relationships === null
+      ? []
+      : [
+          ...(relationships.parent ? [relationships.parent.number] : []),
+          ...relationships.subIssues.map((item) => item.number),
+          ...relationships.blockedBy.map((item) => item.number),
+          ...relationships.blocking.map((item) => item.number)
+        ]
+  )
+
+  /**
+   * Undo the link the reader asked to remove.
+   *
+   * The mode decides which side holds the relationship: a sub-issue is detached from
+   * its parent, so the parent is the issue named first, while a blocker is removed
+   * from this issue's own list. Both writes are the same mutation with the two ids
+   * swapped, which is why the direction is decided here and not in the payload.
+   */
+  async function unlink(): Promise<void> {
+    const pending = unlinking
+    const ownNodeId = issueNodeId
+    if (!pending || !ownNodeId || pending.item.nodeId === null) return
+    const related = pending.item.nodeId
+    const link = (mode: IssueRelationshipMode, first: string, second: string): Promise<boolean> =>
+      mode === 'blocked-by' || mode === 'blocking'
+        ? gitState.removeIssueBlockedBy(
+            projectId,
+            identity.owner,
+            identity.repo,
+            issue.number,
+            first,
+            second
+          )
+        : gitState.removeIssueSubIssue(
+            projectId,
+            identity.owner,
+            identity.repo,
+            issue.number,
+            first,
+            second
+          )
+    // Which side holds the link: a parent and an issue this one blocks are held by
+    // the other issue, while a sub-issue and a blocker are held by this one. Getting
+    // this backwards addresses the mutation at the wrong issue, which GitHub answers
+    // with a refusal rather than a wrong link.
+    const heldByRelated = pending.mode === 'parent' || pending.mode === 'blocking'
+    const landed = await link(
+      pending.mode,
+      heldByRelated ? related : ownNodeId,
+      heldByRelated ? ownNodeId : related
+    )
+    if (landed) unlinking = null
+  }
 
   async function submitComment(): Promise<void> {
     const body = draft.trim()
@@ -400,8 +469,11 @@
       <IssueRelationships
         repository={repositoryName}
         {relationships}
+        {issueNodeId}
         onOpenIssue={onOpenRelated}
         onOpenRemote={(item) => void openInBrowser(item.url)}
+        onAdd={(mode) => (linking = mode)}
+        onRemove={(mode, item) => (unlinking = { mode, item })}
       />
 
       <!-- The issue body, rendered as the author wrote it. -->
@@ -638,3 +710,43 @@
     </p>
   {/if}
 </ConfirmDialog>
+
+<!--
+  Unlinking is confirmed, like every other action that detaches work: it changes what
+  the issue is part of, and GitHub does not offer an undo.
+-->
+<ConfirmDialog
+  open={unlinking !== null}
+  title="Unlink #{unlinking?.item.number ?? ''}?"
+  confirmLabel="Unlink"
+  busy={unlinkBusy}
+  onCancel={() => (unlinking = null)}
+  onConfirm={() => void unlink()}
+>
+  <p class="text-xs leading-relaxed text-muted">
+    <strong class="text-foreground">{unlinking?.item.title ?? ''}</strong> stops being
+    {unlinking?.mode === 'parent'
+      ? 'the parent of this issue'
+      : unlinking?.mode === 'sub-issue'
+        ? 'a sub-issue of this one'
+        : unlinking?.mode === 'blocked-by'
+          ? 'a blocker of this one'
+          : 'blocked by this one'}.
+  </p>
+  <p class="mt-2 text-[0.6875rem] leading-relaxed text-dimmed">
+    Both issues stay exactly as they are. Only the link between them is removed.
+  </p>
+</ConfirmDialog>
+
+{#if linking && issueNodeId}
+  <IssueRelationshipPicker
+    {projectId}
+    owner={identity.owner}
+    repo={identity.repo}
+    issueNumber={issue.number}
+    {issueNodeId}
+    mode={linking}
+    excluded={relatedNumbers}
+    onClose={() => (linking = null)}
+  />
+{/if}

@@ -68,6 +68,10 @@ export type GitOperation =
   | 'issue-comment-edit'
   | 'issue-comment-delete'
   | 'issue-metadata'
+  /** One relationship write: sub-issue or dependency, added or removed. */
+  | 'issue-relationship'
+  /** The relationship picker's search, which is not a write but must show progress. */
+  | 'issue-candidates'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'

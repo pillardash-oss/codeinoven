@@ -46,6 +46,7 @@ import type {
   IssuePage,
   IssueReference,
   IssueRelationships,
+  IssueSummary,
   IssueTimelineEvent,
   NewIssueInput,
   PrAgentAssignmentInput,
@@ -318,7 +319,13 @@ export class GitState {
     patchIssue: (owner, repo, issueNumber, patch) =>
       this.issues.patchIssue(owner, repo, issueNumber, patch),
     patchBundleReactions: (owner, repo, issueNumber, nodeId, groups) =>
-      this.issues.patchBundleReactions(owner, repo, issueNumber, nodeId, groups)
+      this.issues.patchBundleReactions(owner, repo, issueNumber, nodeId, groups),
+    refreshIssueLinks: (projectId, owner, repo, issueNumber) => {
+      this.issues.relationships.invalidate(owner, repo, issueNumber)
+      this.issues.timelines.invalidate(owner, repo, issueNumber)
+      void this.issues.relationships.ensure(projectId, owner, repo, issueNumber, true)
+      void this.issues.timelines.ensure(projectId, owner, repo, issueNumber, true)
+    }
   } satisfies GitIssueOperationAccess)
 
   get status(): GitStatus | null {
@@ -1709,6 +1716,92 @@ export class GitState {
   /** Forget an issue's cached relationships, so a link change is read back. */
   invalidateIssueRelationships(owner: string, repo: string, issueNumber: number): void {
     this.issues.relationships.invalidate(owner, repo, issueNumber)
+  }
+
+  /** Search the repository's issues, for the relationship picker. */
+  searchIssueCandidates(
+    projectId: string,
+    owner: string,
+    repo: string,
+    text: string
+  ): Promise<IssueSummary[]> {
+    return this.issueOps.searchIssueCandidates(projectId, owner, repo, text)
+  }
+
+  /** Make one issue a sub-issue of another. Both sides are node ids. */
+  addIssueSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.addSubIssue(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Detach a sub-issue from its parent. */
+  removeIssueSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.removeSubIssue(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Record that one issue blocks another. */
+  addIssueBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.addBlockedBy(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Remove a blocking relationship between two issues. */
+  removeIssueBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.removeBlockedBy(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
   }
 
   /** Warm the issue under the pointer, so the click that follows renders from cache. */

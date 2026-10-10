@@ -46,6 +46,7 @@ import type {
   SetPrReactionInput,
   WorkflowRerunMode
 } from '../../lib/types'
+import type { IssueLinkInput, SearchIssueCandidatesInput } from '../git/git-provider.interface'
 import { capJobLogText } from '../../lib/github-job-log'
 import { isReactionContent } from '../../lib/github-reactions'
 import type {
@@ -251,6 +252,64 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
  * `... on Issue` fragment is what keeps a stray `PullRequest` node from being read
  * as an issue.
  */
+/**
+ * How many candidates the relationship picker offers.
+ *
+ * Smaller than a listing page on purpose: a picker is a choice from what is in front
+ * of the reader, and the search field is how they reach anything further.
+ */
+const ISSUE_CANDIDATE_LIMIT = 20
+
+/**
+ * The relationship mutations.
+ *
+ * Every one of them takes the two issues by GraphQL node id and answers with the
+ * updated issue, which is why one document shape serves all four. Their input fields
+ * were read off the schema rather than guessed: `addSubIssue` takes
+ * `issueId`/`subIssueId`, and the dependency pair takes `issueId`/`blockingIssueId`.
+ */
+const ADD_SUB_ISSUE_MUTATION = `mutation AddSubIssue($issueId: ID!, $subIssueId: ID!) {
+  addSubIssue(input: { issueId: $issueId, subIssueId: $subIssueId }) {
+    issue {
+      id
+    }
+  }
+}`
+
+const REMOVE_SUB_ISSUE_MUTATION = `mutation RemoveSubIssue($issueId: ID!, $subIssueId: ID!) {
+  removeSubIssue(input: { issueId: $issueId, subIssueId: $subIssueId }) {
+    issue {
+      id
+    }
+  }
+}`
+
+const ADD_BLOCKED_BY_MUTATION = `mutation AddBlockedBy($issueId: ID!, $blockingIssueId: ID!) {
+  addBlockedBy(input: { issueId: $issueId, blockingIssueId: $blockingIssueId }) {
+    issue {
+      id
+    }
+  }
+}`
+
+const REMOVE_BLOCKED_BY_MUTATION = `mutation RemoveBlockedBy($issueId: ID!, $blockingIssueId: ID!) {
+  removeBlockedBy(input: { issueId: $issueId, blockingIssueId: $blockingIssueId }) {
+    issue {
+      id
+    }
+  }
+}`
+
+/**
+ * One GraphQL search for a page of issues.
+ *
+ * Search rather than the repository's `issues` connection for the same reason the
+ * pull request listing uses it: only the search index can answer the viewer
+ * relationships and the orderings the listing offers. The `id` it selects is the
+ * GraphQL node id, which is the only handle the relationship mutations accept, so a
+ * candidate the picker offers already carries what the write needs. Punctuation here
+ * is GraphQL's, not this file's: comments inside the document have to be `#`.
+ */
 const ISSUE_LIST_QUERY = `query IssueList($q: String!, $first: Int!, $after: String) {
   search(query: $q, type: ISSUE, first: $first, after: $after) {
     pageInfo {
@@ -291,6 +350,7 @@ const ISSUE_LIST_QUERY = `query IssueList($q: String!, $first: Int!, $after: Str
           description
           dueOn
         }
+        id
         comments {
           totalCount
         }
@@ -716,6 +776,85 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
+   * Search the repository's issues, for a relationship picker.
+   *
+   * The same query and the same mapper the listing uses, so a candidate reads
+   * exactly like a listed issue, including the node id the relationship writes need.
+   * Sorted by most recently updated, because a picker is usually used on something
+   * that moved lately.
+   */
+  async searchIssueCandidates(input: SearchIssueCandidatesInput): Promise<IssueSummary[]> {
+    const qualifiers = ['is:issue', `repo:${input.owner}/${input.repo}`]
+    const text = input.text.trim()
+    if (text) qualifiers.push(text)
+    qualifiers.push(LIST_SORTS['updated'])
+    const data = await this.runGraphql(ISSUE_LIST_QUERY, {
+      q: qualifiers.join(' '),
+      first: ISSUE_CANDIDATE_LIMIT,
+      after: null
+    })
+    const search = this.readRecord(data, 'search')
+    const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+    return nodes.flatMap((node): IssueSummary[] => {
+      const summary = this.toGraphqlIssueSummary(node, input.owner, input.repo)
+      return summary ? [summary] : []
+    })
+  }
+
+  /**
+   * Make one issue a sub-issue of another.
+   *
+   * GraphQL rather than REST because that is where the mutation exists, and it takes
+   * the two issues by node id. The payload returns the updated issue; the caller
+   * re-reads the relationship list instead of trusting a partial answer, since the
+   * reader draws the parent and the children together.
+   */
+  async addIssueSubIssue(input: IssueLinkInput): Promise<void> {
+    await this.runRelationshipMutation(ADD_SUB_ISSUE_MUTATION, {
+      issueId: input.issueNodeId,
+      subIssueId: input.relatedNodeId
+    })
+  }
+
+  /** Detach a sub-issue from its parent. */
+  async removeIssueSubIssue(input: IssueLinkInput): Promise<void> {
+    await this.runRelationshipMutation(REMOVE_SUB_ISSUE_MUTATION, {
+      issueId: input.issueNodeId,
+      subIssueId: input.relatedNodeId
+    })
+  }
+
+  /** Record that `relatedNodeId` blocks `issueNodeId`. */
+  async addIssueBlockedBy(input: IssueLinkInput): Promise<void> {
+    await this.runRelationshipMutation(ADD_BLOCKED_BY_MUTATION, {
+      issueId: input.issueNodeId,
+      blockingIssueId: input.relatedNodeId
+    })
+  }
+
+  /** Remove a blocking relationship between two issues. */
+  async removeIssueBlockedBy(input: IssueLinkInput): Promise<void> {
+    await this.runRelationshipMutation(REMOVE_BLOCKED_BY_MUTATION, {
+      issueId: input.issueNodeId,
+      blockingIssueId: input.relatedNodeId
+    })
+  }
+
+  /**
+   * Run one relationship mutation, discarding the payload.
+   *
+   * The payload carries the issue and its new counterpart, which the caller does not
+   * use: the relationship list is re-read afterwards, so this only has to fail loudly
+   * when GitHub refuses.
+   */
+  private async runRelationshipMutation(
+    document: string,
+    variables: Record<string, string>
+  ): Promise<void> {
+    await this.runGraphql(document, variables)
+  }
+
+  /**
    * Where GitHub files an issue comment.
    *
    * Repository-scoped, with the issue number appearing nowhere in the path: a
@@ -806,7 +945,8 @@ export class GitHubProvider implements GitProvider {
       stateReason: this.toStateReason(this.readString(record, 'state_reason')),
       repository:
         (repository ? this.readString(repository, 'full_name') : null) ??
-        `${input.owner}/${input.repo}`
+        `${input.owner}/${input.repo}`,
+      nodeId: this.readString(record, 'node_id')
     }
   }
 
@@ -2301,7 +2441,8 @@ export class GitHubProvider implements GitProvider {
       comments: comments ? this.readNumber(comments, 'totalCount') : 0,
       labels: this.readLabels(record),
       assignees: this.readGraphqlAssignees(record),
-      milestone: this.readGraphqlMilestone(record)
+      milestone: this.readGraphqlMilestone(record),
+      nodeId: this.readString(record, 'id')
     }
   }
 
@@ -2325,7 +2466,8 @@ export class GitHubProvider implements GitProvider {
       comments: this.readNumber(record, 'comments'),
       labels: this.toLabels(record['labels']),
       assignees: this.toAssignees(record),
-      milestone: this.toMilestone(record['milestone'])
+      milestone: this.toMilestone(record['milestone']),
+      nodeId: this.readString(record, 'node_id')
     }
   }
 
