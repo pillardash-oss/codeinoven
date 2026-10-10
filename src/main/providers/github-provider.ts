@@ -286,7 +286,9 @@ const ISSUE_LIST_QUERY = `query IssueList($q: String!, $first: Int!, $after: Str
           description
           dueOn
         }
-        totalCommentsCount
+        comments {
+          totalCount
+        }
       }
     }
   }
@@ -2175,6 +2177,7 @@ export class GitHubProvider implements GitProvider {
     if (number <= 0) return null
     const author = this.readRecord(record, 'author')
     const login = author ? (this.readString(author, 'login') ?? 'unknown') : 'unknown'
+    const comments = this.readRecord(record, 'comments')
     return {
       number,
       title: this.readString(record, 'title') ?? `Issue #${number}`,
@@ -2186,7 +2189,7 @@ export class GitHubProvider implements GitProvider {
       authorIsBot: login.endsWith('[bot]'),
       createdAt: this.readString(record, 'createdAt') ?? '',
       updatedAt: this.readString(record, 'updatedAt') ?? '',
-      comments: this.readNumber(record, 'totalCommentsCount'),
+      comments: comments ? this.readNumber(comments, 'totalCount') : 0,
       labels: this.readLabels(record),
       assignees: this.readGraphqlAssignees(record),
       milestone: this.readGraphqlMilestone(record)

@@ -449,6 +449,115 @@ describe('GitHubProvider', () => {
     )
   })
 
+  it('lists a page of issues through one GraphQL search, reading the comment count from the issue connection', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: 'ISSUE_CURSOR_1' },
+            nodes: [
+              {
+                __typename: 'Issue',
+                number: 7,
+                title: 'Fix the flaky test',
+                url: 'https://github.com/acme/app/issues/7',
+                state: 'CLOSED',
+                stateReason: 'NOT_PLANNED',
+                createdAt: '2026-08-01T10:00:00Z',
+                updatedAt: '2026-08-02T11:00:00Z',
+                author: { login: 'octocat', avatarUrl: 'https://avatars.example/octocat.png' },
+                labels: {
+                  nodes: [{ name: 'bug', color: 'ff0000' }, { color: '00ff00' }]
+                },
+                assignees: {
+                  nodes: [
+                    {
+                      login: 'hubot',
+                      name: 'Hubot',
+                      avatarUrl: 'https://avatars.example/hubot.png'
+                    }
+                  ]
+                },
+                milestone: {
+                  number: 3,
+                  title: 'v1.0',
+                  state: 'OPEN',
+                  description: 'First release',
+                  dueOn: '2026-09-01T00:00:00Z'
+                },
+                comments: { totalCount: 4 }
+              },
+              { __typename: 'PullRequest', number: 8, title: 'A pull request' },
+              { __typename: 'Issue', number: 0, title: 'No usable number' }
+            ]
+          }
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const page = await provider.listIssuePage({
+      owner: 'acme',
+      repo: 'app',
+      state: 'open',
+      filter: 'created',
+      sort: 'updated',
+      perPage: 20,
+      page: 1,
+      cursor: null
+    })
+
+    const { url, init } = captureRequest()
+    expect(url).toBe('https://api.github.com/graphql')
+    expect(init.method).toBe('POST')
+    const body = JSON.parse(String(init.body)) as {
+      query: string
+      variables: Record<string, unknown>
+    }
+    expect(body.query).toContain('query IssueList')
+    // An issue's comment count is the `comments` connection, not the pull
+    // request's `totalCommentsCount` scalar, which the Issue type does not
+    // declare. Asking for it fails the whole search with a GraphQL error.
+    expect(body.query).not.toContain('totalCommentsCount')
+    expect(body.query).toContain('totalCount')
+    expect(body.variables['q']).toBe('is:issue repo:acme/app is:open author:@me sort:updated-desc')
+    expect(body.variables['first']).toBe(20)
+    expect(body.variables['after']).toBeNull()
+
+    // The pull request node and the numberless issue are both dropped.
+    expect(page.items.map((item) => item.number)).toEqual([7])
+    expect(page.page).toBe(1)
+    expect(page.hasMore).toBe(true)
+    expect(page.nextCursor).toBe('ISSUE_CURSOR_1')
+    expect(page.items[0]).toMatchObject({
+      number: 7,
+      title: 'Fix the flaky test',
+      url: 'https://github.com/acme/app/issues/7',
+      state: 'closed',
+      stateReason: 'not_planned',
+      authorLogin: 'octocat',
+      authorAvatarUrl: 'https://avatars.example/octocat.png',
+      authorIsBot: false,
+      comments: 4,
+      labels: [{ name: 'bug', color: 'ff0000' }],
+      assignees: [
+        {
+          login: 'hubot',
+          name: 'Hubot',
+          avatarUrl: 'https://avatars.example/hubot.png',
+          bot: false
+        }
+      ],
+      milestone: {
+        number: 3,
+        title: 'v1.0',
+        state: 'open',
+        description: 'First release',
+        dueOn: '2026-09-01T00:00:00Z'
+      }
+    })
+  })
+
   it('resolves repository identity from HTTPS, SSH, and scp-like remote URLs', () => {
     const provider = new GitHubProvider('ghp_secret_token')
     expect(provider.resolveRepositoryIdentity('https://github.com/acme/app.git')?.owner).toBe(
