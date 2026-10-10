@@ -77,6 +77,12 @@ export class BrowserOverlayWindow {
    *  never part of the click-through decision. */
   private status: BrowserStatusOverlay | null = null
   private docks = new Map<string, NativeDockRequest>()
+  /**
+   * The control each dock's document has focused, as `a:`/`f:`/`n:` plus its
+   * identity. A key is forwarded with this so the app can hand it to the element
+   * that answers for it instead of dropping it on `window`.
+   */
+  private dockFocus = new Map<string, string | null>()
   private leavingDocks = new Map<string, { modal: boolean; timer: ReturnType<typeof setTimeout> }>()
   private deliveredDockImages = new Map<string, Set<string>>()
   /** True while the document has finished loading and may be sent content. */
@@ -230,6 +236,11 @@ export class BrowserOverlayWindow {
   }
 
   /** Dock chips share this window with toasts and the floating browser strip. */
+  /** Record which control a dock's document has focused. */
+  setDockFocus(id: string, target: string | null): void {
+    this.dockFocus.set(id, target)
+  }
+
   applyDock(id: string, request: NativeDockRequest | null): boolean {
     const leaving = this.leavingDocks.get(id)
     if (request === null && leaving && !this.docks.has(id)) return true
@@ -239,6 +250,7 @@ export class BrowserOverlayWindow {
       const previous = this.docks.get(id)
       this.docks.delete(id)
       this.deliveredDockImages.delete(id)
+      this.dockFocus.delete(id)
       if (previous?.modal) {
         // Publish the removal now so the native document runs its outro. Keep
         // its host above the browser only for that bounded transition window.
@@ -346,6 +358,7 @@ export class BrowserOverlayWindow {
     this.strip = null
     this.status = null
     this.docks.clear()
+    this.dockFocus.clear()
     this.awaitingDocument = false
     for (const dock of this.leavingDocks.values()) clearTimeout(dock.timer)
     this.leavingDocks.clear()
@@ -548,7 +561,8 @@ export class BrowserOverlayWindow {
         shift: input.shift,
         alt: input.alt,
         meta: input.meta,
-        isAutoRepeat: input.isAutoRepeat
+        isAutoRepeat: input.isAutoRepeat,
+        target: this.dockFocus.get(modal.id) ?? null
       })
     })
     popup.on('blur', () => {

@@ -9,7 +9,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { patchNativeDockChildren } from '$lib/native-dock-dom'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { fly, fade } from 'svelte/transition'
   import { prefersReducedMotion } from 'svelte/motion'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
@@ -25,7 +25,6 @@
   let modalRoot: HTMLDivElement | null = null
   let lastScroll: { target: string; top: number } | null = null
   let images: Record<string, string> = {}
-  let assignedFocus = false
   function report(report: NativeDockInteraction): void {
     void invoke('browser:overlayDockInteract', report).catch(() => {})
   }
@@ -70,18 +69,8 @@
       if (field && document.activeElement !== field) field.focus({ preventScroll: true })
     }
     if (current.modal) {
-      for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
-        row.dataset.nativeModalRow = ''
-      }
       highlight(element, hoveredAction ?? selectedAction)
-      if (!assignedFocus && !element.querySelector('[data-native-dock-key]')) {
-        assignedFocus = true
-        const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-          'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])'
-        )
-        ;(field ?? findPanelPrimaryAction(element))?.focus({ preventScroll: true })
-        if (field?.hasAttribute('data-native-dock-select')) field.select()
-      }
+      focusPanel(element)
     }
     void invoke('browser:overlayDockDrawn', {
       id: current.id,
@@ -102,6 +91,8 @@
     element.addEventListener('pointerup', up)
     element.addEventListener('pointercancel', up)
     element.addEventListener('scroll', scroll, true)
+    element.addEventListener('focusin', focusChanged)
+    element.addEventListener('focusout', focusChanged)
     if (dock.modal) {
       void invoke('browser:overlayCursor')
         .then((point) => {
@@ -120,14 +111,58 @@
       element.removeEventListener('pointerup', up)
       element.removeEventListener('pointercancel', up)
       element.removeEventListener('scroll', scroll, true)
+      element.removeEventListener('focusin', focusChanged)
+      element.removeEventListener('focusout', focusChanged)
       cancelAnimationFrame(frame)
       if (origin) onDragging(false)
     }
   }
   function highlight(element: HTMLElement, action: string | null): void {
-    for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
+    for (const row of element.querySelectorAll<HTMLElement>('[data-native-dock-row]')) {
+      if (!row.dataset.nativeDockAction) continue
       row.setAttribute('aria-selected', String(row.dataset.nativeDockAction === action))
     }
+  }
+  /**
+   * Focus the panel's own first control in the native document.
+   *
+   * Without a focused control here the panel accepts no typing at all   the
+   * caret has nowhere to go   and every key only reaches the source after the
+   * user has tabbed into the dialog by hand. The window itself is already the
+   * key window, so a panel with no control at all still receives its shortcuts.
+   */
+  function focusPanel(element: HTMLElement): void {
+    if (element.contains(document.activeElement)) return
+    const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      '[data-native-dock-focus], input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])'
+    )
+    const target =
+      field ??
+      findPanelPrimaryAction(element) ??
+      element.querySelector<HTMLElement>('[data-native-dock-action]:not([disabled])')
+    if (!target) return
+    target.focus({ preventScroll: true })
+    if (field?.hasAttribute('data-native-dock-select')) field.select()
+  }
+  /**
+   * Tell the app which control owns the keyboard, so a forwarded key can be
+   * delivered to the element that answers for it.
+   */
+  function focusChanged(): void {
+    void tick().then(() => {
+      const active = document.activeElement
+      const control =
+        active instanceof Element
+          ? active.closest<HTMLElement>(
+              '[data-native-dock-field], [data-native-dock-action], [data-native-dock-focus-key]'
+            )
+          : null
+      const field = control?.dataset.nativeDockField
+      const action = control?.dataset.nativeDockAction
+      const focus = control?.dataset.nativeDockFocusKey
+      const target = field ? `f:${field}` : action ? `a:${action}` : focus ? `n:${focus}` : null
+      report({ id: dock.id, kind: 'focus', target })
+    })
   }
   function scroll(event: Event): void {
     const target = event.target
@@ -156,14 +191,14 @@
   function click(event: MouseEvent): void {
     const target = event.target
     if (!(target instanceof Element)) return
-    const button = target.closest<HTMLButtonElement>('button[data-native-dock-action]')
-    const action = button?.getAttribute('data-native-dock-action')
-    const key = button?.dataset.nativeDockKey
-    if (dock.modal && key && !button.disabled) {
-      report({ id: dock.id, kind: 'commit', key })
+    const control = target.closest<HTMLElement>('[data-native-dock-action]')
+    const action = control?.getAttribute('data-native-dock-action')
+    const disabled = isDisabled(control)
+    if (dock.modal && control?.dataset.nativeDockKey && !disabled) {
+      report({ id: dock.id, kind: 'commit', key: control.dataset.nativeDockKey })
       return
     }
-    if (action && !button?.disabled)
+    if (action && !disabled)
       report({
         id: dock.id,
         kind: 'click',
@@ -174,13 +209,19 @@
         alt: event.altKey
       })
   }
+  /** A disabled control looks the same whatever tag it is. */
+  function isDisabled(control: HTMLElement | null | undefined): boolean {
+    return Boolean(
+      control && (control.matches(':disabled') || control.getAttribute('aria-disabled') === 'true')
+    )
+  }
   function contextmenu(event: MouseEvent): void {
     // macOS turns a left press with Control held into a context menu instead
     // of a click. Ctrl+Tab users are still holding that modifier when picking.
     if (dock.panel && event.target instanceof Element) {
-      const button = event.target.closest<HTMLButtonElement>('button[data-native-dock-action]')
-      const action = button?.dataset.nativeDockAction
-      if (action && !button.disabled) {
+      const control = event.target.closest<HTMLElement>('[data-native-dock-action]')
+      const action = control?.dataset.nativeDockAction
+      if (action && !isDisabled(control)) {
         event.preventDefault()
         report({ id: dock.id, kind: 'context', action })
       }
@@ -218,21 +259,10 @@
     )
       return false
     if (event.ctrlKey || event.metaKey) return true
-    // Native text editing, clipboard and composition stay in this document.
-    // Field-specific handlers receive the same key against the canonical field.
-    report({
-      id: dock.id,
-      kind: 'fieldKey',
-      field: field.dataset.nativeDockField,
-      type: event.type as 'keydown' | 'keyup',
-      key: event.key,
-      code: event.code,
-      control: event.ctrlKey,
-      shift: event.shiftKey,
-      alt: event.altKey,
-      meta: event.metaKey,
-      isAutoRepeat: event.repeat
-    })
+    // The key itself is forwarded to the source by the window that owns the
+    // keyboard. This only decides the native document's own default: a
+    // single-line field submits on Enter instead of inserting a newline, and a
+    // field may claim keys through `data-native-dock-keys`.
     if (
       event.type === 'keydown' &&
       ((event.key === 'Enter' && field instanceof HTMLInputElement) ||
@@ -241,44 +271,56 @@
       event.preventDefault()
     return true
   }
+  /** The panel's own focus order, for wrapping Tab at its edges. */
+  function focusOrder(root: HTMLElement): HTMLElement[] {
+    const selector = [
+      '[data-native-dock-action]:not([disabled]):not([tabindex="-1"])',
+      '[data-native-dock-field]:not([disabled])',
+      '[data-native-dock-focus-key]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"])',
+      'input:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])'
+    ].join(', ')
+    return [...new Set(root.querySelectorAll<HTMLElement>(selector))]
+  }
   function keydown(event: KeyboardEvent): void {
-    const textKey = fieldKey(event)
-    if (textKey && !dock.modal) return
-    if (dock.modal) {
-      if (textKey && event.key !== 'Escape' && event.key !== 'Tab') return
-      if (
-        modalRoot?.querySelector('[data-native-dock-key]') ||
-        event.key === 'Escape' ||
-        ((event.ctrlKey || event.metaKey) && event.key === 'Enter')
-      )
+    if (!dock.modal) {
+      if (fieldKey(event)) return
+      if (!(event.target instanceof Element) || !event.target.closest('[data-native-dock-handle]'))
+        return
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
+      event.preventDefault()
+      report({ id: dock.id, kind: 'edge', key: event.key })
+      return
+    }
+    // The source answers every key (the window that owns the keyboard forwards
+    // it, and the controller delivers it to the control this document focused),
+    // so only the native document's own defaults are settled here: Escape and
+    // Cmd+Enter belong to the source, a control activates on Enter and Space,
+    // and Tab walks the panel and wraps at its own edges.
+    if (event.key === 'Tab' && modalRoot) {
+      const controls = focusOrder(modalRoot)
+      const next = event.shiftKey ? controls.at(-1) : controls[0]
+      const edge = event.shiftKey ? controls[0] : controls.at(-1)
+      if (document.activeElement === edge && next) {
         event.preventDefault()
-      else if (
-        (event.key === 'Enter' || event.key === ' ') &&
-        event.target instanceof HTMLButtonElement &&
-        event.target.hasAttribute('data-native-dock-action')
-      ) {
-        event.preventDefault()
-        if (!event.repeat && !event.target.disabled) event.target.click()
-      } else if (event.key === 'Tab' && modalRoot) {
-        const buttons = [
-          ...modalRoot.querySelectorAll<HTMLElement>(
-            'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), textarea:not([disabled])'
-          )
-        ]
-        const next = event.shiftKey ? buttons.at(-1) : buttons[0]
-        const edge = event.shiftKey ? buttons[0] : buttons.at(-1)
-        if (document.activeElement === edge && next) {
-          event.preventDefault()
-          next.focus()
-        }
+        next.focus()
       }
       return
     }
-    if (!(event.target instanceof Element) || !event.target.closest('[data-native-dock-handle]'))
+    if (event.key === 'Escape' || ((event.ctrlKey || event.metaKey) && event.key === 'Enter')) {
+      event.preventDefault()
       return
-    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
-    event.preventDefault()
-    report({ id: dock.id, kind: 'edge', key: event.key })
+    }
+    if (fieldKey(event)) return
+    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element) {
+      const control = event.target.closest<HTMLElement>('[data-native-dock-action]')
+      if (control && !isDisabled(control)) {
+        event.preventDefault()
+        if (!event.repeat) control.click()
+      }
+    }
   }
   function down(event: PointerEvent): void {
     if (
@@ -299,11 +341,9 @@
       const dx = event.clientX - pointerOrigin.x
       const dy = event.clientY - pointerOrigin.y
       if (dx * dx + dy * dy > 16) pointerMoved = true
-      const row = event.target.closest<HTMLButtonElement>(
-        'button[aria-selected][data-native-dock-action]'
-      )
+      const row = event.target.closest<HTMLElement>('[data-native-dock-action]')
       const action = row?.dataset.nativeDockAction
-      if (action && !row.disabled && pointerMoved) {
+      if (action && !isDisabled(row) && pointerMoved) {
         hoveredAt = performance.timeOrigin + performance.now()
         if (action !== hoveredAction) {
           hoveredAction = action
@@ -389,20 +429,26 @@
 </div>
 
 <style>
-  :global([data-native-overlay-dock] button[data-native-dock-action]:not(:disabled)) {
+  /* Every control the projection identified, whatever tag it is: a command row
+     is a div, and the app's own cursor rule cannot reach into this document's
+     class list the way it reaches its own. */
+  :global([data-native-overlay-dock] [data-native-dock-action]:not([disabled])) {
     cursor: pointer;
   }
-  :global([data-native-modal-row]),
-  :global([data-native-modal-row] *) {
+  :global([data-native-overlay-dock] [data-native-dock-action][aria-disabled='true']) {
+    cursor: default;
+  }
+  :global([data-native-dock-row]),
+  :global([data-native-dock-row] *) {
     cursor: pointer;
   }
-  :global([data-native-modal-row]:hover) {
+  :global([data-native-dock-row]:hover) {
     background: var(--color-elevated);
   }
-  :global([data-native-modal-row][aria-selected='true']) {
+  :global([data-native-dock-row][aria-selected='true']) {
     background: var(--color-selected);
   }
-  :global([data-native-modal-row] > .bg-selected) {
+  :global([data-native-dock-row] > .bg-selected) {
     background: transparent;
   }
 </style>

@@ -186,7 +186,7 @@
     nativeOverlay?: string
     nativeReady?: boolean
     nativeFailed?: boolean
-    onNativeHover?: (button: HTMLButtonElement) => void
+    onNativeHover?: (control: HTMLElement) => void
     onNativeCommit?: (key: string) => void
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
@@ -282,7 +282,7 @@
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
       }
       const controller = new NativeDockController(id, () => {}, bounds, false, {
-        onHover: (button) => onNativeHover?.(button),
+        onHover: (control) => onNativeHover?.(control),
         onDismiss: () => {
           if (closeOnBackdrop) onClose()
         },
@@ -301,9 +301,12 @@
             if (escapeCloses && !event.defaultPrevented) onClose()
             return true
           }
-          // Ordinary button navigation belongs to the native document. Only
-          // application shortcuts go back to the source window for these dialogs.
-          return !nativeOverlay && !event.metaKey && !event.ctrlKey && !event.altKey
+          // Everything else belongs to the source. The forwarded key is
+          // dispatched on the element the native document has focused, so a
+          // list, an editor and every shortcut handler receive it exactly as
+          // they would in the app window. Claiming these keys here is what made
+          // arrow navigation dead in every natively drawn dialog.
+          return false
         }
       })
       const cleanup = controller.mount(panel)
@@ -436,9 +439,7 @@
             if (isWithinToastLayer(event.target)) event.preventDefault()
             if (!closeOnBackdrop) event.preventDefault()
           }}
-          class="{PANEL_BASE} {layout} {widthClass} {panelClass} {domPresented
-            ? ''
-            : 'pointer-events-none'}"
+          class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
         >
           {#snippet child({ props })}
             <div

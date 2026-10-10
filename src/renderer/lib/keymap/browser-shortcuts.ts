@@ -19,7 +19,7 @@ import type {
   BrowserSwitcherBindings
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { isMacPlatform, parseKeymapTrigger, resolveChordModifiers } from './keymap'
+import { isMacPlatform, KEYMAP, parseKeymapTrigger, resolveChordModifiers } from './keymap'
 
 /**
  * The keymap entry behind each action. The ids are the user-visible catalog
@@ -107,6 +107,41 @@ export function browserSwitcherChords(source: BrowserShortcutKeySource): Browser
   return resolveChords(source.keysFor('thread-switcher'), isMacPlatform())
 }
 
+/** The ids main already answers itself, so it must not also hand them back. */
+const BROWSER_OWNED_IDS = new Set<string>([
+  ...ACTION_ENTRIES.map(([, id]) => id),
+  'thread-switcher'
+])
+
+/**
+ * Every chord the app itself answers, so a key pressed in a page still reaches
+ * the app's own shortcuts.
+ *
+ * A page holds the OS keyboard through its own view, so `mod+k` never reaches
+ * the renderer that owns the spotlight. The whole keymap therefore travels to
+ * main, which claims a matching chord in the page and hands the key back. Two
+ * rules keep that from eating the page's own shortcuts:
+ *
+ * - A chord the browser answers itself is claimed first and never reaches this
+ *   table, so `mod+r` still reloads the page.
+ * - A chord with no Command/Control/Alt is left alone entirely, because a bare
+ *   key belongs to whatever the page is doing with it.
+ */
+export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShortcutChord[] {
+  const isMac = isMacPlatform()
+  const chords = new Map<string, BrowserShortcutChord>()
+  for (const category of KEYMAP.categories) {
+    for (const shortcut of category.shortcuts) {
+      if (BROWSER_OWNED_IDS.has(shortcut.id)) continue
+      for (const chord of resolveChords(source.keysFor(shortcut.id), isMac)) {
+        if (!chord.meta && !chord.control && !chord.alt) continue
+        chords.set(`${chord.key}:${chord.meta}${chord.control}${chord.shift}${chord.alt}`, chord)
+      }
+    }
+  }
+  return [...chords.values()]
+}
+
 /**
  * Hand the table to the main process. Called on startup and on every keymap
  * change, so the reported chords are always the effective ones. A failure is
@@ -116,6 +151,7 @@ export function browserSwitcherChords(source: BrowserShortcutKeySource): Browser
 export function publishBrowserShortcutBindings(source: BrowserShortcutKeySource): void {
   void invoke('browser:setShortcutBindings', browserShortcutBindings(source)).catch(() => {})
   void invoke('browser:setSwitcherBindings', browserSwitcherChords(source)).catch(() => {})
+  void invoke('browser:setAppShortcutChords', appShortcutChords(source)).catch(() => {})
 }
 
 /** Whether {@link installBrowserShortcutPublishing} has already run. */
