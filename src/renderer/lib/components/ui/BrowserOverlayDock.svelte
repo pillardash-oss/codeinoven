@@ -7,6 +7,7 @@
     type NativeDockInteraction
   } from '$shared/native-dock'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { patchNativeDockChildren } from '$lib/native-dock-dom'
   import { onMount } from 'svelte'
   let { dock, onDragging }: { dock: NativeDockRequest; onDragging: (dragging: boolean) => void } =
     $props()
@@ -37,33 +38,34 @@
   }
   const draw: Attachment<HTMLDivElement> = (element) => {
     modalRoot = element
-    $effect(() => {
-      const current = dock
-      const nextImages: Record<string, string> = {}
-      for (const id of nativeDockImageIds(current.nodes)) {
-        const source = current.images?.[id] ?? images[id]
-        if (source) nextImages[id] = source
+    const current = dock
+    const nextImages: Record<string, string> = {}
+    for (const id of nativeDockImageIds(current.nodes)) {
+      const source = current.images?.[id] ?? images[id]
+      if (source) nextImages[id] = source
+    }
+    images = nextImages
+    if (selectedAction !== (current.selectedAction ?? null)) {
+      if (hoveredAction !== current.selectedAction) hoveredAction = null
+      selectedAction = current.selectedAction ?? null
+    }
+    patchNativeDockChildren(
+      element,
+      current.nodes.map((node) => create(node))
+    )
+    for (const target of element.querySelectorAll<HTMLElement>('[data-native-dock-scroll]')) {
+      target.scrollTop = Number(target.dataset.nativeDockScrollTop ?? 0)
+    }
+    if (current.modal) {
+      for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
+        row.dataset.nativeModalRow = ''
       }
-      images = nextImages
-      if (selectedAction !== (current.selectedAction ?? null)) {
-        if (hoveredAction !== current.selectedAction) hoveredAction = null
-        selectedAction = current.selectedAction ?? null
-      }
-      element.replaceChildren(...current.nodes.map((node) => create(node)))
-      for (const target of element.querySelectorAll<HTMLElement>('[data-native-dock-scroll]')) {
-        target.scrollTop = Number(target.dataset.nativeDockScrollTop ?? 0)
-      }
-      if (current.modal) {
-        for (const row of element.querySelectorAll<HTMLElement>('button[aria-selected]')) {
-          row.dataset.nativeModalRow = ''
-        }
-        highlight(element, hoveredAction ?? selectedAction)
-      }
-      void invoke('browser:overlayDockDrawn', {
-        id: current.id,
-        revision: current.revision
-      }).catch(() => {})
-    })
+      highlight(element, hoveredAction ?? selectedAction)
+    }
+    void invoke('browser:overlayDockDrawn', {
+      id: current.id,
+      revision: current.revision
+    }).catch(() => {})
     return () => {
       modalRoot = null
     }
@@ -129,6 +131,11 @@
     if (!(target instanceof Element)) return
     const button = target.closest<HTMLButtonElement>('button[data-native-dock-action]')
     const action = button?.getAttribute('data-native-dock-action')
+    const key = button?.dataset.nativeDockKey
+    if (dock.modal && key && !button.disabled) {
+      report({ id: dock.id, kind: 'commit', key })
+      return
+    }
     if (action && !button?.disabled) report({ id: dock.id, kind: 'click', action })
   }
   function keydown(event: KeyboardEvent): void {
@@ -239,6 +246,13 @@
 </div>
 
 <style>
+  :global([data-native-modal-row]),
+  :global([data-native-modal-row] *) {
+    cursor: pointer;
+  }
+  :global([data-native-modal-row]:hover) {
+    background: var(--color-elevated);
+  }
   :global([data-native-modal-row][aria-selected='true']) {
     background: var(--color-selected);
   }
