@@ -107,7 +107,11 @@ import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
 import { NativeToastView } from './native-toast-view'
 import { NativeStripView } from './native-strip-view'
-import { browserStatusOverlayPlacement, type BrowserStatusOverlay } from '../../lib/browser-overlay'
+import {
+  STATUS_BUBBLE_DELAY_MS,
+  browserStatusOverlayPlacement,
+  type BrowserStatusOverlay
+} from '../../lib/browser-overlay'
 import {
   BrowserDownloadManager,
   type BrowserDownloadOwner
@@ -573,6 +577,17 @@ export class BrowserService {
    */
   private targetUrl: string | null = null
   private targetUrlTabId: string | null = null
+  /**
+   * Whether the pointer has rested on `targetUrl` long enough to paint it.
+   *
+   * A new target starts false and flips true when the resting delay elapses; a
+   * target the bubble is already showing stays true so moving between links
+   * updates it live. It gates the placement, so a pointer sweeping across a page
+   * shows no bubble at all.
+   */
+  private statusDelayElapsed = false
+  /** The pending resting-delay timer, or null while none is armed. */
+  private statusShowTimer: ReturnType<typeof setTimeout> | null = null
   /** The link preview currently drawn by the overlay window, or null while none
    *  is. Compared against the next placement so a repeat frame is not a repaint. */
   private statusOverlay: BrowserStatusOverlay | null = null
@@ -1704,6 +1719,8 @@ export class BrowserService {
     this.displayedTab = null
     for (const handle of this.pendingParks.values()) clearTimeout(handle)
     this.pendingParks.clear()
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
     this.agentReveals.clear()
@@ -6503,6 +6520,9 @@ export class BrowserService {
    * empty string once it leaves the link, which is the one signal that takes the
    * bubble down. Only the page actually on screen can be hovered, so a report
    * from a parked or background tab is dropped rather than drawn over another.
+   * A fresh target earns the bubble only after `STATUS_BUBBLE_DELAY_MS` of rest,
+   * so a pointer sweeping across a page shows nothing; a bubble already up
+   * follows the pointer between links at once.
    */
   private onTargetUrlReport(tabId: string, url: string): void {
     const target = statusTextForTarget(url)
@@ -6512,9 +6532,45 @@ export class BrowserService {
     }
     if (this.window.isDestroyed()) return
     if (this.activeTabId !== tabId || this.toastVisible) return
+    // A repeated report for the pointer's current target is not a new hover: an
+    // armed delay is left to run and an elapsed one stays up. Only a target the
+    // pointer has newly moved onto restarts the wait.
+    if (this.targetUrl === target && this.targetUrlTabId === tabId) {
+      if (this.statusDelayElapsed) this.refreshStatusOverlay()
+      return
+    }
     this.targetUrl = target
     this.targetUrlTabId = tabId
-    this.refreshStatusOverlay()
+    // A bubble already on screen follows the pointer between links at once, the
+    // way a native browser does; the delay guards only the first appearance.
+    if (this.statusDelayElapsed) {
+      this.refreshStatusOverlay()
+      return
+    }
+    this.armStatusDelay()
+  }
+
+  /**
+   * Start the resting delay that earns the pointer a bubble.
+   *
+   * The timer is armed for the newest target only: a pointer crossing onto
+   * another link re-arms it, so a link it merely swept past never shows.
+   */
+  private armStatusDelay(): void {
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
+    this.statusShowTimer = setTimeout(() => {
+      this.statusShowTimer = null
+      this.statusDelayElapsed = true
+      this.refreshStatusOverlay()
+    }, STATUS_BUBBLE_DELAY_MS)
+  }
+
+  /** Cancel any pending resting delay. */
+  private clearStatusDelay(): void {
+    if (this.statusShowTimer === null) return
+    clearTimeout(this.statusShowTimer)
+    this.statusShowTimer = null
   }
 
   /**
@@ -6533,6 +6589,7 @@ export class BrowserService {
     const target = this.targetUrl
     if (
       target === null ||
+      !this.statusDelayElapsed ||
       this.targetUrlTabId !== this.activeTabId ||
       this.toastVisible ||
       bounds === null
@@ -6561,6 +6618,8 @@ export class BrowserService {
 
   /** Drop the preview, for the page that owns it leaving the screen. */
   private dismissStatusOverlay(): void {
+    this.clearStatusDelay()
+    this.statusDelayElapsed = false
     if (this.targetUrl === null && this.targetUrlTabId === null) return
     this.targetUrl = null
     this.targetUrlTabId = null

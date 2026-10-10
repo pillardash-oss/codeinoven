@@ -81,6 +81,16 @@ export interface BrowserStatusOverlay {
 export const STATUS_BUBBLE_INSET = 4
 
 /**
+ * How long the pointer must rest on a link before the bubble appears.
+ *
+ * A native browser holds its status bubble back rather than painting one the
+ * instant a pointer crosses a link, so sweeping across a page does not flash a
+ * bubble for every link passed over. The same resting delay applies here; once
+ * the bubble is up, moving between links updates it live with no delay.
+ */
+export const STATUS_BUBBLE_DELAY_MS = 1500
+
+/**
  * Where the status bubble belongs for a page laid out at `page`, given the
  * height of the window content the overlay window spans.
  *
