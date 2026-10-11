@@ -21,13 +21,16 @@ export const GITHUB_TRANSIENT_MESSAGE =
 /**
  * Returned when GitHub will not let this sign-in read the repository.
  *
- * The app signs in with an OAuth App, so its grant covers the repositories the
- * account can reach. A refusal here means that grant no longer covers this one:
- * it was revoked, its scope narrowed, or the organization requires an
- * authorization the account has not given. Signing in again renews it.
+ * Two causes land here and they need different answers. The app signs in with
+ * an OAuth App, so its grant can be revoked or narrowed, and signing in again
+ * renews it. But an organization with OAuth app access restrictions refuses
+ * every unapproved OAuth App rather than a revoked one, and no amount of
+ * signing in clears that: an organization owner has to approve the app under
+ * the organization's OAuth app policy. The notice names both, because the
+ * second is a dead end that only says "sign in again" hides.
  */
 export const GITHUB_REPOSITORY_ACCESS_MESSAGE =
-  'GitHub will not let this sign-in read this repository. Sign in to GitHub again to renew access.'
+  'GitHub will not let this sign-in read this repository. Sign in again to renew access, or ask an organization owner to approve CodeInOven for that organization.'
 
 /**
  * Resolve `owner/repo` from a project's origin remote, so a call can target the
