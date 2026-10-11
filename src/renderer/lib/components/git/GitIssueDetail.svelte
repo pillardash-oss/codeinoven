@@ -79,6 +79,14 @@
     onReopen: (issue: IssueSummary) => void
     /** Open an issue this one relates to, when it lives in the same repository. */
     onOpenRelated: (item: IssueRelationshipItem) => void
+    /**
+     * Open a commit this issue's history references, in the Git panel.
+     *
+     * A reference event names its commit by hash, and the commit belongs to the
+     * repository the reader is already in, so the reader hands the hash over
+     * instead of deciding where a commit is read.
+     */
+    onOpenCommit: (commitId: string) => void
     onOpenInBrowser: (issue: IssueSummary) => void
   }
 
@@ -93,6 +101,7 @@
     onRequestClose,
     onReopen,
     onOpenRelated,
+    onOpenCommit,
     onOpenInBrowser
   }: Props = $props()
 
@@ -645,6 +654,22 @@
                   onclick={() => void openInBrowser(reference.url)}
                 >
                   {issueReferenceLabel(reference, repositoryName)}
+                </button>
+              {/if}
+              {#if item.line.commitId}
+                {@const commitId = item.line.commitId}
+                <!--
+                  The commit is in this repository, so it opens where the repository
+                  is read rather than on github.com.
+                -->
+                <button
+                  type="button"
+                  class="mx-1 cursor-pointer font-mono text-[0.625rem] font-medium text-primary hover:underline"
+                  title={`Open commit ${commitId.slice(0, 7)} in the Git panel`}
+                  aria-label={`Open commit ${commitId.slice(0, 7)} in the Git panel`}
+                  onclick={() => onOpenCommit(commitId)}
+                >
+                  {commitId.slice(0, 7)}
                 </button>
               {/if}
               {#if item.line.trail}

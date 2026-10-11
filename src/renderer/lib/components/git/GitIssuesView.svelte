@@ -26,9 +26,24 @@
     identity: { owner: string; repo: string } | null
     githubConnected: boolean
     onSignIn: () => void
+    /**
+     * Open a commit the issue reader's history names, in this panel.
+     *
+     * Forwarded down unchanged: the panel owns the commit view, this view only
+     * knows the reader that asked for it.
+     */
+    onOpenCommit: (commitId: string) => void
   }
 
-  let { projectId, threadId, scopeBucketId, identity, githubConnected, onSignIn }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    scopeBucketId,
+    identity,
+    githubConnected,
+    onSignIn,
+    onOpenCommit
+  }: Props = $props()
 
   /**
    * The tab's own view state, kept in its own store keyed by project.
@@ -231,6 +246,7 @@
       onRequestClose={(issue) => (confirmingClose = issue)}
       onReopen={(issue) => void applyState(issue, 'open')}
       onOpenRelated={(item) => openIssue(issueRelationshipSummary(item))}
+      {onOpenCommit}
       onOpenInBrowser={(issue) => void openInBrowser(issue.url)}
     />
   </div>

@@ -96,9 +96,11 @@ export function issueStateReasonLabel(reason: IssueStateReason | null): string |
  *
  * The row is one line: whoever did it, then what they did. Some of those actions
  * carry something a reader wants to click or recognise, so they are handed back
- * as parts rather than as one string: a label keeps its own chip and colour, and a
+ * as parts rather than as one string: a label keeps its own chip and colour, a
  * cross-reference stays a link instead of becoming text that merely looks like
- * one. `lead` is the wording that precedes the part, `trail` whatever follows it.
+ * one, and a commit stays a handle the reader can open rather than a hash that
+ * only looks like one. `lead` is the wording that precedes the part, `trail`
+ * whatever follows it.
  */
 export interface IssueTimelineLine {
   lead: string
@@ -106,6 +108,14 @@ export interface IssueTimelineLine {
   label?: PullRequestLabel | null
   /** The issue or pull request a cross-reference named, drawn as a link. */
   reference?: IssueTimelineReference | null
+  /**
+   * The commit a reference event named, as the full hash.
+   *
+   * Kept apart from `lead` so the row can draw it as a control: the commit lives in
+   * this repository, so the reader opens it where the repository is read, in the
+   * Git panel, rather than leaving the app for github.com.
+   */
+  commitId?: string | null
   /** Wording that follows the inline part, empty when nothing follows. */
   trail?: string
 }
@@ -164,11 +174,12 @@ export function issueTimelineLine(event: IssueTimelineEvent): IssueTimelineLine 
     case 'unpinned':
       return { lead: 'unpinned this issue' }
     case 'referenced':
-      return {
-        lead: event.commitId
-          ? `referenced this in commit ${event.commitId.slice(0, 7)}`
-          : 'referenced this'
-      }
+      // The hash is a part rather than part of the sentence: the reader opens the
+      // commit in the Git panel, and wording that swallowed the hash would leave
+      // nothing to click.
+      return event.commitId
+        ? { lead: 'referenced this in commit', commitId: event.commitId }
+        : { lead: 'referenced this' }
     case 'cross-referenced':
       return { lead: 'mentioned this in', reference: event.reference ?? null }
     case 'marked_as_duplicate':

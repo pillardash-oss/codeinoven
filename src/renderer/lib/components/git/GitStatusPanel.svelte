@@ -135,6 +135,7 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -1230,6 +1231,29 @@
     commitDiffErrors = {}
     commitTreeCollapsedDirs = {}
     loadingCommitDiff = false
+  }
+
+  /**
+   * Open one commit named from outside the history list, addressed by its hash.
+   *
+   * An issue's history knows a referenced commit only by hash, and `git log` resolves
+   * a hash-like query against the object database rather than the commit message, so
+   * a commit that was fetched but never checked out still opens. A commit this
+   * checkout has never fetched is a miss worth saying out loud: a click that silently
+   * does nothing reads as a broken link.
+   */
+  async function openCommitByHash(hash: string): Promise<void> {
+    const [commit] = await gitState.getLog(projectId, 1, 0, hash)
+    // The pin above any message matches is what makes the hash trustworthy, so a
+    // result that is not the hash itself is a commit whose message happens to
+    // contain it, which is not the commit the reader asked for.
+    if (!commit || !commit.hash.startsWith(hash)) {
+      reportErrorWithDetails(
+        `Commit ${hash.slice(0, 7)} is not in this repository. Fetch the branch it was pushed to, then open it again.`
+      )
+      return
+    }
+    void selectCommit(commit)
   }
 
   function toggleCommitDir(path: string): void {
@@ -3897,6 +3921,7 @@
               identity={githubIdentity}
               {githubConnected}
               onSignIn={() => githubSignIn.start()}
+              onOpenCommit={(hash) => void openCommitByHash(hash)}
             />
           </div>
         {:else if activeTab === 'notifications'}
