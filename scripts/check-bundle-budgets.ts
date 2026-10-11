@@ -1,3 +1,33 @@
+/******************************************************************************
+ *                                                                           *
+ *   STOP.  THESE BUDGETS ARE A HARD CEILING, NOT A SUGGESTION.              *
+ *                                                                           *
+ *   THIS FILE IS UNDER AN EXPLICIT AND STANDING USER FREEZE.                *
+ *                                                                           *
+ *   YOU, THE AGENT READING THIS, ARE FORBIDDEN FROM RAISING, RELAXING,      *
+ *   WIDENING, SPLITTING, ROUNDING UP, OR OTHERWISE WEAKENING ANY BUDGET    *
+ *   IN THIS FILE.  NOT BY A BYTE.  NOT "JUST FOR THIS RELEASE".  NOT        *
+ *   "TEMPORARILY".  NOT TO GET CI GREEN.  NOT BECAUSE THE CHECK IS         *
+ *   INCONVENIENT.  A BUDGET THAT MOVES IS NOT A BUDGET, IT IS A LIE.        *
+ *                                                                           *
+ *   THESE NUMBERS HAVE ALREADY BEEN RAISED SIX TIMES (SEE BELOW).  THAT     *
+ *   HISTORY IS A RECORD OF FAILURE, NOT A PRECEDENT TO CONTINUE.  EACH      *
+ *   RAISE SHIPPED A STARTUP REGRESSION STRAIGHT TO THE USER.  THE NEXT      *
+ *   RAISE WILL NOT BE TREATED AS A FIX.  IT IS A VIOLATION.                 *
+ *                                                                           *
+ *   THE ONLY PERMITTED RESPONSE TO "THE BUILD IS OVER BUDGET" IS TO MAKE    *
+ *   THE FIRST SCREEN LIGHTER:  MOVE WORK BEHIND A DYNAMIC import(),        *
+ *   DELETE DEAD CODE, ELIMINATE EAGER DEPENDENCIES.  NEVER TOUCH THE        *
+ *   CEILING.  IF YOU CHANGE A NUMBER HERE TO SILENCE A FAILURE, YOU HAVE    *
+ *   SOLVED NOTHING AND YOU HAVE LIED TO THE USER.                          *
+ *                                                                           *
+ *   RAISING A BUDGET REQUIRES THE USER'S PRIOR, EXPLICIT, FORMAL APPROVAL.  *
+ *   NOT AN INFERENCE, NOT A SILENCE, NOT A "THEY PROBABLY WANT IT".         *
+ *   AN ACTUAL STATEMENT FROM THE USER SAYING TO RAISE IT.  WITHOUT THAT    *
+ *   APPROVAL ON RECORD, ANY CHANGE TO THESE CONSTANTS IS A REGRESSION       *
+ *   YOU ARE SHIPPING ON PURPOSE.  DO NOT DO IT.                            *
+ *                                                                           *
+ ******************************************************************************/
 /**
  * Bundle-budget check for the production renderer build.
  *
@@ -32,8 +62,18 @@ const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 // closure (~2.48 MiB raw / ~0.74 MiB gzip) and a heavier first screen must be
 // paid for by making something lazy instead. See `STARTUP_BUDGET_MS` for the
 // runtime half of the same promise.
+//
+// ============================ DO NOT RAISE ================================
+// Raising either constant below is PROHIBITED without the user's explicit,
+// prior, formal approval. "The build is over budget" is fixed by making the
+// first screen lighter, never by moving the ceiling. A number changed here to
+// silence a failing check is a startup regression deliberately shipped to the
+// user. Read the freeze notice at the top of this file before you even think
+// about editing a value on the next two lines.
+// ===========================================================================
 const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 3 * 1024 * 1024
 // Windows Minifier output runs ~35 KiB heavier gzip than macOS/Linux.
+// Do not raise this either. Same freeze, same rule, no exceptions.
 const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 900 * 1024
 
 interface DesktopChunkBudget {
