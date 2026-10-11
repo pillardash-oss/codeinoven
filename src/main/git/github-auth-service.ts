@@ -362,6 +362,21 @@ export class GitHubAuthService {
     forceRefresh: boolean
   ): Promise<string | null> {
     const stored = account.credentials
+    // A credential belongs to the registration that issued it, and this build
+    // signs in for exactly one. A token left behind by another registration is
+    // not partially usable: GitHub pairs the refresh token with its issuer, and
+    // the access token was minted for a different application with a different
+    // permission model (CodeInOven's GitHub App registration, which GitHub
+    // serves no notifications to, was replaced by the OAuth App one). Keeping it
+    // would leave the app signed in to a registration that cannot do the work,
+    // which is the half-working state this check exists to end.
+    if (stored.clientId !== undefined && stored.clientId !== this.clientId) {
+      Logger.error(
+        `GitHub credentials were issued to client ID ${stored.clientId}, but this build is configured with ${this.clientId}`
+      )
+      await this.discardAccount(account.id, 'they belong to a different GitHub client ID')
+      return null
+    }
     const now = Date.now()
     const accessTokenExpired =
       stored.accessTokenExpiresAt !== undefined && stored.accessTokenExpiresAt <= now
@@ -407,17 +422,6 @@ export class GitHubAuthService {
     const stored = account.credentials
     const refreshToken = stored.refreshToken
     if (!refreshToken) return stored.accessToken
-    if (stored.clientId !== undefined && stored.clientId !== this.clientId) {
-      // GitHub pairs a refresh token with the registration that issued it, so
-      // this build can never renew it. Keep using a still-valid access token and
-      // name the real cause once it expires, instead of a generic refusal.
-      Logger.error(
-        `GitHub credentials were issued to client ID ${stored.clientId}, but this build is configured with ${this.clientId}`
-      )
-      if (this.isAccessTokenStillValid(stored)) return stored.accessToken
-      await this.discardAccount(account.id, 'they belong to a different GitHub client ID')
-      return null
-    }
     try {
       return await this.exchangeRefreshToken(account.id, refreshToken)
     } catch (failure) {
