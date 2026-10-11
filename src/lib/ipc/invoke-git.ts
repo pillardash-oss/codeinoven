@@ -14,8 +14,8 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubDeviceCode,
   GitHubMutationResult,
-  GitHubNotificationPage,
   GitHubNotificationPageInput,
+  GitHubNotificationPageResult,
   GitHubNotificationTabCounts,
   GitHubPollResult,
   GitHubWorkflowRunDetail,
@@ -986,7 +986,7 @@ export const invokeGitContract = {
    */
   'githubNotification:page': {} as Contract<
     [input: GitHubNotificationPageInput],
-    GitHubNotificationPage
+    GitHubNotificationPageResult
   >,
   /** Mark one thread read on GitHub. */
   'githubNotification:markRead': {} as Contract<[threadId: string], void>,

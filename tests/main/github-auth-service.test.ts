@@ -79,7 +79,7 @@ describe('GitHubAuthService', () => {
     expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body))).toMatchObject({
       client_id: 'Iv1.someClientId',
-      scope: 'repo'
+      scope: 'repo notifications'
     })
     expect(code).toEqual({
       deviceCode: 'device-abc',

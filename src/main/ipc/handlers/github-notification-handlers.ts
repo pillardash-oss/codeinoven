@@ -5,7 +5,29 @@ import {
 import { validateBoolean } from '../validation/primitives'
 import { validateNotificationPageInput, validateNotificationThreadId } from '../ipc-validation'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import type { GitHubNotificationPermissionRequired } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
+
+/**
+ * The listing failure as data when the token cannot read notifications.
+ *
+ * A 401 or 403 here almost always means the OAuth scope or the token type
+ * cannot read them, and a retry cannot grant a scope: only signing in again can.
+ * It is returned rather than thrown because a thrown error crosses IPC as a bare
+ * message, leaving the panel unable to tell it apart from a transient failure
+ * and with nothing to offer but the retry that cannot work.
+ */
+function notificationPermissionResult(
+  failure: unknown
+): GitHubNotificationPermissionRequired | null {
+  if (!(failure instanceof GitHubNotificationError)) return null
+  if (failure.status !== 401 && failure.status !== 403) return null
+  return {
+    status: 'permission_required',
+    message:
+      'GitHub refused the notifications request. Sign in again to grant the notifications scope.'
+  }
+}
 
 /**
  * Turn a notification failure into a message the panel can act on, without ever
@@ -46,6 +68,8 @@ export function registerGitHubNotificationHandlers(ctx: IpcHandlerContext): void
     try {
       return await service.listPage(validateNotificationPageInput(input))
     } catch (failure) {
+      const permission = notificationPermissionResult(failure)
+      if (permission) return permission
       describeNotificationFailure(failure)
     }
   })

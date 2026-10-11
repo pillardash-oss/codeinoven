@@ -3,7 +3,7 @@ import type {
   GitHubNotification,
   GitHubNotificationFilter,
   GitHubNotificationGroup,
-  GitHubNotificationPage,
+  GitHubNotificationPageResult,
   GitHubNotificationSort,
   GitHubNotificationTab,
   GitHubNotificationTabCounts
@@ -13,6 +13,19 @@ import type {
 const PAGE_SIZE = 30
 
 const EMPTY_COUNTS: GitHubNotificationTabCounts = { inbox: 0, saved: 0, done: 0 }
+
+/**
+ * Whether a listing answer is GitHub refusing the token rather than a listing.
+ *
+ * A page and a permission refusal are told apart by the marker GitHub's
+ * permission shape carries; the page has no such field.
+ */
+function isPermissionRequired(result: GitHubNotificationPageResult): result is {
+  status: 'permission_required'
+  message: string
+} {
+  return 'status' in result
+}
 
 /**
  * The signed-in account's GitHub notifications.
@@ -34,6 +47,11 @@ class GitHubNotificationsStore {
   loading = $state(false)
   loadingMore = $state(false)
   error = $state<string | null>(null)
+  /**
+   * True while the failure is GitHub refusing the token, not a transient fault.
+   * A retry cannot clear it; the panel offers the sign-in that can.
+   */
+  permissionRequired = $state(false)
   /** Thread id of an in-flight per-row action, so its row can show busy. */
   busyThreadId = $state<string | null>(null)
 
@@ -76,6 +94,7 @@ class GitHubNotificationsStore {
     const requestId = ++this.requestId
     this.loading = true
     this.error = null
+    this.permissionRequired = false
     try {
       const result = await invoke('githubNotification:page', {
         tab: this.tab,
@@ -84,6 +103,13 @@ class GitHubNotificationsStore {
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
+      if (isPermissionRequired(result)) {
+        this.items = []
+        this.hasMore = false
+        this.error = result.message
+        this.permissionRequired = true
+        return
+      }
       this.page = 1
       this.items = result.items
       // Saved and Done carry no inbox count of their own, so the badge keeps the
@@ -108,13 +134,20 @@ class GitHubNotificationsStore {
     this.loadingMore = true
     try {
       const next = this.page + 1
-      const result: GitHubNotificationPage = await invoke('githubNotification:page', {
+      const result = await invoke('githubNotification:page', {
         tab: this.tab,
         filter: this.filter,
         page: next,
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
+      // A refusal mid-list is the same fact as one on the first page: the token
+      // cannot read notifications, and only a fresh sign-in changes that.
+      if (isPermissionRequired(result)) {
+        this.error = result.message
+        this.permissionRequired = true
+        return
+      }
       this.page = next
       const known = new Set(this.items.map((item) => item.id))
       this.items = [...this.items, ...result.items.filter((item) => !known.has(item.id))]

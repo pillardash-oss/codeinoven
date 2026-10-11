@@ -18,9 +18,11 @@
   } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import { githubNotificationsUrl } from '$lib/github-references'
+  import { onMount } from 'svelte'
+  import { githubNotificationsUrl, githubSignInUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
   import GitNotificationsGroupMenu from './GitNotificationsGroupMenu.svelte'
   import PrAvatar from './PrAvatar.svelte'
@@ -46,6 +48,16 @@
   $effect(() => {
     if (githubConnected) void githubNotifications.ensureLoaded()
   })
+
+  /**
+   * Reload once a fresh sign-in lands.
+   *
+   * The state that failed was "signed in, but without the notifications scope",
+   * and signing in again changes the token rather than `githubConnected`. The
+   * panel is already open through that, so nothing else would refetch the
+   * listing it was refused.
+   */
+  onMount(() => githubSignIn.onAuthorized(() => void githubNotifications.load()))
 
   const tabOptions: Array<{ id: GitHubNotificationTab; label: string; count: number }> = $derived([
     { id: 'inbox', label: 'Inbox', count: githubNotifications.counts.inbox },
@@ -244,6 +256,25 @@
     >
       <TriangleAlert size={12} class="mt-0.5 shrink-0" aria-hidden="true" />
       <span class="min-w-0 flex-1">{githubNotifications.error}</span>
+      {#if githubNotifications.permissionRequired}
+        <!--
+          The token on file was issued before the app asked for the notifications
+          scope, so no retry can help: a fresh sign-in is the only fix. The control
+          declares the GitHub sign-in page as the address it stands for, so it
+          carries the same right-click menu as every other external control in the
+          app and can be opened in whichever browser the user prefers.
+        -->
+        <button
+          type="button"
+          class="flex h-6 shrink-0 cursor-pointer items-center rounded-md border border-border bg-surface px-2 font-medium text-foreground transition-colors hover:bg-elevated"
+          title="Sign in to GitHub again to grant the notifications scope"
+          aria-label="Sign in to GitHub again to grant the notifications scope"
+          data-external-url={githubSignInUrl()}
+          onclick={onSignIn}
+        >
+          Sign in again
+        </button>
+      {/if}
       <button
         type="button"
         class="shrink-0 cursor-pointer font-medium text-muted transition-colors hover:text-foreground"

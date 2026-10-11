@@ -1268,6 +1268,28 @@ export interface GitHubNotificationPage {
   counts: GitHubNotificationTabCounts
 }
 
+/**
+ * The signed-in token is not allowed to read notifications.
+ *
+ * GitHub serves the notifications API only to a token that carries the
+ * `notifications` scope, which the app did not request before this view
+ * existed. A token issued then is refused here, and no retry can change that:
+ * the fix is a fresh sign-in, so the failure is reported as data the panel can
+ * act on rather than as a bare error it can only repeat.
+ *
+ * `settingsUrl` is deliberately absent: the destination is the app's own
+ * sign-in, which the renderer owns, not a GitHub page the main process picks.
+ */
+export interface GitHubNotificationPermissionRequired {
+  status: 'permission_required'
+  /** Sentence the panel shows above the sign-in control. */
+  message: string
+}
+
+/** A notification listing, or the permission state that prevents one. */
+export type GitHubNotificationPageResult =
+  GitHubNotificationPage | GitHubNotificationPermissionRequired
+
 /** A notification listing request. */
 export interface GitHubNotificationPageInput {
   tab: GitHubNotificationTab

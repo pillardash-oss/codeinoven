@@ -11,8 +11,15 @@ declare global {
   const __CODEINOVEN_GITHUB_CLIENT_ID__: string | undefined
 }
 
-/** OAuth scopes required to read and manage pull requests. */
-const GITHUB_OAUTH_SCOPES = 'repo'
+/**
+ * OAuth scopes the app signs in with.
+ *
+ * `repo` covers pull requests, issues and deployments. `notifications` is what
+ * GitHub's notifications API requires, and it is not implied by `repo`: a token
+ * issued without it is refused there, so a sign-in that predates this scope has
+ * to be repeated before the panel can read the inbox.
+ */
+const GITHUB_OAUTH_SCOPES = 'repo notifications'
 
 /** OAuth token ref stored in the SecretVault. */
 const GITHUB_TOKEN_REF = 'github_oauth_token'
