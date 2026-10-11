@@ -92,6 +92,7 @@
     DEFAULT_THREAD_TITLE,
     DRAFT_CHAT_THREAD_ID,
     INBOX_PROJECT_ID,
+    isBrowserAssistantThread,
     isOrchestrationChildThread,
     isThreadBusy,
     threadTracksReadStatus,
@@ -1828,6 +1829,9 @@
         // Assistant tasks are Assistant View's own rows, never the Threads
         // timeline's, so a pinned how-to thread cannot appear among them.
         t.projectId !== ASSISTANT_SPACE_ID &&
+        // A browser tab's assistant conversation is the browser rail's own row,
+        // never the Threads timeline's.
+        !isBrowserAssistantThread(t) &&
         threadProjectFilterState.matches(t.projectId)
     )
     // Pinned threads keep one shared pin-time order; the default status sort
@@ -1911,7 +1915,8 @@
       (thread) =>
         !thread.archived &&
         thread.projectId !== INBOX_PROJECT_ID &&
-        thread.projectId !== ASSISTANT_SPACE_ID
+        thread.projectId !== ASSISTANT_SPACE_ID &&
+        !isBrowserAssistantThread(thread)
     )
   )
 
@@ -1999,8 +2004,10 @@
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const incoming = new Map<string, Thread>()
     for (const thread of threads) {
-      // Orchestration children are internals; see `upsertThreadInList`.
-      if (isOrchestrationChildThread(thread)) continue
+      // Orchestration children are internals; see `upsertThreadInList`. Browser
+      // assistant conversations are the browser rail's own rows, not the
+      // Threads timeline's, so a page can never merge one in.
+      if (isOrchestrationChildThread(thread) || isBrowserAssistantThread(thread)) continue
       incoming.set(thread.id, thread)
     }
     if (incoming.size === 0) return
@@ -2034,6 +2041,11 @@
     // one, and every later `thread:updated` for it was then skipped by the same
     // predicate, freezing that row on the stale snapshot it was restored with.
     if (isOrchestrationChildThread(thread)) return
+    // A browser tab's assistant conversation lives in the hidden global browser
+    // container. Its surface is the browser's own rail, so a `thread:updated`
+    // broadcast for one must never plant a phantom row in the Threads timeline
+    // (the browser store already owns that conversation).
+    if (isBrowserAssistantThread(thread)) return
     const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
       allThreads = [thread, ...allThreads]
@@ -2118,7 +2130,8 @@
       // still cover them: the coordinator panel renders a worker's live status
       // chip from its own thread row, so an opened worker settles unread to
       // read exactly like a regular thread.
-      if (!isOrchestrationChildThread(updated)) upsertThreadInList(updated)
+      if (!isOrchestrationChildThread(updated) && !isBrowserAssistantThread(updated))
+        upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         // Auto-mark the selected thread read only while the window actually
@@ -2796,7 +2809,9 @@
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
-      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      allThreads = uniqueThreads.filter(
+        (t) => !isOrchestrationChildThread(t) && !isBrowserAssistantThread(t)
+      )
       historyOffset = uniqueThreadList(threadList).length
       hasMoreHistory = false
       // Restore what the last session left in the durable inbox, alongside the
