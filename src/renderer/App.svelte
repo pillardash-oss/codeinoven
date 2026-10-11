@@ -99,6 +99,7 @@
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
+  import { warmSidebarPanels } from '$lib/sidebar-panel-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
@@ -1840,6 +1841,13 @@
       'harness:autoUpdate',
       () => void harnessLifecycleStore.autoUpdateOnStartup()
     )
+    // The context sidebar's panels are all dynamic imports, and the rail's tab
+    // strip, the terminal chords and a restored session reach them without the
+    // hover that `page-preload` relies on. Warming every panel once here, after
+    // the first paint and while the renderer is idle, is what makes the first
+    // open of the Git, files, diff or terminal panel instant instead of a cold
+    // chunk fetch on the click.
+    scheduleDeferredWork('sidebar:panels', warmSidebarPanels)
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
