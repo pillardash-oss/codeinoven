@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { githubNotificationSettingsUrl } from '$lib/github-references'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     invalidateRepositoryPreflight,
@@ -52,6 +53,7 @@
     Bell,
     Bot,
     Check,
+    CheckCheck,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
@@ -79,6 +81,7 @@
     Rocket,
     RotateCcwClock,
     Search,
+    Settings,
     SkipForward,
     Trash2,
     TriangleAlert
@@ -512,6 +515,12 @@
 
   /** Force a reload of whatever the active view shows, when the store has it. */
   async function refreshFocusedView(): Promise<void> {
+    if (activeTab === 'notifications') {
+      // Notifications are account-wide, so the panel's refresh button reloads
+      // them from GitHub the same way it reloads every other view.
+      if (githubConnected) await githubNotifications.load()
+      return
+    }
     const identity = githubIdentity
     if (!identity || !githubConnected) return
     if (activeTab === 'pulls') {
@@ -2738,7 +2747,8 @@
   >
     <RefreshCw
       size={12}
-      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments'])
+      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments']) ||
+      githubNotifications.loading
         ? 'animate-spin'
         : ''}
     />
@@ -2830,6 +2840,28 @@
       onclick={() => void openInBrowser(deploymentsExternal.url)}
     >
       <ExternalLink size={12} aria-hidden="true" />
+    </button>
+  {:else if activeTab === 'notifications' && githubConnected}
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+      title="Mark all notifications as read"
+      aria-label="Mark all notifications as read"
+      disabled={githubNotifications.tab !== 'inbox' || githubNotifications.busyThreadId !== null}
+      onclick={() => void githubNotifications.markAllRead()}
+    >
+      <CheckCheck size={12} aria-hidden="true" />
+      <span class="view-action-label">Mark all read</span>
+    </button>
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Open GitHub notification settings"
+      aria-label="Open GitHub notification settings"
+      data-external-url={githubNotificationSettingsUrl()}
+      onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
+    >
+      <Settings size={12} aria-hidden="true" />
     </button>
   {/if}
 {/snippet}

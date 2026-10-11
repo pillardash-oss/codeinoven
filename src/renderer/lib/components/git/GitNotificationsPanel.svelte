@@ -6,7 +6,6 @@
     BellOff,
     Bookmark,
     BookmarkCheck,
-    CheckCheck,
     CircleDot,
     ExternalLink,
     GitCommitHorizontal,
@@ -14,14 +13,12 @@
     Inbox,
     Loader2,
     MessageSquare,
-    RefreshCw,
-    Settings,
     Tag,
     TriangleAlert
   } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import { githubNotificationSettingsUrl, githubNotificationsUrl } from '$lib/github-references'
+  import { githubNotificationsUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
@@ -189,91 +186,56 @@
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
   <!--
-    Tabs, then the listing's own tools. GitHub's three views and its filters live
-    here rather than in the panel's action row because none of them describe the
+    One row: the three views, the listing's filter and ordering, then the count.
+    The listing's own actions (refresh, mark all read, settings) live in the
+    panel's header action group with every other view's actions. GitHub's filters
+    sit here rather than in the header because none of them describe the
     repository the Git panel is standing in   notifications are account-wide.
   -->
-  <div class="flex shrink-0 flex-col gap-1 border-b border-border px-2 py-1.5">
-    <div class="flex items-center gap-1">
-      <div role="tablist" aria-label="Notification views" class="flex items-center gap-0.5">
-        {#each tabOptions as tab (tab.id)}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={githubNotifications.tab === tab.id}
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
-            tab.id
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:text-foreground'}"
-            title="Show {tab.label.toLowerCase()} notifications"
-            onclick={() => void githubNotifications.setTab(tab.id)}
-          >
-            {tab.label}
-            {#if tab.count > 0}
-              <span class="tabular-nums text-dimmed">{tab.count}</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-      <span class="min-w-0 flex-1"></span>
-      <button
-        type="button"
-        class={rowActionClass}
-        title="Refresh notifications"
-        aria-label="Refresh notifications"
-        disabled={githubNotifications.loading}
-        onclick={() => void githubNotifications.load()}
-      >
-        {#if githubNotifications.loading}
-          <Loader2 size={12} class="animate-spin" aria-hidden="true" />
-        {:else}
-          <RefreshCw size={12} aria-hidden="true" />
-        {/if}
-      </button>
-      <button
-        type="button"
-        class={rowActionClass}
-        title="Mark all notifications as read"
-        aria-label="Mark all notifications as read"
-        disabled={githubNotifications.tab !== 'inbox'}
-        onclick={() => void githubNotifications.markAllRead()}
-      >
-        <CheckCheck size={12} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        class={rowActionClass}
-        title="Open GitHub notification settings"
-        aria-label="Open GitHub notification settings"
-        data-external-url={githubNotificationSettingsUrl()}
-        onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
-      >
-        <Settings size={12} aria-hidden="true" />
-      </button>
+  <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+    <div role="tablist" aria-label="Notification views" class="flex items-center gap-0.5">
+      {#each tabOptions as tab (tab.id)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={githubNotifications.tab === tab.id}
+          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
+          tab.id
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:text-foreground'}"
+          title="Show {tab.label.toLowerCase()} notifications"
+          onclick={() => void githubNotifications.setTab(tab.id)}
+        >
+          {tab.label}
+          {#if tab.count > 0}
+            <span class="tabular-nums text-dimmed">{tab.count}</span>
+          {/if}
+        </button>
+      {/each}
     </div>
-
-    <div class="flex items-center gap-1">
-      <GitListOptionsMenu
-        filter={githubNotifications.filter}
-        sort={githubNotifications.sort}
-        {filterOptions}
-        {sortOptions}
-        onFilterChange={(next) => void githubNotifications.setFilter(next)}
-        onSortChange={(next) => githubNotifications.setSort(next)}
-        label="Filter and sort notifications"
-        current="{activeFilterLabel}, {activeSortLabel}"
-        narrowed={filterNarrowed || sortNarrowed}
-        showFilter={githubNotifications.tab === 'inbox'}
-      />
-      <GitNotificationsGroupMenu
-        group={githubNotifications.group}
-        onGroupChange={(next) => githubNotifications.setGroup(next)}
-      />
-      <span class="min-w-0 flex-1"></span>
-      <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-        {githubNotifications.items.length} shown
-      </span>
-    </div>
+    <GitListOptionsMenu
+      filter={githubNotifications.filter}
+      sort={githubNotifications.sort}
+      {filterOptions}
+      {sortOptions}
+      onFilterChange={(next) => void githubNotifications.setFilter(next)}
+      onSortChange={(next) => githubNotifications.setSort(next)}
+      label="Filter and sort notifications"
+      current="{activeFilterLabel}, {activeSortLabel}"
+      narrowed={filterNarrowed || sortNarrowed}
+      showFilter={githubNotifications.tab === 'inbox'}
+    />
+    <GitNotificationsGroupMenu
+      group={githubNotifications.group}
+      onGroupChange={(next) => githubNotifications.setGroup(next)}
+    />
+    <span class="min-w-0 flex-1"></span>
+    <span
+      class="shrink-0 cursor-default text-[0.5625rem] tabular-nums text-dimmed"
+      title="Notifications shown in this view"
+    >
+      {githubNotifications.items.length}
+    </span>
   </div>
 
   {#if githubNotifications.error}
