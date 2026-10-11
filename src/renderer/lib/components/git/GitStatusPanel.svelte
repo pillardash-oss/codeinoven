@@ -3699,9 +3699,13 @@
   />
 {/snippet}
 
-/** * The pull request reader, for whoever is reading one. * * The Pulls view reads the pull request
-it has selected; the Notifications view * reads the one a notification names. One snippet, because a
-reader that draws * itself twice is a reader whose two copies drift apart. */
+<!--
+  The pull request reader, for whoever is reading one.
+
+  The Pulls view reads the pull request it has selected; the Notifications view
+  reads the one a notification names. One snippet, because a reader that draws
+  itself twice is a reader whose two copies drift apart.
+-->
 {#snippet pullRequestReader(
   readerIdentity: { owner: string; repo: string },
   summary: PullRequestSummary,
