@@ -6,7 +6,8 @@ import type {
   GitHubNotificationPageResult,
   GitHubNotificationSort,
   GitHubNotificationTab,
-  GitHubNotificationTabCounts
+  GitHubNotificationTabCounts,
+  GitHubPermissionRequired
 } from '$shared/types'
 
 /** Items fetched per page. GitHub caps `per_page` at 100 and the panel asks for less. */
@@ -20,10 +21,9 @@ const EMPTY_COUNTS: GitHubNotificationTabCounts = { inbox: 0, saved: 0, done: 0 
  * A page and a permission refusal are told apart by the marker GitHub's
  * permission shape carries; the page has no such field.
  */
-function isPermissionRequired(result: GitHubNotificationPageResult): result is {
-  status: 'permission_required'
-  message: string
-} {
+function isPermissionRequired(
+  result: GitHubNotificationPageResult
+): result is GitHubPermissionRequired {
   return 'status' in result
 }
 
@@ -48,10 +48,12 @@ class GitHubNotificationsStore {
   loadingMore = $state(false)
   error = $state<string | null>(null)
   /**
-   * True while the failure is GitHub refusing the token, not a transient fault.
-   * A retry cannot clear it; the panel offers the sign-in that can.
+   * GitHub refusing the token, when the failure is that rather than a transient
+   * fault. It is the panel's own notice state and the shape the rest of the app
+   * uses for a GitHub access refusal, so the panel renders it the way the other
+   * views render theirs. A retry cannot clear it; a fresh sign-in can.
    */
-  permissionRequired = $state(false)
+  permission = $state<GitHubPermissionRequired | null>(null)
   /** Thread id of an in-flight per-row action, so its row can show busy. */
   busyThreadId = $state<string | null>(null)
 
@@ -94,7 +96,7 @@ class GitHubNotificationsStore {
     const requestId = ++this.requestId
     this.loading = true
     this.error = null
-    this.permissionRequired = false
+    this.permission = null
     try {
       const result = await invoke('githubNotification:page', {
         tab: this.tab,
@@ -106,8 +108,7 @@ class GitHubNotificationsStore {
       if (isPermissionRequired(result)) {
         this.items = []
         this.hasMore = false
-        this.error = result.message
-        this.permissionRequired = true
+        this.permission = result
         return
       }
       this.page = 1
@@ -144,8 +145,7 @@ class GitHubNotificationsStore {
       // A refusal mid-list is the same fact as one on the first page: the token
       // cannot read notifications, and only a fresh sign-in changes that.
       if (isPermissionRequired(result)) {
-        this.error = result.message
-        this.permissionRequired = true
+        this.permission = result
         return
       }
       this.page = next

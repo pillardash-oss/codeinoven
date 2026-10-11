@@ -11,6 +11,17 @@ import type {
 export const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 
 /**
+ * Where GitHub's device-flow sign-in happens.
+ *
+ * Offered as the address a "sign in again" control stands for when the token on
+ * file was issued without a scope a view now needs. The code the app is waiting
+ * for is entered on this page, so a reader who opens it in a browser is one step
+ * from granting the access, and right-clicking the control offers that browser
+ * rather than only the click the control performs.
+ */
+export const GITHUB_SIGN_IN_URL = 'https://github.com/login/device'
+
+/**
  * Returned instead of a raw fetch failure when GitHub could not be reached at
  * all   offline, or a request that outlived the provider's own deadline.
  *

@@ -84,18 +84,6 @@ export function githubNotificationsUrl(): string {
   return 'https://github.com/notifications'
 }
 
-/**
- * Where the device-flow sign-in sends the user.
- *
- * It is the page the app's sign-in code is typed into, so a sign-in control can
- * declare the address it stands for and carry the same link context menu as every
- * other external control in the app: right-clicking it offers the in-app and
- * default browsers instead of only the click the button performs.
- */
-export function githubSignInUrl(): string {
-  return 'https://github.com/login/device'
-}
-
 // ─── Reference extension ────────────────────────────────────────────────────
 
 /** Token type emitted for every resolved reference. */

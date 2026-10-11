@@ -19,8 +19,9 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { onMount } from 'svelte'
-  import { githubNotificationsUrl, githubSignInUrl } from '$lib/github-references'
+  import { githubNotificationsUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
@@ -251,37 +252,16 @@
   </div>
 
   {#if githubNotifications.error}
+    <!--
+      A transient failure, in the strip every GitHub listing in the panel uses
+      for one. Nothing here is actionable beyond trying again, and the panel's
+      own Refresh reloads this listing, so no second control is repeated here.
+    -->
     <div
-      class="flex shrink-0 items-start gap-1.5 border-b border-border px-2 py-1.5 text-[0.625rem] text-danger"
+      class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
     >
-      <TriangleAlert size={12} class="mt-0.5 shrink-0" aria-hidden="true" />
-      <span class="min-w-0 flex-1">{githubNotifications.error}</span>
-      {#if githubNotifications.permissionRequired}
-        <!--
-          The token on file was issued before the app asked for the notifications
-          scope, so no retry can help: a fresh sign-in is the only fix. The control
-          declares the GitHub sign-in page as the address it stands for, so it
-          carries the same right-click menu as every other external control in the
-          app and can be opened in whichever browser the user prefers.
-        -->
-        <button
-          type="button"
-          class="flex h-6 shrink-0 cursor-pointer items-center rounded-md border border-border bg-surface px-2 font-medium text-foreground transition-colors hover:bg-elevated"
-          title="Sign in to GitHub again to grant the notifications scope"
-          aria-label="Sign in to GitHub again to grant the notifications scope"
-          data-external-url={githubSignInUrl()}
-          onclick={onSignIn}
-        >
-          Sign in again
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="shrink-0 cursor-pointer font-medium text-muted transition-colors hover:text-foreground"
-        onclick={() => void githubNotifications.load()}
-      >
-        Retry
-      </button>
+      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
     </div>
   {/if}
 
@@ -301,6 +281,31 @@
         </button>
       {/snippet}
     </EmptyState>
+  {:else if githubNotifications.permission}
+    <!--
+      GitHub refused the token, so there is nothing to list and no retry that
+      could change it. This is the same centered access refusal every other view
+      in the panel shows: the app's GitHub glyph, one sentence in plain words,
+      and the primary sign-in button those views use. The button declares the
+      page its sign-in happens on, so it is a link as much as a button and can be
+      opened from either browser's own context menu.
+    -->
+    <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <VendorIcon name="GitHub" size={20} class="text-dimmed" />
+      <p class="max-w-[36ch] text-[0.6875rem] leading-relaxed text-muted">
+        {githubNotifications.permission.message}
+      </p>
+      <button
+        type="button"
+        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        title="Sign in to GitHub again to allow CodeInOven to read your notifications"
+        aria-label="Sign in to GitHub again to allow CodeInOven to read your notifications"
+        data-external-url={githubNotifications.permission.settingsUrl}
+        onclick={onSignIn}
+      >
+        Sign in to GitHub
+      </button>
+    </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
       <Loader2 size={14} class="animate-spin" aria-hidden="true" />

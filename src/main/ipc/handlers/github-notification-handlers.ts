@@ -5,27 +5,28 @@ import {
 import { validateBoolean } from '../validation/primitives'
 import { validateNotificationPageInput, validateNotificationThreadId } from '../ipc-validation'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { GitHubNotificationPermissionRequired } from '../../../lib/types'
+import type { GitHubPermissionRequired } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
+import { GITHUB_SIGN_IN_URL } from './shared'
 
 /**
  * The listing failure as data when the token cannot read notifications.
  *
- * A 401 or 403 here almost always means the OAuth scope or the token type
- * cannot read them, and a retry cannot grant a scope: only signing in again can.
- * It is returned rather than thrown because a thrown error crosses IPC as a bare
- * message, leaving the panel unable to tell it apart from a transient failure
- * and with nothing to offer but the retry that cannot work.
+ * A 401 or 403 here means the token on file was issued without the
+ * `notifications` scope, and a retry cannot grant one: only signing in again
+ * can. It is returned rather than thrown because a thrown error crosses IPC as a
+ * bare message, leaving the panel unable to tell it apart from a transient
+ * failure and with nothing to offer but the retry that cannot work.
  */
-function notificationPermissionResult(
-  failure: unknown
-): GitHubNotificationPermissionRequired | null {
+function notificationPermissionResult(failure: unknown): GitHubPermissionRequired | null {
   if (!(failure instanceof GitHubNotificationError)) return null
   if (failure.status !== 401 && failure.status !== 403) return null
   return {
     status: 'permission_required',
     message:
-      'GitHub refused the notifications request. Sign in again to grant the notifications scope.'
+      'GitHub would not let CodeInOven read your notifications with the access it was given. ' +
+      'Sign in to GitHub again to allow it.',
+    settingsUrl: GITHUB_SIGN_IN_URL
   }
 }
 
@@ -39,7 +40,8 @@ function describeNotificationFailure(failure: unknown): never {
   if (failure instanceof GitHubNotificationError) {
     if (failure.status === 403) {
       throw new Error(
-        'GitHub refused the notifications request. Sign in again to grant the notifications scope.'
+        'GitHub would not let CodeInOven read your notifications with the access it was given. ' +
+          'Sign in to GitHub again to allow it.'
       )
     }
     if (failure.status === 404) {
