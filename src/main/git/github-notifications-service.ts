@@ -11,7 +11,7 @@ import { GITHUB_API_BASE_URL } from '../providers/github-provider'
 
 /** Where the app's own saved/done snapshots live, relative to the config root. */
 const STORE_FILE = 'github-notifications.json'
-const STORE_VERSION = 1
+const STORE_VERSION = 2
 
 const NETWORK_TIMEOUT_MS = 15_000
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
@@ -44,13 +44,25 @@ const REASON_FILTERS: Record<
 /** One thread's persisted snapshot, keyed by thread id. */
 type NotificationSnapshots = Record<string, GitHubNotification>
 
-interface NotificationStoreFile {
-  version: number
+/** The snapshots one account holds. */
+interface NotificationAccountSnapshots {
   saved: NotificationSnapshots
   done: NotificationSnapshots
 }
 
-/** Local, app-owned state GitHub's API does not expose (saved and done views). */
+interface NotificationStoreFile {
+  version: number
+  accounts: Record<string, NotificationAccountSnapshots>
+}
+
+/**
+ * Local, app-owned state GitHub's API does not expose (saved and done views).
+ *
+ * Split per account, because notifications are a property of the account rather
+ * than of the app: switching accounts must not show one account's saved threads
+ * under another's inbox, and signing a second account in must not move the
+ * first account's threads into it.
+ */
 export class NotificationSnapshotStore {
   private loaded: NotificationStoreFile | null = null
   /** Serializes writes so two quick actions cannot interleave a read-modify-write. */
@@ -58,21 +70,54 @@ export class NotificationSnapshotStore {
 
   constructor(private readonly storage: StorageEngine) {}
 
-  private async load(): Promise<NotificationStoreFile> {
-    if (this.loaded) return this.loaded
-    const raw = await this.storage
-      .read<Partial<NotificationStoreFile>>(STORE_FILE)
-      .catch(() => null)
-    const saved =
-      raw && raw.version === STORE_VERSION && raw.saved && typeof raw.saved === 'object'
-        ? raw.saved
-        : {}
-    const done =
-      raw && raw.version === STORE_VERSION && raw.done && typeof raw.done === 'object'
-        ? raw.done
-        : {}
-    this.loaded = { version: STORE_VERSION, saved, done }
+  private async load(accountId: string): Promise<NotificationStoreFile> {
+    if (!this.loaded) {
+      const raw = await this.storage.read<unknown>(STORE_FILE).catch(() => null)
+      this.loaded = this.parse(raw, accountId)
+    }
     return this.loaded
+  }
+
+  /**
+   * Read a store file, carrying the app's single-account snapshots into the
+   * account that is signed in now.
+   *
+   * The version 1 file had one `saved`/`done` pair with no account on it. Those
+   * threads belonged to whoever was signed in at the time, which the caller knows
+   * is the account making this call.
+   */
+  private parse(raw: unknown, accountId: string): NotificationStoreFile {
+    if (!raw || typeof raw !== 'object') return { version: STORE_VERSION, accounts: {} }
+    const record = raw as Record<string, unknown>
+    if (record['version'] === STORE_VERSION) {
+      const accounts = record['accounts']
+      return {
+        version: STORE_VERSION,
+        accounts:
+          accounts && typeof accounts === 'object'
+            ? (accounts as Record<string, NotificationAccountSnapshots>)
+            : {}
+      }
+    }
+    const saved = record['saved']
+    const done = record['done']
+    return {
+      version: STORE_VERSION,
+      accounts: {
+        [accountId]: {
+          saved: saved && typeof saved === 'object' ? (saved as NotificationSnapshots) : {},
+          done: done && typeof done === 'object' ? (done as NotificationSnapshots) : {}
+        }
+      }
+    }
+  }
+
+  private forAccount(file: NotificationStoreFile, accountId: string): NotificationAccountSnapshots {
+    const existing = file.accounts[accountId]
+    if (existing) return existing
+    const created: NotificationAccountSnapshots = { saved: {}, done: {} }
+    file.accounts[accountId] = created
+    return created
   }
 
   private persist(): Promise<void> {
@@ -86,47 +131,45 @@ export class NotificationSnapshotStore {
     return this.writeQueue
   }
 
-  async snapshot(id: string): Promise<GitHubNotification | null> {
-    const file = await this.load()
-    return file.saved[id] ?? file.done[id] ?? null
+  async snapshot(accountId: string, id: string): Promise<GitHubNotification | null> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    return snapshots.saved[id] ?? snapshots.done[id] ?? null
   }
 
-  async counts(): Promise<{ saved: number; done: number }> {
-    const file = await this.load()
-    return { saved: Object.keys(file.saved).length, done: Object.keys(file.done).length }
+  async counts(accountId: string): Promise<{ saved: number; done: number }> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    return { saved: Object.keys(snapshots.saved).length, done: Object.keys(snapshots.done).length }
   }
 
-  async saved(): Promise<GitHubNotification[]> {
-    const file = await this.load()
-    return Object.values(file.saved).map((item) => ({ ...item, saved: true, done: false }))
+  async saved(accountId: string): Promise<GitHubNotification[]> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    return Object.values(snapshots.saved).map((item) => ({ ...item, saved: true, done: false }))
   }
 
-  async done(): Promise<GitHubNotification[]> {
-    const file = await this.load()
-    return Object.values(file.done).map((item) => ({ ...item, saved: false, done: true }))
+  async done(accountId: string): Promise<GitHubNotification[]> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    return Object.values(snapshots.done).map((item) => ({ ...item, saved: false, done: true }))
   }
 
-  async setSaved(item: GitHubNotification): Promise<void> {
-    const file = await this.load()
-    file.saved[item.id] = { ...item, saved: true, done: false }
+  async setSaved(accountId: string, item: GitHubNotification): Promise<void> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    snapshots.saved[item.id] = { ...item, saved: true, done: false }
     await this.persist()
   }
 
-  async removeSaved(id: string): Promise<void> {
-    const file = await this.load()
-    delete file.saved[id]
+  async removeSaved(accountId: string, id: string): Promise<void> {
+    delete this.forAccount(await this.load(accountId), accountId).saved[id]
     await this.persist()
   }
 
-  async setDone(item: GitHubNotification): Promise<void> {
-    const file = await this.load()
-    file.done[item.id] = { ...item, saved: false, done: true }
+  async setDone(accountId: string, item: GitHubNotification): Promise<void> {
+    const snapshots = this.forAccount(await this.load(accountId), accountId)
+    snapshots.done[item.id] = { ...item, saved: false, done: true }
     await this.persist()
   }
 
-  async removeDone(id: string): Promise<void> {
-    const file = await this.load()
-    delete file.done[id]
+  async removeDone(accountId: string, id: string): Promise<void> {
+    delete this.forAccount(await this.load(accountId), accountId).done[id]
     await this.persist()
   }
 }
@@ -143,47 +186,31 @@ export class GitHubNotificationError extends Error {
 }
 
 /**
- * No notification token is connected yet.
+ * No account is signed in, so there is no token and nothing to read.
  *
  * Its own failure because it is not a GitHub answer at all: the app never sent a
- * request. GitHub serves the notifications API only to a classic personal access
- * token, which the app's GitHub App sign-in can never produce, so the panel is
- * told to connect one instead of being handed a retry that cannot work.
+ * request. The panel reads it as signed out and offers the app's own sign-in.
  */
 export class GitHubNotificationTokenMissingError extends Error {
   constructor() {
-    super('Connect a GitHub token to read your notifications')
+    super('Sign in to GitHub to read your notifications')
     this.name = 'GitHubNotificationTokenMissingError'
   }
 }
 
-/**
- * Whether a token's scopes may read the notifications API.
- *
- * GitHub accepts the `notifications` scope, and also the broader `repo` scope
- * (its reference: "All calls to these endpoints require the `notifications` or
- * `repo` scopes"). A token whose scopes GitHub does not report at all is let
- * through: the header is absent for some credential types, and the API itself is
- * the authority that then answers.
- */
-export function notificationScopesAllowRead(scopes: readonly string[] | null): boolean {
-  if (!scopes) return true
-  return scopes.includes('notifications') || scopes.includes('repo')
-}
-
-/** What a candidate token says about itself: whose it is, and what it may do. */
-export interface GitHubTokenInspection {
-  login: string | null
-  scopes: string[] | null
-}
-
 export interface GitHubNotificationsDeps {
   /**
-   * The classic personal access token the notification endpoints run on, from
-   * the vault. Null until the user connects one; the app's GitHub App sign-in
-   * token is deliberately not a fallback, because GitHub refuses it here.
+   * Resolve the active account's GitHub token; null when none is signed in.
+   *
+   * Every request resolves it per call rather than capturing it, so switching
+   * accounts changes who the very next request runs as.
    */
   resolveToken: () => Promise<string | null>
+  /**
+   * The account those tokens belong to, which keys the app's own saved and done
+   * snapshots. Null when none is signed in.
+   */
+  activeAccountId: () => Promise<string | null>
   storage: StorageEngine
   baseUrl?: string
 }
@@ -200,7 +227,9 @@ export interface GitHubNotificationsDeps {
 export class GitHubNotificationsService {
   private readonly store: NotificationSnapshotStore
   private readonly baseUrl: string
-  /** Last-seen threads, so an action can persist a snapshot without a re-fetch. */
+  /** Last-seen threads per account, so an action can persist a snapshot without
+   *  a re-fetch. Keyed by account and thread, because two accounts can hold a
+   *  thread id for the same repository. */
   private readonly seen = new Map<string, GitHubNotification>()
 
   constructor(private readonly deps: GitHubNotificationsDeps) {
@@ -208,29 +237,42 @@ export class GitHubNotificationsService {
     this.baseUrl = deps.baseUrl ?? GITHUB_API_BASE_URL
   }
 
+  /** The account a listing belongs to, or a signed-out failure. */
+  private async requireAccount(): Promise<string> {
+    const accountId = await this.deps.activeAccountId()
+    if (!accountId) throw new GitHubNotificationTokenMissingError()
+    return accountId
+  }
+
+  private seenKey(accountId: string, threadId: string): string {
+    return `${accountId}:${threadId}`
+  }
+
   async listPage(input: GitHubNotificationPageInput): Promise<GitHubNotificationPage> {
-    const counts = await this.countState()
+    const accountId = await this.requireAccount()
+    const counts = await this.countState(accountId)
     if (input.tab === 'saved') {
-      const saved = await this.store.saved()
+      const saved = await this.store.saved(accountId)
       return { items: saved, hasMore: false, counts: { ...counts, inbox: 0 } }
     }
     if (input.tab === 'done') {
-      const done = await this.store.done()
+      const done = await this.store.done(accountId)
       return { items: done, hasMore: false, counts: { ...counts, inbox: 0 } }
     }
-    const { items, hasMore } = await this.fetchInbox(input)
+    const { items, hasMore } = await this.fetchInbox(input, accountId)
     const unread = items.filter((item) => item.unread).length
     return { items, hasMore, counts: { ...counts, inbox: unread } }
   }
 
-  private async countState(): Promise<GitHubNotificationTabCounts> {
-    const { saved, done } = await this.store.counts()
+  private async countState(accountId: string): Promise<GitHubNotificationTabCounts> {
+    const { saved, done } = await this.store.counts(accountId)
     return { inbox: 0, saved, done }
   }
 
   /** Fetch and normalize one page of the live inbox listing. */
   private async fetchInbox(
-    input: GitHubNotificationPageInput
+    input: GitHubNotificationPageInput,
+    accountId: string
   ): Promise<{ items: GitHubNotification[]; hasMore: boolean }> {
     const params = new URLSearchParams({
       per_page: String(input.perPage),
@@ -251,7 +293,7 @@ export class GitHubNotificationsService {
     const reasons = this.reasonSet(input.filter)
     if (reasons) items = items.filter((item) => reasons.has(item.reason))
 
-    for (const item of items) this.seen.set(item.id, item)
+    for (const item of items) this.seen.set(this.seenKey(accountId, item.id), item)
     return { items, hasMore: this.hasNextPage(response) }
   }
 
@@ -268,17 +310,22 @@ export class GitHubNotificationsService {
 
   /** Mark one thread read on GitHub. */
   async markRead(threadId: string): Promise<void> {
+    const accountId = await this.requireAccount()
     await this.request(`/notifications/threads/${encodeURIComponent(threadId)}`, {
       method: 'PATCH'
     })
-    const seen = this.seen.get(threadId)
-    if (seen) this.seen.set(threadId, { ...seen, unread: false })
+    const key = this.seenKey(accountId, threadId)
+    const seen = this.seen.get(key)
+    if (seen) this.seen.set(key, { ...seen, unread: false })
   }
 
   /** Mark every notification read on GitHub. */
   async markAllRead(): Promise<void> {
+    const accountId = await this.requireAccount()
     await this.request('/notifications', { method: 'PUT' })
-    for (const [id, item] of this.seen) this.seen.set(id, { ...item, unread: false })
+    for (const [key, item] of this.seen) {
+      if (key.startsWith(`${accountId}:`)) this.seen.set(key, { ...item, unread: false })
+    }
   }
 
   /** Subscribe (watch) or unsubscribe (ignore) a thread's notifications. */
@@ -299,12 +346,13 @@ export class GitHubNotificationsService {
    * writes the local snapshot store.
    */
   async setSaved(threadId: string, saved: boolean): Promise<GitHubNotificationTabCounts> {
+    const accountId = await this.requireAccount()
     if (saved) {
-      await this.store.setSaved(await this.requireThread(threadId))
+      await this.store.setSaved(accountId, await this.requireThread(accountId, threadId))
     } else {
-      await this.store.removeSaved(threadId)
+      await this.store.removeSaved(accountId, threadId)
     }
-    return this.countState()
+    return this.countState(accountId)
   }
 
   /**
@@ -316,24 +364,26 @@ export class GitHubNotificationsService {
    * the local snapshot   a thread that gets new activity reappears on its own.
    */
   async setDone(threadId: string, done: boolean): Promise<GitHubNotificationTabCounts> {
+    const accountId = await this.requireAccount()
     if (done) {
-      const item = await this.requireThread(threadId)
+      const item = await this.requireThread(accountId, threadId)
       await this.request(`/notifications/threads/${encodeURIComponent(threadId)}`, {
         method: 'DELETE'
       })
-      this.seen.set(threadId, { ...item, unread: false })
-      await this.store.setDone({ ...item, unread: false })
+      this.seen.set(this.seenKey(accountId, threadId), { ...item, unread: false })
+      await this.store.setDone(accountId, { ...item, unread: false })
     } else {
-      await this.store.removeDone(threadId)
+      await this.store.removeDone(accountId, threadId)
     }
-    return this.countState()
+    return this.countState(accountId)
   }
 
   /** Resolve a thread's snapshot from memory, the store, or the API. */
-  private async requireThread(threadId: string): Promise<GitHubNotification> {
-    const cached = this.seen.get(threadId)
+  private async requireThread(accountId: string, threadId: string): Promise<GitHubNotification> {
+    const key = this.seenKey(accountId, threadId)
+    const cached = this.seen.get(key)
     if (cached) return cached
-    const stored = await this.store.snapshot(threadId)
+    const stored = await this.store.snapshot(accountId, threadId)
     if (stored) return stored
     const response = await this.request(`/notifications/threads/${encodeURIComponent(threadId)}`, {
       method: 'GET'
@@ -341,7 +391,7 @@ export class GitHubNotificationsService {
     const payload = (await response.json()) as unknown
     const item = this.toNotification(payload)
     if (!item) throw new Error('GitHub did not return that notification thread')
-    this.seen.set(item.id, item)
+    this.seen.set(key, item)
     return item
   }
 
@@ -423,44 +473,6 @@ export class GitHubNotificationsService {
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
         throw new Error('GitHub notifications request timed out', { cause: failure })
-      }
-      throw failure
-    } finally {
-      clearTimeout(timer)
-    }
-  }
-
-  /**
-   * Ask GitHub whose a candidate token is and what it may do.
-   *
-   * This is the one call that runs on a token that is not connected yet, so it
-   * takes the token as an argument. It is what lets the panel refuse a token
-   * that cannot read notifications before storing it, and name the account
-   * afterwards. A 401 is reported as `GitHubNotificationError`, so the caller can
-   * tell a dead token from a network fault.
-   */
-  async inspectToken(token: string): Promise<GitHubTokenInspection> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
-    try {
-      const response = await this.send('/user', { method: 'GET' }, token, controller.signal)
-      if (!response.ok) {
-        throw new GitHubNotificationError(response.status, await this.readErrorMessage(response))
-      }
-      const payload = (await response.json()) as unknown
-      const record = this.asRecord(payload)
-      const header = response.headers.get('x-oauth-scopes')
-      const scopes =
-        typeof header === 'string'
-          ? header
-              .split(',')
-              .map((scope) => scope.trim())
-              .filter((scope) => scope.length > 0)
-          : null
-      return { login: this.readString(record, 'login'), scopes }
-    } catch (failure) {
-      if (failure instanceof Error && failure.name === 'AbortError') {
-        throw new Error('GitHub token check timed out', { cause: failure })
       }
       throw failure
     } finally {

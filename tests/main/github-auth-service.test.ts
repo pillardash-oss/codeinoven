@@ -13,32 +13,93 @@ function jsonResponse(payload: unknown, status = 200): Response {
   })
 }
 
-function captureRequest(): { url: string; init: RequestInit } {
-  const call = fetchMock.mock.calls[0]
+/** The avatar download the profile read performs (the renderer CSP blocks remote hosts). */
+function avatarResponse(): Response {
+  return {
+    ok: true,
+    headers: new Headers({ 'content-type': 'image/png' }),
+    arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer
+  } as unknown as Response
+}
+
+function captureRequest(index = 0): { url: string; init: RequestInit } {
+  const call = fetchMock.mock.calls[index]
   return { url: call[0] as string, init: (call[1] ?? {}) as RequestInit }
 }
 
-function mockVault(): SecretVault {
+/** A vault stub that behaves like the real one: what is written is what is read. */
+function mapVault(initial: Record<string, string> = {}): SecretVault {
+  const values = new Map(Object.entries(initial))
   return {
-    save: vi.fn().mockResolvedValue('ref'),
-    resolve: vi.fn().mockResolvedValue('gho_secret'),
-    remove: vi.fn().mockResolvedValue(undefined),
-    exists: vi.fn().mockResolvedValue(false),
+    save: vi.fn(async (value: string, ref: string) => {
+      values.set(ref, value)
+      return ref
+    }),
+    resolve: vi.fn(async (ref: string) => values.get(ref) ?? ''),
+    remove: vi.fn(async (ref: string) => {
+      values.delete(ref)
+    }),
+    exists: vi.fn(async (ref: string) => values.has(ref)),
     isAvailable: vi.fn(() => true)
   } as unknown as SecretVault
 }
 
+function storedRef(vault: SecretVault, ref: string): string | null {
+  const call = vi
+    .mocked(vault.save)
+    .mock.calls.filter(([, savedRef]) => savedRef === ref)
+    .at(-1)
+  return call ? (call[0] as string) : null
+}
+
+interface StoredFile {
+  version: number
+  activeId: string | null
+  accounts: Array<{
+    id: string
+    login: string
+    name: string | null
+    credentials: Record<string, unknown>
+  }>
+}
+
+/** The account list as the service last wrote it. */
+function writtenFile(vault: SecretVault): StoredFile {
+  const raw = storedRef(vault, 'github_oauth_accounts')
+  if (raw === null) throw new Error('No GitHub accounts were written')
+  return JSON.parse(raw) as StoredFile
+}
+
+function credentials(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { version: 1, accessToken: 'gho_secret', ...overrides }
+}
+
+/** One account entry of an account list file. */
+function accountEntry(
+  id: string,
+  login: string,
+  overrides: Record<string, unknown> = {}
+): StoredFile['accounts'][number] {
+  return { id, login, name: null, credentials: credentials(overrides) }
+}
+
+function accountsFile(accounts: StoredFile['accounts'], activeId: string): string {
+  return JSON.stringify({ version: 1, activeId, accounts })
+}
+
 /**
- * Vault stub that behaves like the real one: reading returns what was last
- * written, and removing the credential makes it disappear.
+ * A vault whose second read of the account list answers with a different file,
+ * standing in for the other app instance that rotated the refresh token first.
  */
-function statefulVault(initial: string): SecretVault {
-  let value: string | null = initial
-  const vault = mockVault()
-  vi.mocked(vault.exists).mockImplementation(async () => value !== null)
-  vi.mocked(vault.resolve).mockImplementation(async () => value ?? '')
-  vi.mocked(vault.remove).mockImplementation(async () => {
-    value = null
+function rotatingVault(first: string, next: string): SecretVault {
+  const vault = mapVault({ github_oauth_accounts: first })
+  const base = vi.mocked(vault.resolve).getMockImplementation()
+  if (!base) throw new Error('Vault stub has no read behaviour')
+  let reads = 0
+  vi.mocked(vault.resolve).mockImplementation(async (ref: string) => {
+    reads += 1
+    if (ref === 'github_oauth_accounts' && reads > 1) return next
+    return await base(ref)
   })
   return vault
 }
@@ -54,12 +115,18 @@ describe('GitHubAuthService', () => {
   })
 
   it('reports not configured when no client ID is set', async () => {
-    const service = new GitHubAuthService(mockVault())
-    await expect(service.status()).resolves.toEqual({ connected: false, configured: false })
+    const service = new GitHubAuthService(mapVault())
+    await expect(service.status()).resolves.toEqual({
+      connected: false,
+      configured: false,
+      user: null,
+      accounts: [],
+      activeAccountId: null
+    })
     await expect(service.startDeviceFlow()).rejects.toThrow('client ID')
   })
 
-  it('starts a device flow and returns the code for the user to approve', async () => {
+  it('starts a device flow asking for the scope this registration needs', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
@@ -70,7 +137,7 @@ describe('GitHubAuthService', () => {
         interval: 5
       })
     )
-    const service = new GitHubAuthService(mockVault())
+    const service = new GitHubAuthService(mapVault())
 
     const code = await service.startDeviceFlow()
 
@@ -79,7 +146,7 @@ describe('GitHubAuthService', () => {
     expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body))).toMatchObject({
       client_id: 'Iv1.someClientId',
-      scope: 'repo'
+      scope: 'repo notifications'
     })
     expect(code).toEqual({
       deviceCode: 'device-abc',
@@ -90,45 +157,193 @@ describe('GitHubAuthService', () => {
     })
   })
 
-  it('saves refreshable credentials when the poll succeeds and rotates them when expired', async () => {
+  it('adds an account, named from its profile, when the poll succeeds', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        access_token: 'ghu_approved',
-        expires_in: 28_800,
-        refresh_token: 'ghr_initial',
-        refresh_token_expires_in: 15_897_600
-      })
-    )
-    const vault = mockVault()
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: 'ghu_approved',
+          expires_in: 28_800,
+          refresh_token: 'ghr_initial',
+          refresh_token_expires_in: 15_897_600
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ login: 'octocat', name: 'The Octocat' }))
+    const vault = mapVault()
     const service = new GitHubAuthService(vault)
 
-    const result = await service.pollAccessToken('device-abc')
+    await expect(service.pollAccessToken('device-abc')).resolves.toEqual({ status: 'authorized' })
 
-    expect(result).toEqual({ status: 'authorized' })
-    const saved = JSON.parse(String(vi.mocked(vault.save).mock.calls[0]?.[0])) as Record<
-      string,
-      unknown
-    >
-    expect(saved).toMatchObject({
-      version: 1,
-      accessToken: 'ghu_approved',
-      refreshToken: 'ghr_initial'
-    })
-    expect(saved['accessTokenExpiresAt']).toEqual(expect.any(Number))
-    expect(saved['refreshTokenExpiresAt']).toEqual(expect.any(Number))
-    expect(vault.save).toHaveBeenCalledWith(expect.any(String), 'github_oauth_token')
-
-    vi.mocked(vault.exists).mockResolvedValue(true)
-    vi.mocked(vault.resolve).mockResolvedValue(
-      JSON.stringify({
+    const file = writtenFile(vault)
+    expect(file.accounts).toHaveLength(1)
+    expect(file.accounts[0]).toMatchObject({
+      login: 'octocat',
+      credentials: {
         version: 1,
-        accessToken: 'ghu_expired',
-        refreshToken: 'ghr_initial',
-        accessTokenExpiresAt: Date.now() - 1,
-        refreshTokenExpiresAt: Date.now() + 60_000
-      })
-    )
+        accessToken: 'ghu_approved',
+        refreshToken: 'ghr_initial'
+      }
+    })
+    expect(file.accounts[0]?.credentials['accessTokenExpiresAt']).toEqual(expect.any(Number))
+    expect(file.accounts[0]?.credentials['refreshTokenExpiresAt']).toEqual(expect.any(Number))
+    expect(file.activeId).toBe(file.accounts[0]?.id)
+    expect(captureRequest(1).url).toBe('https://api.github.com/user')
+  })
+
+  it('re-authorizing the same account replaces its credentials instead of adding a row', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'ghu_new', expires_in: 28_800 }))
+      .mockResolvedValueOnce(jsonResponse({ login: 'octocat', name: 'The Octocat' }))
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile([accountEntry('account-1', 'octocat')], 'account-1')
+    })
+    const service = new GitHubAuthService(vault)
+
+    await service.pollAccessToken('device-abc')
+
+    const file = writtenFile(vault)
+    expect(file.accounts).toHaveLength(1)
+    expect(file.accounts[0]?.credentials['accessToken']).toBe('ghu_new')
+    expect(file.activeId).toBe('account-1')
+  })
+
+  it('reports every signed-in account, with the active one named and its avatar inlined', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          login: 'octocat',
+          name: 'The Octocat',
+          avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
+        })
+      )
+      .mockResolvedValueOnce(avatarResponse())
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', { accessToken: 'gho_one' }),
+          accountEntry('account-2', 'hubot')
+        ],
+        'account-1'
+      )
+    })
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.status()).resolves.toEqual({
+      connected: true,
+      configured: true,
+      user: { login: 'octocat', name: 'The Octocat', avatarUrl: 'data:image/png;base64,AQID' },
+      accounts: [
+        // The profile read names the account it belongs to.
+        { id: 'account-1', login: 'octocat', name: 'The Octocat', active: true },
+        { id: 'account-2', login: 'hubot', name: null, active: false }
+      ],
+      activeAccountId: 'account-1'
+    })
+    await expect(service.resolveToken()).resolves.toBe('gho_one')
+  })
+
+  it('switches the active account, and every later call runs as that one', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          login: 'hubot',
+          name: 'Hubot',
+          avatar_url: 'https://avatars.githubusercontent.com/u/2?v=4'
+        })
+      )
+      .mockResolvedValueOnce(avatarResponse())
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', { accessToken: 'gho_one' }),
+          accountEntry('account-2', 'hubot', { accessToken: 'gho_two' })
+        ],
+        'account-1'
+      )
+    })
+    const service = new GitHubAuthService(vault)
+
+    const status = await service.switchAccount('account-2')
+
+    expect(status.activeAccountId).toBe('account-2')
+    expect(status.user?.login).toBe('hubot')
+    expect(status.accounts.find((account) => account.id === 'account-2')?.active).toBe(true)
+    await expect(service.resolveToken()).resolves.toBe('gho_two')
+    expect(writtenFile(vault).activeId).toBe('account-2')
+  })
+
+  it('refuses to switch to an account that is not signed in', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile([accountEntry('account-1', 'octocat')], 'account-1')
+    })
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.switchAccount('account-9')).rejects.toThrow('no longer signed in')
+  })
+
+  it('signing out removes only the active account and moves to another one', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [accountEntry('account-1', 'octocat'), accountEntry('account-2', 'hubot')],
+        'account-1'
+      )
+    })
+    const service = new GitHubAuthService(vault)
+
+    await service.logout()
+
+    const file = writtenFile(vault)
+    expect(file.accounts.map((account) => account.id)).toEqual(['account-2'])
+    expect(file.activeId).toBe('account-2')
+    expect(vault.remove).not.toHaveBeenCalled()
+  })
+
+  it('signing out the last account leaves nothing signed in', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile([accountEntry('account-1', 'octocat')], 'account-1')
+    })
+    const service = new GitHubAuthService(vault)
+
+    await service.logout()
+
+    expect(writtenFile(vault)).toMatchObject({ activeId: null, accounts: [] })
+    await expect(service.activeAccountId()).resolves.toBeNull()
+  })
+
+  it('migrates a single-account credential into the account list on first read', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          login: 'octocat',
+          name: 'The Octocat',
+          avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
+        })
+      )
+      .mockResolvedValueOnce(avatarResponse())
+    const vault = mapVault({
+      github_oauth_token: JSON.stringify({ version: 1, accessToken: 'gho_legacy' })
+    })
+    const service = new GitHubAuthService(vault)
+
+    const status = await service.status()
+
+    expect(status.connected).toBe(true)
+    // The migrated credential carried no login; the profile read names it.
+    expect(status.accounts[0]).toMatchObject({ login: 'octocat', active: true })
+    expect(status.user?.login).toBe('octocat')
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+    expect(writtenFile(vault).accounts[0]?.credentials['accessToken']).toBe('gho_legacy')
+  })
+
+  it('rotates an expired access token per account', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         access_token: 'ghu_refreshed',
@@ -137,20 +352,35 @@ describe('GitHubAuthService', () => {
         refresh_token_expires_in: 15_897_600
       })
     )
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_expired',
+            refreshToken: 'ghr_initial',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      )
+    })
+    const service = new GitHubAuthService(vault)
 
     await expect(service.resolveToken()).resolves.toBe('ghu_refreshed')
-    const refreshRequest = fetchMock.mock.calls[1]
-    expect(refreshRequest?.[0]).toBe('https://github.com/login/oauth/access_token')
-    expect(JSON.parse(String((refreshRequest?.[1] as RequestInit | undefined)?.body))).toEqual({
+
+    expect(captureRequest().url).toBe('https://github.com/login/oauth/access_token')
+    expect(JSON.parse(String(captureRequest().init.body))).toEqual({
       client_id: 'Iv1.someClientId',
       grant_type: 'refresh_token',
       refresh_token: 'ghr_initial'
     })
+    expect(writtenFile(vault).accounts[0]?.credentials['refreshToken']).toBe('ghr_rotated')
   })
 
   it('reports pending for authorization_pending and slow_down', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const service = new GitHubAuthService(mockVault())
+    const service = new GitHubAuthService(mapVault())
 
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'authorization_pending' }))
     await expect(service.pollAccessToken('device-abc')).resolves.toEqual({ status: 'pending' })
@@ -161,7 +391,7 @@ describe('GitHubAuthService', () => {
 
   it('reports expired for expired_token and access_denied', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const service = new GitHubAuthService(mockVault())
+    const service = new GitHubAuthService(mapVault())
 
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'expired_token' }))
     await expect(service.pollAccessToken('device-abc')).resolves.toEqual({ status: 'expired' })
@@ -170,62 +400,8 @@ describe('GitHubAuthService', () => {
     await expect(service.pollAccessToken('device-abc')).resolves.toEqual({ status: 'expired' })
   })
 
-  it('resolves the stored token and reports connected status with the user profile', async () => {
+  it('drops an account GitHub refuses, leaving the others signed in', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = mockVault()
-    vi.mocked(vault.exists).mockResolvedValue(true)
-    vi.mocked(vault.resolve).mockResolvedValue(
-      JSON.stringify({ version: 1, accessToken: 'gho_secret' })
-    )
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        login: 'octocat',
-        name: 'The Octocat',
-        avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
-      })
-    )
-    // Avatar download   inlined as a data URL because the renderer CSP blocks
-    // remote image hosts.
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ 'content-type': 'image/png' }),
-      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer
-    } as unknown as Response)
-    const service = new GitHubAuthService(vault)
-
-    await expect(service.status()).resolves.toEqual({
-      connected: true,
-      configured: true,
-      user: {
-        login: 'octocat',
-        name: 'The Octocat',
-        avatarUrl: 'data:image/png;base64,AQID'
-      }
-    })
-    await expect(service.resolveToken()).resolves.toBe('gho_secret')
-  })
-
-  it('logs out by removing the stored token', async () => {
-    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = mockVault()
-    const service = new GitHubAuthService(vault)
-
-    await service.logout()
-
-    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
-  })
-
-  it('drops credentials GitHub refuses and reports signed out instead of throwing', async () => {
-    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = statefulVault(
-      JSON.stringify({
-        version: 1,
-        accessToken: 'ghu_expired',
-        refreshToken: 'ghr_dead',
-        accessTokenExpiresAt: Date.now() - 1,
-        refreshTokenExpiresAt: Date.now() + 60_000
-      })
-    )
     // GitHub answers a refresh token it cannot redeem with this generic code,
     // whether it expired, was already used, or belongs to another app.
     fetchMock.mockResolvedValue(
@@ -234,132 +410,151 @@ describe('GitHubAuthService', () => {
         error_description: 'The client_id and/or client_secret passed are incorrect.'
       })
     )
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_expired',
+            refreshToken: 'ghr_dead',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          }),
+          accountEntry('account-2', 'hubot', { accessToken: 'gho_two' })
+        ],
+        'account-1'
+      )
+    })
     const service = new GitHubAuthService(vault)
 
-    await expect(service.status()).resolves.toEqual({ connected: false, configured: true })
     await expect(service.resolveToken()).resolves.toBeNull()
 
-    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+    // The refused account is gone, and the healthy one took its place.
+    const file = writtenFile(vault)
+    expect(file.accounts.map((account) => account.id)).toEqual(['account-2'])
+    expect(file.activeId).toBe('account-2')
+    await expect(service.resolveToken()).resolves.toBe('gho_two')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('keeps credentials when a refresh fails transiently and uses the still-valid token', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = statefulVault(
-      JSON.stringify({
-        version: 1,
-        accessToken: 'ghu_valid',
-        refreshToken: 'ghr_live',
-        accessTokenExpiresAt: Date.now() + 60_000,
-        refreshTokenExpiresAt: Date.now() + 60_000
-      })
-    )
     fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'server error' }, 500))
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_valid',
+            refreshToken: 'ghr_live',
+            accessTokenExpiresAt: Date.now() + 60_000,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      )
+    })
     const service = new GitHubAuthService(vault)
 
     await expect(service.resolveToken(true)).resolves.toBe('ghu_valid')
 
-    expect(vault.remove).not.toHaveBeenCalled()
-  })
-
-  it('recovers when another instance rotated the refresh token first', async () => {
-    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = mockVault()
-    vi.mocked(vault.exists).mockResolvedValue(true)
-    vi.mocked(vault.resolve)
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          version: 1,
-          accessToken: 'ghu_stale',
-          refreshToken: 'ghr_used',
-          accessTokenExpiresAt: Date.now() - 1,
-          refreshTokenExpiresAt: Date.now() + 60_000
-        })
-      )
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          version: 1,
-          accessToken: 'ghu_rotated',
-          refreshToken: 'ghr_rotated',
-          accessTokenExpiresAt: Date.now() + 60_000,
-          refreshTokenExpiresAt: Date.now() + 60_000
-        })
-      )
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'incorrect_client_credentials' }))
-    const service = new GitHubAuthService(vault)
-
-    await expect(service.resolveToken()).resolves.toBe('ghu_rotated')
-
-    expect(vault.remove).not.toHaveBeenCalled()
+    // A transient failure is not a reason to forget the account.
+    const stored = JSON.parse(String(await vault.resolve('github_oauth_accounts'))) as StoredFile
+    expect(stored.accounts).toHaveLength(1)
   })
 
   it('names a client ID change instead of calling GitHub with credentials from another app', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = statefulVault(
-      JSON.stringify({
-        version: 1,
-        clientId: 'Iv1.otherApp',
-        accessToken: 'ghu_other_app',
-        refreshToken: 'ghr_other_app',
-        accessTokenExpiresAt: Date.now() - 1,
-        refreshTokenExpiresAt: Date.now() + 60_000
-      })
-    )
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            clientId: 'Iv1.otherApp',
+            accessToken: 'ghu_other_app',
+            refreshToken: 'ghr_other_app',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      )
+    })
     const service = new GitHubAuthService(vault)
 
     await expect(service.resolveToken(true)).resolves.toBeNull()
 
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+    expect(writtenFile(vault)).toMatchObject({ activeId: null, accounts: [] })
   })
 
   it('drops an expired access token that no refresh token can renew', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = statefulVault(
-      JSON.stringify({
-        version: 1,
-        accessToken: 'ghu_expired',
-        accessTokenExpiresAt: Date.now() - 1
-      })
-    )
-    const service = new GitHubAuthService(vault)
-
-    await expect(service.resolveToken()).resolves.toBeNull()
-
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
-  })
-
-  it('discards a malformed stored record and reports signed out', async () => {
-    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = statefulVault('{not json')
-    const service = new GitHubAuthService(vault)
-
-    await expect(service.status()).resolves.toEqual({ connected: false, configured: true })
-
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
-  })
-
-  it('keeps serving a healthy token after credentials GitHub refused are gone', async () => {
-    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    const vault = mockVault()
-    vi.mocked(vault.exists).mockResolvedValue(true)
-    vi.mocked(vault.resolve)
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          version: 1,
-          accessToken: 'ghu_expired',
-          refreshToken: 'ghr_dead',
-          accessTokenExpiresAt: Date.now() - 1,
-          refreshTokenExpiresAt: Date.now() + 60_000
-        })
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_expired',
+            accessTokenExpiresAt: Date.now() - 1
+          })
+        ],
+        'account-1'
       )
-      .mockResolvedValue(JSON.stringify({ version: 1, accessToken: 'ghu_fresh' }))
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'bad_refresh_token' }))
+    })
     const service = new GitHubAuthService(vault)
 
     await expect(service.resolveToken()).resolves.toBeNull()
-    await expect(service.resolveToken()).resolves.toBe('ghu_fresh')
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(writtenFile(vault).accounts).toEqual([])
+  })
+
+  it('discards a malformed account list and reports signed out', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mapVault({ github_oauth_accounts: '{not json' })
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.status()).resolves.toMatchObject({
+      connected: false,
+      configured: true,
+      accounts: []
+    })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_accounts')
+  })
+
+  it('recovers when another instance rotated the refresh token first', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = rotatingVault(
+      accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_stale',
+            refreshToken: 'ghr_used',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      ),
+      // What the winning instance stored a moment ago: a fresh access token.
+      accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_rotated',
+            refreshToken: 'ghr_rotated',
+            accessTokenExpiresAt: Date.now() + 60_000,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      )
+    )
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'incorrect_client_credentials' }))
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBe('ghu_rotated')
+
+    // The refused exchange is not a reason to drop an account that now holds a
+    // usable credential.
+    expect(vault.remove).not.toHaveBeenCalled()
   })
 })

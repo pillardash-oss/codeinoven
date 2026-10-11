@@ -17,7 +17,6 @@ import type {
   GitHubNotificationPageInput,
   GitHubNotificationPageResult,
   GitHubNotificationTabCounts,
-  GitHubNotificationTokenStatus,
   GitHubPollResult,
   GitHubWorkflowRunDetail,
   GitIdentity,
@@ -961,6 +960,9 @@ export const invokeGitContract = {
   'github:authStatus': {} as Contract<[], GitHubAuthStatus>,
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
+  /** Make one signed-in account the one every GitHub call runs as. */
+  'github:switchAccount': {} as Contract<[accountId: string], GitHubAuthStatus>,
+  /** Sign the active account out, moving on to the next one if there is one. */
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
   /**
    * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
@@ -1004,18 +1006,5 @@ export const invokeGitContract = {
   'githubNotification:setDone': {} as Contract<
     [threadId: string, done: boolean],
     GitHubNotificationTabCounts
-  >,
-  /**
-   * The classic personal access token the notification endpoints run on.
-   *
-   * GitHub's REST reference marks every notification endpoint as unavailable to
-   * GitHub App tokens (and to fine-grained personal access tokens), so this half
-   * of the panel cannot run on the GitHub App sign-in the rest of it uses. The
-   * token lives in the vault and only main ever reads it.
-   */
-  'githubNotification:tokenStatus': {} as Contract<[], GitHubNotificationTokenStatus>,
-  /** Connect (or rotate) the notification token, after checking it with GitHub. */
-  'githubNotification:setToken': {} as Contract<[token: string], GitHubNotificationTokenStatus>,
-  /** Forget the notification token, so the view asks for one again. */
-  'githubNotification:removeToken': {} as Contract<[], GitHubNotificationTokenStatus>
+  >
 }

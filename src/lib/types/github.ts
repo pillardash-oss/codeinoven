@@ -1066,13 +1066,38 @@ export type GitHubPollResult =
   | { status: 'expired' }
   | { status: 'error'; message: string }
 
-/** Presence-only status of the GitHub OAuth connection. Never carries plaintext. */
+/**
+ * Presence-only status of the GitHub connection. Never carries plaintext.
+ *
+ * An account list rather than a single account: a user may be signed in with
+ * several, one of which is active, and every GitHub call the app makes runs as
+ * that one.
+ */
 export interface GitHubAuthStatus {
+  /** Whether at least one account is signed in. */
   connected: boolean
-  /** Whether the app has a GitHub App client ID configured to sign in with. */
+  /** Whether the app has a GitHub client ID configured to sign in with. */
   configured: boolean
-  /** Public profile of the signed-in user, when connected. */
+  /** Public profile of the active account, when connected. */
   user?: GitHubUser | null
+  /** Every signed-in account, in the order it was added. */
+  accounts: GitHubAccountSummary[]
+  /** The account every GitHub call runs as, or null when none is signed in. */
+  activeAccountId: string | null
+}
+
+/** One signed-in GitHub account, as the account switcher shows it. */
+export interface GitHubAccountSummary {
+  /** Stable identity of the account inside the app. */
+  id: string
+  /**
+   * The account's login. Empty while a credential carried over from a
+   * single-account build has not been named by a profile read yet.
+   */
+  login: string
+  name: string | null
+  /** Whether GitHub calls currently run as this account. */
+  active: boolean
 }
 
 /** Public GitHub user profile, safe to surface in the UI. */
@@ -1292,39 +1317,23 @@ export interface GitHubNotificationPage {
 }
 
 /**
- * A notification listing, or the account-token state that prevents one.
+ * A notification listing, or the sign-in state that prevents one.
  *
- * GitHub serves the notifications API only to a classic personal access token:
- * its REST description marks every notification endpoint `enabledForGitHubApps:
- * false`, and the reference says outright that these endpoints "do not work with
- * GitHub App user access tokens". The app signs in with a GitHub App, so no
- * GitHub sign-in can ever read this listing; it runs instead on a token the user
- * connects for it and the vault holds. When no such token is on file, or GitHub
- * refuses the one that is, that is reported as data the panel can act on rather
- * than as a bare error it can only repeat.
+ * GitHub serves the notifications API only to a token that carries the
+ * `notifications` scope, and only to some kinds of token at all: its REST
+ * description marks every notification endpoint as unavailable to GitHub App
+ * user tokens, and no GitHub App permission can change that. The app reads the
+ * inbox as the signed-in account, so a GitHub App registration is the one thing
+ * that leaves this view permanently refused   a state the panel reports as data
+ * it can act on rather than as a bare error it can only repeat.
  */
-export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubNotificationTokenRequired
+export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubNotificationAccessRequired
 
-/** The listing could not run because no usable notification token is on file. */
-export interface GitHubNotificationTokenRequired {
-  status: 'token_required'
-  /** One sentence naming what is missing, in the panel's own words. */
+/** The listing could not run because this sign-in may not read notifications. */
+export interface GitHubNotificationAccessRequired {
+  status: 'access_required'
+  /** One sentence naming the cause, in the panel's own words. */
   message: string
-  /** Where the user creates the classic token that carries the scope. */
-  createTokenUrl: string
-}
-
-/** The vaulted notification token, as the panel shows it. */
-export interface GitHubNotificationTokenStatus {
-  connected: boolean
-  /** The account the token belongs to, when one is connected. */
-  login: string | null
-  /** The scopes GitHub reports for the token, or null when it reports none. */
-  scopes: string[] | null
-  /** Whether those scopes are allowed to read the notifications API. */
-  canReadNotifications: boolean
-  /** Where the user creates a token this view can use. */
-  createTokenUrl: string
 }
 
 /** A notification listing request. */

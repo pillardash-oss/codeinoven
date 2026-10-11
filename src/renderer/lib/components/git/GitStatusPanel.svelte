@@ -11,6 +11,7 @@
   } from '$lib/repository-preflight-cache'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { GITHUB_STATUS_UNAVAILABLE } from '$lib/stores/git-store-github.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
@@ -37,7 +38,7 @@
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
-    GitHubUser,
+    GitHubAuthStatus,
     GitHubWorkflowRun,
     GitResetMode,
     GitRemoteUpdate,
@@ -71,7 +72,6 @@
     GitMerge,
     GitPullRequest,
     Info,
-    KeyRound,
     Loader2,
     Maximize2,
     MoreHorizontal,
@@ -96,7 +96,6 @@
   import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
   import GitNotificationsPanel from './GitNotificationsPanel.svelte'
-  import GitNotificationsTokenModal from './GitNotificationsTokenModal.svelte'
   import GitStatusPanelBranchesView from './GitStatusPanelBranchesView.svelte'
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
@@ -330,9 +329,6 @@
    */
   let prDetailTab = $state<PrDetailTabId>('conversation')
 
-  /** The notification token modal, opened from the view's own header action. */
-  let notificationsTokenOpen = $state(false)
-
   /**
    * Full screen pull request reader. It mirrors the fullscreen terminal and
    * browser: the reader owns its own tab list, opens from the pull request
@@ -396,9 +392,15 @@
       fullscreenPullRequestId !== null
     )
   )
-  let githubConnected = $state(false)
-  let githubConfigured = $state(false)
-  let githubUser = $state<GitHubUser | null>(null)
+  /**
+   * The GitHub accounts, as one status.
+   *
+   * One state rather than a derived boolean, a configured flag and a user: the
+   * panel also has to hand the account list to the account menu, and three loose
+   * copies of one answer is how they end up disagreeing.
+   */
+  let githubStatus = $state<GitHubAuthStatus | null>(null)
+  const githubConnected = $derived(githubStatus?.connected === true)
   /**
    * Whether the repo has GitHub deployments, which gates the Deployments view.
    * Null means "not read yet": the cache and the project row are both read
@@ -522,11 +524,10 @@
   /** Force a reload of whatever the active view shows, when the store has it. */
   async function refreshFocusedView(): Promise<void> {
     if (activeTab === 'notifications') {
-      // Notifications are account-wide, so the panel's refresh button re-checks
-      // the token that serves them and reloads the listing, the same way it
-      // refreshes every other view.
-      await githubNotifications.refreshToken()
-      await githubNotifications.load()
+      // Notifications are account-wide, so the panel's refresh button reloads
+      // them from GitHub as the active account, the same way it refreshes every
+      // other view.
+      if (githubConnected) await githubNotifications.load()
       return
     }
     const identity = githubIdentity
@@ -738,10 +739,28 @@
   }
 
   async function loadGitHubAuth(): Promise<void> {
-    const status = await gitState.githubAuthStatus()
-    githubConnected = status.connected
-    githubConfigured = status.configured
-    githubUser = status.user ?? null
+    applyGitHubStatus(await gitState.githubAuthStatus())
+  }
+
+  /** Adopt a GitHub status, and the active account's data with it. */
+  async function applyGitHubStatus(status: GitHubAuthStatus): Promise<void> {
+    githubStatus = status
+    // Notifications are account-wide, so they are the one view whose data belongs
+    // to the account rather than to the repository the panel is standing in. A
+    // view that was never opened is left alone: it loads when it is opened.
+    if (githubNotifications.hasLoaded) await githubNotifications.load()
+  }
+
+  /**
+   * Make another signed-in account the one GitHub calls run as.
+   *
+   * The view is reloaded afterwards: everything on screen was read with the
+   * previous account's token, so leaving it up would present one account's pull
+   * requests, issues or deployments as another's.
+   */
+  async function switchGitHubAccount(accountId: string): Promise<void> {
+    await applyGitHubStatus(await gitState.switchGitHubAccount(accountId))
+    await refreshFocusedView()
   }
 
   /**
@@ -868,10 +887,11 @@
   }
 
   async function signOutGitHub(): Promise<void> {
-    const status = await gitState.logoutGitHub()
-    githubConnected = status.connected
-    githubConfigured = status.configured
-    githubUser = status.user ?? null
+    // Signing out of the active account hands GitHub calls to the next one, so
+    // the panel adopts the status that comes back rather than assuming none is
+    // signed in.
+    await applyGitHubStatus(await gitState.logoutGitHub())
+    await refreshFocusedView()
   }
 
   async function saveIdentity(): Promise<void> {
@@ -2878,34 +2898,13 @@
       class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
       title="Mark all notifications as read"
       aria-label="Mark all notifications as read"
-      disabled={!githubNotifications.token?.connected ||
+      disabled={!githubConnected ||
         githubNotifications.tab !== 'inbox' ||
         githubNotifications.busyThreadId !== null}
       onclick={() => void githubNotifications.markAllRead()}
     >
       <CheckCheck size={12} aria-hidden="true" />
       <span class="view-action-label">Mark all read</span>
-    </button>
-    <!--
-      The token is the view's own credential: GitHub's REST reference marks every
-      notification endpoint as unavailable to the app's GitHub App sign-in, so
-      this is where the token that does work is connected, replaced or forgotten.
-    -->
-    <button
-      type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded {githubNotifications.token
-        ?.connected
-        ? 'text-dimmed'
-        : 'text-warning'} transition-colors hover:bg-elevated hover:text-foreground"
-      title={githubNotifications.token?.connected
-        ? `GitHub token for notifications${githubNotifications.token.login ? `, connected as ${githubNotifications.token.login}` : ''}`
-        : 'Connect the GitHub token this view reads notifications with'}
-      aria-label={githubNotifications.token?.connected
-        ? 'Manage the GitHub token this view reads notifications with'
-        : 'Connect the GitHub token this view reads notifications with'}
-      onclick={() => (notificationsTokenOpen = true)}
-    >
-      <KeyRound size={12} aria-hidden="true" />
     </button>
     <button
       type="button"
@@ -3499,10 +3498,11 @@
     >
       {#if repoState === 'git'}
         <GitHubAccountMenu
-          github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
+          github={githubStatus ?? GITHUB_STATUS_UNAVAILABLE}
           {primaryRemote}
           onSignIn={() => githubSignIn.start()}
           onSignOut={() => void signOutGitHub()}
+          onSwitchAccount={(accountId) => void switchGitHubAccount(accountId)}
           onOpenNotifications={() => selectTab('notifications')}
         />
       {/if}
@@ -3957,7 +3957,7 @@
           </div>
         {:else if activeTab === 'notifications'}
           <div class="h-full min-h-0">
-            <GitNotificationsPanel onManageToken={() => (notificationsTokenOpen = true)} />
+            <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor
@@ -4093,11 +4093,6 @@
     onSettled={() => void refreshStatus()}
   />
 {/if}
-
-<GitNotificationsTokenModal
-  open={notificationsTokenOpen}
-  onClose={() => (notificationsTokenOpen = false)}
-/>
 
 <GitStatusPanelConfirmDialogs
   bind:stashDropTarget

@@ -23,6 +23,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
   import GitNotificationsGroupMenu from './GitNotificationsGroupMenu.svelte'
   import PrAvatar from './PrAvatar.svelte'
@@ -34,21 +35,23 @@
   } from '$shared/types'
 
   interface Props {
-    /** Opens the token modal, from the one control that can fix a missing token. */
-    onManageToken: () => void
+    /** Whether a GitHub account is signed in; the panel offers sign-in otherwise. */
+    githubConnected: boolean
+    onSignIn: () => void
   }
 
-  let { onManageToken }: Props = $props()
+  let { githubConnected, onSignIn }: Props = $props()
 
   /**
-   * Open the panel's data on first mount: the token state, and the listing it
-   * unlocks. The store guards both, so a remount after the sidebar was hidden
-   * costs nothing, and a listing answered without a token fails before any
-   * request leaves the app.
+   * Open the panel's data on first mount. The store guards against a second
+   * load, so a remount after the sidebar was hidden costs nothing.
    */
   onMount(() => {
-    void githubNotifications.ensureTokenLoaded()
     void githubNotifications.ensureLoaded()
+    // A sign-in that lands while this panel is open changes whose inbox it is,
+    // and the panel is already mounted through it, so nothing else would refetch
+    // the listing it was refused.
+    return githubSignIn.onAuthorized(() => void githubNotifications.load())
   })
 
   const tabOptions: Array<{ id: GitHubNotificationTab; label: string; count: number }> = $derived([
@@ -256,28 +259,33 @@
     </div>
   {/if}
 
-  {#if githubNotifications.access}
+  {#if !githubConnected}
+    <EmptyState
+      icon={Bell}
+      title="Sign in to GitHub"
+      description="Notifications belong to your GitHub account, so sign in to read and act on them here."
+    >
+      {#snippet action()}
+        <button
+          type="button"
+          class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+          onclick={onSignIn}
+        >
+          Sign in
+        </button>
+      {/snippet}
+    </EmptyState>
+  {:else if githubNotifications.access}
     <!--
-      No token can read this listing yet, so there is nothing to show and no
-      retry that could change it. This is the same centered refusal every other
-      view in the panel shows: the app's GitHub glyph, one sentence, and the
-      primary action that resolves it. The action opens the token modal rather
-      than a sign-in, because GitHub refuses its own sign-in here.
+      A sign-in GitHub will not serve notifications to. Not actionable from here:
+      the answer is another registration, not another sign-in or a retry, so the
+      panel states the cause instead of offering a control that cannot help.
     -->
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <VendorIcon name="GitHub" size={20} class="text-dimmed" />
       <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
         {githubNotifications.access.message}
       </p>
-      <button
-        type="button"
-        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Connect the GitHub token this view reads notifications with"
-        aria-label="Connect the GitHub token this view reads notifications with"
-        onclick={onManageToken}
-      >
-        Connect a GitHub token
-      </button>
     </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">

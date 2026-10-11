@@ -11,19 +11,6 @@ import type {
 export const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 
 /**
- * Where the user creates the token the notifications view runs on.
- *
- * GitHub serves the notifications API to a classic personal access token only:
- * its REST description marks every notification endpoint `enabledForGitHubApps:
- * false`, and the reference states that they do not work with GitHub App user
- * access tokens or fine-grained personal access tokens. No GitHub sign-in can
- * produce a usable one, so the view offers this page instead, already prefilled
- * with the scope the endpoints accept.
- */
-export const GITHUB_TOKEN_CREATE_URL =
-  'https://github.com/settings/tokens/new?description=CodeInOven%20notifications&scopes=notifications'
-
-/**
  * Returned instead of a raw fetch failure when GitHub could not be reached at
  * all   offline, or a request that outlived the provider's own deadline.
  *
