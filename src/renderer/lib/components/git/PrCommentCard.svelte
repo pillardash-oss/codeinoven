@@ -51,6 +51,12 @@
     /** Draw this row's own card frame. False when the unit around it is framed. */
     framed?: boolean
     /**
+     * True when the surface around this row already drew the author's picture, which
+     * is what the timeline rail does. The row then keeps its name, its badges and its
+     * time and drops only the picture, rather than showing the same face twice.
+     */
+    onRail?: boolean
+    /**
      * Rendered inside the frame, under the body, on the row that carries this
      * comment's own actions. It is handed the reaction control so a caller can
      * put it beside those actions: reacting is something a reader does once they
@@ -96,6 +102,7 @@
     number,
     authorLogin,
     framed = true,
+    onRail = false,
     footer,
     onQuote,
     onCommentChat,
@@ -297,7 +304,9 @@
       framed ? 'border-b border-border/60 bg-elevated/50' : 'bg-elevated/40'
     ]}
   >
-    <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
+    {#if !onRail}
+      <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
+    {/if}
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-1.5">
         <!--

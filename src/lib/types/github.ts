@@ -783,12 +783,17 @@ export interface IssueDetail extends IssueSummary {
 }
 
 /**
- * One thing that happened to an issue, as GitHub's timeline reports it.
+ * One thing that happened to a conversation, as GitHub's timeline reports it.
  *
  * A conversation is only the comments on it; the timeline is everything else, the
  * labels added and taken back, the assignments, the closes and reopens, the
  * renames, and the issues, pull requests and commits that referenced it. Read
- * together they are the issue's history, which is why the reader interleaves them.
+ * together they are the history, which is why the reader interleaves them.
+ *
+ * One shape serves an issue and a pull request. GitHub's timeline endpoint is the
+ * same one for both, because a pull request is an issue to the API, and the kinds
+ * a pull request adds (`merged`, the review requests, the draft transitions) are
+ * simply kinds an issue never reports.
  */
 export interface IssueTimelineEvent {
   /** GitHub's own event id, which is what the row is keyed by. */
@@ -810,10 +815,19 @@ export interface IssueTimelineEvent {
   rename?: { from: string; to: string } | null
   /** The milestone a milestone event named, absent when the payload omitted it. */
   milestoneTitle?: string | null
-  /** The commit a reference event named. */
+  /** The commit a reference event named, or the merge commit a merge named. */
   commitId?: string | null
   /** What a cross-reference pointed at, in this repository or another. */
   reference?: IssueTimelineReference | null
+  /**
+   * The account a review request named.
+   *
+   * Null when the request named a team instead, and null on every other kind, so
+   * a row that has no name to show says what happened without inventing one.
+   */
+  reviewerLogin?: string | null
+  /** The team a review request named, when it named one rather than an account. */
+  reviewerTeamName?: string | null
   /** GitHub's word for why a conversation was locked, when it carried one. */
   lockReason?: string | null
 }
@@ -841,7 +855,9 @@ export interface IssueTimelineReference {
  * A curated set rather than GitHub's whole vocabulary: these are the events
  * github.com itself renders, each one a state change a reader can be told about.
  * The events it hides (`subscribed`, `mentioned`) are left out so the history
- * reads as the issue's own story instead of as a notification log.
+ * reads as the conversation's own story instead of as a notification log, and so
+ * are the ones another part of the reader already draws (`commented` on the
+ * comments, `reviewed` on the reviews, `committed` on the Commits tab).
  */
 export type IssueTimelineEventKind =
   | 'labeled'
@@ -863,6 +879,13 @@ export type IssueTimelineEventKind =
   | 'connected'
   /** A change to the issue's own custom fields, which GitHub reports opaquely. */
   | 'fields'
+  /** A pull request's merge, which carries the merge commit. */
+  | 'merged'
+  | 'review_requested'
+  | 'review_request_removed'
+  | 'ready_for_review'
+  | 'converted_to_draft'
+  | 'head_ref_deleted'
 
 /** Everything the issue detail view renders, fetched in one round trip. */
 export interface IssueBundle {

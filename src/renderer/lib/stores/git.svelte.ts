@@ -291,12 +291,21 @@ export class GitState {
     scopeFor: (projectId) => this.scopeFor(projectId),
     refreshConflictIndicators: (projectId, force) =>
       void this.refreshPrConflictIndicators(projectId, force),
-    patchPullRequest: (owner, repo, pullNumber, patch) =>
-      this.prs.patchPullRequest(owner, repo, pullNumber, patch),
+    patchPullRequest: (owner, repo, pullNumber, patch) => {
+      this.prs.patchPullRequest(owner, repo, pullNumber, patch)
+      // A draft transition is drawn as a row of the conversation's history, so the
+      // cached read is dropped along with the field that changed.
+      this.issues.timelines.invalidate(owner, repo, pullNumber)
+    },
     patchBundleReactions: (owner, repo, pullNumber, nodeId, groups) =>
       this.prs.patchBundleReactions(owner, repo, pullNumber, nodeId, groups),
-    applyPullRequestState: (owner, repo, pullNumber, state) =>
+    applyPullRequestState: (owner, repo, pullNumber, state) => {
       this.prs.applyPullRequestState(owner, repo, pullNumber, state)
+      // A close, a reopen and a merge are each a row of the history, and they reach
+      // here from the reader and from a listing batch alike, so the drop belongs on
+      // this hook rather than on every caller.
+      this.issues.timelines.invalidate(owner, repo, pullNumber)
+    }
   })
 
   /** GitHub account auth calls. */
@@ -456,8 +465,17 @@ export class GitState {
     return this.issues.bundles
   }
 
-  get issueTimelines(): Record<string, CachedIssueRead<IssueTimelineEvent[]>> {
-    return this.issues.timelines.values
+  /**
+   * One conversation's history, whoever is reading it.
+   *
+   * GitHub's timeline is one endpoint for both readers, because a pull request is
+   * an issue to that API and a repository's numbers are one space: `#42` is an
+   * issue or a pull request and never both. One read and one cache therefore serve
+   * the issue reader and the pull request conversation, and neither reader has to
+   * know which key the other looked under.
+   */
+  conversationTimeline(owner: string, repo: string, number: number): IssueTimelineEvent[] {
+    return this.issues.timelines.values[issueBundleKey(owner, repo, number)]?.value ?? []
   }
 
   get issueRelationships(): Record<string, CachedIssueRead<IssueRelationships>> {
@@ -1676,20 +1694,22 @@ export class GitState {
   }
 
   /**
-   * Read one issue's history, which the reader draws after the issue itself.
+   * Read one conversation's history, which the reader draws after the conversation's
+   * own content: the issue's description and comments, or the pull request's.
    *
-   * Kept apart from `ensureIssueBundle` so a slow history never delays the
-   * description and the conversation. Silent on failure, like the warm-ups: the
-   * issue reads the same without it.
+   * Kept apart from `ensureIssueBundle` so a slow history never delays the content
+   * the reader came for. Silent on failure, like the warm-ups: the conversation
+   * reads the same without it. A pull request passes its number here the same way an
+   * issue does, because one endpoint answers for both.
    */
-  ensureIssueTimeline(
+  ensureConversationTimeline(
     projectId: string,
     owner: string,
     repo: string,
-    issueNumber: number,
+    number: number,
     force = false
   ): Promise<void> {
-    return this.issues.timelines.ensure(projectId, owner, repo, issueNumber, force)
+    return this.issues.timelines.ensure(projectId, owner, repo, number, force)
   }
 
   /**
@@ -1708,9 +1728,16 @@ export class GitState {
     return this.issues.relationships.ensure(projectId, owner, repo, issueNumber, force)
   }
 
-  /** Forget an issue's cached history, so a state change is read back with its event. */
-  invalidateIssueTimeline(owner: string, repo: string, issueNumber: number): void {
-    this.issues.timelines.invalidate(owner, repo, issueNumber)
+  /**
+   * Forget one conversation's cached history, so the event a write just added is
+   * read back rather than aged out.
+   *
+   * A close, a reopen, a merge and a draft transition are each a row of that
+   * history, and a reader looking at the conversation would otherwise be missing the
+   * row its own click caused.
+   */
+  invalidateConversationTimeline(owner: string, repo: string, number: number): void {
+    this.issues.timelines.invalidate(owner, repo, number)
   }
 
   /** Forget an issue's cached relationships, so a link change is read back. */

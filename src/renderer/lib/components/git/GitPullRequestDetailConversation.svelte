@@ -3,10 +3,11 @@
    * The pull request conversation, as GitHub organises it.
    *
    * Each unit of the stream is one thing that happened: the description, a
-   * comment, or a submitted review together with the inline threads that review
-   * wrote. Top-level units are peers, so they simply follow each other with room
-   * between them; the tree belongs to a unit that has children, which is a review
-   * over the threads it wrote and a thread over the replies to it.
+   * comment, a submitted review together with the inline threads that review
+   * wrote, or one event from the pull request's history. They are hung on one rail
+   * so the history reads as the one story it is: what was said and what happened to
+   * it, in the order both happened. The tree belongs to a unit that has children,
+   * which is a review over the threads it wrote and a thread over the replies to it.
    *
    * Replying is deliberately two different acts, because GitHub treats them
    * differently: an inline thread takes a real reply through the review-comment
@@ -20,10 +21,15 @@
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { flashElement } from '$lib/reveal-flash'
   import type { PrReactionContent, PrReactionMap, PullRequestFile } from '$shared/types'
+  import PrAvatar from './PrAvatar.svelte'
   import PrCommentCard from './PrCommentCard.svelte'
   import PrReplyBox from './PrReplyBox.svelte'
   import PrReviewThread from './PrReviewThread.svelte'
   import GitPullRequestDetailCommentDialogs from './GitPullRequestDetailCommentDialogs.svelte'
+  import TimelineCollapsedRows from './TimelineCollapsedRows.svelte'
+  import TimelineEventRow from './TimelineEventRow.svelte'
+  import TimelineRailItem from './TimelineRailItem.svelte'
+  import { timelineCollapsePlan } from './timeline-view'
   import { entryReactions } from './pr-reactions'
   import {
     conversationKindLabel,
@@ -46,6 +52,8 @@
     authorLogin: string
     /** Insert a quote of this entry into the reader's composer. */
     onQuote: (entry: ConversationEntry) => void
+    /** Open a commit from the pull request's history, in the Git panel. */
+    onOpenCommit: (commitId: string) => void
     /** Open a read-only side chat anchored on this entry: explain it, or attach
      *  it to an empty quick chat the reader writes into. */
     onCommentChat: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
@@ -92,6 +100,7 @@
     onReact,
     onNotice,
     onRefresh,
+    onOpenCommit,
     reveal = null,
     onRevealDone
   }: Props = $props()
@@ -103,6 +112,19 @@
    * to identify it: a unit's reply box belongs to the comment it answers.
    */
   let replyEntry = $state<ConversationEntry | null>(null)
+
+  /**
+   * The middle of a long history this reader has opened, if it has.
+   *
+   * Held against the pull request rather than as a plain flag, because opening
+   * another pull request does not remount this reader: a flag would hand the next
+   * one an already opened middle it never asked for.
+   */
+  let openedMiddleFor = $state<number | null>(null)
+  const plan = $derived(timelineCollapsePlan(nodes))
+
+  /** `owner/repo`, for labelling a cross-repository reference a row carries. */
+  const repositoryName = $derived(`${identity.owner}/${identity.repo}`)
 
   /**
    * Take the reader to the entry a report asked to see, and say which one it was.
@@ -155,7 +177,7 @@
 
   /** The pill that names what a conversation unit is. */
   function nodeBadge(node: ConversationNode): { label: string; class: string } | null {
-    if (node.kind === 'threads') return null
+    if (node.kind === 'threads' || node.kind === 'event') return null
     return {
       label: conversationKindLabel(node.entry.kind, node.entry.meta),
       class: reviewBadgeClass(node.entry.meta)
@@ -219,19 +241,49 @@
   </div>
 {/snippet}
 
-{#if nodes.length === 0}
-  <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <MessagesSquare size={18} class="text-dimmed" />
-    <p class="text-[0.6875rem] leading-relaxed text-dimmed">Nothing has been said yet.</p>
-  </div>
-{:else}
-  <!--
-    Peers with room between them, not a rail: the order is the reading order, and
-    a unit that owns children draws their tree itself.
-  -->
-  <div {@attach revealEntry} class="flex flex-col gap-3 p-2.5">
-    {#each nodes as node (node.key)}
-      {#if node.kind === 'description' || node.kind === 'comment'}
+<!--
+  One unit of the stream, hung on the rail. The two things a rail can carry: a
+  glyph for something that happened, and the author's picture for something that was
+  said. A card that owns children draws their tree itself, inside the row so the
+  rail runs past the whole unit rather than stopping at its first line.
+-->
+{#snippet conversationRow(node: ConversationNode, first: boolean, last: boolean)}
+  {#if node.kind === 'description' || node.kind === 'comment'}
+    <TimelineRailItem {first} {last}>
+      {#snippet gutter()}
+        <PrAvatar login={node.entry.author} avatarUrl={node.entry.avatarUrl} />
+      {/snippet}
+      <PrCommentCard
+        entry={node.entry}
+        badge={nodeBadge(node)}
+        {projectId}
+        {identity}
+        {number}
+        {authorLogin}
+        {onQuote}
+        {onCommentChat}
+        {onAssignAgent}
+        reactions={entryReactions(node.entry, reactions)}
+        onReact={(content, add) => onReact(node.entry, content, add)}
+        onReply={(entry) => (replyEntry = entry)}
+        onDelete={(entry) => (deletingEntry = entry)}
+        {onNotice}
+        {onRefresh}
+        onRail
+        footer={replyFooter}
+      />
+    </TimelineRailItem>
+  {:else if node.kind === 'review'}
+    <TimelineRailItem {first} {last}>
+      {#snippet gutter()}
+        <PrAvatar login={node.entry.author} avatarUrl={node.entry.avatarUrl} />
+      {/snippet}
+      <!--
+        A review and the threads it wrote are one unit: the summary says what the
+        reviewer concluded, and the threads are the evidence for that conclusion,
+        so they step in under it rather than reading as separate comments.
+      -->
+      <div class="flex min-w-0 flex-col gap-2">
         <PrCommentCard
           entry={node.entry}
           badge={nodeBadge(node)}
@@ -248,42 +300,73 @@
           onDelete={(entry) => (deletingEntry = entry)}
           {onNotice}
           {onRefresh}
+          onRail
           footer={replyFooter}
         />
-      {:else if node.kind === 'review'}
-        <!--
-          A review and the threads it wrote are one unit: the summary says what the
-          reviewer concluded, and the threads are the evidence for that conclusion,
-          so they step in under it rather than reading as separate comments.
-        -->
-        <div class="flex min-w-0 flex-col gap-2">
-          <PrCommentCard
-            entry={node.entry}
-            badge={nodeBadge(node)}
-            {projectId}
-            {identity}
-            {number}
-            {authorLogin}
-            {onQuote}
-            {onCommentChat}
-            {onAssignAgent}
-            reactions={entryReactions(node.entry, reactions)}
-            onReact={(content, add) => onReact(node.entry, content, add)}
-            onReply={(entry) => (replyEntry = entry)}
-            onDelete={(entry) => (deletingEntry = entry)}
-            {onNotice}
-            {onRefresh}
-            footer={replyFooter}
-          />
-          {#if node.threads.length > 0}
-            <div class="ml-3 border-l-2 border-border/60 pl-3">
-              {@render reviewThreads(node.threads)}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        {@render reviewThreads(node.threads)}
-      {/if}
+        {#if node.threads.length > 0}
+          <div class="ml-3 border-l-2 border-border/60 pl-3">
+            {@render reviewThreads(node.threads)}
+          </div>
+        {/if}
+      </div>
+    </TimelineRailItem>
+  {:else if node.kind === 'event'}
+    <TimelineEventRow
+      event={node.event}
+      line={node.line}
+      repository={repositoryName}
+      {first}
+      {last}
+      {onOpenCommit}
+    />
+  {:else}
+    <!--
+      Threads whose review the provider did not return. They carry no unit of their
+      own to name them, so the rail marks them with what they are rather than with an
+      author they do not have.
+    -->
+    <TimelineRailItem {first} {last}>
+      {#snippet gutter()}
+        <MessagesSquare size={13} class="shrink-0 text-muted" aria-hidden="true" />
+      {/snippet}
+      {@render reviewThreads(node.threads)}
+    </TimelineRailItem>
+  {/if}
+{/snippet}
+
+{#if nodes.length === 0}
+  <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+    <MessagesSquare size={18} class="text-dimmed" />
+    <p class="text-[0.6875rem] leading-relaxed text-dimmed">Nothing has been said yet.</p>
+  </div>
+{:else}
+  <!--
+    One rail for the whole stream, and the units hang off it in reading order. A
+    long history keeps its start and its end and hides the middle behind one control,
+    the way github.com does, because the two things a reader opens a long conversation
+    for are how it began and where it stands.
+  -->
+  <div {@attach revealEntry} class="p-2.5">
+    {#each plan.head as node, index (node.key)}
+      {@render conversationRow(
+        node,
+        index === 0,
+        plan.hidden.length === 0 && index === plan.head.length - 1
+      )}
+    {/each}
+    {#if plan.hidden.length > 0 && openedMiddleFor !== number}
+      <TimelineCollapsedRows
+        hidden={plan.hidden.length}
+        onExpand={() => (openedMiddleFor = number)}
+      />
+    {/if}
+    {#if openedMiddleFor === number}
+      {#each plan.hidden as node (node.key)}
+        {@render conversationRow(node, false, false)}
+      {/each}
+    {/if}
+    {#each plan.tail as node, index (node.key)}
+      {@render conversationRow(node, false, index === plan.tail.length - 1)}
     {/each}
   </div>
 {/if}

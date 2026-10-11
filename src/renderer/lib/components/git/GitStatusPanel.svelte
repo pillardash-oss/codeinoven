@@ -3881,6 +3881,7 @@
                 onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
                 onOpenThread={(threadId) => void openAgentThread(threadId)}
                 onOpenWorkflowRun={openWorkflowRunFromCheck}
+                onOpenCommit={(hash) => void openCommitByHash(hash)}
                 onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
                 onResolveWithAgent={(pr) => void startConflictResolution(pr)}
               />
@@ -4152,6 +4153,7 @@
           onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
           onOpenThread={(threadId) => void openAgentThread(threadId)}
           onOpenWorkflowRun={openWorkflowRunFromCheck}
+          onOpenCommit={(hash) => void openCommitByHash(hash)}
           onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
           onResolveWithAgent={(pr) => void startConflictResolution(pr)}
         />

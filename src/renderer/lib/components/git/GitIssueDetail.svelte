@@ -23,13 +23,16 @@
   import PrAvatar from './PrAvatar.svelte'
   import BotBadge from './BotBadge.svelte'
   import {
-    issueReferenceLabel,
     issueStateIcon,
     issueStateReasonLabel,
     issueStateToneClass,
     issueTimelineLine,
     type IssueTimelineLine
   } from './issue-view'
+  import TimelineCollapsedRows from './TimelineCollapsedRows.svelte'
+  import TimelineEventRow from './TimelineEventRow.svelte'
+  import TimelineRailItem from './TimelineRailItem.svelte'
+  import { timelineCollapsePlan } from './timeline-view'
   import { prLabelStyle, type PrMetadataMode } from './pr-view'
   import PrReactionPicker from './PrReactionPicker.svelte'
   import PrReactionChips from './PrReactionChips.svelte'
@@ -112,8 +115,7 @@
 
   const bundleKey = $derived(GitState.issueBundleKey(identity.owner, identity.repo, issue.number))
   const bundle = $derived(gitState.issueBundles[bundleKey] ?? null)
-  const detail = $derived(bundle?.detail ?? null)
-  /**
+  const detail = $derived(bundle?.detail ?? null) /**
    * The subject the surface draws: the fetched record once it is in, otherwise the
    * summary the list handed over, so the header never flashes empty.
    */
@@ -124,7 +126,9 @@
    * than with it, so a heavily referenced issue's slow timeline never holds back
    * the description and the conversation the reader came for.
    */
-  const timeline = $derived(gitState.issueTimelines[bundleKey]?.value ?? [])
+  const timeline = $derived(
+    gitState.conversationTimeline(identity.owner, identity.repo, issue.number)
+  )
 
   /** The issue's parent, sub-issues and dependencies, read the same way. */
   const relationships = $derived(gitState.issueRelationships[bundleKey]?.value ?? null)
@@ -167,6 +171,16 @@
   /** `owner/repo`, for telling a cross-repository reference from a local one. */
   const repositoryName = $derived(`${identity.owner}/${identity.repo}`)
 
+  /**
+   * The middle of a long history this reader has opened, if it has.
+   *
+   * Held against the issue rather than as a plain flag, because opening another
+   * issue does not remount this reader: a flag would hand the next issue an already
+   * opened middle it never asked for.
+   */
+  let openedMiddleFor = $state<number | null>(null)
+  const plan = $derived(timelineCollapsePlan(flow))
+
   /** Reactions on the issue and its comments, keyed by the subject's node id. */
   const reactions = $derived(bundle?.reactions ?? {})
   /** The issue's own node id, or null for a payload that carried none. */
@@ -202,7 +216,7 @@
     void gitState.ensureIssueBundle(projectId, owner, repo, number, false)
     // The history and the relationships are independent reads. Nothing in the reader
     // waits on either, and one the provider cannot answer leaves the issue readable.
-    void gitState.ensureIssueTimeline(projectId, owner, repo, number, false)
+    void gitState.ensureConversationTimeline(projectId, owner, repo, number, false)
     void gitState.ensureIssueRelationships(projectId, owner, repo, number, false)
   })
 
@@ -531,154 +545,138 @@
 
       <!--
         The stream: every comment and every change to the issue, in the order they
-        happened. Keeping them together is the point   a close with no assignment or
+        happened, hung on one rail so the history reads as one story rather than as a
+        list. Keeping them together is the point   a close with no assignment or
         label in sight is a history a reader cannot follow.
       -->
-      {#each flow as item (item.key)}
+      {#snippet flowRow(item: IssueFlowItem, first: boolean, last: boolean)}
         {#if item.kind === 'comment'}
           {@const comment = item.comment}
           {@const commentReactions = reactions[comment.nodeId ?? ''] ?? []}
-          <div class="mt-2 rounded-lg border border-border bg-surface/60">
-            <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
+          <!--
+            A comment's mark on the rail is its author, where an event's is a glyph:
+            who wrote this is the first thing a reader looks for.
+          -->
+          <TimelineRailItem {first} {last}>
+            {#snippet gutter()}
               <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
-              <span class="text-[0.625rem] font-medium text-foreground"
-                >{githubDisplayLogin(comment.authorLogin)}</span
-              >
-              {#if comment.authorIsBot}
-                <BotBadge />
+            {/snippet}
+            <div class="rounded-lg border border-border bg-surface/60">
+              <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
+                <span class="text-[0.625rem] font-medium text-foreground"
+                  >{githubDisplayLogin(comment.authorLogin)}</span
+                >
+                {#if comment.authorIsBot}
+                  <BotBadge />
+                {/if}
+                <span class="text-[0.5625rem] text-dimmed">{relativeTime(comment.createdAt)}</span>
+                {#if comment.updatedAt}
+                  <span class="text-[0.5625rem] text-dimmed">· edited</span>
+                {/if}
+                <span class="flex-1"></span>
+                {#if comment.nodeId}
+                  <PrReactionPicker
+                    nodeId={comment.nodeId}
+                    groups={commentReactions}
+                    onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
+                  />
+                {/if}
+                {#if isOwnComment(comment)}
+                  {#if editingId === comment.id}
+                    <button
+                      type="button"
+                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      onclick={() => {
+                        editingId = null
+                        editingBody = ''
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                      disabled={busyCommentId || editingBody.trim().length === 0}
+                      onclick={() => void saveEdit()}
+                    >
+                      Save
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Edit your comment"
+                      onclick={() => {
+                        editingId = comment.id
+                        editingBody = comment.body
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+                      title="Delete your comment"
+                      onclick={() => (confirmingDelete = comment)}
+                    >
+                      Delete
+                    </button>
+                  {/if}
+                {/if}
+              </div>
+              {#if editingId === comment.id}
+                <div class="px-2.5 py-2">
+                  <textarea
+                    class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
+                    aria-label="Edit comment"
+                    bind:value={editingBody}></textarea>
+                </div>
+              {:else}
+                <div class="px-2.5 py-2">
+                  <MarkdownView text={comment.body} allowHtml {repository} />
+                </div>
               {/if}
-              <span class="text-[0.5625rem] text-dimmed">{relativeTime(comment.createdAt)}</span>
-              {#if comment.updatedAt}
-                <span class="text-[0.5625rem] text-dimmed">· edited</span>
-              {/if}
-              <span class="flex-1"></span>
-              {#if comment.nodeId}
-                <PrReactionPicker
+              {#if comment.nodeId && commentReactions.length > 0}
+                <PrReactionChips
                   nodeId={comment.nodeId}
                   groups={commentReactions}
                   onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
                 />
               {/if}
-              {#if isOwnComment(comment)}
-                {#if editingId === comment.id}
-                  <button
-                    type="button"
-                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    onclick={() => {
-                      editingId = null
-                      editingBody = ''
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                    disabled={busyCommentId || editingBody.trim().length === 0}
-                    onclick={() => void saveEdit()}
-                  >
-                    Save
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Edit your comment"
-                    onclick={() => {
-                      editingId = comment.id
-                      editingBody = comment.body
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
-                    title="Delete your comment"
-                    onclick={() => (confirmingDelete = comment)}
-                  >
-                    Delete
-                  </button>
-                {/if}
-              {/if}
             </div>
-            {#if editingId === comment.id}
-              <div class="px-2.5 py-2">
-                <textarea
-                  class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
-                  aria-label="Edit comment"
-                  bind:value={editingBody}></textarea>
-              </div>
-            {:else}
-              <div class="px-2.5 py-2">
-                <MarkdownView text={comment.body} allowHtml {repository} />
-              </div>
-            {/if}
-            {#if comment.nodeId && commentReactions.length > 0}
-              <PrReactionChips
-                nodeId={comment.nodeId}
-                groups={commentReactions}
-                onToggle={(content, add) => reactTo(comment.nodeId, content, add)}
-              />
-            {/if}
-          </div>
+          </TimelineRailItem>
         {:else}
-          <!--
-            One change to the issue. Drawn lighter than a comment because it has no
-            body to read: the avatar says who, the sentence says what.
-          -->
-          <div class="mt-2 flex items-start gap-1.5 px-0.5">
-            <PrAvatar login={item.event.actorLogin} avatarUrl={item.event.actorAvatarUrl} />
-            <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
-              <span class="font-medium text-foreground"
-                >{githubDisplayLogin(item.event.actorLogin)}</span
-              >
-              {#if item.event.actorIsBot}
-                <BotBadge />
-              {/if}
-              <span> {item.line.lead}</span>
-              {#if item.line.label}
-                <span
-                  class="mx-1 inline-block max-w-[14ch] truncate rounded-full px-1.5 py-0.5 align-middle text-[0.5625rem] font-medium leading-none"
-                  style={prLabelStyle(item.line.label.color)}
-                >
-                  {item.line.label.name}
-                </span>
-              {/if}
-              {#if item.line.reference}
-                {@const reference = item.line.reference}
-                <button
-                  type="button"
-                  class="mx-1 cursor-pointer text-[0.625rem] font-medium text-primary hover:underline"
-                  title={`Open ${issueReferenceLabel(reference, repositoryName)} on GitHub`}
-                  onclick={() => void openInBrowser(reference.url)}
-                >
-                  {issueReferenceLabel(reference, repositoryName)}
-                </button>
-              {/if}
-              {#if item.line.commitId}
-                {@const commitId = item.line.commitId}
-                <!--
-                  The commit is in this repository, so it opens where the repository
-                  is read rather than on github.com.
-                -->
-                <button
-                  type="button"
-                  class="mx-1 cursor-pointer font-mono text-[0.625rem] font-medium text-primary hover:underline"
-                  title={`Open commit ${commitId.slice(0, 7)} in the Git panel`}
-                  aria-label={`Open commit ${commitId.slice(0, 7)} in the Git panel`}
-                  onclick={() => onOpenCommit(commitId)}
-                >
-                  {commitId.slice(0, 7)}
-                </button>
-              {/if}
-              {#if item.line.trail}
-                <span> {item.line.trail}</span>
-              {/if}
-              <span class="text-dimmed"> · {relativeTime(item.at)}</span>
-            </p>
-          </div>
+          <TimelineEventRow
+            event={item.event}
+            line={item.line}
+            repository={repositoryName}
+            {first}
+            {last}
+            {onOpenCommit}
+          />
         {/if}
+      {/snippet}
+
+      {#each plan.head as item, index (item.key)}
+        {@render flowRow(
+          item,
+          index === 0,
+          plan.hidden.length === 0 && index === plan.head.length - 1
+        )}
+      {/each}
+      {#if plan.hidden.length > 0 && openedMiddleFor !== issue.number}
+        <TimelineCollapsedRows
+          hidden={plan.hidden.length}
+          onExpand={() => (openedMiddleFor = issue.number)}
+        />
+      {/if}
+      {#if openedMiddleFor === issue.number}
+        {#each plan.hidden as item (item.key)}
+          {@render flowRow(item, false, false)}
+        {/each}
+      {/if}
+      {#each plan.tail as item, index (item.key)}
+        {@render flowRow(item, false, index === plan.tail.length - 1)}
       {/each}
     {/if}
   </div>

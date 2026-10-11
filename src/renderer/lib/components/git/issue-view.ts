@@ -139,6 +139,28 @@ export function issueTimelineLine(event: IssueTimelineEvent): IssueTimelineLine 
       return { lead: `assigned ${event.assigneeLogin ?? 'someone'}` }
     case 'unassigned':
       return { lead: `unassigned ${event.assigneeLogin ?? 'someone'}` }
+    case 'review_requested':
+      return {
+        lead:
+          event.reviewerLogin !== null && event.reviewerLogin !== undefined
+            ? `requested a review from ${event.reviewerLogin}`
+            : event.reviewerTeamName
+              ? `requested a review from the ${event.reviewerTeamName} team`
+              : 'requested a review'
+      }
+    case 'review_request_removed':
+      return {
+        lead:
+          event.reviewerLogin !== null && event.reviewerLogin !== undefined
+            ? `removed the review request for ${event.reviewerLogin}`
+            : event.reviewerTeamName
+              ? `removed the review request for the ${event.reviewerTeamName} team`
+              : 'removed a review request'
+      }
+    case 'ready_for_review':
+      return { lead: 'marked this pull request as ready for review' }
+    case 'converted_to_draft':
+      return { lead: 'converted this pull request to draft' }
     case 'closed': {
       const reason = issueStateReasonLabel(event.closeReason ?? null)
       return { lead: reason ? `closed this as ${reason.toLowerCase()}` : 'closed this' }
@@ -182,6 +204,14 @@ export function issueTimelineLine(event: IssueTimelineEvent): IssueTimelineLine 
         : { lead: 'referenced this' }
     case 'cross-referenced':
       return { lead: 'mentioned this in', reference: event.reference ?? null }
+    case 'merged':
+      // A merge whose payload carried no commit still says it happened, rather
+      // than dangling the word "commit" in front of nothing.
+      return event.commitId
+        ? { lead: 'merged commit', commitId: event.commitId }
+        : { lead: 'merged this' }
+    case 'head_ref_deleted':
+      return { lead: 'deleted the head branch' }
     case 'marked_as_duplicate':
       return { lead: 'marked this as a duplicate' }
     case 'connected':

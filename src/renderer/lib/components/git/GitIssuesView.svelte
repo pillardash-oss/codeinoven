@@ -154,7 +154,7 @@
     if (!reference) return
     // The write became an event on the issue's history, so the cached history is
     // now behind the truth and is dropped for the reader to read back.
-    gitState.invalidateIssueTimeline(identity.owner, identity.repo, issue.number)
+    gitState.invalidateConversationTimeline(identity.owner, identity.repo, issue.number)
     if (selectedIssue?.number === issue.number) {
       patch({ selectedIssue: { ...selectedIssue, state, stateReason: stateReason ?? null } })
     }

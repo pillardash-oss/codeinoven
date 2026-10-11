@@ -746,23 +746,52 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
-   * The issue's history, from the timeline endpoint.
+   * One conversation's history, from the timeline endpoint.
    *
    * A hundred events is one request, which covers a conversation of any ordinary
-   * length. Comment events are dropped because the comments themselves arrive
-   * from `listIssueComments` with the fields a comment row draws; an event this
-   * provider does not map is dropped too, so an event type GitHub adds later is
-   * simply absent rather than rendered as a row saying nothing.
+   * length. The endpoint is `/issues/{number}/timeline` for a pull request too,
+   * because a pull request is an issue to this API and a repository's numbers are
+   * one space, so the issue reader and the pull request conversation read the same
+   * way through the same mapper.
+   *
+   * The events another part of the reader already draws are dropped here rather
+   * than filtered by the renderer: `commented` because the comments arrive from
+   * `listIssueComments` with the fields a comment row draws, `reviewed` because the
+   * bundle's reviews carry the body and the inline threads the event does not, and
+   * `committed` because a commit arrives once per commit (123 of them across a
+   * dozen ordinary pull requests) and would drown the story the history tells. An
+   * event type this provider does not map is dropped too, so an event GitHub adds
+   * later is simply absent rather than rendered as a row saying nothing.
    */
   async listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]> {
     const response = await this.request(`${this.issuePath(input)}/timeline?per_page=100`, {
       method: 'GET'
     })
     const items = Array.isArray(response) ? response : []
-    return items.flatMap((item): IssueTimelineEvent[] => {
+    const events = items.flatMap((item): IssueTimelineEvent[] => {
       const event = this.toTimelineEvent(item)
       return event ? [event] : []
     })
+    return this.dropClosedBesideMerge(events)
+  }
+
+  /**
+   * Drop the `closed` event that a merge carries.
+   *
+   * A merged pull request reports `merged` and `closed` with the identical
+   * `created_at`, and github.com draws one row for the pair. Removing the close it
+   * shares with the merge leaves the merge as the single row the site shows. The
+   * rule matches on the timestamp rather than on the presence of a merge, so a pull
+   * request closed, reopened and later merged still shows the close that happened on
+   * its own, and a payload without the shared timestamp shows both rows rather than
+   * losing one.
+   */
+  private dropClosedBesideMerge(events: IssueTimelineEvent[]): IssueTimelineEvent[] {
+    const mergeTimes = new Set(
+      events.filter((event) => event.kind === 'merged').map((event) => event.createdAt)
+    )
+    if (mergeTimes.size === 0) return events
+    return events.filter((event) => event.kind !== 'closed' || !mergeTimes.has(event.createdAt))
   }
 
   async createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment> {
@@ -2555,9 +2584,20 @@ export class GitHubProvider implements GitProvider {
       case 'locked':
         return { ...event, lockReason: this.readString(record, 'lock_reason') }
       case 'referenced':
+      case 'merged':
         return { ...event, commitId: this.readString(record, 'commit_id') }
       case 'cross-referenced':
         return { ...event, reference: this.toTimelineReference(record) }
+      case 'review_requested':
+      case 'review_request_removed':
+        return {
+          ...event,
+          reviewerLogin: this.readString(
+            this.readRecord(record, 'requested_reviewer') ?? {},
+            'login'
+          ),
+          reviewerTeamName: this.readString(this.readRecord(record, 'requested_team') ?? {}, 'name')
+        }
       default:
         return event
     }
@@ -2608,6 +2648,13 @@ export class GitHubProvider implements GitProvider {
    * custom fields: the payload names neither the field nor its value, so it is
    * mapped to a field event that says a field changed without pretending to know
    * which one.
+   *
+   * The kinds no case here answers for are dropped, and three of them are dropped
+   * deliberately rather than by omission: `committed`, `reviewed` and `commented`
+   * are all drawn by another part of the reader. A force-push and a base-branch
+   * change are dropped because their payloads name a ref this mapper has not seen
+   * in a real event, and a row that could not say which branch moved would be worse
+   * than the silence.
    */
   private toTimelineKind(raw: string | null): IssueTimelineEventKind | null {
     switch (raw) {
@@ -2628,9 +2675,20 @@ export class GitHubProvider implements GitProvider {
       case 'cross-referenced':
       case 'marked_as_duplicate':
       case 'connected':
+      case 'merged':
+      case 'review_requested':
+      case 'review_request_removed':
+      case 'ready_for_review':
+      case 'head_ref_deleted':
         return raw
       case 'issue_field_added':
         return 'fields'
+      // github.com draws the draft transition, and the event arrives under both
+      // spellings depending on which endpoint reported it, so both land on one kind
+      // rather than the row going missing for whichever spelling this build met.
+      case 'convert_to_draft':
+      case 'converted_to_draft':
+        return 'converted_to_draft'
       default:
         return null
     }
