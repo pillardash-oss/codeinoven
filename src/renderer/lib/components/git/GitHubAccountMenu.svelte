@@ -127,14 +127,6 @@
             <Bell size={12} class="shrink-0 text-dimmed" />
             Notifications
           </DropdownMenu.Item>
-          <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-            data-external-url={notificationSettingsUrl}
-            onSelect={() => void openUrl(notificationSettingsUrl)}
-          >
-            <Settings size={12} class="shrink-0 text-dimmed" />
-            Notification settings
-          </DropdownMenu.Item>
           <DropdownMenu.Separator class="my-1 h-px bg-border" />
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
