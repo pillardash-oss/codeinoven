@@ -318,6 +318,30 @@ function buildOrderBy(options: ThreadListOptions): string {
 }
 
 /**
+ * The reserved hidden containers that hold conversations rather than projects:
+ * the chats inbox, the assistant space, and the global browser. No project-thread
+ * query may ever return one of their rows; the surfaces that need them read them
+ * through their own container-scoped queries.
+ */
+const HIDDEN_CONTAINER_PROJECT_IDS: readonly string[] = [
+  INBOX_PROJECT_ID,
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID
+]
+
+/**
+ * WHERE fragment and params keeping only real project threads, across every
+ * project. This is the load boundary for a threads view, so the list never has
+ * to filter another container's rows out after the fact.
+ */
+function projectThreadsOnlyClause(): { where: string; params: string[] } {
+  return {
+    where: `project_id NOT IN (${HIDDEN_CONTAINER_PROJECT_IDS.map(() => '?').join(', ')})`,
+    params: [...HIDDEN_CONTAINER_PROJECT_IDS]
+  }
+}
+
+/**
  * The WHERE clause for every thread a Threads view must carry whatever the
  * recency window is: pinned rows, rows in a status that a Threads view ranks
  * above done, and every row of a pinned-like scope. The non-done and scoped
@@ -327,7 +351,8 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
   where: string
   params: unknown[]
 } {
-  const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
+  const only = projectThreadsOnlyClause()
+  const params: unknown[] = [...only.params]
   const statusPlaceholders = DONE_THREAD_STATUSES.map(() => '?').join(', ')
   params.push(...DONE_THREAD_STATUSES)
   let visibility = `(pinned = 1 OR status NOT IN (${statusPlaceholders}))`
@@ -339,7 +364,7 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
     params.push(...bucketIds)
   }
   return {
-    where: `WHERE archived = 0 AND project_id != ? AND ${visibility}`,
+    where: `WHERE archived = 0 AND ${only.where} AND ${visibility}`,
     params
   }
 }
@@ -836,6 +861,34 @@ export class ThreadRepo {
       0
     )
     if (!result.ok) return this.listAll(options)
+    const rows = result.rows as unknown as ThreadRow[]
+    return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
+  }
+
+  /**
+   * Real project threads only, across every project, for the Threads view.
+   *
+   * Unlike {@link listAllViaWorker}, which is the shared list the navigator and
+   * the container views read, this never returns a hidden container's row, so a
+   * threads view loads exactly what it shows and drops nothing afterwards.
+   */
+  async listProjectThreadsViaWorker(
+    options: ThreadListOptions = {},
+    hydrateUsage = true
+  ): Promise<Thread[]> {
+    const only = projectThreadsOnlyClause()
+    const { where, params, limit } = buildListClauses([only.where], only.params, options)
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where}
+       ${buildOrderBy(options)}${limit}`,
+      params,
+      0
+    )
+    if (!result.ok) {
+      return this.listAll(options).filter(
+        (thread) => !HIDDEN_CONTAINER_PROJECT_IDS.includes(thread.projectId)
+      )
+    }
     const rows = result.rows as unknown as ThreadRow[]
     return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
   }

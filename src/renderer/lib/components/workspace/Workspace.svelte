@@ -1829,9 +1829,6 @@
         // Assistant tasks are Assistant View's own rows, never the Threads
         // timeline's, so a pinned how-to thread cannot appear among them.
         t.projectId !== ASSISTANT_SPACE_ID &&
-        // A browser tab's assistant conversation is the browser rail's own row,
-        // never the Threads timeline's.
-        !isBrowserAssistantThread(t) &&
         threadProjectFilterState.matches(t.projectId)
     )
     // Pinned threads keep one shared pin-time order; the default status sort
@@ -1915,8 +1912,7 @@
       (thread) =>
         !thread.archived &&
         thread.projectId !== INBOX_PROJECT_ID &&
-        thread.projectId !== ASSISTANT_SPACE_ID &&
-        !isBrowserAssistantThread(thread)
+        thread.projectId !== ASSISTANT_SPACE_ID
     )
   )
 
@@ -2809,9 +2805,7 @@
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
-      allThreads = uniqueThreads.filter(
-        (t) => !isOrchestrationChildThread(t) && !isBrowserAssistantThread(t)
-      )
+      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = uniqueThreadList(threadList).length
       hasMoreHistory = false
       // Restore what the last session left in the durable inbox, alongside the
