@@ -1,9 +1,12 @@
 <script lang="ts">
   import { Minus, X, GripVertical } from '@lucide/svelte'
+  import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
+  import type { NativeDockInteraction } from '$shared/native-dock'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
@@ -283,6 +286,71 @@
 
   let panelEl = $state<HTMLElement | null>(null)
 
+  /**
+   * The host that draws this panel above a live browser page.
+   *
+   * A dockable panel floats over whatever is behind it, and the browser's page is
+   * a native view the compositor paints above every DOM node of this window. So
+   * the panel is drawn by the shared native host while the app window cannot draw
+   * it, and the panel here stays the projection source: it never paints while a
+   * host can draw it, so it arrives once instead of arriving, vanishing, and
+   * arriving again.
+   *
+   * Arming is deliberately narrow. The host is only used while a browser surface
+   * actually owns a page (`canUseNativeDock`), which is the one situation where
+   * the app window would otherwise have to park that page to be seen at all. A
+   * panel over the workspace keeps the app window's own presentation, which is
+   * both faithful and free.
+   */
+  const native = new NativeDockController(
+    `dockable-modal-${crypto.randomUUID()}`,
+    onNativeInteraction,
+    (width: number, height: number) => ({ x: position.x, y: position.y, width, height }),
+    false,
+    {
+      panel: true,
+      // A panel that cannot be projected whole keeps the app window's drawing
+      // rather than a half-drawn one: an editor, a terminal, a select, or a
+      // field that needs a keyboard this window does not own.
+      requireCompleteProjection: true,
+      onHover: () => {},
+      onDismiss: () => {},
+      onCommit: () => {}
+    }
+  )
+  const nativeArmed = $derived(
+    open && !minimized && browserVisibility.canUseNativeDock && !native.failed
+  )
+
+  /**
+   * The host's drag reports, applied to the panel's own placement.
+   *
+   * The press happened in the host's document, so the pointer's travel is a
+   * delta: the panel re-clamps and persists it exactly as its own header drag
+   * does, which keeps one placement and one storage key behind both.
+   */
+  function onNativeInteraction(report: NativeDockInteraction): void {
+    if (report.kind !== 'drag') return
+    if (!dragging) {
+      dragging = true
+      dragOrigin = { x: position.x, y: position.y }
+    }
+    position = {
+      x: clampX(dragOrigin.x + report.dx, width),
+      y: clampY(dragOrigin.y + report.dy, height)
+    }
+    if (report.done) {
+      dragging = false
+      persistSnapshot()
+    }
+  }
+
+  const nativeMount: Attachment<HTMLElement> = (element) => native.mount(element)
+
+  $effect(() => {
+    native.update(nativeArmed, { x: position.x, y: position.y, width, height })
+  })
+
   // A collapsed panel is `invisible`, but the DOM keeps focus on whatever was
   // focused inside it. Without this, keystrokes typed after a minimize land in
   // an element the user cannot see (an editor, a terminal), so focus is released
@@ -319,9 +387,17 @@
   // on-screen rectangle and let the browser panel detach its native view while
   // it is covered   a panel dragged off the browser leaves the browser usable.
   // The minimized dock row publishes its own rectangle through `DockRow`.
+  //
+  // While the native host draws the panel there is nothing here to hide behind,
+  // so the page stays attached and the panel floats above it. That is the whole
+  // point of the host, and a rectangle left behind here would park the page for
+  // as long as the panel is open.
   $effect(() => {
-    if (!open || minimized) return
     const key = occlusionKey
+    if (!open || minimized || nativeArmed) {
+      browserVisibility.clearOcclusion(key)
+      return () => browserVisibility.clearOcclusion(key)
+    }
     // The floating panel is positioned and sized from state, so reading those
     // values here re-publishes on drag, resize, and viewport clamping without a
     // DOM measurement.
@@ -381,15 +457,20 @@
       : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
       : 'pointer-events-auto'}"
-    style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
+    inert={nativeArmed}
+    style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed
+      ? ' opacity: 0;'
+      : ''}"
     bind:this={panelEl}
+    {@attach nativeMount}
     role="dialog"
     aria-label={title}
   >
     <div
-      class="flex shrink-0 cursor-grab items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
+      class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
         ? 'cursor-grabbing'
-        : ''}"
+        : 'cursor-grab'}"
+      data-native-dock-handle
       title={dragLabel}
       aria-label={dragLabel}
       role="group"

@@ -309,6 +309,10 @@ export const invokeProjectContract = {
     import('../project-actions').ProjectAction
   >,
   'projectActions:delete': {} as Contract<[projectId: string, actionId: string], boolean>,
+  'projectActions:markRun': {} as Contract<
+    [projectId: string, actionId: string],
+    import('../project-actions').ProjectAction | null
+  >,
   'projectActions:reorder': {} as Contract<
     [projectId: string, orderedIds: string[]],
     import('../project-actions').ProjectAction[]

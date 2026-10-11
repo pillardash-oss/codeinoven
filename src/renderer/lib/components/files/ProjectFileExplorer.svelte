@@ -159,6 +159,21 @@
    *  interaction on the tree so a user clicking a row isn't yanked around;
    *  cleared on a macrotask so external reveals still auto-scroll. */
   let suppressRevealScroll = false
+  /** Seed the consumed request once, at construction. A reveal the store still
+   *  holds unfocused is explicit for this mount's first run, while an ordinary
+   *  remount starts already settled so it does not first scroll to a stale
+   *  revealed path and then snap to the active tab. The read is deliberately a
+   *  one-off outside any reactive context, so acknowledging a reveal later
+   *  cannot re-run the effect that acknowledges it. */
+  function seedConsumedFocusRequest(): number {
+    return projectState.pendingReveal ? -1 : projectState.focusRequest
+  }
+
+  /** The last `focusRequest` this tree acted on. A newer request is an explicit
+   *  reveal from the store (`revealFile`/`revealDirectory`) and outranks the
+   *  panel's own "follow the active tab" default. Not reactive: consuming a
+   *  request must never re-run the effect that consumes it. */
+  let consumedFocusRequest = seedConsumedFocusRequest()
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
   const conflictPathSet = $derived(new Set(conflictPaths))
 
@@ -473,9 +488,27 @@
 
   $effect(() => {
     const focusRequest = projectState.focusRequest
-    const path = revealedSearchPath ?? selectedPath ?? projectState.revealedPath
+    const revealedPath = projectState.revealedPath
+    const searchPath = revealedSearchPath
+    const tabPath = selectedPath
+    // A `focusRequest` bump is a click asking for one specific path, so it must
+    // land there even while another file tab is open. Preferring the active tab
+    // made a folder reveal (a folder citation, a breadcrumb) scroll back to the
+    // open file - or bail entirely on a parent directory that tab had never
+    // loaded - which read as the tree refusing to reveal the path. Every other
+    // run keeps following the active tab, which is what the tree does by
+    // default.
+    const explicitReveal = focusRequest !== consumedFocusRequest
+    const path = explicitReveal
+      ? (revealedPath ?? searchPath ?? tabPath)
+      : (searchPath ?? tabPath ?? revealedPath)
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
     if (suppressRevealScroll) return
+    // Consumed only once the reveal is actually scheduled: a suppressed scroll
+    // or an ancestor that has not loaded yet must stay pending, so the request
+    // still lands when the directory listing and the pointer turn settle.
+    consumedFocusRequest = focusRequest
+    projectFilesWorkspace.acknowledgeReveal(projectId, focusRequest)
     void focusRevealedTreePath(path, focusRequest)
   })
 

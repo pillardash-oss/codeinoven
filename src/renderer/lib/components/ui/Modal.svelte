@@ -186,7 +186,7 @@
     nativeOverlay?: string
     nativeReady?: boolean
     nativeFailed?: boolean
-    onNativeHover?: (button: HTMLButtonElement) => void
+    onNativeHover?: (control: HTMLElement) => void
     onNativeCommit?: (key: string) => void
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
@@ -282,7 +282,7 @@
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
       }
       const controller = new NativeDockController(id, () => {}, bounds, false, {
-        onHover: (button) => onNativeHover?.(button),
+        onHover: (control) => onNativeHover?.(control),
         onDismiss: () => {
           if (closeOnBackdrop) onClose()
         },
@@ -301,9 +301,12 @@
             if (escapeCloses && !event.defaultPrevented) onClose()
             return true
           }
-          // Ordinary button navigation belongs to the native document. Only
-          // application shortcuts go back to the source window for these dialogs.
-          return !nativeOverlay && !event.metaKey && !event.ctrlKey && !event.altKey
+          // Everything else belongs to the source. The forwarded key is
+          // dispatched on the element the native document has focused, so a
+          // list, an editor and every shortcut handler receive it exactly as
+          // they would in the app window. Claiming these keys here is what made
+          // arrow navigation dead in every natively drawn dialog.
+          return false
         }
       })
       const cleanup = controller.mount(panel)
@@ -369,15 +372,32 @@
     })
   })
 
-  function focusInitialElement(event: Event) {
+  // The DOM panel becomes the presentation whenever the native host cannot draw
+  // the dialog   the common case being a native dialog whose content changed
+  // into something the projection refuses. bits-ui's open-autofocus ran once,
+  // when the dialog first opened, so a handover would otherwise leave the panel
+  // on screen with nothing focused and the user reaching for the mouse. Focus
+  // the initial element here, but only when nothing inside the panel already
+  // holds it, so a user who tabbed to a control keeps it.
+  $effect(() => {
+    if (!open || !domPresented || !panelPresent) return
+    const panel = panelEl
+    if (!panel || panel.contains(document.activeElement)) return
+    focusPrimary(panel)
+  })
+
+  function focusPrimary(panel: HTMLElement): void {
     // Own the initial focus (input field, else the primary action) instead
     // of bits-ui's default of focusing the panel itself.
-    event.preventDefault()
-    if (!panelEl) return
-    if (claimInitialFocus?.(panelEl)) return
-    const inputField = firstTextField(panelEl)
-    const defaultAction = findPanelPrimaryAction(panelEl)
+    if (claimInitialFocus?.(panel)) return
+    const inputField = firstTextField(panel)
+    const defaultAction = findPanelPrimaryAction(panel)
     ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
+  }
+
+  function focusInitialElement(event: Event) {
+    event.preventDefault()
+    if (panelEl) focusPrimary(panelEl)
   }
 
   function firstTextField(panel: HTMLElement): HTMLElement | undefined {
@@ -436,9 +456,7 @@
             if (isWithinToastLayer(event.target)) event.preventDefault()
             if (!closeOnBackdrop) event.preventDefault()
           }}
-          class="{PANEL_BASE} {layout} {widthClass} {panelClass} {domPresented
-            ? ''
-            : 'pointer-events-none'}"
+          class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
         >
           {#snippet child({ props })}
             <div

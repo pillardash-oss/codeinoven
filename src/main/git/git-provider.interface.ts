@@ -4,6 +4,16 @@ import type {
   GitHubDeploymentOverview,
   GitHubWorkflowRunDetail,
   GitRepositoryIdentity,
+  IssueDetail,
+  IssueListFilter,
+  IssueListSort,
+  IssuePage,
+  IssueReference,
+  IssueRelationships,
+  IssueSummary,
+  IssueTimelineEvent,
+  IssueUpdateInput,
+  NewIssueInput,
   PrCommentKind,
   PrDraft,
   PrListFilter,
@@ -73,6 +83,108 @@ export interface PullRequestTarget {
   owner: string
   repo: string
   pullNumber: number
+}
+
+/**
+ * List issues for a repository, optionally filtered by state. State `all` asks
+ * for both open and closed, which is the only way to read a closed issue.
+ */
+export interface ListIssuesInput {
+  owner: string
+  repo: string
+  state?: PrState
+}
+
+/** One page of an issue listing, with the viewer relationship and ordering. */
+export interface ListIssuePageInput extends ListIssuesInput {
+  /** 1-based page number. */
+  page: number
+  /** Items per page; providers cap this. */
+  perPage: number
+  /** Which of the viewer's relationships to the issue to keep. */
+  filter: IssueListFilter
+  /** Newest-first ordering. */
+  sort: IssueListSort
+  /**
+   * Where to continue from, as the previous page reported it. Null asks for the
+   * first page; a provider that pages by number instead ignores it.
+   */
+  cursor: string | null
+}
+
+/** Address one issue in a repository. */
+export interface IssueTarget {
+  owner: string
+  repo: string
+  issueNumber: number
+}
+
+/** A new issue as the provider is asked to create one. */
+export interface CreateIssueInput extends NewIssueInput {
+  owner: string
+  repo: string
+}
+
+/** Rewrite the fields an existing issue allows editing. */
+export interface UpdateIssueInput extends IssueTarget, IssueUpdateInput {}
+
+/**
+ * Settle or reopen an issue.
+ *
+ * Closing carries GitHub's optional reason, which is how a dismissal is told
+ * apart from a resolution; reopening carries none, because GitHub clears the
+ * reason itself when an issue is brought back.
+ */
+export interface SetIssueStateInput extends IssueTarget {
+  state: 'open' | 'closed'
+  stateReason?: 'completed' | 'not_planned'
+}
+
+/** Post an issue comment (the same collection a pull request conversation uses). */
+export interface CreateIssueCommentInput extends IssueTarget {
+  body: string
+}
+
+/** Rewrite an already-posted issue comment's body. Only the author may do this. */
+export interface UpdateIssueCommentInput {
+  owner: string
+  repo: string
+  commentId: number
+  body: string
+}
+
+/** Permanently delete an issue comment. Only the author may do this. */
+export interface IssueCommentTarget {
+  owner: string
+  repo: string
+  commentId: number
+}
+
+/** Search a repository's issues by text, for the relationship picker. */
+export interface SearchIssueCandidatesInput {
+  owner: string
+  repo: string
+  /**
+   * Free text in GitHub's own search syntax. Empty lists the most recently updated
+   * issues, which is what a picker shows before anything is typed.
+   */
+  text: string
+}
+
+/**
+ * One relationship write, with both sides addressed by GraphQL node id.
+ *
+ * There is no issue number here on purpose: GitHub's sub-issue and dependency
+ * mutations accept node ids only, and a number would have to be resolved to one
+ * anyway, which is a second request for a caller that already has the id.
+ */
+export interface IssueLinkInput {
+  owner: string
+  repo: string
+  /** The issue that holds the relationship: the parent, or the blocked issue. */
+  issueNodeId: string
+  /** The issue on the other side: the sub-issue, or the issue that blocks. */
+  relatedNodeId: string
 }
 
 /** Post an issue comment on a pull request. */
@@ -166,6 +278,72 @@ export interface GitProvider {
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>
+  /**
+   * One page of the repository's issues, narrowed by the viewer's relationship
+   * and ordered the way the sidebar draws it.
+   *
+   * Search-backed for the same reason the pull request listing is: `author:@me`
+   * and `mentions:@me` are questions only the search index can answer. A page
+   * carries the labels, assignee accounts, milestone and comment count the row
+   * draws, so no follow-up request is made per row.
+   */
+  listIssuePage(input: ListIssuePageInput): Promise<IssuePage>
+  /** One issue's full detail. Rejects a number that names a pull request. */
+  getIssue(input: IssueTarget): Promise<IssueDetail>
+  /** Open a new issue on the repository. */
+  createIssue(input: CreateIssueInput): Promise<IssueReference>
+  /** Rewrite an issue's title and/or body. */
+  updateIssue(input: UpdateIssueInput): Promise<IssueReference>
+  /** Close or reopen an issue, optionally recording why it was closed. */
+  setIssueState(input: SetIssueStateInput): Promise<IssueReference>
+  /** The issue's conversation comments, oldest first as GitHub returns them. */
+  listIssueComments(input: IssueTarget): Promise<PullRequestComment[]>
+  /**
+   * The issue's history: what happened to it, oldest first as GitHub returns it.
+   *
+   * Read from the timeline endpoint rather than the issue's events endpoint,
+   * because only the timeline includes the cross-references and references that
+   * tie the issue to the commits and pull requests that mention it. Comment
+   * events are filtered out: the comments themselves come from
+   * `listIssueComments`, which carries the fields a comment row draws.
+   */
+  listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]>
+  /**
+   * An issue's relationships: the parent it belongs to, its sub-issues, and the
+   * issues that block it or that it blocks.
+   *
+   * Four reads behind one call because the reader draws one block, and because a
+   * dependency may live in another repository, which the provider reports on the
+   * item rather than assuming from the issue being read.
+   */
+  listIssueRelationships(input: IssueTarget): Promise<IssueRelationships>
+  /**
+   * Search the repository's issues for a relationship picker.
+   *
+   * Search-backed, sharing the listing's query and its mapper, so a candidate is
+   * read exactly the way a listed issue is read. Each candidate carries its node id,
+   * which is the only handle the relationship writes accept.
+   */
+  searchIssueCandidates(input: SearchIssueCandidatesInput): Promise<IssueSummary[]>
+  /**
+   * Make `relatedNodeId` a sub-issue of `issueNodeId`.
+   *
+   * The direction matters: the issue named first becomes the parent, so setting a
+   * parent is this same call with the roles the other way round.
+   */
+  addIssueSubIssue(input: IssueLinkInput): Promise<void>
+  /** Detach a sub-issue from its parent. */
+  removeIssueSubIssue(input: IssueLinkInput): Promise<void>
+  /** Record that `relatedNodeId` blocks `issueNodeId`. */
+  addIssueBlockedBy(input: IssueLinkInput): Promise<void>
+  /** Remove a blocking relationship between two issues. */
+  removeIssueBlockedBy(input: IssueLinkInput): Promise<void>
+  /** Post a comment on an issue. */
+  createIssueComment(input: CreateIssueCommentInput): Promise<PullRequestComment>
+  /** Rewrite an issue comment's body. Only the author may do this. */
+  updateIssueComment(input: UpdateIssueCommentInput): Promise<PullRequestComment>
+  /** Permanently delete an issue comment. Only the author may do this. */
+  deleteIssueComment(input: IssueCommentTarget): Promise<void>
   getPullRequest(input: PullRequestTarget): Promise<PullRequestDetail>
   listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]>
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>
@@ -198,14 +376,16 @@ export interface GitProvider {
   /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
   setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
   /**
-   * Read the reactions on many comments at once, keyed by their node ids.
+   * Read the reactions on many subjects at once, keyed by their node ids.
    *
-   * GitHub answers reactions per subject, so a conversation of eighty comments
-   * would otherwise be eighty requests. Subjects with no reactions are absent
-   * from the answer, and a subject the read could not resolve is absent too
-   * rather than reported as unreacted.
+   * GitHub answers reactions per `Reactable` subject, so a conversation of eighty
+   * comments would otherwise be eighty requests. Any reactable node works here: a
+   * pull request's description, comments, reviews and inline comments, or an
+   * issue and its comments. Subjects with no reactions are absent from the
+   * answer, and a subject the read could not resolve is absent too rather than
+   * reported as unreacted.
    */
-  listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap>
+  listReactions(subjectNodeIds: string[]): Promise<PrReactionMap>
   /**
    * Add or take back the signed-in account's reaction, answering with the
    * subject's reactions as they now stand.
@@ -214,7 +394,7 @@ export interface GitProvider {
    * the subject, so the caller corrects its own view from the server's answer
    * instead of refetching the conversation it is already showing.
    */
-  setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]>
+  setReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>

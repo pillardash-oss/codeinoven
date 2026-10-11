@@ -112,7 +112,10 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
           : validateEntityId(options.projectId, 'Project ID')
       const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
       const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
-      const threads = await threadManager.listAllThreads({
+      // The Threads view is the projects surface: its bounded window and its
+      // paged history read real project threads only, so neither can bring back
+      // a chats, assistant, or browser row for the view to filter out.
+      const threads = await threadManager.listProjectThreadsForSidebar({
         includeArchived: false,
         limit,
         offset,
@@ -141,7 +144,7 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
         : validateEntityId(options.projectId, 'Project ID')
     const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 100)
     const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
-    const threads = await threadManager.listAllThreads({
+    const threads = await threadManager.listProjectThreadsForSidebar({
       includeArchived: false,
       limit,
       offset,

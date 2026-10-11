@@ -44,6 +44,8 @@ export interface NativeDockKey {
   alt: boolean
   meta: boolean
   isAutoRepeat: boolean
+  /** The native document's focused control, so the source can route the key. */
+  target?: string | null
 }
 export type NativeDockInteraction =
   | { id: string; kind: 'field'; field: string; value: string; version: number }
@@ -59,6 +61,7 @@ export type NativeDockInteraction =
     }
   | { id: string; kind: 'hover'; action: string }
   | { id: string; kind: 'commit'; key: string }
+  | { id: string; kind: 'focus'; target: string | null }
   | { id: string; kind: 'dismiss' }
   | { id: string; kind: 'scroll'; target: string; top: number }
   | { id: string; kind: 'drag'; dx: number; dy: number; done: boolean }
@@ -166,6 +169,8 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'data-native-dock-scroll',
   'data-native-dock-scroll-top',
   'data-native-dock-key',
+  'data-native-dock-row',
+  'data-native-dock-focus-key',
   'data-native-dock-image',
   'for',
   'placeholder',
@@ -248,6 +253,26 @@ const DOCK_SIZE_PROPERTIES = new Set(['width', 'height', 'max-height', 'font-siz
 const DOCK_PAINT_PROPERTIES = new Set<string>(NATIVE_DOCK_STYLE_PROPERTIES)
 
 /**
+ * The one layout keyword a projected node may carry.
+ *
+ * `display: contents` is how a wrapper stays out of the box tree   bits-ui wraps
+ * every command row in one   and dropping it changes the panel's own layout and
+ * scrolling. The set stays closed so no projected node can hide itself or invent
+ * a layout mode the app does not use.
+ */
+const DOCK_DISPLAY_VALUES = new Set([
+  'contents',
+  'block',
+  'inline',
+  'inline-block',
+  'flex',
+  'inline-flex',
+  'grid',
+  'inline-grid',
+  'none'
+])
+
+/**
  * CSS functions an inert paint value may call. Colour maths and gradients paint
  * pixels; everything else can reference a resource, a variable outside the theme,
  * or an environment detail the native document must not read.
@@ -327,6 +352,7 @@ export function nativeDockStyleAllowed(style: string): boolean {
     const property = declaration.slice(0, separator).trim()
     const value = declaration.slice(separator + 1).trim()
     if (DOCK_SIZE_PROPERTIES.has(property)) return /^[0-9.]+(?:px|rem|em|%)$/.test(value)
+    if (property === 'display') return DOCK_DISPLAY_VALUES.has(value)
     return DOCK_PAINT_PROPERTIES.has(property) && paintValueAllowed(value)
   })
 }
@@ -344,6 +370,14 @@ function identifier(value: unknown): string {
 function finite(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 100_000)
     throw new TypeError('Invalid native dock coordinate')
+  return value
+}
+/** `a:<action>`, `f:<field>` or `n:<focus key>`: the native document's focus. */
+const FOCUS_TARGET = /^[afn]:[a-zA-Z0-9_-]{1,64}$/
+function focusTarget(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string' || !FOCUS_TARGET.test(value))
+    throw new TypeError('Invalid native dock focus target')
   return value
 }
 export function validateNativeDockAck(value: unknown): NativeDockAck {
@@ -482,6 +516,7 @@ export function validateNativeDockInteraction(value: unknown): NativeDockInterac
       alt: input.alt === true
     }
   if (input.kind === 'hover') return { id, kind: 'hover', action: identifier(input.action) }
+  if (input.kind === 'focus') return { id, kind: 'focus', target: focusTarget(input.target) }
   if (input.kind === 'commit') return { id, kind: 'commit', key: identifier(input.key) }
   if (input.kind === 'dismiss') return { id, kind: 'dismiss' }
   if (input.kind === 'scroll') {

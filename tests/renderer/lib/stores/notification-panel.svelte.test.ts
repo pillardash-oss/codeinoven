@@ -314,3 +314,74 @@ describe('opening the thread', () => {
     expect(panel.visible.map((n) => n.id)).toEqual(['b'])
   })
 })
+
+/**
+ * A temporary (side) chat belongs to the entity that spawned it, and it wears
+ * that side chat's own indicator colour everywhere: its parent project's tab
+ * and rail, not the Chats tab and rail, and the side-chat blue, not the chat
+ * teal. These cases pin that routing and that one colour down.
+ */
+describe('routing a temporary chat notification', () => {
+  function temporaryChat(
+    id: string,
+    overrides: Partial<AgentNotificationPayload> = {}
+  ): AgentNotificationPayload {
+    return payload(id, {
+      kind: 'chat-completed',
+      source: 'temporary-chat',
+      projectId: 'project-1',
+      projectName: 'CodeInOven',
+      temporaryChatId: 'temp-1',
+      ...overrides
+    })
+  }
+
+  it('groups a project side chat under the project, not the chats tab', () => {
+    panel.add(temporaryChat('side'))
+    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['side'])
+    expect(panel.chatNotifications).toEqual([])
+    expect(panel.assistantNotifications).toEqual([])
+  })
+
+  it('groups an inbox side chat under chats and an assistant side chat under assistants', () => {
+    panel.add(temporaryChat('inbox', { projectId: INBOX_PROJECT_ID }))
+    panel.add(temporaryChat('assistant', { projectId: ASSISTANT_SPACE_ID }))
+    expect(panel.chatNotifications.map((n) => n.id)).toEqual(['inbox'])
+    expect(panel.assistantNotifications.map((n) => n.id)).toEqual(['assistant'])
+    expect(panel.projectNotifications).toEqual([])
+  })
+
+  it('paints a side chat with the temporary-chat colour, not the chat teal', () => {
+    panel.add(temporaryChat('side'))
+    const entry = panel.projectNotifications[0]
+    expect(entry && panel.accentColor(entry)).toBe('var(--color-temporary-chat)')
+    expect(panel.hasTemporaryChat).toBe(true)
+  })
+
+  it('counts a project side chat on the project rail, never the chats rail', () => {
+    panel.add(temporaryChat('side'))
+    expect(panel.unreadRailSummary('chats')).toBeNull()
+    expect(panel.unreadRailSummary('projects')).toEqual({
+      count: 1,
+      label: '1 unread project',
+      colors: ['var(--color-temporary-chat)']
+    })
+  })
+
+  it('lists a settled turn and a side chat as two distinct rail accents', () => {
+    panel.add(payload('turn'))
+    panel.add(temporaryChat('side'))
+    expect(panel.unreadRailSummary('projects')?.colors).toEqual([
+      'var(--color-temporary-chat)',
+      'var(--color-success)'
+    ])
+  })
+
+  it('reads a failed side chat as an error, not as a side-chat response', () => {
+    panel.add(temporaryChat('failed', { kind: 'error' }))
+    const entry = panel.projectNotifications[0]
+    expect(entry && panel.accentColor(entry)).toBe('var(--color-danger)')
+    expect(panel.hasTemporaryChat).toBe(false)
+    expect(panel.hasError).toBe(true)
+  })
+})

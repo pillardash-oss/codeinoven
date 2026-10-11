@@ -3,6 +3,8 @@ import App from './App.svelte'
 import './app.css'
 import { installRendererErrorCapture } from './lib/system/renderer-logger'
 import { installNotificationSound } from './lib/notification-sound'
+import { scheduleDeferredWork } from './lib/deferred-work'
+import { preloadSpotlightChunk } from './lib/page-preload'
 
 // Capture renderer JS errors (uncaught exceptions, unhandled rejections, and
 // console.error output) from the first renderer statement and forward them to
@@ -24,5 +26,11 @@ window.addEventListener('beforeunload', unsubscribeFromNotificationSound, { once
 const app = mount(App, {
   target: document.getElementById('app')!
 })
+
+// The spotlight is the app's most-used surface and it is a dynamic import at its
+// render site, reached by a keyboard shortcut. Nothing can warm it on hover, so
+// the first Cmd/Ctrl+K of a session would pay the chunk fetch and module eval on
+// the keypress itself. Warming it once the renderer is idle removes that wait.
+scheduleDeferredWork('spotlight:palette', preloadSpotlightChunk)
 
 export default app

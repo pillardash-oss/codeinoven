@@ -132,20 +132,36 @@
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
   }
 
+  /**
+   * Whether the pointer is resting on a dock this window has drawn.
+   *
+   * Read from the rectangles the docks published rather than from their
+   * elements. A dock is positioned by its own bounds, and the surfaces that
+   * place themselves absolutely   the floating rail, a dockable panel   are out
+   * of flow, so the element that carries the dock measures zero and a pointer
+   * resting on the panel would read as a departure. That answer hands the app
+   * window's clicks back to the page underneath, which makes the panel inert.
+   */
+  function overDock(): boolean {
+    for (const dock of docks) {
+      if (dock.passive) continue
+      // A modal dock's backdrop covers the window, so anywhere is on it. Its
+      // press is claimed by the modal itself either way.
+      if (dock.modal) return true
+      const bounds = dock.bounds
+      if (
+        pointer.x >= bounds.x &&
+        pointer.x <= bounds.x + bounds.width &&
+        pointer.y >= bounds.y &&
+        pointer.y <= bounds.y + bounds.height
+      )
+        return true
+    }
+    return false
+  }
   function reportPointer(force = false): void {
     if (!pointer.known) return
-    const overDock = [
-      ...document.querySelectorAll('[data-native-overlay-dock]:not([data-native-overlay-passive])')
-    ].some((element) => {
-      const rect = element.getBoundingClientRect()
-      return (
-        pointer.x >= rect.left &&
-        pointer.x <= rect.right &&
-        pointer.y >= rect.top &&
-        pointer.y <= rect.bottom
-      )
-    })
-    const over = dockDragging || overDock || overStrip(pointer.x, pointer.y)
+    const over = dockDragging || overDock() || overStrip(pointer.x, pointer.y)
     if (!force && over === pointerOverContent) return
     pointerOverContent = over
     void invoke('browser:overlayPointer', over).catch(() => {})

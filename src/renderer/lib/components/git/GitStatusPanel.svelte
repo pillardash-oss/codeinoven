@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { githubNotificationSettingsUrl } from '$lib/github-references'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     invalidateRepositoryPreflight,
@@ -11,6 +12,7 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
+  import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
@@ -48,12 +50,15 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
+    Bell,
     Bot,
     Check,
+    CheckCheck,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
     CircleCheck,
+    CircleDot,
     Download,
     ExternalLink,
     FileDiff,
@@ -76,6 +81,7 @@
     Rocket,
     RotateCcwClock,
     Search,
+    Settings,
     SkipForward,
     Trash2,
     TriangleAlert
@@ -88,6 +94,7 @@
   import BranchPicker from './BranchPicker.svelte'
   import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
+  import GitNotificationsPanel from './GitNotificationsPanel.svelte'
   import GitStatusPanelBranchesView from './GitStatusPanelBranchesView.svelte'
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
@@ -103,6 +110,7 @@
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
+  import GitIssuesView from './GitIssuesView.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import PrBatchDialog from './PrBatchDialog.svelte'
@@ -127,6 +135,7 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -507,6 +516,12 @@
 
   /** Force a reload of whatever the active view shows, when the store has it. */
   async function refreshFocusedView(): Promise<void> {
+    if (activeTab === 'notifications') {
+      // Notifications are account-wide, so the panel's refresh button reloads
+      // them from GitHub the same way it reloads every other view.
+      if (githubConnected) await githubNotifications.load()
+      return
+    }
     const identity = githubIdentity
     if (!identity || !githubConnected) return
     if (activeTab === 'pulls') {
@@ -931,6 +946,9 @@
   function selectTab(id: GitPanelTabId): void {
     activeTab = id
     if (id === 'history') void loadHistory()
+    // Notifications arrive from GitHub rather than the repository, so the view
+    // asks for its own data the first time it is shown.
+    if (id === 'notifications') void githubNotifications.ensureLoaded()
   }
 
   /**
@@ -1213,6 +1231,29 @@
     commitDiffErrors = {}
     commitTreeCollapsedDirs = {}
     loadingCommitDiff = false
+  }
+
+  /**
+   * Open one commit named from outside the history list, addressed by its hash.
+   *
+   * An issue's history knows a referenced commit only by hash, and `git log` resolves
+   * a hash-like query against the object database rather than the commit message, so
+   * a commit that was fetched but never checked out still opens. A commit this
+   * checkout has never fetched is a miss worth saying out loud: a click that silently
+   * does nothing reads as a broken link.
+   */
+  async function openCommitByHash(hash: string): Promise<void> {
+    const [commit] = await gitState.getLog(projectId, 1, 0, hash)
+    // The pin above any message matches is what makes the hash trustworthy, so a
+    // result that is not the hash itself is a commit whose message happens to
+    // contain it, which is not the commit the reader asked for.
+    if (!commit || !commit.hash.startsWith(hash)) {
+      reportErrorWithDetails(
+        `Commit ${hash.slice(0, 7)} is not in this repository. Fetch the branch it was pushed to, then open it again.`
+      )
+      return
+    }
+    void selectCommit(commit)
   }
 
   function toggleCommitDir(path: string): void {
@@ -1853,7 +1894,7 @@
    * The row's remote actions apply to the branch you are standing on, which is
    * what the Deploys view is not about.
    */
-  const remoteActionsApply = $derived(activeTab !== 'deployments')
+  const remoteActionsApply = $derived(activeTab !== 'deployments' && activeTab !== 'notifications')
   /**
    * Unresolved conflicts hand the row to the controls that end them, so the
    * remote buttons step out of the way and reappear in the git actions menu.
@@ -2560,8 +2601,20 @@
       },
       { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
       { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null }
+      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null },
+      { id: 'issues', label: 'Issues', icon: CircleDot, count: null }
     ]
+    // Notifications are account-wide, so the view earns a place only once a
+    // GitHub account is signed in. Its badge is the unread count of what the
+    // panel has loaded, since GitHub has no total-count endpoint.
+    if (githubConnected) {
+      list.push({
+        id: 'notifications',
+        label: 'Notifications',
+        icon: Bell,
+        count: githubNotifications.counts.inbox > 0 ? githubNotifications.counts.inbox : null
+      })
+    }
     // Stash is just shelved work   it earns a tab only once something is shelved.
     if (gitState.stashes.length > 0) {
       list.push({
@@ -2718,7 +2771,8 @@
   >
     <RefreshCw
       size={12}
-      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments'])
+      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments']) ||
+      githubNotifications.loading
         ? 'animate-spin'
         : ''}
     />
@@ -2810,6 +2864,28 @@
       onclick={() => void openInBrowser(deploymentsExternal.url)}
     >
       <ExternalLink size={12} aria-hidden="true" />
+    </button>
+  {:else if activeTab === 'notifications' && githubConnected}
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+      title="Mark all notifications as read"
+      aria-label="Mark all notifications as read"
+      disabled={githubNotifications.tab !== 'inbox' || githubNotifications.busyThreadId !== null}
+      onclick={() => void githubNotifications.markAllRead()}
+    >
+      <CheckCheck size={12} aria-hidden="true" />
+      <span class="view-action-label">Mark all read</span>
+    </button>
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Open GitHub notification settings"
+      aria-label="Open GitHub notification settings"
+      data-external-url={githubNotificationSettingsUrl()}
+      onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
+    >
+      <Settings size={12} aria-hidden="true" />
     </button>
   {/if}
 {/snippet}
@@ -3397,6 +3473,7 @@
           {primaryRemote}
           onSignIn={() => githubSignIn.start()}
           onSignOut={() => void signOutGitHub()}
+          onOpenNotifications={() => selectTab('notifications')}
         />
       {/if}
       {#if repoState === 'git' && gitState.branches.length > 0}
@@ -3804,6 +3881,7 @@
                 onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
                 onOpenThread={(threadId) => void openAgentThread(threadId)}
                 onOpenWorkflowRun={openWorkflowRunFromCheck}
+                onOpenCommit={(hash) => void openCommitByHash(hash)}
                 onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
                 onResolveWithAgent={(pr) => void startConflictResolution(pr)}
               />
@@ -3834,6 +3912,22 @@
                 onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               />
             {/if}
+          </div>
+        {:else if activeTab === 'issues'}
+          <div class="h-full min-h-0">
+            <GitIssuesView
+              {projectId}
+              {threadId}
+              {scopeBucketId}
+              identity={githubIdentity}
+              {githubConnected}
+              onSignIn={() => githubSignIn.start()}
+              onOpenCommit={(hash) => void openCommitByHash(hash)}
+            />
+          </div>
+        {:else if activeTab === 'notifications'}
+          <div class="h-full min-h-0">
+            <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor
@@ -4059,6 +4153,7 @@
           onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
           onOpenThread={(threadId) => void openAgentThread(threadId)}
           onOpenWorkflowRun={openWorkflowRunFromCheck}
+          onOpenCommit={(hash) => void openCommitByHash(hash)}
           onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
           onResolveWithAgent={(pr) => void startConflictResolution(pr)}
         />

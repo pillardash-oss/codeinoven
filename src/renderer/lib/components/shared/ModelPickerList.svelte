@@ -166,35 +166,41 @@
       .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
       .filter((favorite) => !isUnavailableHarness(favorite.harnessId))
   )
-  const favoriteModelsList = $derived(
-    filterEntries(
-      dedupeModelEntries(
-        favoriteModels
-          .slice()
-          .reverse()
-          .map((key) => {
-            const parsed = parseModelKey(key)
-            if (!parsed) return null
-            const entry = resolveModel(
-              displayProviders,
-              cachedProviders,
-              parsed.providerId,
-              parsed.modelId,
-              harnessId,
-              parsed.harnessId
-            )
-            return entry &&
-              passesPropHarnessFilter(entry.provider.harnessId) &&
-              !isUnavailableHarness(entry.provider.harnessId) &&
-              passesVisionFilter(entry.model, visionOnly)
-              ? entry
-              : null
-          })
-          .filter((entry): entry is ModelEntry => entry !== null)
-      ),
-      search
+  /**
+   * Favorite models this picker can actually render: the stored keys that
+   * resolve to a model in the current catalog, harness scope, and vision scope.
+   *
+   * Kept separate from the search query on purpose: the star rail item is gated
+   * on this list, so typing a query that matches no favorite must not make the
+   * rail item disappear.
+   */
+  const favoriteEntries = $derived(
+    dedupeModelEntries(
+      favoriteModels
+        .slice()
+        .reverse()
+        .map((key) => {
+          const parsed = parseModelKey(key)
+          if (!parsed) return null
+          const entry = resolveModel(
+            displayProviders,
+            cachedProviders,
+            parsed.providerId,
+            parsed.modelId,
+            harnessId,
+            parsed.harnessId
+          )
+          return entry &&
+            passesPropHarnessFilter(entry.provider.harnessId) &&
+            !isUnavailableHarness(entry.provider.harnessId) &&
+            passesVisionFilter(entry.model, visionOnly)
+            ? entry
+            : null
+        })
+        .filter((entry): entry is ModelEntry => entry !== null)
     )
   )
+  const favoriteModelsList = $derived(filterEntries(favoriteEntries, search))
   const recentModelsList = $derived(
     filterEntries(
       dedupeModelEntries(
@@ -272,8 +278,14 @@
       }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
-  /** True while the user has favorited models, which decides the star rail item. */
-  const hasFavorites = $derived(favoriteModels.length > 0)
+  /**
+   * True while this picker has favorite models to show, which decides the star
+   * rail item. Gated on the rendered favorites rather than the stored key list,
+   * so a stale key (a model no longer in the catalog, or one outside this
+   * picker's harness or vision scope) never lights the star with nothing behind
+   * it.
+   */
+  const hasFavorites = $derived(favoriteEntries.length > 0)
   /** True while this picker can apply profiles, which decides the profiles rail item. */
   const showProfilesRail = $derived(profiles !== null)
   /**

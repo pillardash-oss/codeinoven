@@ -294,6 +294,8 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       const action: ProjectAction = {
         id: existing?.id ?? randomUUID(),
         ...input,
+        // Editing an action must never erase when it was last run.
+        lastRunAt: existing?.lastRunAt,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       }
@@ -335,6 +337,19 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     await storage.write(projectActionsPath(projectId), { actions: next })
     return next
+  })
+  ipcMain.handle('projectActions:markRun', async (_, projectId: string, actionId: string) => {
+    const id = validateEntityId(actionId, 'Action ID')
+    const actions = await readProjectActions(projectId)
+    const existing = actions.find((action) => action.id === id)
+    if (!existing) return null
+    // A run is activity, not an edit: `updatedAt` (and its createdAt) stay put
+    // so the record's authorship timestamps keep meaning what they say.
+    const updated: ProjectAction = { ...existing, lastRunAt: Date.now() }
+    await storage.write(projectActionsPath(projectId), {
+      actions: actions.map((action) => (action.id === id ? updated : action))
+    })
+    return updated
   })
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)

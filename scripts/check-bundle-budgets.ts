@@ -5,7 +5,7 @@
  * audit's budgets over each **eagerly-loaded initial JS closure** — the entry
  * plus the chunks Vite emits as modulepreloads:
  *
- * - initial JavaScript raw ≤ 5.75 MiB and gzip ≤ 1.5 MiB
+ * - initial JavaScript raw ≤ 3 MiB and gzip ≤ 900 KiB
  *
  * Truly lazy dynamic imports and their modulepreload dep arrays are excluded
  * from the measurement, so the check measures exactly what the app loads to
@@ -22,14 +22,19 @@ import { resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 
 const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
-// The eager closure grows with every feature shipped on the first screen: the
-// November baseline of ~5.56 MB raw / ~1.38 MB gzip on macOS is the current
-// floor, and these thresholds leave room for build-hash/minifier variance as
-// well as the ~35 KiB heavier gzip the Windows minifier emits, while still
-// rejecting a runaway eager import.
-const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.75 * 1024 * 1024
+// The renderer is minified (`build.minify: 'oxc'` in electron.vite.config.ts), so
+// these thresholds measure a minified closure, not a formatted one. The budget
+// that preceded this one was 5.75 MiB raw / 1.5 MiB gzip and had been raised six
+// times between August and October 2026 - 4.5/1.0, 4.6/1.2, 5.0/1.3, 5.5/1.3,
+// 5.5/1.4, 5.75/1.5 - while the closure it was meant to bound grew with every
+// feature added to the first screen. Raising the ceiling is how a startup
+// regression ships, so the budget now sits just above the measured minified
+// closure (~2.48 MiB raw / ~0.74 MiB gzip) and a heavier first screen must be
+// paid for by making something lazy instead. See `STARTUP_BUDGET_MS` for the
+// runtime half of the same promise.
+const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 3 * 1024 * 1024
 // Windows Minifier output runs ~35 KiB heavier gzip than macOS/Linux.
-const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1500 * 1024
+const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 900 * 1024
 
 interface DesktopChunkBudget {
   url: string

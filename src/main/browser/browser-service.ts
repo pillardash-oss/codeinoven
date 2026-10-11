@@ -61,6 +61,7 @@ import type {
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
   BrowserScrollbarTheme,
@@ -242,6 +243,7 @@ import {
   validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
+  validateBrowserAppShortcutChords,
   validateBrowserStripInteraction,
   validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
@@ -612,6 +614,12 @@ export class BrowserService {
   /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
+  /**
+   * Every chord the app's own keymap answers, claimed in a page so the app's
+   * shortcuts survive a focused page. The browser's own table is matched first,
+   * and a chord with no Command/Control/Alt never arrives here.
+   */
+  private appShortcutChords: BrowserShortcutChord[] = []
   /**
    * Which find request each tab's page is answering.
    *
@@ -1056,6 +1064,19 @@ export class BrowserService {
     await this.tabHistory.flush()
   }
 
+  /**
+   * Load the overlay document once and keep it for the session.
+   *
+   * Called after the primary window is up: the first modal, switcher or toast of
+   * a session then draws into a document that is already loaded, instead of
+   * paying its load on the gesture that asks for it   and, past the
+   * acknowledgement deadline, falling back to the app window's DOM, which hides
+   * the browser behind it.
+   */
+  warmOverlay(): void {
+    this.overlay.warmForSession()
+  }
+
   register(): void {
     this.guardAgainstStrandedView()
     // The page-tabs preload is asked for on every document an extension surface
@@ -1255,11 +1276,14 @@ export class BrowserService {
         : this.overlay.applyDock(id, request)
     })
     replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
-      sendToRenderer(
-        this.window.webContents,
-        'browser:overlay:dockEvent',
-        validateNativeDockInteraction(rawReport)
-      )
+      const report = validateNativeDockInteraction(rawReport)
+      // Which control a modal's document has focused is state the window needs
+      // when it forwards a key, not an interaction to hand back to the app.
+      if (report.kind === 'focus') {
+        this.overlay.setDockFocus(report.id, report.target)
+        return
+      }
+      sendToRenderer(this.window.webContents, 'browser:overlay:dockEvent', report)
     })
     replaceHandler('browser:overlayDockDrawn', (_event, rawAck) => {
       sendToRenderer(
@@ -1400,6 +1424,9 @@ export class BrowserService {
     })
     replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
+    })
+    replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
+      this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
     })
     replaceHandler('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
@@ -3216,9 +3243,27 @@ export class BrowserService {
         return
       }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
-      if (!action) return
-      event.preventDefault()
-      this.runBrowserShortcut(tabId, action)
+      if (action) {
+        event.preventDefault()
+        this.runBrowserShortcut(tabId, action)
+        return
+      }
+      // The app's own keymap, claimed after the browser's table so a page still
+      // gets `mod+r` and every other key the browser answers itself. Handing the
+      // chord back is what makes the spotlight open from inside a page.
+      if (matchesBrowserChord(input, this.appShortcutChords)) {
+        event.preventDefault()
+        if (!this.window.webContents.isDestroyed()) {
+          this.window.webContents.focus()
+          sendToRenderer(this.window.webContents, 'browser:navigationKey', {
+            key: input.key.toLowerCase(),
+            meta: input.meta,
+            control: input.control,
+            shift: input.shift,
+            alt: input.alt
+          })
+        }
+      }
     })
     // The page itself never sees the application's DOM menus, so this is where
     // the browser's own right-click menu is produced: link, image, media,

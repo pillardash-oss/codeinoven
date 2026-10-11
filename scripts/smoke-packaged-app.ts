@@ -7,10 +7,12 @@ import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { PACKAGED_SMOKE_OUTPUT_ENV } from '../src/main/system/packaged-smoke'
+import { STARTUP_BUDGET_MS, startupBudgetViolation } from '../src/main/system/startup-budget'
 import type { StartupPhase, StartupTelemetrySnapshot } from '../src/main/system/startup-telemetry'
 
 interface SmokeOptions {
   appDir: string
+  budgetMs: number
   iterations: number
   output: string | null
   target: 'linux' | 'mac' | 'win'
@@ -68,6 +70,7 @@ function parseArgs(argv: string[]): SmokeOptions {
     target,
     appDir: resolve(appDir),
     output: output ? resolve(output) : null,
+    budgetMs: parsePositiveInteger(values.get('budget-ms'), '--budget-ms', STARTUP_BUDGET_MS),
     iterations: parsePositiveInteger(values.get('iterations'), '--iterations', 1),
     timeoutMs: parsePositiveInteger(values.get('timeout-ms'), '--timeout-ms', 60_000)
   }
@@ -95,6 +98,23 @@ async function executableFor(options: SmokeOptions): Promise<string> {
 function boundedAppend(current: string, chunk: Buffer): string {
   const next = current + chunk.toString('utf8')
   return next.length > 64_000 ? next.slice(-64_000) : next
+}
+
+/**
+ * The packaged app under test must boot as a real Electron app.
+ *
+ * CodeInOven exports `ELECTRON_RUN_AS_NODE` (and `ELECTRON_NO_ATTACH_CONSOLE`) to
+ * the agent processes it spawns, and the local CI gate runs inside one. Inherited,
+ * the packaged binary starts as plain Node and rejects its own Chromium switches
+ * ("bad option: --user-data-dir=..."), so the smoke can never pass under the agent
+ * harness even though CI, which never sets the variable, stays green. The smoke is
+ * always a real app launch, so the node-mode flags are dropped.
+ */
+function smokeEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...process.env }
+  delete environment.ELECTRON_RUN_AS_NODE
+  delete environment.ELECTRON_NO_ATTACH_CONSOLE
+  return environment
 }
 
 function phaseTime(proof: SmokeProof, phase: StartupPhase, iteration: number): number {
@@ -126,7 +146,7 @@ async function runIteration(
       {
         cwd: options.appDir,
         env: {
-          ...process.env,
+          ...smokeEnvironment(),
           ELECTRON_ENABLE_LOGGING: '1',
           CODEINOVEN_CONFIG_ROOT: join(runRoot, 'config'),
           [PACKAGED_SMOKE_OUTPUT_ENV]: proofPath
@@ -204,6 +224,19 @@ async function runIteration(
     const featuresReadyMs = phaseTime(proof, 'features:ready', iteration)
     const visualReadyMs = phaseTime(proof, 'window:visualReady', iteration)
     const workspaceReadyMs = phaseTime(proof, 'workspace:ready', iteration)
+    // The first-paint budget is a release gate, not a log line: raising a bundle
+    // budget to fit a heavier eager closure is exactly how a startup regression
+    // ships unnoticed, so the packaged app must still reach its first rendered
+    // frame inside the budget on the machine that built it.
+    const violation = startupBudgetViolation(proof.startup, options.budgetMs)
+    if (violation) {
+      fail(
+        `iteration ${iteration} missed the first-paint startup budget: ` +
+          `${Math.round(violation.atMs)}ms > ${violation.budgetMs}ms ` +
+          `(over by ${Math.round(violation.overByMs)}ms)\n` +
+          `stdout:\n${stdout}\nstderr:\n${stderr}`
+      )
+    }
     return {
       iteration,
       documentLoadedMs,
@@ -253,6 +286,7 @@ async function main(): Promise<void> {
     generatedAt: new Date().toISOString(),
     target: options.target,
     executable: basename(executable),
+    budgetMs: options.budgetMs,
     iterations: results.length,
     splashVisualReadyMs: summarize(results.map((result) => result.splashVisualReadyMs)),
     visualReadyMs: summarize(results.map((result) => result.visualReadyMs)),

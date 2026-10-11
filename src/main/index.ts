@@ -23,6 +23,7 @@ import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
+import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
@@ -205,6 +206,20 @@ async function completeStartupIfReady(): Promise<void> {
     state.startupTelemetryReported = true
     startupTelemetry.stopEventLoopMonitor()
     startupTelemetry.report()
+    // The first paint has its own budget, so a startup regression is visible in
+    // the durable log on every launch instead of only being caught by a release
+    // smoke. It is recorded, never fatal: a slow machine, a cold cache and a
+    // concurrently-running agent build all legitimately boot slowly, and the
+    // app must still open. The hard failure lives in the packaged smoke gate.
+    const violation = startupBudgetViolation(startupTelemetry.snapshot())
+    if (violation) {
+      Logger.error('Startup exceeded the first-paint budget', {
+        phase: violation.phase,
+        atMs: Math.round(violation.atMs),
+        overByMs: Math.round(violation.overByMs),
+        budgetMs: violation.budgetMs
+      })
+    }
   }
 
   if (!output || state.packagedSmokeProofStarted) return

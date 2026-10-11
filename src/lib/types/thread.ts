@@ -4,7 +4,7 @@ import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 import type { RoutineSchedule } from './schedule'
-import { ASSISTANT_SPACE_ID } from './project'
+import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
 export const DEFAULT_THREAD_TITLE = 'New Thread'
@@ -193,6 +193,20 @@ export interface ThreadNote {
 /** A thread that lives in the assistant space (a routine task). */
 export function isAssistantThread(thread: Thread): boolean {
   return thread.projectId === ASSISTANT_SPACE_ID
+}
+
+/**
+ * A browser tab's assistant conversation, which lives in the hidden global
+ * browser container.
+ *
+ * These rows are real threads so a per-tab conversation persists, but they are
+ * never user threads: their surface is the browser's own rail, not any
+ * workspace list. Every ingestion into a workspace list or search has to drop
+ * them, because a `thread:updated` broadcast is not a list and would otherwise
+ * push one phantom row into the Threads timeline.
+ */
+export function isBrowserAssistantThread(thread: Pick<Thread, 'projectId'>): boolean {
+  return thread.projectId === GLOBAL_BROWSER_PROJECT_ID
 }
 
 /**

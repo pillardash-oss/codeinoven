@@ -318,8 +318,8 @@
   nativeOverlay="thread-switcher"
   bind:nativeReady
   bind:nativeFailed
-  onNativeHover={(button) => {
-    const entry = entries[Number(button.dataset.entryIndex)]
+  onNativeHover={(control) => {
+    const entry = entries[Number(control.dataset.entryIndex)]
     if (entry) highlightedKey = threadSwitcherEntryKey(entry)
   }}
   onNativeCommit={(key) => {

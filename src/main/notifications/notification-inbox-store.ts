@@ -71,12 +71,18 @@ function isPersistedNotification(value: unknown): value is PersistedAgentNotific
   )
 }
 
+/**
+ * Which family a notification belongs to, from the entity that owns it.
+ *
+ * The owning project decides, never the source: a temporary (side) chat carries
+ * its parent thread's project, so a side chat opened from a project thread
+ * groups under that project, one opened from the assistant space under the
+ * assistant, and one opened from an inbox chat under Chats. Grouping it by its
+ * `temporary-chat` source instead forced every side chat onto the Chats tab and
+ * rail, whichever entity had actually spawned it.
+ */
 function familyOf(notification: AgentNotificationPayload): NotificationFamily {
-  if (
-    notification.source === 'chat' ||
-    notification.source === 'temporary-chat' ||
-    notification.projectId === INBOX_PROJECT_ID
-  ) {
+  if (notification.source === 'chat' || notification.projectId === INBOX_PROJECT_ID) {
     return 'chat'
   }
   if (notification.source === 'assistant' || notification.projectId === ASSISTANT_SPACE_ID) {

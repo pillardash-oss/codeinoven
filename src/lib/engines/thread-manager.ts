@@ -1555,6 +1555,17 @@ export class ThreadManager {
   }
 
   /**
+   * Real project threads only, across every project, for the Threads view.
+   *
+   * The Threads view is the projects surface, so its bounded window, its paged
+   * history and its guarantee set all read through here: none of them can bring
+   * back a chats, assistant, or browser row for the view to filter out.
+   */
+  async listProjectThreadsForSidebar(options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listProjectThreadsViaWorker(options)
+  }
+
+  /**
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
    * (Chats) project gets its configured `thread_limit` quota; every other
    * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via

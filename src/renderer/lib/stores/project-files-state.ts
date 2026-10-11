@@ -53,6 +53,12 @@ export interface ProjectFilesState {
   explorerWidth: number
   revealedPath: string | null
   focusRequest: number
+  /** Explicit reveal the tree has not focused yet: the path a click asked for
+   *  and the focus request carrying it. Revealing a path opens the files
+   *  sidebar, which can mount the tree *after* the reveal ran; a mount must not
+   *  align itself to the active file tab and steal that reveal. Cleared by the
+   *  explorer once the tree has focused the request. */
+  pendingReveal: { path: string; request: number } | null
   fullscreenRequest: number
   fullscreenActive: boolean
   selectedPaths: string[]
@@ -119,6 +125,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
     focusRequest: 0,
+    pendingReveal: null,
     fullscreenRequest: 0,
     fullscreenActive: false,
     selectedPaths: [...explorer.selectedPaths],
@@ -250,6 +257,7 @@ export function removePathsInState(state: ProjectFilesState, paths: string[]): S
     if (isWithin(candidate)) delete state.staleFiles[candidate]
   }
   if (state.revealedPath && isWithin(state.revealedPath)) state.revealedPath = null
+  if (state.pendingReveal && isWithin(state.pendingReveal.path)) state.pendingReveal = null
   state.selectedPaths = state.selectedPaths.filter((candidate) => !isWithin(candidate))
   return closingIds
 }
@@ -316,6 +324,9 @@ export function remapPathInState(
   }
   if (state.revealedPath && isWithin(state.revealedPath)) {
     state.revealedPath = translate(state.revealedPath)
+  }
+  if (state.pendingReveal && isWithin(state.pendingReveal.path)) {
+    state.pendingReveal = { ...state.pendingReveal, path: translate(state.pendingReveal.path) }
   }
   return remapped
 }

@@ -459,7 +459,7 @@
     {:else if tab.kind === 'sources'}
       <Info size={12} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
-      <MessageCircleDashed size={12} class="shrink-0 text-info" />
+      <MessageCircleDashed size={12} class="shrink-0 text-temporary-chat" />
     {:else if tab.kind === 'browser-agent'}
       <!-- The assistant conversation of a browser tab wears the Chats view's own
            mark, and no tone: it is a conversation, not a status. -->

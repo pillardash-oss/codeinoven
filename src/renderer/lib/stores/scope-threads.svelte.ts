@@ -176,6 +176,10 @@ export class ScopeThreads {
   }
 
   setThreads(threads: Thread[]): void {
+    // The reserved browser container's per-tab assistant conversations are never
+    // a workspace thread, whatever list a caller hands in (a raw `thread:listAll`
+    // includes them). Drop them here so no scope surface or search can show one.
+    threads = threads.filter((thread) => thread.projectId !== GLOBAL_BROWSER_PROJECT_ID)
     // Projects already fully hydrated for the scope board must survive this
     // bounded re-seed: replacing the whole array would empty their custom
     // scopes even though `fullyHydratedProjects` still marks them complete.

@@ -316,6 +316,15 @@ export default defineConfig(({ mode }) => {
       },
       build: {
         outDir: resolve(__dirname, 'out/renderer'),
+        // electron-vite defaults every environment to `minify: false`, so what
+        // actually shipped was an unminified renderer: the production eager
+        // closure measured 5.86 MB raw / 1.46 MB gzip, and the first paint paid
+        // to parse every comment and indentation the source has. The `oxc`
+        // minifier (Vite 8's own default minifier) removes 55% of the raw bytes
+        // and 47% of the gzip, renames no property, and this app reaches a
+        // rendered, hydrated workspace with it on. Never disable it to "make a
+        // bug reproducible": run a dev build instead.
+        minify: 'oxc',
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/renderer/index.html'),
