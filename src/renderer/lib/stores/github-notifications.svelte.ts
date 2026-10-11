@@ -7,7 +7,8 @@ import type {
   GitHubNotificationSort,
   GitHubNotificationTab,
   GitHubNotificationTabCounts,
-  GitHubPermissionRequired
+  GitHubNotificationTokenRequired,
+  GitHubNotificationTokenStatus
 } from '$shared/types'
 
 /** Items fetched per page. GitHub caps `per_page` at 100 and the panel asks for less. */
@@ -16,15 +17,16 @@ const PAGE_SIZE = 30
 const EMPTY_COUNTS: GitHubNotificationTabCounts = { inbox: 0, saved: 0, done: 0 }
 
 /**
- * Whether a listing answer is GitHub refusing the token rather than a listing.
+ * Whether a listing answer reports that no usable token serves it rather than a
+ * listing.
  *
- * A page and a permission refusal are told apart by the marker GitHub's
- * permission shape carries; the page has no such field.
+ * A page and the access state are told apart by the marker the access shape
+ * carries; the page has no `status` field.
  */
-function isPermissionRequired(
+function isAccessRequired(
   result: GitHubNotificationPageResult
-): result is GitHubPermissionRequired {
-  return 'status' in result
+): result is GitHubNotificationTokenRequired {
+  return 'status' in result && result.status === 'token_required'
 }
 
 /**
@@ -48,12 +50,21 @@ class GitHubNotificationsStore {
   loadingMore = $state(false)
   error = $state<string | null>(null)
   /**
-   * GitHub refusing the token, when the failure is that rather than a transient
-   * fault. It is the panel's own notice state and the shape the rest of the app
-   * uses for a GitHub access refusal, so the panel renders it the way the other
-   * views render theirs. A retry cannot clear it; a fresh sign-in can.
+   * The access state the listing reported, when GitHub could not serve it.
+   *
+   * GitHub serves notifications only to a classic personal access token, so this
+   * is the panel's "connect one" state rather than a transient fault: a retry
+   * cannot clear it and the panel offers the control that can.
    */
-  permission = $state<GitHubPermissionRequired | null>(null)
+  access = $state<GitHubNotificationTokenRequired | null>(null)
+  /**
+   * The token this view runs on. GitHub's own sign-in cannot serve it (every
+   * notification endpoint is closed to GitHub App tokens), so the view owns a
+   * token the user connects for it.
+   */
+  token = $state<GitHubNotificationTokenStatus | null>(null)
+  /** Whether the token is being checked, connected or forgotten. */
+  tokenBusy = $state(false)
   /** Thread id of an in-flight per-row action, so its row can show busy. */
   busyThreadId = $state<string | null>(null)
 
@@ -69,6 +80,59 @@ class GitHubNotificationsStore {
     if (this.started) return
     this.started = true
     await this.load()
+  }
+
+  /**
+   * Check the token on file, and load the listing when one works.
+   *
+   * Called when the view opens, so the panel knows whether it is reading
+   * notifications or asking for the token that makes that possible.
+   */
+  async ensureTokenLoaded(): Promise<void> {
+    if (this.token !== null) return
+    await this.refreshToken()
+  }
+
+  /** Read the token's status from main. */
+  async refreshToken(): Promise<void> {
+    try {
+      this.token = await invoke('githubNotification:tokenStatus')
+    } catch (reason) {
+      this.token = null
+      this.error =
+        reason instanceof Error ? reason.message : 'The notification token could not be checked'
+    }
+  }
+
+  /**
+   * Connect (or rotate) the token, then load what it unlocks.
+   *
+   * The failure is re-thrown so the modal that collected the token can show it
+   * next to the field the user is standing in, rather than behind the modal.
+   */
+  async connectToken(token: string): Promise<void> {
+    this.tokenBusy = true
+    try {
+      this.token = await invoke('githubNotification:setToken', token)
+      await this.load()
+    } finally {
+      this.tokenBusy = false
+    }
+  }
+
+  /** Forget the token, so the panel asks for one again. */
+  async disconnectToken(): Promise<void> {
+    this.tokenBusy = true
+    try {
+      this.token = await invoke('githubNotification:removeToken')
+      this.started = false
+      this.items = []
+      this.counts = EMPTY_COUNTS
+      this.access = null
+      await this.load()
+    } finally {
+      this.tokenBusy = false
+    }
   }
 
   async setTab(tab: GitHubNotificationTab): Promise<void> {
@@ -96,7 +160,7 @@ class GitHubNotificationsStore {
     const requestId = ++this.requestId
     this.loading = true
     this.error = null
-    this.permission = null
+    this.access = null
     try {
       const result = await invoke('githubNotification:page', {
         tab: this.tab,
@@ -105,10 +169,10 @@ class GitHubNotificationsStore {
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
-      if (isPermissionRequired(result)) {
+      if (isAccessRequired(result)) {
         this.items = []
         this.hasMore = false
-        this.permission = result
+        this.access = result
         return
       }
       this.page = 1
@@ -142,10 +206,10 @@ class GitHubNotificationsStore {
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
-      // A refusal mid-list is the same fact as one on the first page: the token
-      // cannot read notifications, and only a fresh sign-in changes that.
-      if (isPermissionRequired(result)) {
-        this.permission = result
+      // A refusal mid-list is the same fact as one on the first page: no usable
+      // token serves this listing, and only connecting one changes that.
+      if (isAccessRequired(result)) {
+        this.access = result
         return
       }
       this.page = next

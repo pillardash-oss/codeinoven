@@ -11,15 +11,17 @@ import type {
 export const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 
 /**
- * Where GitHub's device-flow sign-in happens.
+ * Where the user creates the token the notifications view runs on.
  *
- * Offered as the address a "sign in again" control stands for when the token on
- * file was issued without a scope a view now needs. The code the app is waiting
- * for is entered on this page, so a reader who opens it in a browser is one step
- * from granting the access, and right-clicking the control offers that browser
- * rather than only the click the control performs.
+ * GitHub serves the notifications API to a classic personal access token only:
+ * its REST description marks every notification endpoint `enabledForGitHubApps:
+ * false`, and the reference states that they do not work with GitHub App user
+ * access tokens or fine-grained personal access tokens. No GitHub sign-in can
+ * produce a usable one, so the view offers this page instead, already prefilled
+ * with the scope the endpoints accept.
  */
-export const GITHUB_SIGN_IN_URL = 'https://github.com/login/device'
+export const GITHUB_TOKEN_CREATE_URL =
+  'https://github.com/settings/tokens/new?description=CodeInOven%20notifications&scopes=notifications'
 
 /**
  * Returned instead of a raw fetch failure when GitHub could not be reached at

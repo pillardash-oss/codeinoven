@@ -44,3 +44,23 @@ export function validateNotificationPageInput(value: unknown): GitHubNotificatio
     perPage: validateBoundedInteger(record['perPage'], 'Items per page', 1, 50)
   }
 }
+
+/**
+ * A GitHub personal access token the user pasted into the panel.
+ *
+ * Deliberately not shape-checked beyond "one token, no whitespace": classic
+ * tokens predate the `ghp_` prefix, and an OAuth token from another client (the
+ * GitHub CLI's, for one) works here too. The length bound keeps an accidental
+ * paste of a file inside the IPC payload and out of the vault.
+ */
+export function validateNotificationToken(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Token must be a string')
+  const token = value.trim()
+  if (token.length < 20 || token.length > 512) {
+    throw new TypeError('Token must be between 20 and 512 characters')
+  }
+  if (!/^[A-Za-z0-9_]+$/u.test(token)) {
+    throw new TypeError('Token must be a single GitHub token, with no other text')
+  }
+  return token
+}

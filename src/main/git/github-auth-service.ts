@@ -12,14 +12,17 @@ declare global {
 }
 
 /**
- * OAuth scopes the app signs in with.
+ * OAuth scope the app asks for when it starts a device flow.
  *
- * `repo` covers pull requests, issues and deployments. `notifications` is what
- * GitHub's notifications API requires, and it is not implied by `repo`: a token
- * issued without it is refused there, so a sign-in that predates this scope has
- * to be repeated before the panel can read the inbox.
+ * `repo` covers pull requests, issues and deployments. It is the only scope this
+ * sign-in can usefully request: the app authenticates as a GitHub App, and GitHub
+ * Apps do not decide a user token's access with scopes at all (their permissions
+ * come from the app registration, and the token's own `scope` field always comes
+ * back empty). Nothing here can grant the notifications API, which is closed to
+ * GitHub App tokens outright   the notifications view connects a classic personal
+ * access token of its own for that.
  */
-const GITHUB_OAUTH_SCOPES = 'repo notifications'
+const GITHUB_OAUTH_SCOPES = 'repo'
 
 /** OAuth token ref stored in the SecretVault. */
 const GITHUB_TOKEN_REF = 'github_oauth_token'

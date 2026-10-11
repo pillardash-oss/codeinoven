@@ -71,6 +71,7 @@
     GitMerge,
     GitPullRequest,
     Info,
+    KeyRound,
     Loader2,
     Maximize2,
     MoreHorizontal,
@@ -95,6 +96,7 @@
   import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
   import GitNotificationsPanel from './GitNotificationsPanel.svelte'
+  import GitNotificationsTokenModal from './GitNotificationsTokenModal.svelte'
   import GitStatusPanelBranchesView from './GitStatusPanelBranchesView.svelte'
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
@@ -328,6 +330,9 @@
    */
   let prDetailTab = $state<PrDetailTabId>('conversation')
 
+  /** The notification token modal, opened from the view's own header action. */
+  let notificationsTokenOpen = $state(false)
+
   /**
    * Full screen pull request reader. It mirrors the fullscreen terminal and
    * browser: the reader owns its own tab list, opens from the pull request
@@ -517,9 +522,11 @@
   /** Force a reload of whatever the active view shows, when the store has it. */
   async function refreshFocusedView(): Promise<void> {
     if (activeTab === 'notifications') {
-      // Notifications are account-wide, so the panel's refresh button reloads
-      // them from GitHub the same way it reloads every other view.
-      if (githubConnected) await githubNotifications.load()
+      // Notifications are account-wide, so the panel's refresh button re-checks
+      // the token that serves them and reloads the listing, the same way it
+      // refreshes every other view.
+      await githubNotifications.refreshToken()
+      await githubNotifications.load()
       return
     }
     const identity = githubIdentity
@@ -2865,17 +2872,40 @@
     >
       <ExternalLink size={12} aria-hidden="true" />
     </button>
-  {:else if activeTab === 'notifications' && githubConnected}
+  {:else if activeTab === 'notifications'}
     <button
       type="button"
       class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
       title="Mark all notifications as read"
       aria-label="Mark all notifications as read"
-      disabled={githubNotifications.tab !== 'inbox' || githubNotifications.busyThreadId !== null}
+      disabled={!githubNotifications.token?.connected ||
+        githubNotifications.tab !== 'inbox' ||
+        githubNotifications.busyThreadId !== null}
       onclick={() => void githubNotifications.markAllRead()}
     >
       <CheckCheck size={12} aria-hidden="true" />
       <span class="view-action-label">Mark all read</span>
+    </button>
+    <!--
+      The token is the view's own credential: GitHub's REST reference marks every
+      notification endpoint as unavailable to the app's GitHub App sign-in, so
+      this is where the token that does work is connected, replaced or forgotten.
+    -->
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded {githubNotifications.token
+        ?.connected
+        ? 'text-dimmed'
+        : 'text-warning'} transition-colors hover:bg-elevated hover:text-foreground"
+      title={githubNotifications.token?.connected
+        ? `GitHub token for notifications${githubNotifications.token.login ? `, connected as ${githubNotifications.token.login}` : ''}`
+        : 'Connect the GitHub token this view reads notifications with'}
+      aria-label={githubNotifications.token?.connected
+        ? 'Manage the GitHub token this view reads notifications with'
+        : 'Connect the GitHub token this view reads notifications with'}
+      onclick={() => (notificationsTokenOpen = true)}
+    >
+      <KeyRound size={12} aria-hidden="true" />
     </button>
     <button
       type="button"
@@ -3927,7 +3957,7 @@
           </div>
         {:else if activeTab === 'notifications'}
           <div class="h-full min-h-0">
-            <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
+            <GitNotificationsPanel onManageToken={() => (notificationsTokenOpen = true)} />
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor
@@ -4063,6 +4093,11 @@
     onSettled={() => void refreshStatus()}
   />
 {/if}
+
+<GitNotificationsTokenModal
+  open={notificationsTokenOpen}
+  onClose={() => (notificationsTokenOpen = false)}
+/>
 
 <GitStatusPanelConfirmDialogs
   bind:stashDropTarget

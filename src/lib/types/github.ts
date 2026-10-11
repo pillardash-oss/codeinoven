@@ -1292,16 +1292,40 @@ export interface GitHubNotificationPage {
 }
 
 /**
- * A notification listing, or the GitHub access state that prevents one.
+ * A notification listing, or the account-token state that prevents one.
  *
- * GitHub serves the notifications API only to a token it granted the
- * `notifications` scope, and the app signs in for it, so a token issued before
- * that scope was asked for is refused here. No retry can change that, so the
- * refusal is reported as data the panel can act on rather than as a bare error
- * it can only repeat, and it reuses `GitHubPermissionRequired` so one shape and
- * one notice pattern cover GitHub refusing access anywhere in the panel.
+ * GitHub serves the notifications API only to a classic personal access token:
+ * its REST description marks every notification endpoint `enabledForGitHubApps:
+ * false`, and the reference says outright that these endpoints "do not work with
+ * GitHub App user access tokens". The app signs in with a GitHub App, so no
+ * GitHub sign-in can ever read this listing; it runs instead on a token the user
+ * connects for it and the vault holds. When no such token is on file, or GitHub
+ * refuses the one that is, that is reported as data the panel can act on rather
+ * than as a bare error it can only repeat.
  */
-export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubPermissionRequired
+export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubNotificationTokenRequired
+
+/** The listing could not run because no usable notification token is on file. */
+export interface GitHubNotificationTokenRequired {
+  status: 'token_required'
+  /** One sentence naming what is missing, in the panel's own words. */
+  message: string
+  /** Where the user creates the classic token that carries the scope. */
+  createTokenUrl: string
+}
+
+/** The vaulted notification token, as the panel shows it. */
+export interface GitHubNotificationTokenStatus {
+  connected: boolean
+  /** The account the token belongs to, when one is connected. */
+  login: string | null
+  /** The scopes GitHub reports for the token, or null when it reports none. */
+  scopes: string[] | null
+  /** Whether those scopes are allowed to read the notifications API. */
+  canReadNotifications: boolean
+  /** Where the user creates a token this view can use. */
+  createTokenUrl: string
+}
 
 /** A notification listing request. */
 export interface GitHubNotificationPageInput {

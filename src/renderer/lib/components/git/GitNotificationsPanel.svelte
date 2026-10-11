@@ -23,7 +23,6 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
-  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
   import GitNotificationsGroupMenu from './GitNotificationsGroupMenu.svelte'
   import PrAvatar from './PrAvatar.svelte'
@@ -35,30 +34,22 @@
   } from '$shared/types'
 
   interface Props {
-    /** Whether a GitHub account is signed in; the panel offers sign-in otherwise. */
-    githubConnected: boolean
-    onSignIn: () => void
+    /** Opens the token modal, from the one control that can fix a missing token. */
+    onManageToken: () => void
   }
 
-  let { githubConnected, onSignIn }: Props = $props()
+  let { onManageToken }: Props = $props()
 
   /**
-   * Open the panel's data on first mount. The store guards against a second
-   * load, so a remount after the sidebar was hidden costs nothing.
+   * Open the panel's data on first mount: the token state, and the listing it
+   * unlocks. The store guards both, so a remount after the sidebar was hidden
+   * costs nothing, and a listing answered without a token fails before any
+   * request leaves the app.
    */
-  $effect(() => {
-    if (githubConnected) void githubNotifications.ensureLoaded()
+  onMount(() => {
+    void githubNotifications.ensureTokenLoaded()
+    void githubNotifications.ensureLoaded()
   })
-
-  /**
-   * Reload once a fresh sign-in lands.
-   *
-   * The state that failed was "signed in, but without the notifications scope",
-   * and signing in again changes the token rather than `githubConnected`. The
-   * panel is already open through that, so nothing else would refetch the
-   * listing it was refused.
-   */
-  onMount(() => githubSignIn.onAuthorized(() => void githubNotifications.load()))
 
   const tabOptions: Array<{ id: GitHubNotificationTab; label: string; count: number }> = $derived([
     { id: 'inbox', label: 'Inbox', count: githubNotifications.counts.inbox },
@@ -265,45 +256,27 @@
     </div>
   {/if}
 
-  {#if !githubConnected}
-    <EmptyState
-      icon={Bell}
-      title="Sign in to GitHub"
-      description="Notifications come from your GitHub account, so sign in to read and act on them here."
-    >
-      {#snippet action()}
-        <button
-          type="button"
-          class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
-          onclick={onSignIn}
-        >
-          Sign in
-        </button>
-      {/snippet}
-    </EmptyState>
-  {:else if githubNotifications.permission}
+  {#if githubNotifications.access}
     <!--
-      GitHub refused the token, so there is nothing to list and no retry that
-      could change it. This is the same centered access refusal every other view
-      in the panel shows: the app's GitHub glyph, one sentence in plain words,
-      and the primary sign-in button those views use. The button declares the
-      page its sign-in happens on, so it is a link as much as a button and can be
-      opened from either browser's own context menu.
+      No token can read this listing yet, so there is nothing to show and no
+      retry that could change it. This is the same centered refusal every other
+      view in the panel shows: the app's GitHub glyph, one sentence, and the
+      primary action that resolves it. The action opens the token modal rather
+      than a sign-in, because GitHub refuses its own sign-in here.
     -->
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <VendorIcon name="GitHub" size={20} class="text-dimmed" />
-      <p class="max-w-[36ch] text-[0.6875rem] leading-relaxed text-muted">
-        {githubNotifications.permission.message}
+      <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
+        {githubNotifications.access.message}
       </p>
       <button
         type="button"
         class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Sign in to GitHub again to allow CodeInOven to read your notifications"
-        aria-label="Sign in to GitHub again to allow CodeInOven to read your notifications"
-        data-external-url={githubNotifications.permission.settingsUrl}
-        onclick={onSignIn}
+        title="Connect the GitHub token this view reads notifications with"
+        aria-label="Connect the GitHub token this view reads notifications with"
+        onclick={onManageToken}
       >
-        Sign in to GitHub
+        Connect a GitHub token
       </button>
     </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}

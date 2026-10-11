@@ -142,11 +142,48 @@ export class GitHubNotificationError extends Error {
   }
 }
 
+/**
+ * No notification token is connected yet.
+ *
+ * Its own failure because it is not a GitHub answer at all: the app never sent a
+ * request. GitHub serves the notifications API only to a classic personal access
+ * token, which the app's GitHub App sign-in can never produce, so the panel is
+ * told to connect one instead of being handed a retry that cannot work.
+ */
+export class GitHubNotificationTokenMissingError extends Error {
+  constructor() {
+    super('Connect a GitHub token to read your notifications')
+    this.name = 'GitHubNotificationTokenMissingError'
+  }
+}
+
+/**
+ * Whether a token's scopes may read the notifications API.
+ *
+ * GitHub accepts the `notifications` scope, and also the broader `repo` scope
+ * (its reference: "All calls to these endpoints require the `notifications` or
+ * `repo` scopes"). A token whose scopes GitHub does not report at all is let
+ * through: the header is absent for some credential types, and the API itself is
+ * the authority that then answers.
+ */
+export function notificationScopesAllowRead(scopes: readonly string[] | null): boolean {
+  if (!scopes) return true
+  return scopes.includes('notifications') || scopes.includes('repo')
+}
+
+/** What a candidate token says about itself: whose it is, and what it may do. */
+export interface GitHubTokenInspection {
+  login: string | null
+  scopes: string[] | null
+}
+
 export interface GitHubNotificationsDeps {
-  /** Resolve the current GitHub token; null when the user is signed out. */
+  /**
+   * The classic personal access token the notification endpoints run on, from
+   * the vault. Null until the user connects one; the app's GitHub App sign-in
+   * token is deliberately not a fallback, because GitHub refuses it here.
+   */
   resolveToken: () => Promise<string | null>
-  /** Force a token refresh after a 401. */
-  refreshToken: () => Promise<string | null>
   storage: StorageEngine
   baseUrl?: string
 }
@@ -369,24 +406,16 @@ export class GitHubNotificationsService {
   }
 
   /**
-   * One authenticated request, with a timeout and a one-shot token refresh on
-   * a 401. The token never appears in an error: only GitHub's own message is
-   * carried, and it is truncated.
+   * One authenticated request, with a timeout. The token never appears in an
+   * error: only GitHub's own message is carried, and it is truncated.
    */
   private async request(path: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
     try {
-      let token = await this.deps.resolveToken()
-      if (!token) throw new GitHubNotificationError(401, 'Sign in to GitHub to see notifications')
-      let response = await this.send(path, init, token, controller.signal)
-      if (response.status === 401) {
-        const refreshed = await this.deps.refreshToken()
-        if (refreshed && refreshed !== token) {
-          token = refreshed
-          response = await this.send(path, init, token, controller.signal)
-        }
-      }
+      const token = await this.deps.resolveToken()
+      if (!token) throw new GitHubNotificationTokenMissingError()
+      const response = await this.send(path, init, token, controller.signal)
       if (!response.ok) {
         throw new GitHubNotificationError(response.status, await this.readErrorMessage(response))
       }
@@ -394,6 +423,44 @@ export class GitHubNotificationsService {
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
         throw new Error('GitHub notifications request timed out', { cause: failure })
+      }
+      throw failure
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Ask GitHub whose a candidate token is and what it may do.
+   *
+   * This is the one call that runs on a token that is not connected yet, so it
+   * takes the token as an argument. It is what lets the panel refuse a token
+   * that cannot read notifications before storing it, and name the account
+   * afterwards. A 401 is reported as `GitHubNotificationError`, so the caller can
+   * tell a dead token from a network fault.
+   */
+  async inspectToken(token: string): Promise<GitHubTokenInspection> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
+    try {
+      const response = await this.send('/user', { method: 'GET' }, token, controller.signal)
+      if (!response.ok) {
+        throw new GitHubNotificationError(response.status, await this.readErrorMessage(response))
+      }
+      const payload = (await response.json()) as unknown
+      const record = this.asRecord(payload)
+      const header = response.headers.get('x-oauth-scopes')
+      const scopes =
+        typeof header === 'string'
+          ? header
+              .split(',')
+              .map((scope) => scope.trim())
+              .filter((scope) => scope.length > 0)
+          : null
+      return { login: this.readString(record, 'login'), scopes }
+    } catch (failure) {
+      if (failure instanceof Error && failure.name === 'AbortError') {
+        throw new Error('GitHub token check timed out', { cause: failure })
       }
       throw failure
     } finally {
