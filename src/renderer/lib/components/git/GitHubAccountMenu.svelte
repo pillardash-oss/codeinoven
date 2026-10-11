@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, ExternalLink, GitFork, LogOut, Settings, User } from '@lucide/svelte'
+  import { Bell, ExternalLink, GitFork, LogOut, User } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -46,7 +46,6 @@
    */
   const profileUrl = $derived(`https://github.com/${user?.login ?? ''}`)
   const myPullRequestsUrl = 'https://github.com/pulls'
-  const notificationSettingsUrl = 'https://github.com/settings/notifications'
 </script>
 
 {#if github.connected && user}
