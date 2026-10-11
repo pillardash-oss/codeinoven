@@ -1,11 +1,8 @@
 import type {
   GitHubNotification,
-  GitHubNotificationComment,
   GitHubNotificationFilter,
   GitHubNotificationPage,
   GitHubNotificationPageInput,
-  GitHubNotificationSubject,
-  GitHubNotificationSubjectRequest,
   GitHubNotificationTabCounts
 } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -227,21 +224,6 @@ export interface GitHubNotificationsDeps {
  * done, subscribe) to GitHub. Every request resolves the token from the vault on
  * the main process only and is sanitized before an error crosses IPC.
  */
-/** A subject GitHub serves no REST thread for, so the detail shows the notification alone. */
-function unreadableSubject(kind: string): GitHubNotificationSubject {
-  return {
-    kind,
-    readable: false,
-    state: null,
-    body: null,
-    authorLogin: null,
-    authorAvatarUrl: null,
-    createdAt: null,
-    labels: [],
-    comments: []
-  }
-}
-
 export class GitHubNotificationsService {
   private readonly store: NotificationSnapshotStore
   private readonly baseUrl: string
@@ -324,165 +306,6 @@ export class GitHubNotificationsService {
   private hasNextPage(response: Response): boolean {
     const link = response.headers.get('link')
     return typeof link === 'string' && /rel="next"/u.test(link)
-  }
-
-  /**
-   * Read the thread a notification points at, so the panel shows it in place.
-   *
-   * A notification names its subject and carries none of its content, so this is
-   * the fetch that turns a row into something readable. The subject's own address
-   * comes from the same URL the row links to, whose last segment is the number,
-   * commit sha or release tag, which keeps one source of truth for where it lives.
-   * Kinds GitHub serves no REST thread for (discussions are GraphQL-only) come
-   * back unreadable rather than as a failure, so the detail still draws the
-   * notification's facts and leaves the thread itself to the browser.
-   */
-  async fetchSubject(
-    request: GitHubNotificationSubjectRequest
-  ): Promise<GitHubNotificationSubject> {
-    await this.requireAccount()
-    const repository = request.repositoryFullName
-    const address = this.subjectAddress(request.url)
-    if (!address || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u.test(repository)) {
-      return unreadableSubject(request.subjectType)
-    }
-    const base = `/repos/${repository}`
-    if (request.subjectType === 'Issue' || request.subjectType === 'PullRequest') {
-      return this.fetchIssueSubject(base, address, request.subjectType === 'PullRequest')
-    }
-    if (request.subjectType === 'Commit') return this.fetchCommitSubject(base, address)
-    if (request.subjectType === 'Release') return this.fetchReleaseSubject(base, address)
-    return unreadableSubject(request.subjectType)
-  }
-
-  /** The subject's number, sha or tag, taken from the tail of its web URL. */
-  private subjectAddress(url: string | null): string | null {
-    if (!url) return null
-    const tail = url.split('?')[0].split('/').filter(Boolean).pop() ?? ''
-    return /^[A-Za-z0-9._-]+$/u.test(tail) ? tail : null
-  }
-
-  /**
-   * An issue or a pull request, with its conversation.
-   *
-   * Both live under the issues endpoints, but a pull request is read from its own
-   * so a merged or draft pull request is named as one. A conversation that will
-   * not load leaves the description standing rather than blanking the reader over
-   * a failure the thread's own content does not depend on.
-   */
-  private async fetchIssueSubject(
-    base: string,
-    address: string,
-    isPullRequest: boolean
-  ): Promise<GitHubNotificationSubject> {
-    const detailResponse = await this.request(
-      isPullRequest ? `${base}/pulls/${address}` : `${base}/issues/${address}`,
-      { method: 'GET' }
-    )
-    const detail = this.asRecord((await detailResponse.json()) as unknown)
-    if (!detail) return unreadableSubject(isPullRequest ? 'PullRequest' : 'Issue')
-    const conversation = this.asRecordArray(
-      await this.requestJson(`${base}/issues/${address}/comments?per_page=100`, [])
-    )
-    const user = this.asRecord(detail['user'])
-    return {
-      kind: isPullRequest ? 'PullRequest' : 'Issue',
-      readable: true,
-      state: this.subjectState(detail, isPullRequest),
-      body: this.readString(detail, 'body'),
-      authorLogin: this.readString(user, 'login'),
-      authorAvatarUrl: this.readString(user, 'avatar_url'),
-      createdAt: this.readString(detail, 'created_at'),
-      labels: this.labelNames(detail['labels']),
-      comments: conversation
-        .map((comment) => this.toComment(comment))
-        .filter((comment): comment is GitHubNotificationComment => comment !== null)
-    }
-  }
-
-  /** A commit: the message is the content, with its own comment thread left out. */
-  private async fetchCommitSubject(
-    base: string,
-    address: string
-  ): Promise<GitHubNotificationSubject> {
-    const response = await this.request(`${base}/commits/${address}`, { method: 'GET' })
-    const detail = this.asRecord((await response.json()) as unknown)
-    if (!detail) return unreadableSubject('Commit')
-    const commit = this.asRecord(detail['commit'])
-    const author = this.asRecord(detail['author'])
-    const commitAuthor = this.asRecord(commit?.['author'])
-    return {
-      kind: 'Commit',
-      readable: true,
-      state: null,
-      body: this.readString(commit, 'message'),
-      authorLogin: this.readString(author, 'login'),
-      authorAvatarUrl: this.readString(author, 'avatar_url'),
-      createdAt: this.readString(commitAuthor, 'date'),
-      labels: [],
-      comments: []
-    }
-  }
-
-  /** A release: its notes are the content. */
-  private async fetchReleaseSubject(
-    base: string,
-    address: string
-  ): Promise<GitHubNotificationSubject> {
-    const response = await this.request(`${base}/releases/tags/${address}`, { method: 'GET' })
-    const detail = this.asRecord((await response.json()) as unknown)
-    if (!detail) return unreadableSubject('Release')
-    const author = this.asRecord(detail['author'])
-    return {
-      kind: 'Release',
-      readable: true,
-      state: null,
-      body: this.readString(detail, 'body'),
-      authorLogin: this.readString(author, 'login'),
-      authorAvatarUrl: this.readString(author, 'avatar_url'),
-      createdAt: this.readString(detail, 'created_at'),
-      labels: [],
-      comments: []
-    }
-  }
-
-  /** A pull request's own state, naming merged and draft rather than just open. */
-  private subjectState(detail: Record<string, unknown>, isPullRequest: boolean): string | null {
-    if (!isPullRequest) return this.readString(detail, 'state')
-    if (detail['merged'] === true) return 'merged'
-    if (detail['draft'] === true) return 'draft'
-    return this.readString(detail, 'state')
-  }
-
-  /** Label names, in GitHub's own order. */
-  private labelNames(raw: unknown): string[] {
-    return this.asRecordArray(raw)
-      .map((label) => this.readString(label, 'name'))
-      .filter((name): name is string => name !== null)
-  }
-
-  /** Normalize one raw comment record. */
-  private toComment(raw: Record<string, unknown>): GitHubNotificationComment | null {
-    const id = this.readId(raw)
-    if (!id) return null
-    const user = this.asRecord(raw['user'])
-    return {
-      id,
-      body: this.readString(raw, 'body') ?? '',
-      authorLogin: this.readString(user, 'login'),
-      authorAvatarUrl: this.readString(user, 'avatar_url'),
-      createdAt: this.readString(raw, 'created_at') ?? new Date(0).toISOString()
-    }
-  }
-
-  /** One GET whose payload is normalized to an array; a failure yields the fallback. */
-  private async requestJson(path: string, fallback: unknown): Promise<unknown> {
-    try {
-      const response = await this.request(path, { method: 'GET' })
-      return await response.json()
-    } catch {
-      return fallback
-    }
   }
 
   /** Mark one thread read on GitHub. */

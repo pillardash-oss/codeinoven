@@ -68,9 +68,19 @@
     projectId: string
     identity: { owner: string; repo: string }
     issue: IssueSummary
-    onBack: () => void
+    /**
+     * Return to the list this reader was opened from. Omitted when the host owns
+     * the back control, which is how the Git panel draws its action row: the row
+     * carries the control and its label names the view actually being returned to.
+     */
+    onBack?: () => void
     onWorkOn: (issue: IssueSummary) => void
-    onCreatePr: (issue: IssueSummary) => void
+    /**
+     * Open a pull request prefilled to close this issue. Omitted for an issue that
+     * lives in another repository: the sheet it opens composes a pull request in
+     * the project, which would close a number belonging to somewhere else.
+     */
+    onCreatePr?: (issue: IssueSummary) => void
     onEditMetadata: (mode: PrMetadataMode, issue: IssueSummary) => void
     /**
      * Ask to close the issue. The view owns the confirmation and the reason, so
@@ -355,15 +365,17 @@
   <!-- Header: back, state, number, title, and the work actions this issue offers. -->
   <div class="flex shrink-0 flex-col gap-1.5 border-b border-border px-2.5 py-2">
     <div class="flex items-center gap-1.5">
-      <button
-        type="button"
-        class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to issues"
-        aria-label="Back to issues"
-        onclick={onBack}
-      >
-        <ChevronLeft size={13} />
-      </button>
+      {#if onBack}
+        <button
+          type="button"
+          class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Back to issues"
+          aria-label="Back to issues"
+          onclick={onBack}
+        >
+          <ChevronLeft size={13} />
+        </button>
+      {/if}
       <span
         class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold {issueStateToneClass(
           subject
@@ -395,15 +407,17 @@
         <Hammer size={11} />
         Work on this issue
       </button>
-      <button
-        type="button"
-        class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open a pull request prefilled to close this issue"
-        onclick={() => onCreatePr(subject)}
-      >
-        <GitPullRequest size={11} />
-        Create pull request
-      </button>
+      {#if onCreatePr}
+        <button
+          type="button"
+          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Open a pull request prefilled to close this issue"
+          onclick={() => onCreatePr?.(subject)}
+        >
+          <GitPullRequest size={11} />
+          Create pull request
+        </button>
+      {/if}
       {#if subject.state === 'open'}
         <button
           type="button"

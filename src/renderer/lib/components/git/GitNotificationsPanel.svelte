@@ -20,7 +20,6 @@
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
-  import GitNotificationDetail from './GitNotificationDetail.svelte'
   import GitNotificationsGroupMenu from './GitNotificationsGroupMenu.svelte'
   import PrAvatar from './PrAvatar.svelte'
   import {
@@ -100,9 +99,6 @@
   const filterNarrowed = $derived(githubNotifications.filter !== 'default')
   const sortNarrowed = $derived(githubNotifications.sort !== 'newest')
 
-  /** The notification the reader has open, when the detail is what is showing. */
-  const openItem = $derived(githubNotifications.openItem)
-
   const sortedItems = $derived.by(() => {
     const items = [...githubNotifications.items]
     items.sort((a, b) => {
@@ -138,20 +134,23 @@
   })
 
   /** Open the thread on github.com, marking it read here and there. */
-  function openThread(item: GitHubNotification): void {
+  function openOnGitHub(item: GitHubNotification): void {
     if (item.unread) void githubNotifications.markRead(item.id)
     void openInBrowser(item.url ?? githubNotificationsUrl())
   }
 
   /**
-   * Reveal a thread inside the panel rather than sending the reader away for it.
+   * Read a thread inside the panel rather than sending the reader away for it.
+   *
+   * The panel's own pull request and issue readers show the thread, addressed by
+   * the repository and number the notification names.
    *
    * Opening a notification is reading it, which is why GitHub marks it read, so
    * the read is reported here the same way it is when the row opens github.com.
    */
-  function revealThread(item: GitHubNotification): void {
+  function openThreadInPanel(item: GitHubNotification): void {
     if (item.unread) void githubNotifications.markRead(item.id)
-    void githubNotifications.openSubject(item)
+    githubNotifications.openThread(item)
   }
 
   const rowTitleClass =
@@ -161,284 +160,265 @@
 </script>
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
-  {#if openItem}
-    <!--
-      Reading a thread happens here, the way a commit and a stash are read, with
-      the notification's own actions on the thread it names. The listing keeps its
-      own state, so Back returns to the same tab, filter and ordering.
-    -->
-    <GitNotificationDetail
-      item={openItem}
-      subject={githubNotifications.subject}
-      loading={githubNotifications.subjectLoading}
-      error={githubNotifications.subjectError}
-      busy={githubNotifications.busyThreadId === openItem.id}
-      onBack={() => githubNotifications.closeSubject()}
-      onToggleDone={() => void githubNotifications.setDone(openItem.id, !openItem.done)}
-      onToggleSaved={() => void githubNotifications.setSaved(openItem.id, !openItem.saved)}
-      onUnsubscribe={() => void githubNotifications.unsubscribe(openItem.id)}
-      onOpenInBrowser={() => openThread(openItem)}
-    />
-  {:else}
-    <!--
-      The listing: one row of the three views, the filter and ordering, then the
-      count. The listing's own actions (refresh, mark all read, settings) live in
-      the panel's header action group with every other view's actions. GitHub's
-      filters sit here rather than in the header because none of them describe the
-      repository the Git panel is standing in   notifications are account-wide.
-    -->
-    <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-      <div role="tablist" aria-label="Notification views" class="flex items-center gap-0.5">
-        {#each tabOptions as tab (tab.id)}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={githubNotifications.tab === tab.id}
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
-            tab.id
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:text-foreground'}"
-            title="Show {tab.label.toLowerCase()} notifications"
-            onclick={() => void githubNotifications.setTab(tab.id)}
-          >
-            {tab.label}
-            {#if tab.count > 0}
-              <span class="tabular-nums text-dimmed">{tab.count}</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-      <GitListOptionsMenu
-        filter={githubNotifications.filter}
-        sort={githubNotifications.sort}
-        {filterOptions}
-        {sortOptions}
-        onFilterChange={(next) => void githubNotifications.setFilter(next)}
-        onSortChange={(next) => githubNotifications.setSort(next)}
-        label="Filter and sort notifications"
-        current="{activeFilterLabel}, {activeSortLabel}"
-        narrowed={filterNarrowed || sortNarrowed}
-        showFilter={githubNotifications.tab === 'inbox'}
-      />
-      <GitNotificationsGroupMenu
-        group={githubNotifications.group}
-        onGroupChange={(next) => githubNotifications.setGroup(next)}
-      />
-      <span class="min-w-0 flex-1"></span>
-      <span
-        class="shrink-0 cursor-default text-[0.5625rem] tabular-nums text-dimmed"
-        title="Notifications shown in this view"
-      >
-        {githubNotifications.items.length}
-      </span>
-    </div>
+  <!--
+    The listing: one row of the three views, the filter and ordering, then the
+    count. The listing's own actions (refresh, mark all read, settings) live in
+    the panel's header action group with every other view's actions. GitHub's
+    filters sit here rather than in the header because none of them describe the
+    repository the Git panel is standing in: notifications are account-wide.
 
-    {#if githubNotifications.error}
-      <!--
+    A row opens its thread in the panel rather than on github.com: the panel's own
+    pull request and issue readers read it, in the repository the notification
+    names, and the panel's action row carries the notification's own actions.
+  -->
+  <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+    <div role="tablist" aria-label="Notification views" class="flex items-center gap-0.5">
+      {#each tabOptions as tab (tab.id)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={githubNotifications.tab === tab.id}
+          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
+          tab.id
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:text-foreground'}"
+          title="Show {tab.label.toLowerCase()} notifications"
+          onclick={() => void githubNotifications.setTab(tab.id)}
+        >
+          {tab.label}
+          {#if tab.count > 0}
+            <span class="tabular-nums text-dimmed">{tab.count}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+    <GitListOptionsMenu
+      filter={githubNotifications.filter}
+      sort={githubNotifications.sort}
+      {filterOptions}
+      {sortOptions}
+      onFilterChange={(next) => void githubNotifications.setFilter(next)}
+      onSortChange={(next) => githubNotifications.setSort(next)}
+      label="Filter and sort notifications"
+      current="{activeFilterLabel}, {activeSortLabel}"
+      narrowed={filterNarrowed || sortNarrowed}
+      showFilter={githubNotifications.tab === 'inbox'}
+    />
+    <GitNotificationsGroupMenu
+      group={githubNotifications.group}
+      onGroupChange={(next) => githubNotifications.setGroup(next)}
+    />
+    <span class="min-w-0 flex-1"></span>
+    <span
+      class="shrink-0 cursor-default text-[0.5625rem] tabular-nums text-dimmed"
+      title="Notifications shown in this view"
+    >
+      {githubNotifications.items.length}
+    </span>
+  </div>
+
+  {#if githubNotifications.error}
+    <!--
       A transient failure, in the strip every GitHub listing in the panel uses
       for one. Nothing here is actionable beyond trying again, and the panel's
       own Refresh reloads this listing, so no second control is repeated here.
     -->
-      <div
-        class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
-      >
-        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
-        <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
-      </div>
-    {/if}
+    <div
+      class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
+    >
+      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
+    </div>
+  {/if}
 
-    {#if !githubConnected}
-      <EmptyState
-        icon={Bell}
-        title="Sign in to GitHub"
-        description="Notifications belong to your GitHub account, so sign in to read and act on them here."
-      >
-        {#snippet action()}
-          <button
-            type="button"
-            class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
-            onclick={onSignIn}
-          >
-            Sign in
-          </button>
-        {/snippet}
-      </EmptyState>
-    {:else if githubNotifications.access}
-      <!--
-      A sign-in GitHub will not serve notifications to. It is actionable now that
-      the app signs in with an OAuth App: the grant needs the notifications
-      scope, and signing in again asks for it, so the panel offers the control
-      instead of only stating the cause.
-    -->
-      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <VendorIcon name="GitHub" size={20} class="text-dimmed" />
-        <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
-          {githubNotifications.access.message}
-        </p>
+  {#if !githubConnected}
+    <EmptyState
+      icon={Bell}
+      title="Sign in to GitHub"
+      description="Notifications belong to your GitHub account, so sign in to read and act on them here."
+    >
+      {#snippet action()}
         <button
           type="button"
           class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
           onclick={onSignIn}
         >
-          Sign in to GitHub
+          Sign in
         </button>
-      </div>
-    {:else if githubNotifications.loading && githubNotifications.items.length === 0}
-      <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
-        <Loader2 size={14} class="animate-spin" aria-hidden="true" />
-        Loading notifications
-      </div>
-    {:else if githubNotifications.items.length === 0}
-      <EmptyState
-        icon={Inbox}
-        title={githubNotifications.tab === 'saved'
-          ? 'Nothing saved'
-          : githubNotifications.tab === 'done'
-            ? 'Nothing marked done'
-            : 'Inbox zero'}
-        description={githubNotifications.tab === 'saved'
-          ? 'Save a notification from the inbox to keep it here.'
-          : githubNotifications.tab === 'done'
-            ? 'Notifications you mark as done are kept here so you can restore them.'
-            : 'No notifications match this view right now.'}
-      />
-    {:else}
-      <div class="min-h-0 flex-1 overflow-y-auto px-1 py-1">
-        {#each groups as group (group.label)}
-          <div class="mb-1">
-            <p
-              class="sticky top-0 z-10 bg-app px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+      {/snippet}
+    </EmptyState>
+  {:else if githubNotifications.access}
+    <!--
+      A sign-in GitHub will not serve notifications to. It is actionable now that
+      the app signs in with an OAuth App: the grant needs the notifications
+      scope, and signing in again asks for it, so the panel offers the control
+      instead of only stating the cause.
+    -->
+    <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <VendorIcon name="GitHub" size={20} class="text-dimmed" />
+      <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
+        {githubNotifications.access.message}
+      </p>
+      <button
+        type="button"
+        class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+        onclick={onSignIn}
+      >
+        Sign in to GitHub
+      </button>
+    </div>
+  {:else if githubNotifications.loading && githubNotifications.items.length === 0}
+    <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
+      <Loader2 size={14} class="animate-spin" aria-hidden="true" />
+      Loading notifications
+    </div>
+  {:else if githubNotifications.items.length === 0}
+    <EmptyState
+      icon={Inbox}
+      title={githubNotifications.tab === 'saved'
+        ? 'Nothing saved'
+        : githubNotifications.tab === 'done'
+          ? 'Nothing marked done'
+          : 'Inbox zero'}
+      description={githubNotifications.tab === 'saved'
+        ? 'Save a notification from the inbox to keep it here.'
+        : githubNotifications.tab === 'done'
+          ? 'Notifications you mark as done are kept here so you can restore them.'
+          : 'No notifications match this view right now.'}
+    />
+  {:else}
+    <div class="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+      {#each groups as group (group.label)}
+        <div class="mb-1">
+          <p
+            class="sticky top-0 z-10 bg-app px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+          >
+            {group.label}
+          </p>
+          {#each group.items as item (item.id)}
+            {@const SubjectIcon = subjectIcon(item.subjectType)}
+            <div
+              class="group relative flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
+                ? 'bg-primary/5'
+                : ''}"
+              data-notification-id={item.id}
             >
-              {group.label}
-            </p>
-            {#each group.items as item (item.id)}
-              {@const SubjectIcon = subjectIcon(item.subjectType)}
-              <div
-                class="group relative flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
-                  ? 'bg-primary/5'
-                  : ''}"
-                data-notification-id={item.id}
-              >
-                <span
-                  class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full {item.unread
-                    ? 'bg-primary'
-                    : 'bg-transparent'}"
-                  aria-hidden="true"
-                ></span>
-                {#if item.actorLogin}
-                  <span class="mt-0.5 shrink-0">
-                    <PrAvatar login={item.actorLogin} />
-                  </span>
-                {:else}
-                  <SubjectIcon size={13} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
-                {/if}
-                <div class="min-w-0 flex-1">
-                  <button
-                    type="button"
-                    class="{rowTitleClass} {item.unread
-                      ? 'font-medium text-foreground'
-                      : 'text-muted'} hover:text-primary"
-                    title={item.url ?? item.title}
-                    data-external-url={item.url ?? ''}
-                    onclick={() => revealThread(item)}
+              <span
+                class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full {item.unread
+                  ? 'bg-primary'
+                  : 'bg-transparent'}"
+                aria-hidden="true"
+              ></span>
+              {#if item.actorLogin}
+                <span class="mt-0.5 shrink-0">
+                  <PrAvatar login={item.actorLogin} />
+                </span>
+              {:else}
+                <SubjectIcon size={13} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+              {/if}
+              <div class="min-w-0 flex-1">
+                <button
+                  type="button"
+                  class="{rowTitleClass} {item.unread
+                    ? 'font-medium text-foreground'
+                    : 'text-muted'} hover:text-primary"
+                  title={item.url ?? item.title}
+                  data-external-url={item.url ?? ''}
+                  onclick={() => openThreadInPanel(item)}
+                >
+                  {item.title}
+                </button>
+                <div class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
+                  <span class="truncate">{item.repositoryFullName}</span>
+                  <span aria-hidden="true">·</span>
+                  <span class="shrink-0">{reasonLabel(item.reason)}</span>
+                  <span aria-hidden="true">·</span>
+                  <span class="shrink-0" title={item.updatedAt}>{relativeTime(item.updatedAt)}</span
                   >
-                    {item.title}
-                  </button>
-                  <div class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
-                    <span class="truncate">{item.repositoryFullName}</span>
-                    <span aria-hidden="true">·</span>
-                    <span class="shrink-0">{reasonLabel(item.reason)}</span>
-                    <span aria-hidden="true">·</span>
-                    <span class="shrink-0" title={item.updatedAt}
-                      >{relativeTime(item.updatedAt)}</span
-                    >
-                  </div>
                 </div>
-                <!--
+              </div>
+              <!--
                 The row's actions float over the right edge of the entry and only
                 on hover, the way every other row in the app shows its actions.
                 They reserve no width, so the title keeps the full row until they
                 are actually visible, and the left-to-right fade covers the text
                 they land on so the controls stay legible over it.
               -->
+              <span
+                class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-end bg-linear-to-l from-elevated from-65% to-transparent pl-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+              >
                 <span
-                  class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-end bg-linear-to-l from-elevated from-65% to-transparent pl-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+                  class="pointer-events-none flex items-center gap-0.5 group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
                 >
-                  <span
-                    class="pointer-events-none flex items-center gap-0.5 group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title={item.done ? 'Restore to inbox' : 'Mark as done'}
+                    aria-label={item.done
+                      ? 'Restore notification to inbox'
+                      : 'Mark notification as done'}
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.setDone(item.id, !item.done)}
                   >
-                    <button
-                      type="button"
-                      class={rowActionClass}
-                      title={item.done ? 'Restore to inbox' : 'Mark as done'}
-                      aria-label={item.done
-                        ? 'Restore notification to inbox'
-                        : 'Mark notification as done'}
-                      disabled={githubNotifications.busyThreadId === item.id}
-                      onclick={() => void githubNotifications.setDone(item.id, !item.done)}
-                    >
-                      {#if item.done}
-                        <ArchiveRestore size={13} aria-hidden="true" />
-                      {:else}
-                        <Archive size={13} aria-hidden="true" />
-                      {/if}
-                    </button>
-                    <button
-                      type="button"
-                      class={rowActionClass}
-                      title="Unsubscribe from this thread"
-                      aria-label="Unsubscribe from this notification thread"
-                      disabled={githubNotifications.busyThreadId === item.id}
-                      onclick={() => void githubNotifications.unsubscribe(item.id)}
-                    >
-                      <BellOff size={13} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      class={rowActionClass}
-                      title={item.saved ? 'Remove from saved' : 'Save notification'}
-                      aria-label={item.saved
-                        ? 'Remove notification from saved'
-                        : 'Save notification'}
-                      disabled={githubNotifications.busyThreadId === item.id}
-                      onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
-                    >
-                      {#if item.saved}
-                        <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
-                      {:else}
-                        <Bookmark size={13} aria-hidden="true" />
-                      {/if}
-                    </button>
-                    <button
-                      type="button"
-                      class={rowActionClass}
-                      title="Open on GitHub"
-                      aria-label="Open notification on GitHub"
-                      data-external-url={item.url ?? ''}
-                      onclick={() => openThread(item)}
-                    >
-                      <ExternalLink size={13} aria-hidden="true" />
-                    </button>
-                  </span>
+                    {#if item.done}
+                      <ArchiveRestore size={13} aria-hidden="true" />
+                    {:else}
+                      <Archive size={13} aria-hidden="true" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title="Unsubscribe from this thread"
+                    aria-label="Unsubscribe from this notification thread"
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.unsubscribe(item.id)}
+                  >
+                    <BellOff size={13} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title={item.saved ? 'Remove from saved' : 'Save notification'}
+                    aria-label={item.saved ? 'Remove notification from saved' : 'Save notification'}
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
+                  >
+                    {#if item.saved}
+                      <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
+                    {:else}
+                      <Bookmark size={13} aria-hidden="true" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title="Open on GitHub"
+                    aria-label="Open notification on GitHub"
+                    data-external-url={item.url ?? ''}
+                    onclick={() => openOnGitHub(item)}
+                  >
+                    <ExternalLink size={13} aria-hidden="true" />
+                  </button>
                 </span>
-              </div>
-            {/each}
-          </div>
-        {/each}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/each}
 
-        {#if githubNotifications.tab === 'inbox' && githubNotifications.hasMore}
-          <div class="flex justify-center px-2 py-2">
-            <button
-              type="button"
-              class="cursor-pointer rounded-md border border-border px-3 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-              disabled={githubNotifications.loadingMore}
-              onclick={() => void githubNotifications.loadMore()}
-            >
-              {githubNotifications.loadingMore ? 'Loading' : 'Load more'}
-            </button>
-          </div>
-        {/if}
-      </div>
-    {/if}
+      {#if githubNotifications.tab === 'inbox' && githubNotifications.hasMore}
+        <div class="flex justify-center px-2 py-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-md border border-border px-3 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            disabled={githubNotifications.loadingMore}
+            onclick={() => void githubNotifications.loadMore()}
+          >
+            {githubNotifications.loadingMore ? 'Loading' : 'Load more'}
+          </button>
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>

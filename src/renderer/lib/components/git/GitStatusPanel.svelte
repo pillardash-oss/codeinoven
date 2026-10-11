@@ -48,10 +48,14 @@
   } from '$shared/types'
   import {
     Archive,
+    ArchiveRestore,
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
     Bell,
+    BellOff,
+    Bookmark,
+    BookmarkCheck,
     Bot,
     Check,
     CheckCheck,
@@ -112,6 +116,7 @@
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitIssuesView from './GitIssuesView.svelte'
+  import GitIssueReader from './GitIssueReader.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import PrBatchDialog from './PrBatchDialog.svelte'
@@ -131,6 +136,15 @@
   import PrIdentityRow from './PrIdentityRow.svelte'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
+  import EmptyState from '../ui/EmptyState.svelte'
+  import {
+    notificationIssueSummary,
+    notificationPullRequestSummary,
+    notificationTargetFor,
+    reasonLabel,
+    subjectIcon,
+    subjectKindLabel
+  } from './notification-view'
 
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -147,6 +161,7 @@
     PrListSort,
     PrMergeMethod,
     PrState,
+    PullRequestBundle,
     PullRequestSummary
   } from '$shared/types'
 
@@ -744,13 +759,15 @@
 
   /** Adopt a GitHub status, and the active account's data with it. */
   async function applyGitHubStatus(status: GitHubAuthStatus): Promise<void> {
+    const previousAccountId = githubStatus?.activeAccountId ?? null
     githubStatus = status
     // Notifications are account-wide, so they are the one view whose data belongs
     // to the account rather than to the repository the panel is standing in. A
     // view that was never opened is left alone: it loads when it is opened.
-    // The open thread is closed first: it was read as the account that just
-    // signed out, switched or signed in, and this status is what changed that.
-    githubNotifications.closeSubject()
+    // An open thread was read as the account that just left, so a different
+    // account closes it; the same account signing in again keeps it, which is
+    // what an unchecked remount does when the sidebar is hidden and shown.
+    if (previousAccountId !== status.activeAccountId) githubNotifications.closeNotification()
     if (githubNotifications.hasLoaded) await githubNotifications.load()
   }
 
@@ -1792,35 +1809,125 @@
     return { url: `${repository}/actions`, title: 'View these workflow runs on GitHub' }
   })
   /**
+   * The notification the Notifications view has open, and what it points at.
+   *
+   * A notification names a thread by repository and number, which is exactly how
+   * the panel's own pull request and issue readers address one, so what is open
+   * here is read by those readers rather than by a surface built for
+   * notifications alone. The thread's repository need not be the one the panel is
+   * standing in, which is why the readers are handed their own identity.
+   */
+  const openNotification = $derived(githubNotifications.openNotification)
+  const notificationTarget = $derived(
+    openNotification ? notificationTargetFor(openNotification) : null
+  )
+  const notificationIdentity = $derived(
+    notificationTarget ? { owner: notificationTarget.owner, repo: notificationTarget.repo } : null
+  )
+  const notificationPullRequest = $derived(
+    openNotification && notificationTarget?.kind === 'pull-request'
+      ? notificationPullRequestSummary(openNotification, notificationTarget)
+      : null
+  )
+  const notificationIssue = $derived(
+    openNotification && notificationTarget?.kind === 'issue'
+      ? notificationIssueSummary(openNotification, notificationTarget)
+      : null
+  )
+  const notificationBundle = $derived(
+    pullRequestBundleFor(notificationIdentity, notificationPullRequest)
+  )
+  const notificationPrDetailViews = $derived(
+    prDetailViewsFor(notificationBundle, notificationPullRequest)
+  )
+  /**
    * The reader's views with their counts, for the switcher in the action row. The
    * counts come from the same bundle the reader renders, so the switcher and the
    * rail agree.
    */
   const prDetailViews = $derived(
-    PR_DETAIL_VIEWS.map((view) => ({
-      ...view,
-      count: prViewCount(
-        view.id,
-        pullRequestBundle,
-        selectedPullRequest
-          ? (gitState.prAgentReports[String(selectedPullRequest.number)]?.length ?? 0)
-          : 0
-      )
-    }))
+    prDetailViewsFor(pullRequestBundleFor(githubIdentity, selectedPullRequest), selectedPullRequest)
   )
-
   /**
    * The open pull request's fetched record. The reader reads the same bundle
    * from the store, so the panel's identity row and its pills cannot show one
    * thing while the reader shows another.
    */
-  const pullRequestBundle = $derived(
-    githubIdentity && selectedPullRequest
-      ? gitState.prBundles[
-          GitState.bundleKey(githubIdentity.owner, githubIdentity.repo, selectedPullRequest.number)
-        ]
+  const pullRequestBundle = $derived(pullRequestBundleFor(githubIdentity, selectedPullRequest))
+  /** Whether a notification action is in flight, so its controls can hold still. */
+  const notificationBusy = $derived(githubNotifications.busyThreadId !== null)
+  /** The notification action style, shared by the header group's controls. */
+  const notificationActionClass =
+    'flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
+
+  function prDetailViewsFor(
+    bundle: PullRequestBundle | undefined,
+    summary: PullRequestSummary | null
+  ) {
+    return PR_DETAIL_VIEWS.map((view) => ({
+      ...view,
+      count: prViewCount(
+        view.id,
+        bundle,
+        summary ? (gitState.prAgentReports[String(summary.number)]?.length ?? 0) : 0
+      )
+    }))
+  }
+
+  /**
+   * One pull request's fetched record, for whoever is reading it.
+   *
+   * A function rather than a second derived value because two readers ask for it:
+   * the Pulls view for the pull request it has open, and the Notifications view for
+   * the one a notification names, which lives in the repository the notification
+   * came from. The store keys bundles by repository and number, so the same call
+   * serves both.
+   */
+  function pullRequestBundleFor(
+    identity: { owner: string; repo: string } | null,
+    summary: PullRequestSummary | null
+  ): PullRequestBundle | undefined {
+    return identity && summary
+      ? gitState.prBundles[GitState.bundleKey(identity.owner, identity.repo, summary.number)]
       : undefined
-  )
+  }
+
+  /**
+   * Whether a repository is the one this panel stands in.
+   *
+   * The panel's own operations   checking a pull request out to resolve it here,
+   * reading one of its commits, revealing one of its workflow runs   all act on the
+   * local checkout, so a thread from anywhere else takes the github.com route
+   * instead of pointing the local view at somebody else's repository.
+   */
+  function isPanelRepository(identity: { owner: string; repo: string } | null): boolean {
+    return (
+      identity !== null &&
+      githubIdentity !== null &&
+      identity.owner === githubIdentity.owner &&
+      identity.repo === githubIdentity.repo
+    )
+  }
+
+  /** Reveal a check's workflow run: here for the panel's repository, there for any other. */
+  function openWorkflowRunFor(identity: { owner: string; repo: string }, runId: number): void {
+    if (isPanelRepository(identity)) {
+      openWorkflowRunFromCheck(runId)
+      return
+    }
+    void openInBrowser(
+      `https://github.com/${identity.owner}/${identity.repo}/actions/runs/${runId}`
+    )
+  }
+
+  /** Open a commit a thread names: in the panel's own history, or on github.com. */
+  function openCommitFor(identity: { owner: string; repo: string }, hash: string): void {
+    if (isPanelRepository(identity)) {
+      void openCommitByHash(hash)
+      return
+    }
+    void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/commit/${hash}`)
+  }
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
@@ -1965,6 +2072,7 @@
     (activeTab === 'changes' &&
       (selectedCommit !== null || (status !== null && showsStageControls))) ||
       (activeTab === 'pulls' && githubConnected && githubIdentity !== null) ||
+      (activeTab === 'notifications' && openNotification !== null) ||
       (activeTab === 'deployments' && (selectedDeployment !== null || selectedRun !== null)) ||
       (activeTab === 'stashes' && selectedStash !== null)
   )
@@ -2896,29 +3004,90 @@
       <ExternalLink size={12} aria-hidden="true" />
     </button>
   {:else if activeTab === 'notifications'}
-    <button
-      type="button"
-      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-      title="Mark all notifications as read"
-      aria-label="Mark all notifications as read"
-      disabled={!githubConnected ||
-        githubNotifications.tab !== 'inbox' ||
-        githubNotifications.busyThreadId !== null}
-      onclick={() => void githubNotifications.markAllRead()}
-    >
-      <CheckCheck size={12} aria-hidden="true" />
-      <span class="view-action-label">Mark all read</span>
-    </button>
-    <button
-      type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open GitHub notification settings"
-      aria-label="Open GitHub notification settings"
-      data-external-url={githubNotificationSettingsUrl()}
-      onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
-    >
-      <Settings size={12} aria-hidden="true" />
-    </button>
+    {#if openNotification}
+      <!--
+        The actions the notification itself offers, in the header's action group
+        where every other view keeps its own. Opening a notification marks it
+        read, which is what github.com does too, so there is no read action here:
+        there would be nothing left for it to do by the time it could be pressed.
+      -->
+      <button
+        type="button"
+        class={notificationActionClass}
+        title={openNotification.done ? 'Restore to inbox' : 'Mark as done'}
+        aria-label={openNotification.done
+          ? 'Restore notification to inbox'
+          : 'Mark notification as done'}
+        disabled={notificationBusy}
+        onclick={() =>
+          void githubNotifications.setDone(openNotification.id, !openNotification?.done)}
+      >
+        {#if openNotification.done}
+          <ArchiveRestore size={12} aria-hidden="true" />
+        {:else}
+          <Archive size={12} aria-hidden="true" />
+        {/if}
+      </button>
+      <button
+        type="button"
+        class={notificationActionClass}
+        title="Unsubscribe from this thread"
+        aria-label="Unsubscribe from this notification thread"
+        disabled={notificationBusy}
+        onclick={() => void githubNotifications.unsubscribe(openNotification.id)}
+      >
+        <BellOff size={12} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class={notificationActionClass}
+        title={openNotification.saved ? 'Remove from saved' : 'Save notification'}
+        aria-label={openNotification.saved ? 'Remove notification from saved' : 'Save notification'}
+        disabled={notificationBusy}
+        onclick={() =>
+          void githubNotifications.setSaved(openNotification.id, !openNotification?.saved)}
+      >
+        {#if openNotification.saved}
+          <BookmarkCheck size={12} class="text-primary" aria-hidden="true" />
+        {:else}
+          <Bookmark size={12} aria-hidden="true" />
+        {/if}
+      </button>
+      <button
+        type="button"
+        class={notificationActionClass}
+        title="Open on GitHub"
+        aria-label="Open notification on GitHub"
+        data-external-url={openNotification.url ?? ''}
+        onclick={() => void openInBrowser(openNotification?.url ?? '')}
+      >
+        <ExternalLink size={12} aria-hidden="true" />
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title="Mark all notifications as read"
+        aria-label="Mark all notifications as read"
+        disabled={!githubConnected ||
+          githubNotifications.tab !== 'inbox' ||
+          githubNotifications.busyThreadId !== null}
+        onclick={() => void githubNotifications.markAllRead()}
+      >
+        <CheckCheck size={12} aria-hidden="true" />
+        <span class="view-action-label">Mark all read</span>
+      </button>
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open GitHub notification settings"
+        aria-label="Open GitHub notification settings"
+        data-external-url={githubNotificationSettingsUrl()}
+        onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
+      >
+        <Settings size={12} aria-hidden="true" />
+      </button>
+    {/if}
   {/if}
 {/snippet}
 
@@ -3348,6 +3517,62 @@
         <span class="shrink-0">{relativeTime(stash.date)}</span>
       </div>
     </div>
+  {:else if activeTab === 'notifications' && openNotification}
+    <!--
+      Reading a notification: back to the listing, what thread this is, and   for
+      a pull request or an issue   which part of it you are reading. The
+      notification's own actions are in the header's action group, where every
+      other view's live.
+    -->
+    {@const NotificationIcon = subjectIcon(openNotification.subjectType)}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to notifications"
+      aria-label="Back to notifications"
+      onclick={() => githubNotifications.closeNotification()}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <span
+      class="flex size-5 shrink-0 items-center justify-center rounded {openNotification.unread
+        ? 'text-primary'
+        : 'text-dimmed'}"
+      role="img"
+      title={openNotification.unread ? 'Unread notification' : 'Read notification'}
+      aria-label={openNotification.unread ? 'Unread notification' : 'Read notification'}
+    >
+      <NotificationIcon size={13} />
+    </span>
+    <div class="min-w-0 grow-2 basis-0">
+      <p
+        class="truncate text-[0.6875rem] font-medium text-foreground"
+        title={openNotification.title}
+      >
+        {openNotification.title}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate">{openNotification.repositoryFullName}</span>
+        <span>·</span>
+        <span class="shrink-0">{reasonLabel(openNotification.reason)}</span>
+        <span>·</span>
+        <span class="shrink-0" title={openNotification.updatedAt}>
+          {relativeTime(Date.parse(openNotification.updatedAt))}
+        </span>
+      </div>
+    </div>
+    {#if notificationPullRequest}
+      <!--
+        Which part of the thread is being read, exactly as the Pulls view offers
+        it: a pull request's conversation, changes, checks and commits are the
+        reason to read one, and none of them is reachable without this.
+      -->
+      <PrViewSwitcher
+        views={notificationPrDetailViews}
+        active={prDetailTab}
+        onSelect={(id) => (prDetailTab = id)}
+      />
+    {/if}
   {:else if activeTab === 'pulls'}
     {#if selectedPullRequest && githubIdentity}
       <PrIdentityRow
@@ -3471,6 +3696,36 @@
     onCopyHash={() => void copyCommitHash(commit)}
     onCopyMessage={() => void copyCommitMessage(commit)}
     onShowInfo={() => (commitInfoTarget = commit)}
+  />
+{/snippet}
+
+/** * The pull request reader, for whoever is reading one. * * The Pulls view reads the pull request
+it has selected; the Notifications view * reads the one a notification names. One snippet, because a
+reader that draws * itself twice is a reader whose two copies drift apart. */
+{#snippet pullRequestReader(
+  readerIdentity: { owner: string; repo: string },
+  summary: PullRequestSummary,
+  onBack: () => void,
+  fullscreen: (() => void) | undefined
+)}
+  <GitPullRequestDetail
+    {projectId}
+    {threadId}
+    identity={readerIdentity}
+    {summary}
+    bind:tab={prDetailTab}
+    {onBack}
+    onFullscreen={fullscreen}
+    onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+    onOpenThread={(id) => void openAgentThread(id)}
+    onOpenWorkflowRun={(runId) => openWorkflowRunFor(readerIdentity, runId)}
+    onOpenCommit={(hash) => openCommitFor(readerIdentity, hash)}
+    onResolveLocally={isPanelRepository(readerIdentity)
+      ? (pr) => void resolveConflictsLocally(pr)
+      : undefined}
+    onResolveWithAgent={isPanelRepository(readerIdentity)
+      ? (pr) => startConflictResolution(pr)
+      : undefined}
   />
 {/snippet}
 
@@ -3903,21 +4158,12 @@
         {:else if activeTab === 'pulls'}
           <div class="h-full min-h-0">
             {#if selectedPullRequest && githubIdentity}
-              <GitPullRequestDetail
-                {projectId}
-                {threadId}
-                identity={githubIdentity}
-                summary={selectedPullRequest}
-                bind:tab={prDetailTab}
-                onBack={() => (selectedPullRequest = null)}
-                onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
-                onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
-                onOpenThread={(threadId) => void openAgentThread(threadId)}
-                onOpenWorkflowRun={openWorkflowRunFromCheck}
-                onOpenCommit={(hash) => void openCommitByHash(hash)}
-                onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
-                onResolveWithAgent={(pr) => void startConflictResolution(pr)}
-              />
+              {@render pullRequestReader(
+                githubIdentity,
+                selectedPullRequest,
+                () => (selectedPullRequest = null),
+                () => openPullRequestFullscreen(selectedPullRequest)
+              )}
             {:else}
               <!--
               The panel draws the filter and the actions for this list in its own
@@ -3960,7 +4206,51 @@
           </div>
         {:else if activeTab === 'notifications'}
           <div class="h-full min-h-0">
-            <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
+            {#if openNotification && notificationPullRequest && notificationIdentity}
+              {@render pullRequestReader(
+                notificationIdentity,
+                notificationPullRequest,
+                () => githubNotifications.closeNotification(),
+                undefined
+              )}
+            {:else if openNotification && notificationIssue && notificationIdentity}
+              <GitIssueReader
+                {projectId}
+                {threadId}
+                {scopeBucketId}
+                identity={notificationIdentity}
+                issue={notificationIssue}
+                localRepository={isPanelRepository(notificationIdentity)}
+                onOpenCommit={(hash) => openCommitFor(notificationIdentity, hash)}
+              />
+            {:else if openNotification}
+              <!--
+                A kind the panel reads nowhere else: a commit, a release, a
+                discussion, an alert. The notification's own facts are in the
+                action row above, so this names what kind it is and leaves the
+                thread itself to github.com rather than inventing a reader for it.
+              -->
+              <EmptyState
+                icon={subjectIcon(openNotification.subjectType)}
+                title={openNotification.title}
+                description="The panel reads pull requests and issues in place. This is a {subjectKindLabel(
+                  openNotification.subjectType
+                ).toLowerCase()}, which GitHub serves on github.com."
+              >
+                {#snippet action()}
+                  <button
+                    type="button"
+                    class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+                    data-external-url={openNotification.url ?? ''}
+                    onclick={() => void openInBrowser(openNotification?.url ?? '')}
+                  >
+                    Open on GitHub
+                  </button>
+                {/snippet}
+              </EmptyState>
+            {:else}
+              <GitNotificationsPanel {githubConnected} onSignIn={() => githubSignIn.start()} />
+            {/if}
           </div>
         {:else if activeTab === 'deployments'}
           <GitDeploymentsMonitor

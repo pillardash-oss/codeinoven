@@ -16,8 +16,6 @@ import type {
   GitHubMutationResult,
   GitHubNotificationPageInput,
   GitHubNotificationPageResult,
-  GitHubNotificationSubject,
-  GitHubNotificationSubjectRequest,
   GitHubNotificationTabCounts,
   GitHubPollResult,
   GitHubWorkflowRunDetail,
@@ -1008,13 +1006,5 @@ export const invokeGitContract = {
   'githubNotification:setDone': {} as Contract<
     [threadId: string, done: boolean],
     GitHubNotificationTabCounts
-  >,
-  /**
-   * The thread a notification points at, so the panel reads it in place rather
-   * than sending the reader to github.com for it.
-   */
-  'githubNotification:subject': {} as Contract<
-    [request: GitHubNotificationSubjectRequest],
-    GitHubNotificationSubject
   >
 }
