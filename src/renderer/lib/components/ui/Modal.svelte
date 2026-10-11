@@ -372,15 +372,32 @@
     })
   })
 
-  function focusInitialElement(event: Event) {
+  // The DOM panel becomes the presentation whenever the native host cannot draw
+  // the dialog   the common case being a native dialog whose content changed
+  // into something the projection refuses. bits-ui's open-autofocus ran once,
+  // when the dialog first opened, so a handover would otherwise leave the panel
+  // on screen with nothing focused and the user reaching for the mouse. Focus
+  // the initial element here, but only when nothing inside the panel already
+  // holds it, so a user who tabbed to a control keeps it.
+  $effect(() => {
+    if (!open || !domPresented || !panelPresent) return
+    const panel = panelEl
+    if (!panel || panel.contains(document.activeElement)) return
+    focusPrimary(panel)
+  })
+
+  function focusPrimary(panel: HTMLElement): void {
     // Own the initial focus (input field, else the primary action) instead
     // of bits-ui's default of focusing the panel itself.
-    event.preventDefault()
-    if (!panelEl) return
-    if (claimInitialFocus?.(panelEl)) return
-    const inputField = firstTextField(panelEl)
-    const defaultAction = findPanelPrimaryAction(panelEl)
+    if (claimInitialFocus?.(panel)) return
+    const inputField = firstTextField(panel)
+    const defaultAction = findPanelPrimaryAction(panel)
     ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
+  }
+
+  function focusInitialElement(event: Event) {
+    event.preventDefault()
+    if (panelEl) focusPrimary(panelEl)
   }
 
   function firstTextField(panel: HTMLElement): HTMLElement | undefined {

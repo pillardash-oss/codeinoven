@@ -1064,6 +1064,19 @@ export class BrowserService {
     await this.tabHistory.flush()
   }
 
+  /**
+   * Load the overlay document once and keep it for the session.
+   *
+   * Called after the primary window is up: the first modal, switcher or toast of
+   * a session then draws into a document that is already loaded, instead of
+   * paying its load on the gesture that asks for it   and, past the
+   * acknowledgement deadline, falling back to the app window's DOM, which hides
+   * the browser behind it.
+   */
+  warmOverlay(): void {
+    this.overlay.warmForSession()
+  }
+
   register(): void {
     this.guardAgainstStrandedView()
     // The page-tabs preload is asked for on every document an extension surface

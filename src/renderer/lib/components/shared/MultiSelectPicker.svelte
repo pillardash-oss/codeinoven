@@ -23,6 +23,18 @@
     disabled?: boolean
     /** Custom trigger; receives the currently selected options. */
     trigger?: Snippet<[MultiSelectOption[]]>
+    /**
+     * Toggle the choices directly in the owning panel instead of behind a
+     * popup.
+     *
+     * A popup lives in the app window's DOM, which the browser's native page
+     * view composites over, so a dialog drawn natively cannot own one: the
+     * projection refuses the whole panel rather than half-draw it. A screen
+     * whose filter is inline carries no popup, so the screen stays native and
+     * nothing has to hand back to the DOM. The compact row is also what the
+     * dialog footer has room for.
+     */
+    inline?: boolean
   }
 
   let {
@@ -39,7 +51,8 @@
     searchPlaceholder = 'Search…',
     emptyMessage = 'No matching options',
     disabled = false,
-    trigger
+    trigger,
+    inline = false
   }: Props = $props()
 
   let search = $state('')
@@ -71,148 +84,200 @@
   }
 </script>
 
-<DropdownMenu.Root
-  onOpenChange={(open) => {
-    if (open) search = ''
-  }}
->
-  <DropdownMenu.Trigger
-    class={trigger
-      ? `flex items-center justify-center rounded transition-colors hover:bg-elevated focus:outline-none ${className}`
-      : compact
-        ? `flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
-        : `flex w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+{#if inline}
+  <div
+    class="flex min-w-0 items-center gap-1 overflow-x-auto {className}"
+    role="group"
     aria-label={ariaLabel}
-    title={ariaLabel}
-    {disabled}
   >
-    {#if trigger}
-      {@render trigger(selectedOptions)}
-    {:else}
-      <span class="flex -space-x-1.5" aria-hidden="true">
-        {#each selectedOptions.slice(0, 3) as option (option.id)}
-          <span
-            class="flex h-5 w-5 items-center justify-center overflow-hidden rounded border bg-raised text-dimmed"
-            style:border-color={option.color}
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center rounded-md border px-1.5 text-[0.625rem] font-medium transition-colors {selectedIds.length ===
+      0
+        ? 'border-border-strong bg-elevated text-foreground'
+        : 'border-border text-dimmed hover:bg-elevated hover:text-foreground'}"
+      aria-pressed={selectedIds.length === 0}
+      title={allLabel}
+      {disabled}
+      onclick={() => onSelectionChange([])}
+    >
+      {allLabel}
+    </button>
+    {#each options as option (option.id)}
+      <button
+        type="button"
+        class="flex h-6 max-w-28 shrink-0 items-center gap-1 rounded-md border px-1.5 text-[0.625rem] font-medium transition-colors {selectedIdSet.has(
+          option.id
+        )
+          ? 'border-border-strong bg-elevated text-foreground'
+          : 'border-border text-dimmed hover:bg-elevated hover:text-foreground'}"
+        aria-pressed={selectedIdSet.has(option.id)}
+        title={option.description ?? option.label}
+        {disabled}
+        onclick={() => toggle(option.id)}
+      >
+        {#if option.iconUrl}
+          <img
+            src={option.iconUrl}
+            alt=""
+            class="h-3 w-3 shrink-0 rounded object-contain"
+            onerror={hideBrokenIcon}
+          />
+        {:else if option.icon}
+          {@const Icon = option.icon}
+          <Icon size={11} class="shrink-0" />
+        {:else if option.color}
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full" style:background-color={option.color}
+          ></span>
+        {/if}
+        <span class="truncate">{option.label}</span>
+      </button>
+    {/each}
+  </div>
+{:else}
+  <DropdownMenu.Root
+    onOpenChange={(open) => {
+      if (open) search = ''
+    }}
+  >
+    <DropdownMenu.Trigger
+      class={trigger
+        ? `flex items-center justify-center rounded transition-colors hover:bg-elevated focus:outline-none ${className}`
+        : compact
+          ? `flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
+          : `flex w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      {disabled}
+    >
+      {#if trigger}
+        {@render trigger(selectedOptions)}
+      {:else}
+        <span class="flex -space-x-1.5" aria-hidden="true">
+          {#each selectedOptions.slice(0, 3) as option (option.id)}
+            <span
+              class="flex h-5 w-5 items-center justify-center overflow-hidden rounded border bg-raised text-dimmed"
+              style:border-color={option.color}
+            >
+              {#if option.iconUrl}
+                <img
+                  src={option.iconUrl}
+                  alt=""
+                  class="h-3.5 w-3.5 object-contain"
+                  onerror={hideBrokenIcon}
+                />
+              {:else if option.icon}
+                {@const Icon = option.icon}
+                <Icon size={11} />
+              {:else}
+                <span
+                  class="h-2 w-2 rounded-full"
+                  style:background-color={option.color ?? 'currentColor'}
+                ></span>
+              {/if}
+            </span>
+          {/each}
+          {#if selectedOptions.length === 0}
+            <span
+              class="flex h-5 w-5 items-center justify-center rounded border bg-raised text-dimmed"
+            >
+              <ListFilter size={11} />
+            </span>
+          {/if}
+        </span>
+        <span class="min-w-0 flex-1 truncate">
+          {selectedOptions.length === 0 ? allLabel : `${selectedOptions.length} selected`}
+        </span>
+        <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
+      {/if}
+    </DropdownMenu.Trigger>
+
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        {side}
+        {align}
+        {sideOffset}
+        class="z-60 min-w-64 rounded-xl border border-border bg-surface p-1 shadow-lg"
+      >
+        <div class="relative mx-1 mb-1 mt-0.5">
+          <input
+            type="text"
+            placeholder={searchPlaceholder}
+            bind:value={search}
+            class="w-full rounded-md border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
+            onclick={(event: MouseEvent) => event.stopPropagation()}
+            onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+          />
+          <Search
+            size={12}
+            class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
+          />
+        </div>
+
+        <DropdownMenu.Item
+          class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+          textValue={allLabel}
+          onSelect={(event) => {
+            event.preventDefault()
+            onSelectionChange([])
+          }}
+        >
+          <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
+          {#if selectedIds.length === 0}
+            <Check size={12} class="shrink-0 text-primary" />
+          {/if}
+        </DropdownMenu.Item>
+        <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
+
+        {#each filteredOptions as option (option.id)}
+          <DropdownMenu.Item
+            class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+            textValue={option.label}
+            title={option.description ?? option.label}
+            onSelect={(event) => {
+              event.preventDefault()
+              toggle(option.id)
+            }}
           >
+            {#if option.color}
+              <span
+                class="w-0.5 shrink-0 self-stretch rounded-full"
+                style:background-color={option.color}
+              ></span>
+            {/if}
             {#if option.iconUrl}
               <img
                 src={option.iconUrl}
                 alt=""
-                class="h-3.5 w-3.5 object-contain"
+                class="h-4 w-4 shrink-0 rounded object-contain"
                 onerror={hideBrokenIcon}
               />
             {:else if option.icon}
               {@const Icon = option.icon}
-              <Icon size={11} />
-            {:else}
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center text-dimmed">
+                <Icon size={14} />
+              </span>
+            {/if}
+            <span class="flex min-w-0 flex-1 flex-col">
               <span
-                class="h-2 w-2 rounded-full"
-                style:background-color={option.color ?? 'currentColor'}
-              ></span>
-            {/if}
-          </span>
-        {/each}
-        {#if selectedOptions.length === 0}
-          <span
-            class="flex h-5 w-5 items-center justify-center rounded border bg-raised text-dimmed"
-          >
-            <ListFilter size={11} />
-          </span>
-        {/if}
-      </span>
-      <span class="min-w-0 flex-1 truncate">
-        {selectedOptions.length === 0 ? allLabel : `${selectedOptions.length} selected`}
-      </span>
-      <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
-    {/if}
-  </DropdownMenu.Trigger>
-
-  <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      {side}
-      {align}
-      {sideOffset}
-      class="z-60 min-w-64 rounded-xl border border-border bg-surface p-1 shadow-lg"
-    >
-      <div class="relative mx-1 mb-1 mt-0.5">
-        <input
-          type="text"
-          placeholder={searchPlaceholder}
-          bind:value={search}
-          class="w-full rounded-md border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
-          onclick={(event: MouseEvent) => event.stopPropagation()}
-          onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-        />
-        <Search
-          size={12}
-          class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
-        />
-      </div>
-
-      <DropdownMenu.Item
-        class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-        textValue={allLabel}
-        onSelect={(event) => {
-          event.preventDefault()
-          onSelectionChange([])
-        }}
-      >
-        <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
-        {#if selectedIds.length === 0}
-          <Check size={12} class="shrink-0 text-primary" />
-        {/if}
-      </DropdownMenu.Item>
-      <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
-
-      {#each filteredOptions as option (option.id)}
-        <DropdownMenu.Item
-          class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-          textValue={option.label}
-          title={option.description ?? option.label}
-          onSelect={(event) => {
-            event.preventDefault()
-            toggle(option.id)
-          }}
-        >
-          {#if option.color}
-            <span
-              class="w-0.5 shrink-0 self-stretch rounded-full"
-              style:background-color={option.color}
-            ></span>
-          {/if}
-          {#if option.iconUrl}
-            <img
-              src={option.iconUrl}
-              alt=""
-              class="h-4 w-4 shrink-0 rounded object-contain"
-              onerror={hideBrokenIcon}
-            />
-          {:else if option.icon}
-            {@const Icon = option.icon}
-            <span class="flex h-4 w-4 shrink-0 items-center justify-center text-dimmed">
-              <Icon size={14} />
+                class="truncate text-xs {selectedIdSet.has(option.id)
+                  ? 'font-medium text-foreground'
+                  : 'text-muted'}">{option.label}</span
+              >
+              {#if option.description}
+                <span class="truncate text-[0.6875rem] text-dimmed">{option.description}</span>
+              {/if}
             </span>
-          {/if}
-          <span class="flex min-w-0 flex-1 flex-col">
-            <span
-              class="truncate text-xs {selectedIdSet.has(option.id)
-                ? 'font-medium text-foreground'
-                : 'text-muted'}">{option.label}</span
-            >
-            {#if option.description}
-              <span class="truncate text-[0.6875rem] text-dimmed">{option.description}</span>
+            {#if selectedIdSet.has(option.id)}
+              <Check size={12} class="shrink-0 text-primary" />
             {/if}
-          </span>
-          {#if selectedIdSet.has(option.id)}
-            <Check size={12} class="shrink-0 text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-      {/each}
+          </DropdownMenu.Item>
+        {/each}
 
-      {#if filteredOptions.length === 0}
-        <p class="px-3 py-5 text-center text-xs text-dimmed">{emptyMessage}</p>
-      {/if}
-    </DropdownMenu.Content>
-  </DropdownMenu.Portal>
-</DropdownMenu.Root>
+        {#if filteredOptions.length === 0}
+          <p class="px-3 py-5 text-center text-xs text-dimmed">{emptyMessage}</p>
+        {/if}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
+{/if}

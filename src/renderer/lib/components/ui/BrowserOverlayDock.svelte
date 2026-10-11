@@ -132,7 +132,19 @@
    * key window, so a panel with no control at all still receives its shortcuts.
    */
   function focusPanel(element: HTMLElement): void {
-    if (element.contains(document.activeElement)) return
+    // Only an identified control counts as the focused one. The viewport root
+    // and the document body are reachable through the panel but answer nothing,
+    // and treating them as "already focused" is what left a redrawn panel with
+    // no caret and a dead keyboard.
+    const active = document.activeElement
+    if (
+      active instanceof Element &&
+      element.contains(active) &&
+      active.closest(
+        '[data-native-dock-field], [data-native-dock-action], [data-native-dock-focus-key]'
+      )
+    )
+      return
     const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       '[data-native-dock-focus], input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])'
     )

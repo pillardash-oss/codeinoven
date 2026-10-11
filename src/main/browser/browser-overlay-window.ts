@@ -103,6 +103,17 @@ export class BrowserOverlayWindow {
    * is what the user watches as a blank frame before the panel arrives.
    */
   private warm = false
+  /**
+   * Loaded for the whole session, from the moment the window is up.
+   *
+   * A modal, the switcher or a toast is opened and closed throughout a session,
+   * and a document that has to load on the gesture that asks for it is what the
+   * user watches as a blank frame    or, past the acknowledgement deadline, as
+   * a fall back to the app window's DOM, which hides the browser behind it.
+   * Loading once at boot costs one renderer and removes that wait from every
+   * later open.
+   */
+  private sessionWarm = false
   /** The pending idle teardown, armed while nothing is drawing in the window. */
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   /** Tracked rather than read back, because the toggle is only ever a change. */
@@ -117,7 +128,39 @@ export class BrowserOverlayWindow {
     private readonly parent: BrowserWindow,
     private readonly preloadPath: string = resolveChildWindowPreload(),
     private readonly onModalHostChanged: (host: BrowserWindow | null) => void = () => {}
-  ) {}
+  ) {
+    // While the application is active this window stays mapped, empty and
+    // click-through. Hiding it and showing it again costs the window server its
+    // map, which is what a modal would otherwise wait for on the very gesture
+    // that opened it. It is hidden the moment another application comes forward,
+    // so an always-on-top overlay can never float over one.
+    this.parent.on('focus', () => this.showWhileWarm())
+    this.parent.on('blur', () => {
+      setTimeout(() => {
+        if (this.parent.isDestroyed()) return
+        // Another of the app's own windows still holds focus, which includes
+        // this overlay taking it for a modal. Only losing every window means
+        // another application came forward.
+        if (BrowserWindow.getFocusedWindow()) return
+        this.hideWhileInactive()
+      }, 0)
+    })
+  }
+
+  /** Bring the empty warm window back when the application becomes active. */
+  private showWhileWarm(): void {
+    const popup = this.popup
+    if (!popup || popup.isDestroyed()) return
+    if (!this.sessionWarm && !this.hasContent()) return
+    this.reveal(popup)
+  }
+
+  /** Hide the overlay because another application is now in front. */
+  private hideWhileInactive(): void {
+    const popup = this.popup
+    if (!popup || popup.isDestroyed()) return
+    if (popup.isVisible()) popup.hide()
+  }
 
   /**
    * Draw `stack`, or take it down with null.
@@ -211,7 +254,23 @@ export class BrowserOverlayWindow {
   setWarm(warm: boolean): boolean {
     this.warm = warm
     if (warm) return this.ensure() !== null
-    if (!this.hasContent()) this.dispose()
+    this.retire()
+    return true
+  }
+
+  /**
+   * Load the document now and keep it for the session.
+   *
+   * Called once the primary window is up, so the first surface this window draws
+   * has something already loaded to draw into.
+   */
+  warmForSession(): boolean {
+    this.sessionWarm = true
+    const popup = this.ensure()
+    if (!popup) return false
+    // Show it now, so the window server has it mapped before the first modal.
+    // Nothing is drawn and every pixel is click-through, so this is invisible.
+    this.reveal(popup)
     return true
   }
 
@@ -226,7 +285,7 @@ export class BrowserOverlayWindow {
    * session that stops using it releases the renderer.
    */
   private retire(): void {
-    if (this.warm) return
+    if (this.warm || this.sessionWarm) return
     clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined
@@ -415,7 +474,9 @@ export class BrowserOverlayWindow {
     if (this.hasContent()) return
     this.pointerOverContent = false
     this.applyClickThrough()
-    if (popup.isVisible()) popup.hide()
+    // A warm window stays mapped, empty and click-through, so the next modal
+    // paints into a window that is already on screen.
+    if (!this.sessionWarm && popup.isVisible()) popup.hide()
   }
 
   /**
@@ -573,6 +634,15 @@ export class BrowserOverlayWindow {
             kind: 'dismiss'
           })
       }
+      // A focused overlay that no longer holds focus, with no other window of
+      // this app focused either, means another application came forward. The
+      // parent's own blur handler cannot see this case: taking the keyboard for a
+      // modal already blurred the parent.
+      setTimeout(() => {
+        if (popup.isDestroyed() || this.popup !== popup) return
+        if (BrowserWindow.getFocusedWindow()) return
+        this.hideWhileInactive()
+      }, 0)
     })
     popup.webContents.on('did-finish-load', () => {
       // A new overlay document has no resource cache yet, including after HMR.
@@ -627,7 +697,8 @@ export class BrowserOverlayWindow {
         return
       }
       this.position(popup)
-      if (this.ready && this.hasContent() && !popup.isVisible()) popup.showInactive()
+      if ((this.sessionWarm || (this.ready && this.hasContent())) && !popup.isVisible())
+        popup.showInactive()
     }
     this.parent.on('move', reposition)
     this.parent.on('resize', reposition)

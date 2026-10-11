@@ -101,6 +101,10 @@ async function attachBrowserService(
   // there: there is no second chance to restore it once it has loaded.
   await service.hydrateTabHistory()
   service.register()
+  // Load the overlay document now that the primary window is up, so the first
+  // modal, switcher or toast of the session draws into an already-loaded
+  // document instead of paying its load on the gesture that asks for it.
+  service.warmOverlay()
   // The browser's native context menu is built in main, so it needs the address
   // bar's search engine. The config is read once at attach; the renderer pushes
   // later changes.
