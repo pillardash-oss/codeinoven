@@ -138,7 +138,7 @@ Requirements:
 - Node `>=22.13.0`
 - Git
 
-Electron `^44.4.5` is installed as a dependency, so you do not install it yourself. The stack is Electron, Svelte 5, TypeScript, and Tailwind v4.
+Electron `^44.7.0` is installed as a dependency, so you do not install it yourself. The stack is Electron, Svelte 5, TypeScript, and Tailwind v4.
 
 ```bash
 git clone https://github.com/pillardash-oss/codeinoven.git

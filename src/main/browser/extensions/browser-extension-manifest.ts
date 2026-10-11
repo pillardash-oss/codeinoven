@@ -35,7 +35,8 @@
  *
  * Measured, not assumed: `RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS` below was produced
  * by loading a manifest that declared the whole Chrome permission vocabulary
- * against Electron 44.4.5 and reading back what Chromium called unknown. Two names
+ * against Electron 44.7.0 (Chromium 152.0.7977.130, the build 44.4.5 already
+ * carried) and reading back what Chromium called unknown. Two names
  * that warn for reasons of their own are deliberately NOT stripped, because their
  * warning is a fact about this runtime the user should keep seeing:
  * `'usb' is not allowed for specified platform` and `'webRequestBlocking' requires
@@ -49,8 +50,9 @@ import { readManifestObject, writeManifest, stringArray } from './browser-extens
  *
  * Declaring one cannot enable anything: Chromium ignores the name rather than
  * granting it, and prints the warning the user's log caught. Measured against
- * Electron 44.4.5 (a manifest declaring the Chrome vocabulary, loaded through
- * `session.extensions.loadExtension`); a runtime upgrade that starts supporting
+ * Electron 44.7.0 (Chromium 152.0.7977.130) with a manifest declaring the Chrome
+ * vocabulary, loaded through
+ * `session.extensions.loadExtension`; a runtime upgrade that starts supporting
  * one of these is a reason to re-measure rather than to keep the name here.
  */
 export const RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS: readonly string[] = [
