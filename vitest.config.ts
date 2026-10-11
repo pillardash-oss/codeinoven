@@ -17,6 +17,9 @@ export default defineConfig({
     // Browser APIs jsdom does not implement (`matchMedia` above all) have to
     // exist before a test file's module graph is imported, so they are installed
     // for every test file here rather than repeated inside each jsdom suite.
+    // A hermetic temp root set once before the workers spawn keeps the local
+    // test run's temp layout identical to CI's (see tests/setup/hermetic-temp-root.ts).
+    globalSetup: ['./tests/setup/hermetic-temp-root.ts'],
     setupFiles: ['./tests/setup/jsdom-dom-shims.ts']
   },
   resolve: {

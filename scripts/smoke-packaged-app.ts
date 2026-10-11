@@ -97,6 +97,23 @@ function boundedAppend(current: string, chunk: Buffer): string {
   return next.length > 64_000 ? next.slice(-64_000) : next
 }
 
+/**
+ * The packaged app under test must boot as a real Electron app.
+ *
+ * CodeInOven exports `ELECTRON_RUN_AS_NODE` (and `ELECTRON_NO_ATTACH_CONSOLE`) to
+ * the agent processes it spawns, and the local CI gate runs inside one. Inherited,
+ * the packaged binary starts as plain Node and rejects its own Chromium switches
+ * ("bad option: --user-data-dir=..."), so the smoke can never pass under the agent
+ * harness even though CI, which never sets the variable, stays green. The smoke is
+ * always a real app launch, so the node-mode flags are dropped.
+ */
+function smokeEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...process.env }
+  delete environment.ELECTRON_RUN_AS_NODE
+  delete environment.ELECTRON_NO_ATTACH_CONSOLE
+  return environment
+}
+
 function phaseTime(proof: SmokeProof, phase: StartupPhase, iteration: number): number {
   const record = proof.startup.phases.find((candidate) => candidate.phase === phase)
   if (!record || !Number.isFinite(record.atMs)) {
@@ -126,7 +143,7 @@ async function runIteration(
       {
         cwd: options.appDir,
         env: {
-          ...process.env,
+          ...smokeEnvironment(),
           ELECTRON_ENABLE_LOGGING: '1',
           CODEINOVEN_CONFIG_ROOT: join(runRoot, 'config'),
           [PACKAGED_SMOKE_OUTPUT_ENV]: proofPath
