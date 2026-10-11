@@ -277,15 +277,23 @@
     </EmptyState>
   {:else if githubNotifications.access}
     <!--
-      A sign-in GitHub will not serve notifications to. Not actionable from here:
-      the answer is another registration, not another sign-in or a retry, so the
-      panel states the cause instead of offering a control that cannot help.
+      A sign-in GitHub will not serve notifications to. It is actionable now that
+      the app signs in with an OAuth App: the grant needs the notifications
+      scope, and signing in again asks for it, so the panel offers the control
+      instead of only stating the cause.
     -->
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <VendorIcon name="GitHub" size={20} class="text-dimmed" />
       <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
         {githubNotifications.access.message}
       </p>
+      <button
+        type="button"
+        class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+        onclick={onSignIn}
+      >
+        Sign in to GitHub
+      </button>
     </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">

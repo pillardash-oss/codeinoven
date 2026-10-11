@@ -1817,10 +1817,10 @@ export class GitHubProvider implements GitProvider {
           response = await this.fetch(path, init, token, controller.signal)
         }
       }
-      // A GitHub App user token can deliberately hide a public repository with
-      // 404 when the app is not installed there. Public GET endpoints remain
-      // readable without credentials, so retry those reads anonymously. Never
-      // do this for mutations or a configured self-hosted provider.
+      // A signed-in token can still get a 404 for a public repository it cannot
+      // reach. Public GET endpoints remain readable without credentials, so
+      // retry those reads anonymously. Never do this for mutations or a
+      // configured self-hosted provider.
       if (
         response.status === 404 &&
         (init.method ?? 'GET').toUpperCase() === 'GET' &&

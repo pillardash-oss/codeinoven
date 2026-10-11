@@ -59,16 +59,6 @@ export function githubBlockUserUrl(login?: string): string {
 }
 
 /**
- * GitHub's install flow for this app.
- *
- * Where a missing installation is explained (the pull request list, the
- * deployments monitor), the control that fixes it sends the reader here.
- */
-export function githubAppInstallUrl(): string {
-  return 'https://github.com/apps/codeinoven/installations/new'
-}
-
-/**
  * GitHub's notification settings.
  *
  * The panel offers this so a reader who needs more than the inbox filter   per

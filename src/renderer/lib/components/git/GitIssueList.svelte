@@ -7,11 +7,9 @@
     MessageSquare,
     TriangleAlert
   } from '@lucide/svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { relativeTime } from '$lib/format/relative-time'
   import { githubDisplayLogin } from '$lib/format/github-login'
-  import { githubAppInstallUrl } from '$lib/github-references'
   import { GitState, gitState } from '$lib/stores/git.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -233,10 +231,9 @@
           <button
             type="button"
             class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            data-external-url={githubAppInstallUrl()}
-            onclick={() => void openInBrowser(githubAppInstallUrl())}
+            onclick={onSignIn}
           >
-            Install GitHub App
+            Sign in to GitHub
           </button>
         </div>
       {:else if transientError && items.length === 0}

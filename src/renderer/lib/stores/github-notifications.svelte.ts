@@ -50,11 +50,9 @@ class GitHubNotificationsStore {
   /**
    * The access state the listing reported, when GitHub could not serve it.
    *
-   * GitHub refuses its notification endpoints to GitHub App tokens outright, so
-   * this is the state a registration the app cannot read notifications with
-   * lands in. No retry clears it, and no second sign-in through the same
-   * registration reaches a different answer, which is why the panel reports the
-   * cause instead of offering a control that cannot work.
+   * The app asks for the notifications scope at sign-in, so this means the grant
+   * no longer carries it. Signing in again asks for it afresh, which is why the
+   * panel pairs the message with a sign-in control.
    */
   access = $state<GitHubNotificationAccessRequired | null>(null)
   /** Thread id of an in-flight per-row action, so its row can show busy. */

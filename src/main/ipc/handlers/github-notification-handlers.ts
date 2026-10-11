@@ -12,17 +12,14 @@ import type { IpcHandlerContext } from './context'
 /**
  * What the panel is told when GitHub will not serve notifications to this sign-in.
  *
- * It is a registration fact, not a transient fault: GitHub's REST description
- * marks every notification endpoint as unavailable to GitHub App user tokens, and
- * no GitHub App permission covers notifications, so signing in again through a
- * GitHub App registration reaches exactly the same refusal. Saying that plainly
- * is the only honest answer; a retry, and another sign-in, cannot change it.
+ * The app signs in with an OAuth App carrying the `notifications` scope, so a
+ * refusal here means the grant lost it: it was revoked, or another registration
+ * re-issued it. Signing in again asks for the scope afresh, which is why the
+ * panel pairs this message with a sign-in control rather than only stating it.
  */
 const ACCESS_REFUSED: GitHubNotificationAccessRequired = {
   status: 'access_required',
-  message:
-    'GitHub does not serve notifications to this sign-in. Notifications need an OAuth App ' +
-    'registration that carries the notifications scope, which the app signs you in with.'
+  message: 'GitHub did not accept this account for notifications.'
 }
 
 function accessRequired(message: string): GitHubNotificationAccessRequired {

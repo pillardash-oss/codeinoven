@@ -60,17 +60,16 @@ export interface PrDraft {
 /** PR create request as the renderer sends it; owner/repo resolve from the origin. */
 export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
 
-/** GitHub App installation access needed before a repository mutation can run. */
+/** A GitHub permission the signed-in account is missing for a repository mutation. */
 export interface GitHubPermissionRequired {
   status: 'permission_required'
   message: string
-  settingsUrl: string
 }
 
-/** Typed boundary for GitHub writes, including recoverable installation access. */
+/** Typed boundary for GitHub writes, including a recoverable permission refusal. */
 export type GitHubMutationResult<T> = { status: 'completed'; value: T } | GitHubPermissionRequired
 
-/** Result of submitting a pull-request review through the GitHub App. */
+/** Result of submitting a pull-request review through the GitHub provider. */
 export type PullRequestReviewResult = GitHubMutationResult<null>
 
 /** Renderer-safe PR reference created or merged by a provider. */
@@ -1319,13 +1318,11 @@ export interface GitHubNotificationPage {
 /**
  * A notification listing, or the sign-in state that prevents one.
  *
- * GitHub serves the notifications API only to a token that carries the
- * `notifications` scope, and only to some kinds of token at all: its REST
- * description marks every notification endpoint as unavailable to GitHub App
- * user tokens, and no GitHub App permission can change that. The app reads the
- * inbox as the signed-in account, so a GitHub App registration is the one thing
- * that leaves this view permanently refused   a state the panel reports as data
- * it can act on rather than as a bare error it can only repeat.
+ * GitHub serves the notifications API only to a token carrying the
+ * `notifications` scope, which the app asks for at sign-in on its OAuth App
+ * registration. A refusal here means the grant lost that scope: it was revoked,
+ * or another registration re-issued it. The panel reports it as data the user
+ * can act on rather than as a bare error it can only repeat.
  */
 export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubNotificationAccessRequired
 
