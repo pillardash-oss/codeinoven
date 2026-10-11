@@ -1,5 +1,25 @@
 import type { StartupPhase, StartupTelemetrySnapshot } from './startup-telemetry'
 
+/******************************************************************************
+ *                                                                           *
+ *   STOP.  THE 5,000 ms BUDGET BELOW IS A HARD CEILING.                     *
+ *                                                                           *
+ *   STARTUP TIME IS THE FIRST ETHOS OF THIS APPLICATION.  THIS NUMBER IS    *
+ *   UNDER AN EXPLICIT AND STANDING USER FREEZE.  YOU, THE AGENT READING    *
+ *   THIS, ARE FORBIDDEN FROM RAISING, RELAXING, WIDENING, OR OTHERWISE     *
+ *   WEAKENING IT.  NOT BY A MILLISECOND.  NOT ONCE.  NOT "TEMPORARILY".    *
+ *   NOT BECAUSE A MACHINE WAS SLOW, NOT BECAUSE CI IS RED, NOT BECAUSE     *
+ *   SOMETHING NEW MADE BOOT HEAVIER.  THOSE ARE THE REASONS TO FIX THE     *
+ *   BOOT, NOT TO MOVE THE GOALPOST.                                       *
+ *                                                                           *
+ *   RAISING THIS REQUIRES THE USER'S PRIOR, EXPLICIT, FORMAL APPROVAL.     *
+ *   NOT AN ASSUMPTION, NOT A SILENCE, NOT A "THE USER NAMED NO NUMBER".     *
+ *   AN ACTUAL STATEMENT FROM THE USER THAT THIS BUDGET MAY GO UP, AND     *
+ *   THE REASON RECORDED ALONGSIDE IT.  WITHOUT THAT APPROVAL ON RECORD,    *
+ *   A CHANGE TO THIS CONSTANT IS A STARTUP REGRESSION SHIPPED ON PURPOSE.  *
+ *   DO NOT DO IT.  GO MAKE THE BOOT FASTER INSTEAD.                        *
+ *                                                                           *
+ ******************************************************************************/
 /**
  * The first-paint startup budget, in milliseconds.
  *

@@ -59,16 +59,6 @@ export function githubBlockUserUrl(login?: string): string {
 }
 
 /**
- * GitHub's install flow for this app.
- *
- * Where a missing installation is explained (the pull request list, the
- * deployments monitor), the control that fixes it sends the reader here.
- */
-export function githubAppInstallUrl(): string {
-  return 'https://github.com/apps/codeinoven/installations/new'
-}
-
-/**
  * GitHub's notification settings.
  *
  * The panel offers this so a reader who needs more than the inbox filter   per
@@ -82,18 +72,6 @@ export function githubNotificationSettingsUrl(): string {
 /** GitHub's inbox, the page the panel mirrors. */
 export function githubNotificationsUrl(): string {
   return 'https://github.com/notifications'
-}
-
-/**
- * Where the device-flow sign-in sends the user.
- *
- * It is the page the app's sign-in code is typed into, so a sign-in control can
- * declare the address it stands for and carry the same link context menu as every
- * other external control in the app: right-clicking it offers the in-app and
- * default browsers instead of only the click the button performs.
- */
-export function githubSignInUrl(): string {
-  return 'https://github.com/login/device'
 }
 
 // ─── Reference extension ────────────────────────────────────────────────────

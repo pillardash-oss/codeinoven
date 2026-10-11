@@ -1,47 +1,57 @@
 import {
   GitHubNotificationsService,
-  GitHubNotificationError
+  GitHubNotificationError,
+  GitHubNotificationTokenMissingError
 } from '../../git/github-notifications-service'
 import { validateBoolean } from '../validation/primitives'
 import { validateNotificationPageInput, validateNotificationThreadId } from '../ipc-validation'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { GitHubNotificationPermissionRequired } from '../../../lib/types'
+import type { GitHubNotificationAccessRequired } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 /**
- * The listing failure as data when the token cannot read notifications.
+ * What the panel is told when GitHub will not serve notifications to this sign-in.
  *
- * A 401 or 403 here almost always means the OAuth scope or the token type
- * cannot read them, and a retry cannot grant a scope: only signing in again can.
- * It is returned rather than thrown because a thrown error crosses IPC as a bare
- * message, leaving the panel unable to tell it apart from a transient failure
- * and with nothing to offer but the retry that cannot work.
+ * The app signs in with an OAuth App carrying the `notifications` scope, so a
+ * refusal here means the grant lost it: it was revoked, or another registration
+ * re-issued it. Signing in again asks for the scope afresh, which is why the
+ * panel pairs this message with a sign-in control rather than only stating it.
  */
-function notificationPermissionResult(
-  failure: unknown
-): GitHubNotificationPermissionRequired | null {
-  if (!(failure instanceof GitHubNotificationError)) return null
-  if (failure.status !== 401 && failure.status !== 403) return null
-  return {
-    status: 'permission_required',
-    message:
-      'GitHub refused the notifications request. Sign in again to grant the notifications scope.'
+const ACCESS_REFUSED: GitHubNotificationAccessRequired = {
+  status: 'access_required',
+  message: 'GitHub did not accept this account for notifications.'
+}
+
+function accessRequired(message: string): GitHubNotificationAccessRequired {
+  return { status: 'access_required', message }
+}
+
+/**
+ * The listing failure as data when no signed-in account can serve it.
+ *
+ * Returned rather than thrown because a thrown error crosses IPC as a bare
+ * message, leaving the panel unable to tell it apart from a transient failure.
+ */
+function notificationAccessResult(failure: unknown): GitHubNotificationAccessRequired | null {
+  if (failure instanceof GitHubNotificationTokenMissingError) {
+    return accessRequired('Sign in to GitHub to read your notifications here.')
   }
+  if (failure instanceof GitHubNotificationError) {
+    if (failure.status === 401 || failure.status === 403) return ACCESS_REFUSED
+  }
+  return null
 }
 
 /**
  * Turn a notification failure into a message the panel can act on, without ever
- * echoing the token. A 403 from GitHub's notification endpoints almost always
- * means the OAuth scope or the token type cannot read them, which is a state the
- * user can fix by signing in again.
+ * echoing the token.
  */
 function describeNotificationFailure(failure: unknown): never {
+  if (failure instanceof GitHubNotificationTokenMissingError) {
+    throw new Error('Sign in to GitHub to read your notifications here.')
+  }
   if (failure instanceof GitHubNotificationError) {
-    if (failure.status === 403) {
-      throw new Error(
-        'GitHub refused the notifications request. Sign in again to grant the notifications scope.'
-      )
-    }
+    if (failure.status === 401 || failure.status === 403) throw new Error(ACCESS_REFUSED.message)
     if (failure.status === 404) {
       throw new Error('That GitHub notification thread no longer exists.')
     }
@@ -55,12 +65,13 @@ function describeNotificationFailure(failure: unknown): never {
  *
  * Notifications are account-wide, not repository-scoped, so these channels take
  * no project: they read and mutate the same threads the account sees on
- * github.com. The token is resolved in the main process only.
+ * github.com. They run as the active account, with its token resolved in the main
+ * process only, so switching accounts switches whose inbox this is.
  */
 export function registerGitHubNotificationHandlers(ctx: IpcHandlerContext): void {
   const service = new GitHubNotificationsService({
     resolveToken: () => ctx.githubAuthService.resolveToken(),
-    refreshToken: () => ctx.githubAuthService.resolveToken(true),
+    activeAccountId: () => ctx.githubAuthService.activeAccountId(),
     storage: ctx.storage
   })
 
@@ -68,8 +79,8 @@ export function registerGitHubNotificationHandlers(ctx: IpcHandlerContext): void
     try {
       return await service.listPage(validateNotificationPageInput(input))
     } catch (failure) {
-      const permission = notificationPermissionResult(failure)
-      if (permission) return permission
+      const access = notificationAccessResult(failure)
+      if (access) return access
       describeNotificationFailure(failure)
     }
   })

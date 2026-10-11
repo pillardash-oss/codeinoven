@@ -1879,6 +1879,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
     githubAuthService.pollAccessToken(validateBoundedString(deviceCode, 'Device code', 1, 256))
   )
+  ipcMain.handle('github:switchAccount', async (_, accountId: unknown) =>
+    githubAuthService.switchAccount(validateEntityId(accountId, 'GitHub account ID'))
+  )
   ipcMain.handle('github:logout', async () => {
     await githubAuthService.logout()
     return githubAuthService.status()

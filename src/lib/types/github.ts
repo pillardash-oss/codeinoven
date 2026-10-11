@@ -60,17 +60,16 @@ export interface PrDraft {
 /** PR create request as the renderer sends it; owner/repo resolve from the origin. */
 export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
 
-/** GitHub App installation access needed before a repository mutation can run. */
+/** A GitHub permission the signed-in account is missing for a repository mutation. */
 export interface GitHubPermissionRequired {
   status: 'permission_required'
   message: string
-  settingsUrl: string
 }
 
-/** Typed boundary for GitHub writes, including recoverable installation access. */
+/** Typed boundary for GitHub writes, including a recoverable permission refusal. */
 export type GitHubMutationResult<T> = { status: 'completed'; value: T } | GitHubPermissionRequired
 
-/** Result of submitting a pull-request review through the GitHub App. */
+/** Result of submitting a pull-request review through the GitHub provider. */
 export type PullRequestReviewResult = GitHubMutationResult<null>
 
 /** Renderer-safe PR reference created or merged by a provider. */
@@ -1066,13 +1065,38 @@ export type GitHubPollResult =
   | { status: 'expired' }
   | { status: 'error'; message: string }
 
-/** Presence-only status of the GitHub OAuth connection. Never carries plaintext. */
+/**
+ * Presence-only status of the GitHub connection. Never carries plaintext.
+ *
+ * An account list rather than a single account: a user may be signed in with
+ * several, one of which is active, and every GitHub call the app makes runs as
+ * that one.
+ */
 export interface GitHubAuthStatus {
+  /** Whether at least one account is signed in. */
   connected: boolean
-  /** Whether the app has a GitHub App client ID configured to sign in with. */
+  /** Whether the app has a GitHub client ID configured to sign in with. */
   configured: boolean
-  /** Public profile of the signed-in user, when connected. */
+  /** Public profile of the active account, when connected. */
   user?: GitHubUser | null
+  /** Every signed-in account, in the order it was added. */
+  accounts: GitHubAccountSummary[]
+  /** The account every GitHub call runs as, or null when none is signed in. */
+  activeAccountId: string | null
+}
+
+/** One signed-in GitHub account, as the account switcher shows it. */
+export interface GitHubAccountSummary {
+  /** Stable identity of the account inside the app. */
+  id: string
+  /**
+   * The account's login. Empty while a credential carried over from a
+   * single-account build has not been named by a profile read yet.
+   */
+  login: string
+  name: string | null
+  /** Whether GitHub calls currently run as this account. */
+  active: boolean
 }
 
 /** Public GitHub user profile, safe to surface in the UI. */
@@ -1292,26 +1316,22 @@ export interface GitHubNotificationPage {
 }
 
 /**
- * The signed-in token is not allowed to read notifications.
+ * A notification listing, or the sign-in state that prevents one.
  *
- * GitHub serves the notifications API only to a token that carries the
- * `notifications` scope, which the app did not request before this view
- * existed. A token issued then is refused here, and no retry can change that:
- * the fix is a fresh sign-in, so the failure is reported as data the panel can
- * act on rather than as a bare error it can only repeat.
- *
- * `settingsUrl` is deliberately absent: the destination is the app's own
- * sign-in, which the renderer owns, not a GitHub page the main process picks.
+ * GitHub serves the notifications API only to a token carrying the
+ * `notifications` scope, which the app asks for at sign-in on its OAuth App
+ * registration. A refusal here means the grant lost that scope: it was revoked,
+ * or another registration re-issued it. The panel reports it as data the user
+ * can act on rather than as a bare error it can only repeat.
  */
-export interface GitHubNotificationPermissionRequired {
-  status: 'permission_required'
-  /** Sentence the panel shows above the sign-in control. */
+export type GitHubNotificationPageResult = GitHubNotificationPage | GitHubNotificationAccessRequired
+
+/** The listing could not run because this sign-in may not read notifications. */
+export interface GitHubNotificationAccessRequired {
+  status: 'access_required'
+  /** One sentence naming the cause, in the panel's own words. */
   message: string
 }
-
-/** A notification listing, or the permission state that prevents one. */
-export type GitHubNotificationPageResult =
-  GitHubNotificationPage | GitHubNotificationPermissionRequired
 
 /** A notification listing request. */
 export interface GitHubNotificationPageInput {

@@ -6,26 +6,28 @@
     BellOff,
     Bookmark,
     BookmarkCheck,
-    CircleDot,
     ExternalLink,
-    GitCommitHorizontal,
-    GitPullRequest,
     Inbox,
     Loader2,
-    MessageSquare,
-    Tag,
     TriangleAlert
   } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { onMount } from 'svelte'
-  import { githubNotificationsUrl, githubSignInUrl } from '$lib/github-references'
+  import { githubNotificationsUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import GitListOptionsMenu from './GitListOptionsMenu.svelte'
   import GitNotificationsGroupMenu from './GitNotificationsGroupMenu.svelte'
   import PrAvatar from './PrAvatar.svelte'
+  import {
+    NOTIFICATION_DATE_ORDER,
+    notificationDateGroup,
+    reasonLabel,
+    subjectIcon
+  } from './notification-view'
   import type {
     GitHubNotification,
     GitHubNotificationFilter,
@@ -45,19 +47,13 @@
    * Open the panel's data on first mount. The store guards against a second
    * load, so a remount after the sidebar was hidden costs nothing.
    */
-  $effect(() => {
-    if (githubConnected) void githubNotifications.ensureLoaded()
+  onMount(() => {
+    void githubNotifications.ensureLoaded()
+    // A sign-in that lands while this panel is open changes whose inbox it is,
+    // and the panel is already mounted through it, so nothing else would refetch
+    // the listing it was refused.
+    return githubSignIn.onAuthorized(() => void githubNotifications.load())
   })
-
-  /**
-   * Reload once a fresh sign-in lands.
-   *
-   * The state that failed was "signed in, but without the notifications scope",
-   * and signing in again changes the token rather than `githubConnected`. The
-   * panel is already open through that, so nothing else would refetch the
-   * listing it was refused.
-   */
-  onMount(() => githubSignIn.onAuthorized(() => void githubNotifications.load()))
 
   const tabOptions: Array<{ id: GitHubNotificationTab; label: string; count: number }> = $derived([
     { id: 'inbox', label: 'Inbox', count: githubNotifications.counts.inbox },
@@ -103,53 +99,6 @@
   const filterNarrowed = $derived(githubNotifications.filter !== 'default')
   const sortNarrowed = $derived(githubNotifications.sort !== 'newest')
 
-  /** Reason codes rendered as words, matching github.com's own labels. */
-  const REASON_LABELS: Record<string, string> = {
-    assign: 'Assigned',
-    author: 'Author',
-    ci_activity: 'CI activity',
-    comment: 'Comment',
-    invitation: 'Invitation',
-    manual: 'Subscribed',
-    mention: 'Mention',
-    review_requested: 'Review requested',
-    security_alert: 'Security alert',
-    state_change: 'State change',
-    subscribed: 'Watching',
-    team_mention: 'Team mention',
-    approval_requested: 'Approval requested'
-  }
-
-  function reasonLabel(reason: string): string {
-    return REASON_LABELS[reason] ?? reason.replace(/_/gu, ' ')
-  }
-
-  /** Subject kind as its glyph, so a row reads at a glance what it addresses. */
-  function subjectIcon(type: string): typeof CircleDot {
-    if (type === 'PullRequest') return GitPullRequest
-    if (type === 'Issue') return CircleDot
-    if (type === 'Discussion') return MessageSquare
-    if (type === 'Commit') return GitCommitHorizontal
-    if (type === 'Release') return Tag
-    return Bell
-  }
-
-  const DATE_ORDER = ['Today', 'Yesterday', 'This week', 'This month', 'Earlier'] as const
-
-  /** The section a thread falls in under date grouping. */
-  function dateGroupLabel(updatedAt: string): string {
-    const timestamp = Date.parse(updatedAt)
-    if (!Number.isFinite(timestamp)) return 'Earlier'
-    const now = new Date()
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-    const day = 86_400_000
-    if (timestamp >= startOfToday) return 'Today'
-    if (timestamp >= startOfToday - day) return 'Yesterday'
-    if (timestamp >= startOfToday - 7 * day) return 'This week'
-    if (timestamp >= startOfToday - 30 * day) return 'This month'
-    return 'Earlier'
-  }
-
   const sortedItems = $derived.by(() => {
     const items = [...githubNotifications.items]
     items.sort((a, b) => {
@@ -170,7 +119,7 @@
       const label =
         githubNotifications.group === 'repository'
           ? item.repositoryFullName || 'Unknown repository'
-          : dateGroupLabel(item.updatedAt)
+          : notificationDateGroup(item.updatedAt)
       const bucket = buckets.find((entry) => entry.label === label)
       if (bucket) bucket.items.push(item)
       else buckets.push({ label, items: [item] })
@@ -178,16 +127,30 @@
     buckets.sort((a, b) =>
       githubNotifications.group === 'repository'
         ? a.label.localeCompare(b.label)
-        : DATE_ORDER.indexOf(a.label as (typeof DATE_ORDER)[number]) -
-          DATE_ORDER.indexOf(b.label as (typeof DATE_ORDER)[number])
+        : NOTIFICATION_DATE_ORDER.indexOf(a.label as (typeof NOTIFICATION_DATE_ORDER)[number]) -
+          NOTIFICATION_DATE_ORDER.indexOf(b.label as (typeof NOTIFICATION_DATE_ORDER)[number])
     )
     return buckets
   })
 
   /** Open the thread on github.com, marking it read here and there. */
-  function openThread(item: GitHubNotification): void {
+  function openOnGitHub(item: GitHubNotification): void {
     if (item.unread) void githubNotifications.markRead(item.id)
     void openInBrowser(item.url ?? githubNotificationsUrl())
+  }
+
+  /**
+   * Read a thread inside the panel rather than sending the reader away for it.
+   *
+   * The panel's own pull request and issue readers show the thread, addressed by
+   * the repository and number the notification names.
+   *
+   * Opening a notification is reading it, which is why GitHub marks it read, so
+   * the read is reported here the same way it is when the row opens github.com.
+   */
+  function openThreadInPanel(item: GitHubNotification): void {
+    if (item.unread) void githubNotifications.markRead(item.id)
+    githubNotifications.openThread(item)
   }
 
   const rowTitleClass =
@@ -198,11 +161,15 @@
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
   <!--
-    One row: the three views, the listing's filter and ordering, then the count.
-    The listing's own actions (refresh, mark all read, settings) live in the
-    panel's header action group with every other view's actions. GitHub's filters
-    sit here rather than in the header because none of them describe the
-    repository the Git panel is standing in   notifications are account-wide.
+    The listing: one row of the three views, the filter and ordering, then the
+    count. The listing's own actions (refresh, mark all read, settings) live in
+    the panel's header action group with every other view's actions. GitHub's
+    filters sit here rather than in the header because none of them describe the
+    repository the Git panel is standing in: notifications are account-wide.
+
+    A row opens its thread in the panel rather than on github.com: the panel's own
+    pull request and issue readers read it, in the repository the notification
+    names, and the panel's action row carries the notification's own actions.
   -->
   <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
     <div role="tablist" aria-label="Notification views" class="flex items-center gap-0.5">
@@ -251,37 +218,16 @@
   </div>
 
   {#if githubNotifications.error}
+    <!--
+      A transient failure, in the strip every GitHub listing in the panel uses
+      for one. Nothing here is actionable beyond trying again, and the panel's
+      own Refresh reloads this listing, so no second control is repeated here.
+    -->
     <div
-      class="flex shrink-0 items-start gap-1.5 border-b border-border px-2 py-1.5 text-[0.625rem] text-danger"
+      class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
     >
-      <TriangleAlert size={12} class="mt-0.5 shrink-0" aria-hidden="true" />
-      <span class="min-w-0 flex-1">{githubNotifications.error}</span>
-      {#if githubNotifications.permissionRequired}
-        <!--
-          The token on file was issued before the app asked for the notifications
-          scope, so no retry can help: a fresh sign-in is the only fix. The control
-          declares the GitHub sign-in page as the address it stands for, so it
-          carries the same right-click menu as every other external control in the
-          app and can be opened in whichever browser the user prefers.
-        -->
-        <button
-          type="button"
-          class="flex h-6 shrink-0 cursor-pointer items-center rounded-md border border-border bg-surface px-2 font-medium text-foreground transition-colors hover:bg-elevated"
-          title="Sign in to GitHub again to grant the notifications scope"
-          aria-label="Sign in to GitHub again to grant the notifications scope"
-          data-external-url={githubSignInUrl()}
-          onclick={onSignIn}
-        >
-          Sign in again
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="shrink-0 cursor-pointer font-medium text-muted transition-colors hover:text-foreground"
-        onclick={() => void githubNotifications.load()}
-      >
-        Retry
-      </button>
+      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
     </div>
   {/if}
 
@@ -289,7 +235,7 @@
     <EmptyState
       icon={Bell}
       title="Sign in to GitHub"
-      description="Notifications come from your GitHub account, so sign in to read and act on them here."
+      description="Notifications belong to your GitHub account, so sign in to read and act on them here."
     >
       {#snippet action()}
         <button
@@ -301,6 +247,26 @@
         </button>
       {/snippet}
     </EmptyState>
+  {:else if githubNotifications.access}
+    <!--
+      A sign-in GitHub will not serve notifications to. It is actionable now that
+      the app signs in with an OAuth App: the grant needs the notifications
+      scope, and signing in again asks for it, so the panel offers the control
+      instead of only stating the cause.
+    -->
+    <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <VendorIcon name="GitHub" size={20} class="text-dimmed" />
+      <p class="max-w-[42ch] text-[0.6875rem] leading-relaxed text-muted">
+        {githubNotifications.access.message}
+      </p>
+      <button
+        type="button"
+        class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+        onclick={onSignIn}
+      >
+        Sign in to GitHub
+      </button>
+    </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
       <Loader2 size={14} class="animate-spin" aria-hidden="true" />
@@ -332,7 +298,7 @@
           {#each group.items as item (item.id)}
             {@const SubjectIcon = subjectIcon(item.subjectType)}
             <div
-              class="group flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
+              class="group relative flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
                 ? 'bg-primary/5'
                 : ''}"
               data-notification-id={item.id}
@@ -358,7 +324,7 @@
                     : 'text-muted'} hover:text-primary"
                   title={item.url ?? item.title}
                   data-external-url={item.url ?? ''}
-                  onclick={() => openThread(item)}
+                  onclick={() => openThreadInPanel(item)}
                 >
                   {item.title}
                 </button>
@@ -371,58 +337,71 @@
                   >
                 </div>
               </div>
-              <div class="flex shrink-0 items-center gap-0.5">
-                <button
-                  type="button"
-                  class={rowActionClass}
-                  title={item.done ? 'Restore to inbox' : 'Mark as done'}
-                  aria-label={item.done
-                    ? 'Restore notification to inbox'
-                    : 'Mark notification as done'}
-                  disabled={githubNotifications.busyThreadId === item.id}
-                  onclick={() => void githubNotifications.setDone(item.id, !item.done)}
+              <!--
+                The row's actions float over the right edge of the entry and only
+                on hover, the way every other row in the app shows its actions.
+                They reserve no width, so the title keeps the full row until they
+                are actually visible, and the left-to-right fade covers the text
+                they land on so the controls stay legible over it.
+              -->
+              <span
+                class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-end bg-linear-to-l from-elevated from-65% to-transparent pl-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+              >
+                <span
+                  class="pointer-events-none flex items-center gap-0.5 group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
                 >
-                  {#if item.done}
-                    <ArchiveRestore size={13} aria-hidden="true" />
-                  {:else}
-                    <Archive size={13} aria-hidden="true" />
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class={rowActionClass}
-                  title="Unsubscribe from this thread"
-                  aria-label="Unsubscribe from this notification thread"
-                  disabled={githubNotifications.busyThreadId === item.id}
-                  onclick={() => void githubNotifications.unsubscribe(item.id)}
-                >
-                  <BellOff size={13} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  class={rowActionClass}
-                  title={item.saved ? 'Remove from saved' : 'Save notification'}
-                  aria-label={item.saved ? 'Remove notification from saved' : 'Save notification'}
-                  disabled={githubNotifications.busyThreadId === item.id}
-                  onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
-                >
-                  {#if item.saved}
-                    <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
-                  {:else}
-                    <Bookmark size={13} aria-hidden="true" />
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class={rowActionClass}
-                  title="Open on GitHub"
-                  aria-label="Open notification on GitHub"
-                  data-external-url={item.url ?? ''}
-                  onclick={() => openThread(item)}
-                >
-                  <ExternalLink size={13} aria-hidden="true" />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title={item.done ? 'Restore to inbox' : 'Mark as done'}
+                    aria-label={item.done
+                      ? 'Restore notification to inbox'
+                      : 'Mark notification as done'}
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.setDone(item.id, !item.done)}
+                  >
+                    {#if item.done}
+                      <ArchiveRestore size={13} aria-hidden="true" />
+                    {:else}
+                      <Archive size={13} aria-hidden="true" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title="Unsubscribe from this thread"
+                    aria-label="Unsubscribe from this notification thread"
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.unsubscribe(item.id)}
+                  >
+                    <BellOff size={13} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title={item.saved ? 'Remove from saved' : 'Save notification'}
+                    aria-label={item.saved ? 'Remove notification from saved' : 'Save notification'}
+                    disabled={githubNotifications.busyThreadId === item.id}
+                    onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
+                  >
+                    {#if item.saved}
+                      <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
+                    {:else}
+                      <Bookmark size={13} aria-hidden="true" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class={rowActionClass}
+                    title="Open on GitHub"
+                    aria-label="Open notification on GitHub"
+                    data-external-url={item.url ?? ''}
+                    onclick={() => openOnGitHub(item)}
+                  >
+                    <ExternalLink size={13} aria-hidden="true" />
+                  </button>
+                </span>
+              </span>
             </div>
           {/each}
         </div>

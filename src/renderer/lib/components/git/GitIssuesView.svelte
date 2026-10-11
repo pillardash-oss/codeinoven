@@ -2,19 +2,14 @@
   import { Loader2 } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import { issuePanelView, type IssuePanelViewState } from '$lib/stores/issue-panel-view.svelte'
-  import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import GitIssueList from './GitIssueList.svelte'
-  import GitIssueDetail from './GitIssueDetail.svelte'
-  import MetadataPickerDialog from './MetadataPickerDialog.svelte'
-  import { assignAgentToIssue } from './git-status-panel-agent-actions'
-  import { issueRelationshipSummary } from './issue-view'
+  import GitIssueReader from './GitIssueReader.svelte'
+  import { composePullRequestForIssue, setIssueState, workOnIssue } from './git-issue-actions'
+  import { issueReaderActionFor, type IssueListAction, type IssueReaderAction } from './issue-view'
   import type { IssueListFilter, IssueListSort, IssueSummary, PrState } from '$shared/types'
-  import type { PrMetadataMode } from './pr-view'
 
   interface Props {
     projectId: string
@@ -62,26 +57,21 @@
   /** The listing page is deliberately local: changing the listing resets it. */
   let page = $state(1)
 
+  /**
+   * The reader action a row asked for, handed over as the issue opens.
+   *
+   * The reader owns every one of them, so a row that offers Label, Assign,
+   * Milestone, Close, Reopen, Work on or Create pull request opens the issue and
+   * asks the reader to carry it out, rather than a second copy of the behaviour
+   * living in the list.
+   */
+  let readerAction = $state<IssueReaderAction | null>(null)
+
   const selectedIssue = $derived(view.selectedIssue)
   let creating = $state(false)
   let newTitle = $state('')
   let newBody = $state('')
   const creatingBusy = $derived(gitState.isBusy('issue-create'))
-
-  let metadata = $state<{ mode: PrMetadataMode; issue: IssueSummary } | null>(null)
-  const metadataBusy = $derived(gitState.isBusy('issue-metadata'))
-
-  let confirmingClose = $state<IssueSummary | null>(null)
-  const stateBusy = $derived(gitState.isBusy('issue-state'))
-
-  /** The issue the detail reader draws, resolved from the cached bundle. */
-  const metadataSubject = $derived(
-    metadata && identity
-      ? (gitState.issueBundles[
-          GitState.issueBundleKey(identity.owner, identity.repo, metadata.issue.number)
-        ]?.detail ?? metadata.issue)
-      : null
-  )
 
   function selectState(next: PrState): void {
     page = 1
@@ -101,63 +91,8 @@
   function openIssue(issue: IssueSummary): void {
     patch({ selectedIssue: issue })
   }
-
   function closeReader(): void {
     patch({ selectedIssue: null })
-  }
-
-  /** Hand one issue to an agent, reading its description first so the brief has it. */
-  async function workOn(issue: IssueSummary): Promise<void> {
-    if (!identity) return
-    await gitState.ensureIssueBundle(projectId, identity.owner, identity.repo, issue.number)
-    const body =
-      gitState.issueBundles[GitState.issueBundleKey(identity.owner, identity.repo, issue.number)]
-        ?.detail.body ?? null
-    await assignAgentToIssue(projectId, issue, `${identity.owner}/${identity.repo}`, body)
-  }
-
-  /**
-   * Open the create-PR sheet prefilled to close the issue.
-   *
-   * The description carries GitHub's own closing keyword, so merging the pull
-   * request resolves the issue, and the link makes the connection visible to a
-   * reader who arrives at the pull request first.
-   */
-  function createPullRequest(issue: IssueSummary): void {
-    prLifecycleStore.open(projectId, threadId, scopeBucketId || DEFAULT_SCOPE_BUCKET_ID, {
-      title: issue.title,
-      body: `Closes #${issue.number}\n\n${issue.url}`
-    })
-  }
-
-  /**
-   * Settle the issue on GitHub.
-   *
-   * A close carries GitHub's own reason, so a dismissal is recorded apart from a
-   * resolution. The reader follows the subject it opened on, so a state change
-   * updates the open issue's header rather than leaving it claiming the old state.
-   */
-  async function applyState(
-    issue: IssueSummary,
-    state: 'open' | 'closed',
-    stateReason?: 'completed' | 'not_planned'
-  ): Promise<void> {
-    if (!identity) return
-    const reference = await gitState.setIssueState(
-      projectId,
-      identity.owner,
-      identity.repo,
-      issue.number,
-      state,
-      stateReason
-    )
-    if (!reference) return
-    // The write became an event on the issue's history, so the cached history is
-    // now behind the truth and is dropped for the reader to read back.
-    gitState.invalidateConversationTimeline(identity.owner, identity.repo, issue.number)
-    if (selectedIssue?.number === issue.number) {
-      patch({ selectedIssue: { ...selectedIssue, state, stateReason: stateReason ?? null } })
-    }
   }
 
   async function createIssue(): Promise<void> {
@@ -199,57 +134,69 @@
     }
   }
 
-  function handleAction(action: import('./issue-view').IssueListAction): void {
+  /**
+   * The listing's own actions, plus the reader's, raised on the issue it opens.
+   *
+   * The two that raise a dialog   close, and the metadata pickers   open the
+   * issue and ask the reader for it, because the confirmation and the picker are
+   * the reader's. The rest are performed here, through the same actions module
+   * the reader uses, so a row's Work on the issue is the reader's own brief.
+   */
+  function handleAction(action: IssueListAction): void {
     const issue = action.targets[0]
     if (!issue) return
+    if (action.kind === 'open-in-browser') {
+      void openInBrowser(issue.url)
+      return
+    }
+    if (action.kind === 'copy-links') {
+      void copyText(action.targets.map((target) => target.url).join('\n')).catch(() => undefined)
+      return
+    }
+    const readerRequest = issueReaderActionFor(action)
+    if (readerRequest) {
+      openIssue(issue)
+      readerAction = readerRequest
+      return
+    }
+    if (!identity) return
     switch (action.kind) {
-      case 'open':
-        openIssue(issue)
-        return
-      case 'open-in-browser':
-        void openInBrowser(issue.url)
-        return
-      case 'copy-links':
-        void copyText(action.targets.map((target) => target.url).join('\n')).catch(() => undefined)
-        return
-      case 'close':
-        confirmingClose = issue
-        return
-      case 'reopen':
-        void applyState(issue, 'open')
-        return
-      case 'labels':
-      case 'assignees':
-      case 'milestone':
-        metadata = { mode: action.kind, issue }
-        return
       case 'work-on':
-        void workOn(issue)
+        void workOnIssue(projectId, identity, issue)
         return
       case 'create-pr':
-        createPullRequest(issue)
+        composePullRequestForIssue(projectId, threadId, scopeBucketId, issue)
         return
+      case 'reopen':
+        void reopenIssue(issue)
+        return
+      default:
+        openIssue(issue)
+    }
+  }
+
+  /** Bring a closed issue back, following it in the reader when it is the open one. */
+  async function reopenIssue(issue: IssueSummary): Promise<void> {
+    if (!identity) return
+    if (!(await setIssueState(projectId, identity, issue, 'open'))) return
+    if (selectedIssue?.number === issue.number) {
+      patch({ selectedIssue: { ...selectedIssue, state: 'open', stateReason: null } })
     }
   }
 </script>
 
 {#if selectedIssue && identity}
-  <div class="h-full min-h-0">
-    <GitIssueDetail
-      {projectId}
-      {identity}
-      issue={selectedIssue}
-      onBack={closeReader}
-      onWorkOn={(issue) => void workOn(issue)}
-      onCreatePr={createPullRequest}
-      onEditMetadata={(mode, issue) => (metadata = { mode, issue })}
-      onRequestClose={(issue) => (confirmingClose = issue)}
-      onReopen={(issue) => void applyState(issue, 'open')}
-      onOpenRelated={(item) => openIssue(issueRelationshipSummary(item))}
-      {onOpenCommit}
-      onOpenInBrowser={(issue) => void openInBrowser(issue.url)}
-    />
-  </div>
+  <GitIssueReader
+    {projectId}
+    {threadId}
+    {scopeBucketId}
+    {identity}
+    issue={selectedIssue}
+    onBack={closeReader}
+    action={readerAction}
+    onActionHandled={() => (readerAction = null)}
+    {onOpenCommit}
+  />
 {:else}
   <div class="h-full min-h-0">
     <GitIssueList
@@ -319,82 +266,3 @@
     {/snippet}
   </Modal>
 {/if}
-
-{#if metadata && identity && metadataSubject}
-  <MetadataPickerDialog
-    number={metadataSubject.number}
-    mode={metadata.mode}
-    {projectId}
-    owner={identity.owner}
-    repo={identity.repo}
-    current={{
-      labels: metadataSubject.labels,
-      assignees: metadataSubject.assignees,
-      milestone: metadataSubject.milestone
-    }}
-    authorLogin={metadataSubject.authorLogin}
-    busy={metadataBusy}
-    onClose={() => (metadata = null)}
-    onSave={async (selection) => {
-      if (!identity) return { status: 'failed', message: 'No GitHub repository is configured.' }
-      if (metadata?.mode === 'labels') {
-        return gitState.setIssueLabels(
-          projectId,
-          identity.owner,
-          identity.repo,
-          metadataSubject.number,
-          selection.labels
-        )
-      }
-      if (metadata?.mode === 'assignees') {
-        return gitState.setIssueAssignees(
-          projectId,
-          identity.owner,
-          identity.repo,
-          metadataSubject.number,
-          selection.assignees
-        )
-      }
-      return gitState.setIssueMilestone(
-        projectId,
-        identity.owner,
-        identity.repo,
-        metadataSubject.number,
-        selection.milestone
-      )
-    }}
-  />
-{/if}
-
-<ConfirmDialog
-  open={confirmingClose !== null}
-  title="Close issue #{confirmingClose?.number ?? ''}?"
-  confirmLabel="Close as completed"
-  size="lg"
-  variant="primary"
-  busy={stateBusy}
-  secondaryAction={{
-    label: 'Close as not planned',
-    onSelect: () => {
-      const issue = confirmingClose
-      confirmingClose = null
-      if (issue) void applyState(issue, 'closed', 'not_planned')
-    }
-  }}
-  onCancel={() => (confirmingClose = null)}
-  onConfirm={() => {
-    const issue = confirmingClose
-    confirmingClose = null
-    if (issue) void applyState(issue, 'closed', 'completed')
-  }}
->
-  <p class="text-xs leading-relaxed text-muted">
-    The issue is closed on GitHub. It stays readable and can be reopened.
-  </p>
-  <p class="mt-2 text-[0.6875rem] leading-relaxed text-dimmed">
-    <strong class="text-foreground">Completed</strong> records it as done, closed, fixed or
-    resolved.
-    <strong class="text-foreground">Not planned</strong> records it as won't fix, cannot reproduce, or
-    stale.
-  </p>
-</ConfirmDialog>

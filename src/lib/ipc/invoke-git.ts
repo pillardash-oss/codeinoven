@@ -960,6 +960,9 @@ export const invokeGitContract = {
   'github:authStatus': {} as Contract<[], GitHubAuthStatus>,
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
+  /** Make one signed-in account the one every GitHub call runs as. */
+  'github:switchAccount': {} as Contract<[accountId: string], GitHubAuthStatus>,
+  /** Sign the active account out, moving on to the next one if there is one. */
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
   /**
    * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote

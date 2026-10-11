@@ -37,6 +37,7 @@ import type {
   GitRemoteIssue,
   GitCredentialStatus,
   GitStashEntry,
+  GitHubAuthStatus,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
@@ -1943,6 +1944,21 @@ export class GitState {
 
   startGitHubDeviceFlow() {
     return this.github.startGitHubDeviceFlow()
+  }
+
+  /**
+   * Make one signed-in account the one every GitHub call runs as.
+   *
+   * The viewer login follows the switch here, because it decides which comments
+   * and reactions the panel offers to edit; the panel reloads the view it is
+   * showing afterwards, since everything it had was read with the other account's
+   * token.
+   */
+  switchGitHubAccount(accountId: string): Promise<GitHubAuthStatus> {
+    return this.github.switchGitHubAccount(accountId).then((status) => {
+      this.githubViewerLogin = status.connected ? (status.user?.login ?? null) : null
+      return status
+    })
   }
 
   pollGitHubDeviceCode(deviceCode: string) {

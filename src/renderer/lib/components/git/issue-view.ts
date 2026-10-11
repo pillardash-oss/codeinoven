@@ -7,6 +7,7 @@
  * not the other is exactly the drift this module prevents.
  */
 import { CircleCheck, CircleDot, CircleSlash, CircleX } from '@lucide/svelte'
+import type { PrMetadataMode } from './pr-view'
 import type {
   IssueListFilter,
   IssueListSort,
@@ -275,3 +276,30 @@ export type IssueListAction =
   | { kind: 'work-on'; targets: IssueSummary[] }
   /** Open a pull request prefilled to close the issue. */
   | { kind: 'create-pr'; targets: IssueSummary[] }
+
+/**
+ * A dialog a list row asks the issue reader to raise as it opens.
+ *
+ * A row offers the same actions the reader does, and the confirmation and the
+ * picker are the reader's own. A row that wants one hands the request over with
+ * the issue instead of a second copy of the dialog living in the list. Actions
+ * that need no dialog are not here: the row performs those itself, through the
+ * shared `git-issue-actions` module.
+ */
+export type IssueReaderAction = { kind: 'close' } | { kind: 'metadata'; mode: PrMetadataMode }
+
+/** The reader request a list action stands for, or null for one the list handles itself. */
+export function issueReaderActionFor(action: IssueListAction): IssueReaderAction | null {
+  switch (action.kind) {
+    case 'close':
+      return { kind: 'close' }
+    case 'labels':
+      return { kind: 'metadata', mode: 'labels' }
+    case 'assignees':
+      return { kind: 'metadata', mode: 'assignees' }
+    case 'milestone':
+      return { kind: 'metadata', mode: 'milestone' }
+    default:
+      return null
+  }
+}

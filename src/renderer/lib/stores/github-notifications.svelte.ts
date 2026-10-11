@@ -6,7 +6,8 @@ import type {
   GitHubNotificationPageResult,
   GitHubNotificationSort,
   GitHubNotificationTab,
-  GitHubNotificationTabCounts
+  GitHubNotificationTabCounts,
+  GitHubNotificationAccessRequired
 } from '$shared/types'
 
 /** Items fetched per page. GitHub caps `per_page` at 100 and the panel asks for less. */
@@ -15,16 +16,15 @@ const PAGE_SIZE = 30
 const EMPTY_COUNTS: GitHubNotificationTabCounts = { inbox: 0, saved: 0, done: 0 }
 
 /**
- * Whether a listing answer is GitHub refusing the token rather than a listing.
+ * Whether a listing answer reports that no usable token serves it rather than a
+ * listing.
  *
- * A page and a permission refusal are told apart by the marker GitHub's
- * permission shape carries; the page has no such field.
- */
-function isPermissionRequired(result: GitHubNotificationPageResult): result is {
-  status: 'permission_required'
-  message: string
-} {
-  return 'status' in result
+ * A page and the access state are told apart by the marker the access shape
+ * carries; the page has no `status` field.
+ */ function isAccessRequired(
+  result: GitHubNotificationPageResult
+): result is GitHubNotificationAccessRequired {
+  return 'status' in result && result.status === 'access_required'
 }
 
 /**
@@ -48,12 +48,25 @@ class GitHubNotificationsStore {
   loadingMore = $state(false)
   error = $state<string | null>(null)
   /**
-   * True while the failure is GitHub refusing the token, not a transient fault.
-   * A retry cannot clear it; the panel offers the sign-in that can.
+   * The access state the listing reported, when GitHub could not serve it.
+   *
+   * The app asks for the notifications scope at sign-in, so this means the grant
+   * no longer carries it. Signing in again asks for it afresh, which is why the
+   * panel pairs the message with a sign-in control.
    */
-  permissionRequired = $state(false)
+  access = $state<GitHubNotificationAccessRequired | null>(null)
   /** Thread id of an in-flight per-row action, so its row can show busy. */
   busyThreadId = $state<string | null>(null)
+
+  /**
+   * The notification the panel has open, addressed at the thread it names.
+   *
+   * The open row is held here rather than in the panel so every mutation that
+   * patches a row patches the open copy with it, and so a thread that leaves the
+   * view it was opened from (marked done in the inbox, unsaved in Saved) closes
+   * the reader instead of leaving one addressed at a row the view no longer has.
+   */
+  openNotification = $state<GitHubNotification | null>(null)
 
   private page = 1
   /** Guards against a slower earlier response overwriting a newer one. */
@@ -61,6 +74,17 @@ class GitHubNotificationsStore {
 
   /** Whether the panel has been opened at least once, so it loads lazily. */
   private started = false
+
+  /**
+   * Whether the listing has ever been loaded.
+   *
+   * Lets a caller that only wants to keep a loaded view current (an account
+   * switch, a sign-in) skip the work when the view was never opened, instead of
+   * fetching an inbox the user has not asked to see.
+   */
+  get hasLoaded(): boolean {
+    return this.started
+  }
 
   /** Load the first page for the current tab and filter, unless already loaded. */
   async ensureLoaded(): Promise<void> {
@@ -94,7 +118,7 @@ class GitHubNotificationsStore {
     const requestId = ++this.requestId
     this.loading = true
     this.error = null
-    this.permissionRequired = false
+    this.access = null
     try {
       const result = await invoke('githubNotification:page', {
         tab: this.tab,
@@ -103,15 +127,22 @@ class GitHubNotificationsStore {
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
-      if (isPermissionRequired(result)) {
+      if (isAccessRequired(result)) {
         this.items = []
         this.hasMore = false
-        this.error = result.message
-        this.permissionRequired = true
+        this.access = result
+        // No usable account serves the listing, so there is no thread to read here.
+        if (this.openNotification) this.closeNotification()
         return
       }
       this.page = 1
       this.items = result.items
+      // The reader follows its thread into the fresh listing, so an action taken
+      // elsewhere does not leave the open copy describing an older state.
+      if (this.openNotification) {
+        const refreshed = this.items.find((item) => item.id === this.openNotification?.id)
+        if (refreshed) this.openNotification = refreshed
+      }
       // Saved and Done carry no inbox count of their own, so the badge keeps the
       // last figure the Inbox view reported rather than dropping to zero.
       this.counts =
@@ -141,11 +172,10 @@ class GitHubNotificationsStore {
         perPage: PAGE_SIZE
       })
       if (requestId !== this.requestId) return
-      // A refusal mid-list is the same fact as one on the first page: the token
-      // cannot read notifications, and only a fresh sign-in changes that.
-      if (isPermissionRequired(result)) {
-        this.error = result.message
-        this.permissionRequired = true
+      // A refusal mid-list is the same fact as one on the first page: no usable
+      // token serves this listing, and only connecting one changes that.
+      if (isAccessRequired(result)) {
+        this.access = result
         return
       }
       this.page = next
@@ -217,6 +247,22 @@ class GitHubNotificationsStore {
     }
   }
 
+  /**
+   * Address the panel at the thread a notification names, reading it in place.
+   *
+   * Nothing is fetched here: the thread is read by the panel's own pull request
+   * or issue reader, which fetches what it needs from the repository the
+   * notification names.
+   */
+  openThread(item: GitHubNotification): void {
+    this.openNotification = item
+  }
+
+  /** Close the open thread and return to the listing. */
+  closeNotification(): void {
+    this.openNotification = null
+  }
+
   /** One row action, with its id marked busy and any failure surfaced. */
   private async runRowAction(threadId: string, action: () => Promise<void>): Promise<void> {
     this.busyThreadId = threadId
@@ -235,10 +281,15 @@ class GitHubNotificationsStore {
     patch: (item: GitHubNotification) => GitHubNotification
   ): void {
     this.items = this.items.map((item) => (item.id === threadId ? patch(item) : item))
+    // The open copy is patched with the row, so a thread being read describes the
+    // same state as the row it was opened from.
+    if (this.openNotification?.id === threadId) this.openNotification = patch(this.openNotification)
   }
 
   private removeItem(threadId: string): void {
     this.items = this.items.filter((item) => item.id !== threadId)
+    // A thread that left the view it was read from has nothing to read here.
+    if (this.openNotification?.id === threadId) this.closeNotification()
   }
 }
 

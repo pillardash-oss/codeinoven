@@ -70,7 +70,8 @@ export class GitDeploymentCache {
    * Returns immediately when fresh cache exists; otherwise fetches and updates
    * the cache. `force` bypasses both the TTL and the failure cooldown (explicit
    * refresh). Failures rethrow so the caller can surface a tailored message
-   * (e.g. the GitHub App permission screen) while any stale cache stays on screen.
+   * (e.g. the permission refusal with its sign-in control) while any stale cache
+   * stays on screen.
    */
   async ensureDeploymentOverview(
     projectId: string,
