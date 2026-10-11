@@ -4,7 +4,11 @@ import {
   GitHubNotificationTokenMissingError
 } from '../../git/github-notifications-service'
 import { validateBoolean } from '../validation/primitives'
-import { validateNotificationPageInput, validateNotificationThreadId } from '../ipc-validation'
+import {
+  validateNotificationPageInput,
+  validateNotificationSubjectRequest,
+  validateNotificationThreadId
+} from '../ipc-validation'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { GitHubNotificationAccessRequired } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
@@ -121,6 +125,14 @@ export function registerGitHubNotificationHandlers(ctx: IpcHandlerContext): void
         validateNotificationThreadId(threadId),
         validateBoolean(saved, 'Saved')
       )
+    } catch (failure) {
+      describeNotificationFailure(failure)
+    }
+  })
+
+  ipcMain.handle('githubNotification:subject', async (_, request: unknown) => {
+    try {
+      return await service.fetchSubject(validateNotificationSubjectRequest(request))
     } catch (failure) {
       describeNotificationFailure(failure)
     }

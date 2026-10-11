@@ -748,6 +748,9 @@
     // Notifications are account-wide, so they are the one view whose data belongs
     // to the account rather than to the repository the panel is standing in. A
     // view that was never opened is left alone: it loads when it is opened.
+    // The open thread is closed first: it was read as the account that just
+    // signed out, switched or signed in, and this status is what changed that.
+    githubNotifications.closeSubject()
     if (githubNotifications.hasLoaded) await githubNotifications.load()
   }
 

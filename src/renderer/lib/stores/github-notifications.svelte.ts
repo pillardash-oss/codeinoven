@@ -5,6 +5,7 @@ import type {
   GitHubNotificationGroup,
   GitHubNotificationPageResult,
   GitHubNotificationSort,
+  GitHubNotificationSubject,
   GitHubNotificationTab,
   GitHubNotificationTabCounts,
   GitHubNotificationAccessRequired
@@ -57,6 +58,19 @@ class GitHubNotificationsStore {
   access = $state<GitHubNotificationAccessRequired | null>(null)
   /** Thread id of an in-flight per-row action, so its row can show busy. */
   busyThreadId = $state<string | null>(null)
+
+  /**
+   * The notification the reader has open, and its thread's own fetch state.
+   *
+   * The open row is held here rather than in the panel so every mutation that
+   * patches a row patches the open copy with it, and so a thread that leaves the
+   * view it was opened from (marked done in the inbox, unsaved in Saved) closes
+   * the reader instead of leaving one addressed at a row the view no longer has.
+   */
+  openItem = $state<GitHubNotification | null>(null)
+  subject = $state<GitHubNotificationSubject | null>(null)
+  subjectLoading = $state(false)
+  subjectError = $state<string | null>(null)
 
   private page = 1
   /** Guards against a slower earlier response overwriting a newer one. */
@@ -121,10 +135,18 @@ class GitHubNotificationsStore {
         this.items = []
         this.hasMore = false
         this.access = result
+        // No usable account serves the listing, so there is no thread to read here.
+        if (this.openItem) this.closeSubject()
         return
       }
       this.page = 1
       this.items = result.items
+      // The reader follows its thread into the fresh listing, so an action taken
+      // elsewhere does not leave the open copy describing an older state.
+      if (this.openItem) {
+        const refreshed = this.items.find((item) => item.id === this.openItem?.id)
+        if (refreshed) this.openItem = refreshed
+      }
       // Saved and Done carry no inbox count of their own, so the badge keeps the
       // last figure the Inbox view reported rather than dropping to zero.
       this.counts =
@@ -229,6 +251,41 @@ class GitHubNotificationsStore {
     }
   }
 
+  /**
+   * Open the thread a notification points at, reading it in place.
+   *
+   * The answer is discarded when the reader has since left or opened another
+   * thread, so a slow fetch can never replace what they are actually reading.
+   */
+  async openSubject(item: GitHubNotification): Promise<void> {
+    this.openItem = item
+    this.subject = null
+    this.subjectError = null
+    this.subjectLoading = true
+    try {
+      const result = await invoke('githubNotification:subject', {
+        repositoryFullName: item.repositoryFullName,
+        subjectType: item.subjectType,
+        url: item.url
+      })
+      if (this.openItem?.id !== item.id) return
+      this.subject = result
+    } catch (reason) {
+      if (this.openItem?.id !== item.id) return
+      this.subjectError = reason instanceof Error ? reason.message : 'This thread could not be read'
+    } finally {
+      if (this.openItem?.id === item.id) this.subjectLoading = false
+    }
+  }
+
+  /** Close the open thread and drop its content. */
+  closeSubject(): void {
+    this.openItem = null
+    this.subject = null
+    this.subjectError = null
+    this.subjectLoading = false
+  }
+
   /** One row action, with its id marked busy and any failure surfaced. */
   private async runRowAction(threadId: string, action: () => Promise<void>): Promise<void> {
     this.busyThreadId = threadId
@@ -247,10 +304,15 @@ class GitHubNotificationsStore {
     patch: (item: GitHubNotification) => GitHubNotification
   ): void {
     this.items = this.items.map((item) => (item.id === threadId ? patch(item) : item))
+    // The reader's copy is patched with the row, so an action taken in the detail
+    // shows up there without the detail holding a second, stale copy of it.
+    if (this.openItem?.id === threadId) this.openItem = patch(this.openItem)
   }
 
   private removeItem(threadId: string): void {
     this.items = this.items.filter((item) => item.id !== threadId)
+    // A thread that left the view it was read from has nothing to read here.
+    if (this.openItem?.id === threadId) this.closeSubject()
   }
 }
 

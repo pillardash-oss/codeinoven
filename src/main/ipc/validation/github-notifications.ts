@@ -1,6 +1,7 @@
 import type {
   GitHubNotificationFilter,
   GitHubNotificationPageInput,
+  GitHubNotificationSubjectRequest,
   GitHubNotificationTab
 } from '../../../lib/types'
 import { assertEnum, assertRecord, rejectUnknownFields, validateBoundedInteger } from './primitives'
@@ -45,22 +46,36 @@ export function validateNotificationPageInput(value: unknown): GitHubNotificatio
   }
 }
 
+/** `owner/repo`, the only repository spelling a GitHub request path accepts. */
+const REPOSITORY_FULL_NAME = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u
+
 /**
- * A GitHub personal access token the user pasted into the panel.
+ * One request for the thread a notification points at.
  *
- * Deliberately not shape-checked beyond "one token, no whitespace": classic
- * tokens predate the `ghp_` prefix, and an OAuth token from another client (the
- * GitHub CLI's, for one) works here too. The length bound keeps an accidental
- * paste of a file inside the IPC payload and out of the vault.
+ * The repository is checked to the `owner/repo` shape because it is placed in the
+ * request path, so a caller cannot walk out of the repository it names, and the
+ * kind is bounded to the ones GitHub reports rather than forwarded as free text.
  */
-export function validateNotificationToken(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('Token must be a string')
-  const token = value.trim()
-  if (token.length < 20 || token.length > 512) {
-    throw new TypeError('Token must be between 20 and 512 characters')
+export function validateNotificationSubjectRequest(
+  value: unknown
+): GitHubNotificationSubjectRequest {
+  const record = assertRecord(value, 'Notification subject request')
+  rejectUnknownFields(
+    record,
+    new Set(['repositoryFullName', 'subjectType', 'url']),
+    'notification subject request'
+  )
+  const repositoryFullName = record['repositoryFullName']
+  if (typeof repositoryFullName !== 'string' || !REPOSITORY_FULL_NAME.test(repositoryFullName)) {
+    throw new TypeError('Repository must be an owner/repo full name')
   }
-  if (!/^[A-Za-z0-9_]+$/u.test(token)) {
-    throw new TypeError('Token must be a single GitHub token, with no other text')
+  const subjectType = record['subjectType']
+  if (typeof subjectType !== 'string' || subjectType.length === 0 || subjectType.length > 40) {
+    throw new TypeError('Subject type must be a non-empty string')
   }
-  return token
+  const url = record['url']
+  if (url !== null && url !== undefined && typeof url !== 'string') {
+    throw new TypeError('Subject URL must be a string or null')
+  }
+  return { repositoryFullName, subjectType, url: typeof url === 'string' ? url : null }
 }

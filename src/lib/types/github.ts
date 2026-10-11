@@ -1342,3 +1342,55 @@ export interface GitHubNotificationPageInput {
   /** Items per page; the provider caps this. */
   perPage: number
 }
+
+/** One comment on the thread a notification points at. */
+export interface GitHubNotificationComment {
+  id: string
+  body: string
+  authorLogin: string | null
+  authorAvatarUrl: string | null
+  createdAt: string
+}
+
+/**
+ * The thread a notification points at, read in place instead of sending the
+ * reader to github.com for it.
+ *
+ * A notification names its subject (an issue, pull request, commit, release or
+ * discussion) but carries none of its content, so the panel fetches the subject
+ * itself as the signed-in account. `readable` is false when GitHub serves no
+ * thread for that kind (discussions are GraphQL-only), which the detail draws as
+ * the notification's own facts with the thread left to the browser.
+ */
+export interface GitHubNotificationSubject {
+  /** Subject kind, as GitHub reported it on the thread. */
+  kind: string
+  /** Whether the subject's own content could be read from GitHub. */
+  readable: boolean
+  /** Open, closed, merged or draft, when the kind is stateful. */
+  state: string | null
+  /** The subject's body: the issue description, commit message or release notes. */
+  body: string | null
+  /** Who authored the subject. */
+  authorLogin: string | null
+  authorAvatarUrl: string | null
+  createdAt: string | null
+  /** Label names on the subject, in GitHub's order. */
+  labels: string[]
+  /** The subject's conversation, oldest first. */
+  comments: GitHubNotificationComment[]
+}
+
+/** A request for the thread one notification points at. */
+export interface GitHubNotificationSubjectRequest {
+  /** `owner/repo` the subject lives in. */
+  repositoryFullName: string
+  /** Subject kind, e.g. `Issue`, `PullRequest`, `Commit`, `Release`. */
+  subjectType: string
+  /**
+   * The subject's browsable github.com URL. Its last path segment names the
+   * subject (the number, commit sha or release tag), which is how the fetch is
+   * addressed without a second field that could disagree with the URL.
+   */
+  url: string | null
+}
