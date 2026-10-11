@@ -67,10 +67,7 @@ class ProjectActionsState {
     const saved = await invoke('projectActions:save', projectId, actionId, input, insertAfterId)
     const current = this.actions(projectId)
     if (actionId) {
-      this.actionsByProject.set(
-        projectId,
-        current.map((action) => (action.id === saved.id ? saved : action))
-      )
+      this.replace(projectId, saved)
       return
     }
     const next = [...current]
@@ -95,7 +92,29 @@ class ProjectActionsState {
     const ordered = await invoke('projectActions:reorder', projectId, orderedIds)
     this.actionsByProject.set(projectId, ordered)
   }
-  start(action: ProjectAction, variables: Record<string, string>, scopeBucketId: string): void {
+  /** Swap one action's in-memory record for the version main just persisted. */
+  private replace(projectId: string, action: ProjectAction): void {
+    this.actionsByProject.set(
+      projectId,
+      this.actions(projectId).map((entry) => (entry.id === action.id ? action : entry))
+    )
+  }
+  /** Stamp the action as just-run so its entry can show how old its output is.
+   *  Best-effort: a failed stamp must never stop a run the user already started. */
+  private async markRun(projectId: string, actionId: string): Promise<void> {
+    try {
+      const updated = await invoke('projectActions:markRun', projectId, actionId)
+      if (updated) this.replace(projectId, updated)
+    } catch {
+      // Presentation only; the terminal is already spawning.
+    }
+  }
+  start(
+    projectId: string,
+    action: ProjectAction,
+    variables: Record<string, string>,
+    scopeBucketId: string
+  ): void {
     const terminalId = `action-${action.id}-${crypto.randomUUID()}`
     this.exitSubscriptions.get(action.id)?.()
     this.runs.set(action.id, {
@@ -116,6 +135,7 @@ class ProjectActionsState {
         this.exitSubscriptions.delete(action.id)
       })
     )
+    void this.markRun(projectId, action.id)
   }
   async stop(actionId: string): Promise<void> {
     const run = this.runs.get(actionId)
