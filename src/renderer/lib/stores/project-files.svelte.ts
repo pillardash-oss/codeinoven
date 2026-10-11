@@ -615,6 +615,12 @@ class ProjectFilesWorkspace {
     return this.explorer.focusFileInExplorer(projectId, path)
   }
 
+  /** The tree focused the reveal carried by `focusRequest`; a later panel mount
+   *  may align to the active file tab again. */
+  acknowledgeReveal(projectId: string, focusRequest: number): void {
+    this.explorer.acknowledgeReveal(projectId, focusRequest)
+  }
+
   setRevealedPath(projectId: string, path: string | null): void {
     this.explorer.setRevealedPath(projectId, path)
   }

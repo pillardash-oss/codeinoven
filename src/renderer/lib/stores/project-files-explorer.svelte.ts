@@ -11,6 +11,7 @@ import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import {
   errorMessage,
+  isWithinPath,
   orderDeletionPaths,
   parentDirectory,
   removePathsInState,
@@ -157,6 +158,7 @@ export class ProjectFilesExplorer {
           // dimmed behind the error so the panel still describes the checkout
           // rather than going blank.
           state.directoryErrors[directory] = errorMessage(error)
+          this.dropBlockedPendingReveal(state, directory)
         }
       } finally {
         if (!options.silent) delete state.loadingDirectories[directory]
@@ -605,14 +607,44 @@ export class ProjectFilesExplorer {
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.host.stateFor(projectId)
     const generation = this.beginFocus(projectId)
+    const target = directory || null
+    this.markPendingReveal(state, target)
     state.explorerVisible = true
     await this.expandDirectoryPath(projectId, state, directory)
     if (!this.isCurrentFocus(projectId, generation)) return
-    state.revealedPath = directory || null
+    state.revealedPath = target
     state.selectedPaths = directory ? [directory] : []
     state.selectionAnchor = directory || null
     state.focusRequest += 1
+    this.markPendingReveal(state, target)
     this.persistExplorer(projectId)
+  }
+
+  /** Record the path an explicit reveal asks for, so a tree that mounts before
+   *  the focus lands aligns itself to the reveal instead of the active tab.
+   *  Claimed before the reveal's first await: those loads mount the tree, and a
+   *  tree that mounts while the reveal is in flight must not align itself to the
+   *  active file tab and cancel the reveal's generation. */
+  private markPendingReveal(state: ProjectFilesState, path: string | null): void {
+    state.pendingReveal = path ? { path, request: state.focusRequest } : null
+  }
+
+  /** The tree has focused the reveal carried by `focusRequest`, so a later panel
+   *  mount may align to the active file tab again. */
+  acknowledgeReveal(projectId: string, focusRequest: number): void {
+    const state = this.host.existingState(projectId)
+    if (state?.pendingReveal?.request === focusRequest) state.pendingReveal = null
+  }
+
+  /** A directory that failed to load can never reveal a path beneath it, so a
+   *  reveal waiting on it is abandoned rather than blocking the tree's
+   *  alignment with the active file tab for good. */
+  private dropBlockedPendingReveal(state: ProjectFilesState, directory: string): void {
+    const pending = state.pendingReveal
+    if (!pending) return
+    if (directory === '' || isWithinPath(parentDirectory(pending.path), directory)) {
+      state.pendingReveal = null
+    }
   }
 
   private beginFocus(projectId: string): number {
@@ -641,6 +673,7 @@ export class ProjectFilesExplorer {
   async revealFile(projectId: string, path: string): Promise<void> {
     const state = this.host.stateFor(projectId)
     const generation = this.beginFocus(projectId)
+    this.markPendingReveal(state, path)
     state.explorerVisible = true
     await this.loadDirectory(projectId, '')
     await this.expandDirectoryPath(projectId, state, parentDirectory(path))
@@ -649,6 +682,7 @@ export class ProjectFilesExplorer {
     state.selectedPaths = [path]
     state.selectionAnchor = path
     state.focusRequest += 1
+    this.markPendingReveal(state, path)
     this.persistExplorer(projectId)
   }
 
@@ -656,6 +690,14 @@ export class ProjectFilesExplorer {
    *  an explorer that the user chose to hide. */
   async focusFileInExplorer(projectId: string, path: string): Promise<void> {
     const state = this.host.stateFor(projectId)
+    // A reveal the tree has not focused yet owns the next focus. Mounting the
+    // tree is one of the things a reveal does, so aligning here would scroll
+    // straight back to the active file tab and lose the path just asked for.
+    // Aligning to that same path *is* the pending reveal, so it settles here.
+    if (state.pendingReveal) {
+      if (state.pendingReveal.path !== path) return
+      state.pendingReveal = null
+    }
     const generation = this.beginFocus(projectId)
     await this.loadDirectory(projectId, '')
     await this.expandDirectoryPath(projectId, state, parentDirectory(path))
@@ -670,6 +712,9 @@ export class ProjectFilesExplorer {
   setRevealedPath(projectId: string, path: string | null): void {
     const state = this.host.stateFor(projectId)
     state.revealedPath = path
+    // A click on a tree row is the user's own navigation: it supersedes a reveal
+    // that was still waiting to be focused.
+    state.pendingReveal = null
     this.persistExplorer(projectId)
   }
 
