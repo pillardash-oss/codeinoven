@@ -74,6 +74,7 @@ export class SearchService {
   private disposed = false
   private sweepController: AbortController | null = null
   private indexingError: string | null = null
+  private indexingDetail: SearchIndexStatus['progress'] = null
 
   constructor(
     private readonly db: Database,
@@ -308,7 +309,8 @@ export class SearchService {
       indexing: this.indexing,
       dimensions: model?.dimensions ?? 0,
       lastIndexedAt: this.index.lastIndexedAt,
-      error: this.indexingError
+      error: this.indexingError,
+      progress: this.indexingDetail
     }
   }
 
@@ -482,10 +484,24 @@ export class SearchService {
           onProgress: ({ total, pending }) => {
             this.sweepTotals = { total, pending }
             this.emitStatus()
+          },
+          onError: (thread, error) => {
+            const detail = error instanceof Error ? error.message : String(error)
+            this.indexingError = `Could not index "${thread.title.slice(0, 100)}": ${detail}`
+            Logger.error('Thread search indexing skipped a failed thread', {
+              threadId: thread.id,
+              error: detail
+            })
+            this.emitStatus()
+          },
+          onThreadProgress: (thread, stage, chunks) => {
+            const title = thread.title.slice(0, 100) || 'Untitled thread'
+            this.indexingDetail = { threadTitle: title, stage, completedChunks: chunks }
+            this.emitStatus()
           }
         }
       )
-      this.sweepTotals = { total: result.total, pending: 0 }
+      this.sweepTotals = { total: result.total, pending: result.pending }
       Logger.dev(`Thread embedding index swept (${reason})`, result)
     } catch (error) {
       if (controller.signal.aborted) return
@@ -494,6 +510,7 @@ export class SearchService {
     } finally {
       this.sweepController = null
       this.indexing = false
+      this.indexingDetail = null
       this.emitStatus()
     }
   }

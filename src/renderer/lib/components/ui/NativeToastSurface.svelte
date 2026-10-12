@@ -9,6 +9,7 @@
     ToastOverlayRequestStack,
     ToastOverlayToast
   } from '$shared/browser-overlay'
+  import MemoryToastIcon from './MemoryToastIcon.svelte'
   import ToastStack from './ToastStack.svelte'
   let theme = $state<'light' | 'dark'>('light')
   let stack: ToastOverlayRequestStack | null = null
@@ -92,6 +93,12 @@
         break
       case 'loading':
         toast.loading(entry.title, options)
+        break
+      case 'memory':
+        // The app raises the memory proposal as a component toast, which the
+        // overlay cannot render, so it arrives projected: a plain card with
+        // the memory icon, which is what tells it apart from other cards.
+        toast.message(entry.title, { ...options, icon: MemoryToastIcon })
         break
       default:
         toast.message(entry.title, options)

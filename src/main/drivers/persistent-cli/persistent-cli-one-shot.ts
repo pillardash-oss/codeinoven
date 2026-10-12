@@ -156,22 +156,26 @@ export async function runOneShotWithCandidates(
     host.titleTurns.register(sessionId)
     const completion = host.titleTurns.wait(sessionId, host.driverName, timeoutMs)
     try {
-      await host.sendPrompt(projectPath, {
-        sessionId,
-        settings: {
-          ...options.settings,
-          providerId: candidate.providerId,
-          modelId: candidate.modelId,
-          thinkingLevel: 'minimal',
-          inferenceMode: 'normal',
-          permissionLevel: 'auto_review'
-        },
-        text: promptText,
-        attachments: [],
-        readOnly: true,
-        allowedTools: []
-      })
-      await completion.promise
+      // Observe the timeout concurrently: some drivers keep sendPrompt pending
+      // until the entire turn finishes, so awaiting it first defeats the timer.
+      await Promise.all([
+        host.sendPrompt(projectPath, {
+          sessionId,
+          settings: {
+            ...options.settings,
+            providerId: candidate.providerId,
+            modelId: candidate.modelId,
+            thinkingLevel: 'minimal',
+            inferenceMode: 'normal',
+            permissionLevel: 'auto_review'
+          },
+          text: promptText,
+          attachments: [],
+          readOnly: true,
+          allowedTools: []
+        }),
+        completion.promise
+      ])
       // Read the live session record directly: a driver override may answer
       // from a native transcript or report [] for unresumable sessions, while
       // title generation always wants this disposable session's own mirror.
@@ -221,10 +225,25 @@ export async function runOneShotWithCandidates(
       accounted.push(buildTitleAttempt(index + 1, candidate, false, fallbackReason))
     } finally {
       completion.cancel()
-      await host.abort(projectPath, sessionId).catch(() => undefined)
-      await host.deleteSession(projectPath, sessionId).catch(() => undefined)
+      await boundedCleanup(() => host.abort(projectPath, sessionId))
+      await boundedCleanup(() => host.deleteSession(projectPath, sessionId))
       host.titleTurns.unregister(sessionId)
     }
   }
   return { value: null, authFailed: false, attempts: accounted }
+}
+
+/** An unresponsive transport must not defeat the completion timeout during cleanup. */
+async function boundedCleanup(operation: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      operation().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 5_000)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
