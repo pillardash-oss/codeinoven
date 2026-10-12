@@ -93,6 +93,15 @@ export interface CioCleanupServiceDeps {
   onProgress?: (progress: CioCleanupProgress) => void
   /** Tell every window the state moved (a run finished, a path was excluded). */
   onStateChanged?: (state: CioCleanupState) => void
+  /**
+   * Told once a sweep settles, whatever its outcome.
+   *
+   * The sweep removes the design and video folders that went stale, and the app's
+   * own history of those folders has to go with them. The cleanup service knows
+   * which folders it removed but not who keeps a timeline for them, so it hands the
+   * moment back rather than reaching into another service.
+   */
+  onSweepComplete?: () => Promise<void>
 }
 
 /** One run's identity, and whether this call started it or surfaced a live one. */
@@ -361,6 +370,14 @@ export class CioCleanupService {
     await this.persist(summary)
     this.run = null
     await this.publishState()
+    // Folders the sweep removed have no history left to stand on, so the app's own
+    // timelines are reconciled once the run is recorded. Best-effort: the cleanup's
+    // result must not depend on another service being able to sweep its database.
+    try {
+      await this.deps.onSweepComplete?.()
+    } catch (thrown) {
+      Logger.dev('CIO Cleanup post-run reconciliation was skipped:', thrown)
+    }
     Logger.info('CIO Cleanup run finished', {
       runId,
       origin: live.origin,

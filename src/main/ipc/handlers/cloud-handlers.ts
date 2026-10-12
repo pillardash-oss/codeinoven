@@ -825,6 +825,55 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   /**
+   * Verify a provider account's credentials without saving anything. Tests a
+   * saved account by id (vaulted token) or inline kind + baseUrl + token from
+   * an unsaved form. A light `listContainers` read is the probe: it exercises
+   * auth, host reachability, and token scope in one call.
+   */
+  ipcMain.handle('cloudDeploy:testAccount', async (_, input: unknown) => {
+    if (!isRecord(input)) throw new TypeError('Connection test input must be an object')
+    let kind: CloudDeploymentProviderKind
+    let baseUrl: string | undefined
+    let token: string
+    if (typeof input.accountId === 'string' && input.accountId.trim() !== '') {
+      const safeAccountId = requireString(input.accountId, 'Account ID', true)
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      if (!account.enabled) {
+        throw new TypeError(`Cloud deployment account "${account.label}" is disabled`)
+      }
+      kind = account.providerKind
+      baseUrl = account.baseUrl
+      // An explicit token in the form replaces the vaulted one for the test so
+      // edits can be verified before they are saved.
+      token =
+        typeof input.token === 'string' && input.token.trim() !== ''
+          ? validateProviderToken(input.token)
+          : await vault.resolveProviderToken(account.id)
+      if (typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '') {
+        baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
+      }
+    } else {
+      kind = validateCloudDeploymentProviderKind(input.providerKind)
+      if (typeof input.baseUrl !== 'string' || input.baseUrl.trim() === '') {
+        throw new TypeError(`Enter the ${kind} base URL before testing.`)
+      }
+      baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
+      if (typeof input.token !== 'string' || input.token.trim() === '') {
+        throw new TypeError('Enter an API token before testing.')
+      }
+      token = validateProviderToken(input.token)
+    }
+    const provider = resolveDeploymentProvider(kind, {
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+      token
+    })
+    const containers = await provider.listContainers()
+    return { containerCount: containers.length }
+  })
+
+  /**
    * Remove every trace of a provider account from one project's cloud
    * deployment config: its attachment, its active-account role, and every
    * container mapping monitored through it (explicitly bound mappings, plus

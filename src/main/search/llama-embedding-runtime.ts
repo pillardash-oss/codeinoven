@@ -3,6 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { constants, access, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { EmbeddingRuntimeId } from '../../lib/search/types'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 /**
  * A local embedding runtime: turns text into vectors without leaving the
@@ -26,15 +27,6 @@ export interface EmbeddingRuntimeHost {
   unregisterProcess: (pid: number) => void
 }
 
-interface EmbeddingResponseRow {
-  index?: number
-  embedding?: number[]
-}
-
-interface EmbeddingResponse {
-  data?: EmbeddingResponseRow[]
-}
-
 /**
  * Runs an embedding model through a local `llama-server` process and reads the
  * OpenAI-compatible `/v1/embeddings` endpoint. One server stays resident per
@@ -46,6 +38,7 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   private port = 0
   private stderrTail = ''
   private ready: Promise<void> | null = null
+  private tokenBudget = 0
 
   constructor(
     private readonly modelDirectory: string,
@@ -60,31 +53,74 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   async embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]> {
     if (texts.length === 0) return []
     await this.ensureServer()
+    // Non-causal embeddings must fit in one physical batch. Process documents
+    // sequentially so an index batch cannot multiply the runtime's memory use.
+    const vectors: Float32Array[] = []
+    for (const text of texts) {
+      signal.throwIfAborted()
+      const tokens = await this.tokenize(text, signal)
+      const vector = await this.embedTokens(tokens.slice(0, this.tokenBudget - 1), signal)
+      vectors.push(vector)
+    }
+    return vectors
+  }
+
+  private async tokenize(text: string, signal: AbortSignal): Promise<number[]> {
+    const response = await fetch(`http://127.0.0.1:${this.port}/tokenize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: text, add_special: true }),
+      signal
+    })
+    await requireSuccessfulResponse(response)
+    const value: unknown = await response.json()
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('tokens' in value) ||
+      !Array.isArray(value.tokens) ||
+      !value.tokens.every(
+        (token: unknown) => typeof token === 'number' && Number.isInteger(token) && token >= 0
+      )
+    ) {
+      throw new Error('The embedding tokenizer returned invalid tokens.')
+    }
+    return value.tokens
+  }
+
+  private async embedTokens(tokens: number[], signal: AbortSignal): Promise<Float32Array> {
     if (this.port === 0) throw new Error('The embedding runtime is not running.')
     const response = await fetch(`http://127.0.0.1:${this.port}/v1/embeddings`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input: [...texts], encoding_format: 'float' }),
+      body: JSON.stringify({ input: [tokens], encoding_format: 'float' }),
       signal
     })
-    if (!response.ok) {
-      throw new Error(`The embedding model request failed (${response.status}).`)
-    }
-    const value = (await response.json()) as EmbeddingResponse
-    const rows = value.data ?? []
-    if (rows.length !== texts.length) {
+    await requireSuccessfulResponse(response)
+    const value: unknown = await response.json()
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('data' in value) ||
+      !Array.isArray(value.data) ||
+      value.data.length !== 1
+    ) {
       throw new Error('The embedding model returned an unexpected number of vectors.')
     }
-    const ordered: Float32Array[] = new Array(texts.length)
-    rows.forEach((row, fallbackIndex) => {
-      const target = typeof row.index === 'number' ? row.index : fallbackIndex
-      if (!row.embedding) throw new Error('The embedding model returned an empty vector.')
-      ordered[target] = Float32Array.from(row.embedding)
-    })
-    for (let index = 0; index < ordered.length; index += 1) {
-      if (!ordered[index]) throw new Error('The embedding model returned an incomplete batch.')
+    const row: unknown = value.data[0]
+    if (
+      typeof row !== 'object' ||
+      row === null ||
+      !('embedding' in row) ||
+      !Array.isArray(row.embedding) ||
+      row.embedding.length === 0 ||
+      !row.embedding.every(
+        (number: unknown) => typeof number === 'number' && Number.isFinite(number)
+      )
+    ) {
+      throw new Error('The embedding model returned an invalid vector.')
     }
-    return ordered
+    return Float32Array.from(row.embedding)
   }
 
   isResident(): boolean {
@@ -96,16 +132,17 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
     this.child = null
     this.port = 0
     this.ready = null
+    this.tokenBudget = 0
     child?.kill('SIGTERM')
   }
 
   private async ensureServer(): Promise<void> {
-    if (this.child && this.port !== 0) return
+    if (this.child && this.tokenBudget > 0) return
     this.ready ??= this.start()
     try {
       await this.ready
     } catch (error) {
-      this.ready = null
+      await this.dispose()
       throw error
     }
   }
@@ -114,7 +151,6 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
     const executable = this.host.llamaServerPath()
     if (!executable) throw new Error('No local llama.cpp runtime is available.')
     const modelFile = await locateGgufModel(this.modelDirectory)
-    await this.dispose()
     this.stderrTail = ''
     // llama-server picks its own free TCP port with --port 0 and reports the
     // listening URL on stderr before the model finishes loading.
@@ -131,6 +167,15 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         // `0` lets llama.cpp adopt the model's own trained context, which is the
         // only correct answer for an imported model whose window we cannot know.
         this.contextTokens > 0 ? String(this.contextTokens) : '0',
+        // Mean pooling cannot split a document across physical batches.
+        '--batch-size',
+        String(this.contextTokens > 0 ? this.contextTokens : 8192),
+        '--ubatch-size',
+        String(this.contextTokens > 0 ? this.contextTokens : 8192),
+        '--threads',
+        '2',
+        '--threads-batch',
+        '2',
         '--parallel',
         '1',
         // Serve the OpenAI-compatible /v1/embeddings endpoint. Pooling and
@@ -138,12 +183,20 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         // for EmbeddingGemma and for user-imported embedding models alike.
         '--embeddings'
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
+      { stdio: ['ignore', 'pipe', 'pipe'], env: buildProcessEnvironment() }
     ) as unknown as ChildProcessWithoutNullStreams
     this.child = child
     const pid = child.pid ?? 0
     this.host.registerProcess(pid, executable, process.cwd())
-    child.once('exit', () => this.host.unregisterProcess(pid))
+    child.once('exit', () => {
+      this.host.unregisterProcess(pid)
+      if (this.child === child) {
+        this.child = null
+        this.port = 0
+        this.ready = null
+        this.tokenBudget = 0
+      }
+    })
     let buffered = ''
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(
@@ -158,7 +211,7 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (chunk: string) => {
         this.stderrTail = `${this.stderrTail}${chunk}`.slice(-4000)
-        buffered += chunk
+        buffered = `${buffered}${chunk}`.slice(-4000)
         const match = /(?:http|https):\/\/[^\s]+:(\d+)/u.exec(buffered)
         if (!match || !match[1]) return
         this.port = Number(match[1])
@@ -170,6 +223,28 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
       )
     })
     await this.waitHealthy()
+    // The runtime may cap the requested window to the model's trained limit.
+    // Read the actual slot size, including for imports using --ctx-size 0.
+    const response = await fetch(`http://127.0.0.1:${this.port}/props`)
+    await requireSuccessfulResponse(response)
+    const properties: unknown = await response.json()
+    if (
+      typeof properties !== 'object' ||
+      properties === null ||
+      !('default_generation_settings' in properties) ||
+      typeof properties.default_generation_settings !== 'object' ||
+      properties.default_generation_settings === null ||
+      !('n_ctx' in properties.default_generation_settings) ||
+      typeof properties.default_generation_settings.n_ctx !== 'number' ||
+      !Number.isInteger(properties.default_generation_settings.n_ctx) ||
+      properties.default_generation_settings.n_ctx < 2
+    ) {
+      throw new Error('The embedding runtime did not report its context window.')
+    }
+    this.tokenBudget = Math.min(
+      properties.default_generation_settings.n_ctx,
+      this.contextTokens > 0 ? this.contextTokens : 8192
+    )
   }
 
   private async waitHealthy(): Promise<void> {
@@ -185,6 +260,32 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
     }
     throw new Error('llama-server did not become healthy after loading the embedding model.')
   }
+}
+
+async function requireSuccessfulResponse(response: Response): Promise<void> {
+  if (response.ok) return
+  const body = (await response.text()).slice(0, 2000)
+  let detail = ''
+  try {
+    const value: unknown = JSON.parse(body)
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      'error' in value &&
+      typeof value.error === 'object' &&
+      value.error !== null &&
+      'message' in value.error &&
+      typeof value.error.message === 'string'
+    ) {
+      detail = value.error.message
+    }
+  } catch {
+    // Non-JSON errors still retain their bounded diagnostic text.
+    detail = body
+  }
+  throw new Error(
+    `The embedding model request failed (${response.status})${detail ? `: ${detail}` : '.'}`
+  )
 }
 
 async function locateGgufModel(directory: string): Promise<string> {

@@ -205,6 +205,16 @@ export interface DesignThumbnail {
  */
 export type DesignRevisionCause = 'initial' | 'agent' | 'user'
 
+/** Result of an explicit named agent checkpoint. */
+export interface DesignCheckpointResult {
+  directory: string
+  entry: string
+  label: string
+  revisionId: string | null
+  checkpointed: boolean
+  gitBacked: boolean
+}
+
 /**
  * One point in a design's history: a snapshot the user can return to.
  *
@@ -218,14 +228,78 @@ export interface DesignRevisionSummary {
   sequence: number
   /** What produced the change this revision captured. */
   cause: DesignRevisionCause
+  /** Named agent step, for example "Hero title updated". */
+  label?: string
+  /** Screen whose step was checkpointed. */
+  checkpointEntry?: string
   /** When the snapshot was taken (ms). */
   createdAt: number
   /** Files added, changed, or removed from the revision this one follows. */
   changedFiles: number
+  /**
+   * The paths added, changed, or removed from the revision this one follows, so a
+   * row can name what moved and a page can be picked out of the timeline.
+   */
+  changedPaths: string[]
   /** Files the snapshot holds. */
   fileCount: number
   /** Total size of the snapshot's files, in bytes. */
   totalBytes: number
+}
+
+/** One file the timeline has touched, for the page scope picker. */
+export interface DesignHistoryFile {
+  /** Screen name shown to the user. */
+  name: string
+  /** Path inside the design folder, with forward slashes. */
+  path: string
+  /** How many revisions added, changed, or removed it. */
+  changeCount: number
+  /** Whether the newest revision still holds it. */
+  present: boolean
+}
+
+/**
+ * One page's own line through the history, for a fine-grained undo.
+ *
+ * A design is iterated a page at a time, and a whole-folder undo is too blunt when
+ * the user only wants to take one page back. The page's states are the distinct
+ * contents it held, oldest first, read from the folder revisions: stepping between
+ * two neighbours restores exactly one file and leaves every other page where it is.
+ */
+export interface DesignPageRevision {
+  label?: string
+  /** The revision whose content this state was read from. */
+  revisionId: string
+  /** Position on the folder's timeline, oldest first. */
+  sequence: number
+  /** When that revision was taken (ms). */
+  createdAt: number
+  /** Whether the file existed at this state (false means restoring deletes it). */
+  present: boolean
+}
+
+/** One page's history, and where the page currently sits in it. */
+export interface DesignPageHistoryState {
+  gitBacked: boolean
+  /** Project-relative folder, with forward slashes. */
+  directory: string
+  /** The file this line belongs to. */
+  path: string
+  /** Distinct states the page held, oldest first. */
+  revisions: DesignPageRevision[]
+  /** Index of the state the page is at, or `revisions.length` when it matches none. */
+  cursorIndex: number
+  /** Whether the page on disk is a state the history does not hold (a hand edit). */
+  modified: boolean
+  canUndo: boolean
+  canRedo: boolean
+}
+
+/** A page restore's answer: the folder's history, and the page's own line after it. */
+export interface DesignHistoryRestoreFileResult {
+  history: DesignHistoryState
+  page: DesignPageHistoryState
 }
 
 /**
@@ -253,6 +327,15 @@ export interface DesignHistoryState {
   cursorId: string | null
   /** Index of `cursorId` in `revisions`, or -1. */
   cursorIndex: number
+  /**
+   * Whether the folder on disk matches no single revision, because a page-scoped
+   * undo or a hand edit left it holding a mixture of states the timeline already
+   * knows. The board says so instead of pretending the folder is at a point, and
+   * a capture that finds such a mixture records no new revision.
+   */
+  modified: boolean
+  /** Every file the timeline has touched, for the page scope picker. */
+  files: DesignHistoryFile[]
   canUndo: boolean
   canRedo: boolean
 }

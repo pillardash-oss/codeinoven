@@ -1,3 +1,4 @@
+import { designScreenName } from '../../lib/design/screens'
 import { readdir, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { DesignScreen } from '../../lib/ipc/design'
@@ -38,11 +39,6 @@ const SCREEN_EXTENSION = '.html'
  */
 function isListableName(name: string): boolean {
   return !name.startsWith('.') && !name.startsWith('_')
-}
-
-/** A screen's label: its path inside the folder without the extension. */
-function screenName(entry: string): string {
-  return entry.slice(0, entry.length - SCREEN_EXTENSION.length)
 }
 
 interface FoundFile {
@@ -102,7 +98,7 @@ export async function listDesignScreens(absoluteFolder: string): Promise<DesignS
   }
   return [...own, ...nested].slice(0, MAX_DESIGN_SCREENS).map(({ entry, updatedAt }) => ({
     entry,
-    name: screenName(entry),
+    name: designScreenName(entry),
     updatedAt
   }))
 }

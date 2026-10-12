@@ -276,6 +276,7 @@ import {
   validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
+import { designScreenEntryFromUrl } from '../../lib/design/screens'
 import { designScreenTabId } from './browser-service/design-screen-tab'
 
 /**
@@ -285,6 +286,8 @@ import { designScreenTabId } from './browser-service/design-screen-tab'
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
   Record<
+    | 'designUndo'
+    | 'designRedo'
     | 'focusAddress'
     | 'closeTab'
     | 'newTab'
@@ -296,6 +299,8 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
     BrowserPanelShortcutAction
   >
 > = {
+  designUndo: 'design-undo',
+  designRedo: 'design-redo',
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
@@ -329,6 +334,8 @@ function isRendererAnsweredAction(
  * nothing, so it is left to the page instead.
  */
 const POPUP_UNCLAIMED_ACTIONS: ReadonlySet<BrowserShortcutAction> = new Set<BrowserShortcutAction>([
+  'designUndo',
+  'designRedo',
   'find',
   'findNext',
   'findPrevious'
@@ -3015,6 +3022,18 @@ export class BrowserService {
     }
   }
 
+  /** Screen history bindings apply only to the current authored page. */
+  private canUseScreenHistory(tabId: string): boolean {
+    const tab = this.tabs.get(tabId)
+    const work = tab?.design ?? tab?.composition
+    return Boolean(
+      tab &&
+      work &&
+      !tab.view.webContents.isDestroyed() &&
+      designScreenEntryFromUrl(tab.view.webContents.getURL(), work.origin)
+    )
+  }
+
   /**
    * Claim the Ctrl+Tab switcher gesture pressed in a page.
    *
@@ -3071,6 +3090,8 @@ export class BrowserService {
     if (!tabId) return false
     const action = matchBrowserShortcut(input, this.shortcutBindings)
     if (!action) return false
+    if ((action === 'designUndo' || action === 'designRedo') && !this.canUseScreenHistory(tabId))
+      return false
     // A claim can name a tab this process holds no page for: a sleeping tab, a
     // blank one, or a tab whose view is still being created. Its row is the
     // renderer's regardless, so the strip's own actions are still claimed here.
@@ -3299,7 +3320,10 @@ export class BrowserService {
         return
       }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
-      if (action) {
+      if (
+        action &&
+        ((action !== 'designUndo' && action !== 'designRedo') || this.canUseScreenHistory(tabId))
+      ) {
         event.preventDefault()
         this.runBrowserShortcut(tabId, action)
         return

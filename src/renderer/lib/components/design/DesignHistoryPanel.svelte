@@ -1,10 +1,15 @@
 <script lang="ts">
+  import DesignHistoryActions from './DesignHistoryActions.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import { onMount } from 'svelte'
-  import { GitBranch, History, LoaderCircle, Redo2, Undo2, X } from '@lucide/svelte'
+  import { GitBranch, History, LoaderCircle, X } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { formatDateTimeCompact } from '$shared/date-time-format'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import type {
     DesignHistoryState,
+    DesignPageHistoryState,
     DesignRevisionCause,
     DesignRevisionSummary
   } from '$shared/ipc-contract'
@@ -40,17 +45,43 @@
 
   let { projectId, threadId, directory, noun, open, onRestored, onClose }: Props = $props()
 
-  let history = $state<DesignHistoryState | null>(null)
+  let history = $state.raw<DesignHistoryState | null>(null)
   /** Reading the timeline, which includes capturing the present. */
   let loading = $state(false)
   /** The revision being restored, so its own row shows the wait. */
   let restoring = $state('')
   let error = $state('')
+  let scope = $state('')
+  let page = $state.raw<DesignPageHistoryState | null>(null)
+  let pendingRestore = $state('')
+  let request = 0
+  const scopeOptions = $derived([
+    { id: '', label: 'All screens' },
+    ...(history?.files ?? []).map((file) => ({ id: file.path, label: file.name }))
+  ])
 
-  let revisions = $derived(history?.revisions ?? [])
-  let cursorIndex = $derived(history?.cursorIndex ?? -1)
-  let canUndo = $derived(history?.canUndo === true && restoring === '')
-  let canRedo = $derived(history?.canRedo === true && restoring === '')
+  let revisions = $derived(
+    scope === ''
+      ? (history?.revisions ?? [])
+      : (page?.revisions ?? []).map((entry): DesignRevisionSummary => ({
+          id: entry.revisionId,
+          sequence: entry.sequence,
+          createdAt: entry.createdAt,
+          cause: 'user',
+          label: entry.label,
+          changedFiles: 1,
+          changedPaths: [scope],
+          fileCount: entry.present ? 1 : 0,
+          totalBytes: 0
+        }))
+  )
+  let cursorIndex = $derived((scope === '' ? history?.cursorIndex : page?.cursorIndex) ?? -1)
+  let canUndo = $derived(
+    (scope === '' ? history?.canUndo : page?.canUndo) === true && restoring === '' && !loading
+  )
+  let canRedo = $derived(
+    (scope === '' ? history?.canRedo : page?.canRedo) === true && restoring === '' && !loading
+  )
   /**
    * The timeline newest first, each row carrying its ascending position.
    *
@@ -62,6 +93,7 @@
 
   /** What produced a revision, in the user's terms. */
   function causeLabel(revision: DesignRevisionSummary): string {
+    if (revision.label) return revision.label
     if (revision.cause === 'initial') return 'First captured'
     if (revision.cause === 'agent') return 'Agent turn'
     return 'Your edit'
@@ -70,22 +102,19 @@
   /** A revision's time, short enough for a row and exact enough to tell steps apart. */
   function timeLabel(createdAt: number): string {
     if (createdAt <= 0) return ''
-    return new Date(createdAt).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+    return formatDateTimeCompact(createdAt)
   }
 
   /** How much a revision changed, in files. */
   function changeLabel(revision: DesignRevisionSummary): string {
     if (revision.cause === 'initial') {
-      return `${revision.fileCount} file${revision.fileCount === 1 ? '' : 's'}`
+      return 'Initial design'
     }
-    const changed = revision.changedFiles
-    if (changed === 0) return 'No file changed'
-    return `${changed} file${changed === 1 ? '' : 's'} changed`
+    const changed = revision.changedPaths.filter((path) =>
+      history?.files.some((screen) => screen.path === path)
+    ).length
+    if (changed === 0) return 'Design updated'
+    return `${changed} screen${changed === 1 ? '' : 's'} changed`
   }
 
   /** Read the folder's history, capturing the present as `cause` when it changed. */
@@ -94,16 +123,25 @@
       history = null
       return
     }
+    const token = ++request
     loading = true
     try {
-      history = await invoke('design:history', projectId, threadId, directory, cause)
+      const next = await invoke('design:history', projectId, threadId, directory, cause)
+      if (token !== request) return
+      const nextPage =
+        scope === ''
+          ? null
+          : await invoke('design:historyPage', projectId, threadId, directory, scope)
+      if (token !== request) return
+      history = next
+      page = nextPage
       error = ''
     } catch (failure) {
       // A history that cannot be read must not take the design down with it: the
       // board above still shows the work, and the pane says what happened.
       error = failure instanceof Error ? failure.message : 'The history could not be read.'
     } finally {
-      loading = false
+      if (token === request) loading = false
     }
   }
 
@@ -112,7 +150,20 @@
     if (restoring !== '' || directory === '' || revisionId === '') return
     restoring = revisionId
     try {
-      history = await invoke('design:historyRestore', projectId, threadId, directory, revisionId)
+      if (scope === '') {
+        history = await invoke('design:historyRestore', projectId, threadId, directory, revisionId)
+      } else {
+        const result = await invoke(
+          'design:historyRestoreFile',
+          projectId,
+          threadId,
+          directory,
+          scope,
+          revisionId
+        )
+        history = result.history
+        page = result.page
+      }
       error = ''
       onRestored()
     } catch (failure) {
@@ -122,32 +173,46 @@
     }
   }
 
+  function requestRestore(revisionId: string): void {
+    if (!revisionId || loading || restoring !== '') return
+    const removesPage =
+      page?.revisions.find((revision) => revision.revisionId === revisionId)?.present === false
+    if (scope === '' || removesPage) pendingRestore = revisionId
+    else void restore(revisionId)
+  }
+
   function undo(): void {
+    if (scope === '' && history?.modified) {
+      requestRestore(revisions[cursorIndex]?.id ?? '')
+      return
+    }
     if (cursorIndex <= 0) return
-    void restore(revisions[cursorIndex - 1]?.id ?? '')
+    requestRestore(revisions[cursorIndex - 1]?.id ?? '')
   }
 
   function redo(): void {
     if (cursorIndex < 0 || cursorIndex >= revisions.length - 1) return
-    void restore(revisions[cursorIndex + 1]?.id ?? '')
+    requestRestore(revisions[cursorIndex + 1]?.id ?? '')
   }
 
-  $effect(() => {
-    // A different folder is a different history: read it as the user's own view,
-    // never as an agent step the previous folder's turn happened to announce. The
-    // call reads `directory` before its first await, so this re-runs on a switch.
+  onMount(() => {
     void load('user')
-  })
-
-  onMount(() =>
-    subscribe('thread:updated', (thread) => {
+    const unsubscribeThread = subscribe('thread:updated', (thread) => {
       if (thread.id !== threadId || thread.projectId !== projectId) return
       if (isThreadBusyStatus(thread.status)) return
       // The agent settles, so whatever it wrote is a revision now. Reading captures
       // it: the pane never has to guess that a turn touched this folder.
       void load('agent')
     })
-  )
+    const unsubscribeHistory = subscribe('design:historyChanged', (owner, folder) => {
+      if (owner === projectId && folder === directory && restoring === '') void load('agent')
+    })
+    return () => {
+      ++request
+      unsubscribeThread()
+      unsubscribeHistory()
+    }
+  })
 </script>
 
 <section
@@ -156,38 +221,37 @@
 >
   <header class="flex shrink-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5">
     <History size={12} class="shrink-0 text-accent" />
-    <span class="text-[0.6875rem] font-semibold text-foreground">History</span>
-    {#if !history?.gitBacked && revisions.length > 0}
-      <span
-        class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
-      >
-        {cursorIndex >= 0 ? `${cursorIndex + 1}/${revisions.length}` : revisions.length}
-      </span>
-    {/if}
-    <span class="min-w-0 flex-1"></span>
+    <span class="text-[0.6875rem] shrink-0 font-semibold text-foreground">History</span>
+    {#if !history?.gitBacked}
+      <EnumSelect
+        compact
+        closeOnSelect
+        class="min-w-0 flex-1"
+        options={scopeOptions}
+        value={scope}
+        placeholder="Screen history"
+        ariaLabel="History scope"
+        title="Choose the whole design or one screen"
+        disabled={loading || restoring !== ''}
+        onChange={(value) => {
+          scope = value
+          void load('user')
+        }}
+      />
+    {:else}<span class="min-w-0 flex-1"></span>{/if}
     {#if loading}
       <LoaderCircle size={11} class="shrink-0 animate-spin text-dimmed" aria-hidden="true" />
     {/if}
-    <button
-      type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-      disabled={!canUndo}
-      title="Undo the last change to this {noun}"
-      aria-label="Undo the last change to this {noun}"
-      onclick={undo}
-    >
-      <Undo2 size={12} />
-    </button>
-    <button
-      type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-      disabled={!canRedo}
-      title="Redo the change that was undone"
-      aria-label="Redo the change that was undone"
-      onclick={redo}
-    >
-      <Redo2 size={12} />
-    </button>
+    <DesignHistoryActions
+      {canUndo}
+      {canRedo}
+      undoTitle={scope === ''
+        ? `Undo the last change to this ${noun}`
+        : `Undo the last change to ${history?.files.find((screen) => screen.path === scope)?.name ?? 'this screen'}`}
+      redoTitle="Redo the change that was undone"
+      onUndo={undo}
+      onRedo={redo}
+    />
     <button
       type="button"
       class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -235,7 +299,7 @@
         {#each timeline as entry (entry.revision.id)}
           {@const revision = entry.revision}
           {@const position = entry.index}
-          {@const current = revision.id === history?.cursorId}
+          {@const current = position === cursorIndex && (scope !== '' || !history?.modified)}
           {@const ahead = cursorIndex >= 0 && position > cursorIndex}
           <li>
             <button
@@ -243,12 +307,12 @@
               class="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-elevated disabled:opacity-60 {current
                 ? 'bg-elevated'
                 : ''}"
-              disabled={restoring !== '' || directory === ''}
+              disabled={restoring !== '' || directory === '' || loading}
               title={current
                 ? `This ${noun} is at this point`
                 : `Go back to this point in the ${noun}'s history`}
               aria-current={current ? 'true' : undefined}
-              onclick={() => void restore(revision.id)}
+              onclick={() => requestRestore(revision.id)}
             >
               <span class="mt-0.5 flex w-3 shrink-0 flex-col items-center self-stretch">
                 <span
@@ -268,7 +332,12 @@
                       ? 'font-semibold text-foreground'
                       : 'text-muted'}"
                   >
-                    {causeLabel(revision)}
+                    {revision.label
+                      ? revision.label
+                      : scope === ''
+                        ? causeLabel(revision)
+                        : (history?.files.find((screen) => screen.path === scope)?.name ??
+                          'Screen')}
                   </span>
                   {#if current}
                     <span
@@ -294,3 +363,23 @@
     {/if}
   </div>
 </section>
+
+<ConfirmDialog
+  open={pendingRestore !== ''}
+  title={scope === '' ? `Restore this ${noun}?` : 'Remove this screen?'}
+  confirmLabel="Restore history point"
+  variant="primary"
+  onCancel={() => (pendingRestore = '')}
+  onConfirm={() => {
+    const id = pendingRestore
+    pendingRestore = ''
+    void restore(id)
+  }}
+>
+  <p>
+    {scope === ''
+      ? `This replaces the entire ${noun} with the selected history point. Screens absent from that point will be removed.`
+      : `The ${history?.files.find((screen) => screen.path === scope)?.name ?? 'selected'} screen did not exist at this history point and will be removed.`}
+  </p>
+  <p>You can return to its current version through history.</p>
+</ConfirmDialog>

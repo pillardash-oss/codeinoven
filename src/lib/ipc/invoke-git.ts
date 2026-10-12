@@ -697,6 +697,23 @@ export const invokeGitContract = {
     [accountId: string, token: string],
     import('../types').CloudDeploymentProviderAccount
   >,
+  /**
+   * Verify a provider account's credentials without saving anything. Either
+   * tests a saved account by id (vaulted token) or tests inline credentials
+   * (kind + baseUrl + token) from an unsaved form. Resolves with the reachable
+   * container count; rejects with the provider's error message on failure.
+   */
+  'cloudDeploy:testAccount': {} as Contract<
+    [
+      input: {
+        accountId?: string
+        providerKind?: import('../types').CloudDeploymentProviderKind
+        baseUrl?: string
+        token?: string
+      }
+    ],
+    { containerCount: number }
+  >,
   /** Remove a global provider account and its vaulted token. */
   'cloudDeploy:removeAccount': {} as Contract<[accountId: string], void>,
   /** Attach a global provider account to a project for a provider kind. */

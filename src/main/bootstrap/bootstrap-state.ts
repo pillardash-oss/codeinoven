@@ -8,6 +8,7 @@
  */
 
 import type { BrowserWindow } from 'electron'
+import type { DesignService } from '../design/design-service'
 import type { BrowserService } from '../browser/browser-service'
 import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -100,6 +101,8 @@ export interface BootstrapState {
   heartbeatScheduler: HeartbeatSchedulerService | null
   /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
   cioCleanup: CioCleanupService | null
+  /** Authored-work service, so a sweep can reconcile the histories it orphaned. */
+  designService: DesignService | null
   routineManager: RoutineManager | null
   routineScheduler: RoutineSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
@@ -189,6 +192,7 @@ export function createBootstrapState(): BootstrapState {
     retryScheduler: null,
     heartbeatScheduler: null,
     cioCleanup: null,
+    designService: null,
     routineManager: null,
     routineScheduler: null,
     backgroundRunLedger: null,

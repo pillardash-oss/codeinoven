@@ -11,6 +11,8 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
+  import { designScreenEntryFromUrl } from '$shared/design/screens'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
   import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
@@ -134,12 +136,13 @@
    *  surface, an inactive workspace, the thread switcher), which surface owns
    *  the single native view, and whether a floating DOM overlay covers this
    *  frame   so this panel never has to combine them itself. */
-  $effect(() => {
+  function synchronizePageFrame() {
     const bounds = contentRect
     if (bounds) browserVisibility.publishPageFrame(nativeFrameKey, tabId, bounds)
     else browserVisibility.clearPageFrame(nativeFrameKey)
     return () => browserVisibility.clearPageFrame(nativeFrameKey)
-  })
+  }
+  $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
@@ -152,6 +155,10 @@
    * so the sidebar and the full screen surface show and keep the same state, and
    * moving between them neither drops the mode nor disarms the page.
    */
+  const authoredWork = $derived(pageState.design ?? pageState.composition)
+  const screenEntry = $derived(
+    authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
+  )
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
   /** The comment currently open for editing on this tab, in composer order. */
   let editingComment = $derived.by(() => {
@@ -231,13 +238,14 @@
    * surface is exactly what it must not do, and the request is still waiting when
    * the user sees the tab.
    */
-  $effect(() => {
+  function claimRequestedAddressFocus() {
     const bar = addressBar
     if (!bar) return
     if (!panelVisible) return
     if (!browserAddressFocus.take(tabId)) return
     bar.focusAndSelect()
-  })
+  }
+  $effect(claimRequestedAddressFocus)
 
   /**
    * Tell the keyboard owner whether the focus that just moved belongs to this
@@ -311,7 +319,7 @@
    * showing publishes nothing, so the two instances of one tab can never both
    * claim the same screen space.
    */
-  $effect(() => {
+  function synchronizeNativeFrame() {
     const frame = panelVisible && !pageState.loadError && !isBlank ? contentRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
@@ -319,7 +327,8 @@
     }
     browserVisibility.publishNativeFrame(nativeFrameKey, frame)
     return () => browserVisibility.clearNativeFrame(nativeFrameKey)
-  })
+  }
+  $effect(synchronizeNativeFrame)
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -625,6 +634,22 @@
         <span>Console</span>
       {/if}
     </button>
+    {#if authoredWork}
+      <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+      {#if screenEntry}
+        {#key `${authoredWork.directory}:${screenEntry}`}
+          <DesignScreenHistoryControls
+            projectId={tabProjectId}
+            threadId={tabThreadId}
+            {tabId}
+            directory={authoredWork.directory}
+            entry={screenEntry}
+            labelled={fullscreen}
+            active={panelVisible}
+          />
+        {/key}
+      {/if}
+    {/if}
     {#if pageState.design}
       <button
         type="button"

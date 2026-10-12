@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getConfigRoot } from '../../lib/utils'
 import type { CheckpointBlobStore } from '../git/change-tracking-service'
@@ -38,7 +38,18 @@ function isAlreadyExists(error: unknown): boolean {
  * folder's store.
  */
 export function designHistoryBlobDirectory(projectId: string, directory: string): string {
-  return join(getConfigRoot(), 'projects', projectId, 'design-blobs', encodeURIComponent(directory))
+  return join(designHistoryProjectBlobDirectory(projectId), encodeURIComponent(directory))
+}
+
+/**
+ * The directory holding every folder's history bytes for one project.
+ *
+ * A project that is gone can be dropped in one removal, and a folder's own store
+ * removed from it. Kept beside {@link designHistoryBlobDirectory} so the two
+ * spellings cannot drift.
+ */
+export function designHistoryProjectBlobDirectory(projectId: string): string {
+  return join(getConfigRoot(), 'projects', projectId, 'design-blobs')
 }
 
 export class DesignHistoryBlobStore implements CheckpointBlobStore {
@@ -98,4 +109,20 @@ export class DesignHistoryBlobStore implements CheckpointBlobStore {
     }
     return removed
   }
+
+  /**
+   * Remove every blob this folder's history holds.
+   *
+   * Used when the folder itself is gone: a design deleted by CIO Cleanup or by the
+   * user has no revisions left to justify its bytes, so the store goes with it
+   * instead of sitting in the database's shadow until the disk fills.
+   */
+  async destroy(): Promise<void> {
+    await rm(this.base, { recursive: true, force: true })
+  }
+}
+
+/** Remove every folder's history bytes for a project whose folders are all gone. */
+export async function destroyDesignHistoryProjectBlobs(projectId: string): Promise<void> {
+  await rm(designHistoryProjectBlobDirectory(projectId), { recursive: true, force: true })
 }

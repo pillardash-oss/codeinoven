@@ -798,6 +798,19 @@ ${fence}`
                 <p class="min-w-0 flex-1">{accessErrors[kind]}</p>
                 <button
                   type="button"
+                  class="shrink-0 cursor-pointer rounded-md bg-danger px-2 py-1 text-[0.5625rem] font-semibold text-white transition-opacity hover:opacity-90"
+                  title="Reconnect the {PROVIDER_LABELS[
+                    kind as CloudDeploymentProviderKind
+                  ]} account"
+                  aria-label="Reconnect the {PROVIDER_LABELS[
+                    kind as CloudDeploymentProviderKind
+                  ]} account"
+                  onclick={() => openConfigSheet('provider')}
+                >
+                  Reconnect
+                </button>
+                <button
+                  type="button"
                   class="-m-0.5 shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-danger/10"
                   title="Dismiss {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind

@@ -71,7 +71,11 @@ How to run the session:
    leave an empty frame where a real asset was asked for.
 7. Report in the user's terms: what a viewer sees, how long it runs, the shape it
    is in, the folder the composition lives in, and the URL that shows it. If a
-   decision was a guess, say which one and what would settle it.`
+   decision was a guess, say which one and what would settle it.
+
+Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 
 /** Every later turn of the same session. */
-export const CIO_VIDEO_CONTINUE_PROMPT = `This thread's video session continues: the user opened it with @cio-video, and the video capability stays active. Keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Report what changed and what a viewer now sees.`
+export const CIO_VIDEO_CONTINUE_PROMPT = `This thread's video session continues: the user opened it with @cio-video, and the video capability stays active. Keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Report what changed and what a viewer now sees.
+
+Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`

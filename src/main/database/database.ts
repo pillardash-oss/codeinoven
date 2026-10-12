@@ -872,6 +872,7 @@ export class Database {
       this.migrateRoutineExecution(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
+      this.migrateDesignRevisionMetadata(connection)
     })()
   }
 
@@ -1122,6 +1123,25 @@ export class Database {
       // a row that predates it.
       if (authoredWorkKindOf(row.directory, DEFAULT_WORK_ROOTS) !== 'video') continue
       update.run('video', row.thread_id)
+    }
+  }
+
+  /**
+   * Keep changed screens and named checkpoint steps beside revision metadata.
+   *
+   * These columns arrived after the revisions table. Existing rows keep their
+   * content and timeline position, while unlabeled revisions use their usual cause.
+   */
+  private migrateDesignRevisionMetadata(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(design_revisions)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0) return
+    for (const column of ['changed_paths', 'label', 'checkpoint_entry']) {
+      if (!columns.has(column))
+        connection.exec(`ALTER TABLE design_revisions ADD COLUMN ${column} TEXT`)
     }
   }
 

@@ -51,6 +51,7 @@ import { PiDriver } from '../drivers/pi-driver'
 import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { toPosixPath } from '../../lib/paths'
@@ -6270,6 +6271,48 @@ export class ChatEngine {
     const lessons = parseLessonExtraction(text)
     if (lessons === null) throw new Error('The learning response could not be parsed.')
     return lessons
+  }
+
+  /** Search summaries use the existing tool-free auxiliary provider lane. */
+  async summarizeSearchThread(input: SearchSummaryRequest): Promise<string> {
+    input.signal.throwIfAborted()
+    const thread = await this.threadManager.getThreadViaWorker(input.projectId, input.threadId)
+    if (!thread?.settings)
+      throw new Error('The thread model settings are unavailable for search summarization.')
+    const harnessId = thread.settings.harnessId ?? DEFAULT_HARNESS
+    // This task reads only its supplied text. Oven projects need no local checkout.
+    const projectPath = await this.ephemeralWorkingDirectory(input.threadId)
+    const auxiliary = await this.resolveAuxiliaryRoute({
+      projectId: input.projectId,
+      threadId: input.threadId,
+      threadHarnessId: harnessId,
+      projectPath
+    })
+    const driver =
+      auxiliary?.driver ?? (await this.driverForAccount(harnessId, thread.settings.accountId))
+    const settings: ThreadSettings = auxiliary?.settings ?? {
+      ...thread.settings,
+      thinkingLevel: 'minimal',
+      permissionLevel: 'auto_review',
+      assignmentMode: false,
+      loopMode: false
+    }
+    const result = await driver.provideCheapModel(projectPath, {
+      settings,
+      purpose: 'Thread search summary',
+      prompt: input.prompt,
+      timeoutMs: 45_000,
+      ...(auxiliary ? { candidates: auxiliary.candidates } : {})
+    })
+    input.signal.throwIfAborted()
+    const text = result.text?.trim()
+    if (!text) {
+      const failure = result.attempts.at(-1)?.failure
+      throw new Error(
+        `The provider could not summarize this thread for search.${failure ? ` ${failure}` : ''}`
+      )
+    }
+    return text
   }
 
   /**

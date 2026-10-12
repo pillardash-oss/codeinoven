@@ -11,7 +11,7 @@
  * paint, in the exact order the bootstrap established.
  */
 
-import { app, type BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
@@ -266,7 +266,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
       Promise.resolve(false),
     onProgress: broadcastCioCleanupProgress,
-    onStateChanged: broadcastCioCleanupState
+    onStateChanged: broadcastCioCleanupState,
+    onSweepComplete: () => state.designService?.reconcileHistory() ?? Promise.resolve()
   })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
@@ -564,6 +565,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Intent search shares the one local llama.cpp runtime with speech, so both
   // draw from the same discovered/downloaded binary and the same process journal.
   state.searchService = new SearchService(database, {
+    summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
     llamaServerPath: () => getLlamaServerBinary(),
     runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
     registerProcess: (pid, command, cwd) =>
@@ -637,10 +639,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const { DesignService } = await import('../design/design-service')
   const designService = new DesignService({
     database,
+    onHistoryChanged: (projectId, directory) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
+    },
     previews: state.directoryPreviewService,
     browser: () => state.browserService
   })
+  state.designService = designService
   designService.registerIpc()
+  void designService.reconcileHistory()
   // What each thread decided about the experts its design or video session may
   // delegate to. One service answers it, because the playbook that names the
   // experts and the `delegate` operation that would run one have to agree: a
@@ -670,6 +678,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
+      checkpoint: (projectId, threadId, input) =>
+        designService.checkpoint(projectId, threadId, input, 'design'),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
@@ -711,6 +721,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createVideoPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
+      checkpoint: (projectId, threadId, input) =>
+        designService.checkpoint(projectId, threadId, input, 'video'),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
