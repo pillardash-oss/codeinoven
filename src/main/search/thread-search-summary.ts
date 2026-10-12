@@ -58,7 +58,11 @@ export class ThreadSearchSummaries {
     private readonly execute: SearchSummaryExecutor
   ) {}
 
-  async get(thread: SearchSummaryThread, signal: AbortSignal): Promise<string> {
+  async get(
+    thread: SearchSummaryThread,
+    signal: AbortSignal,
+    onProgress?: (chunks: number) => void
+  ): Promise<string> {
     signal.throwIfAborted()
     const path = join(this.directory, cacheFile(thread))
     const cached = await this.read(path)
@@ -79,6 +83,7 @@ export class ThreadSearchSummaries {
     const hash = this.contentHash(thread)
     let summary = ''
     let pending = ''
+    let completedChunks = 0
     const flush = async (): Promise<void> => {
       if (!pending.trim()) return
       signal.throwIfAborted()
@@ -94,6 +99,7 @@ export class ThreadSearchSummaries {
         throw new Error('The search summary model returned an empty or oversized summary.')
       }
       summary = text.slice(0, SUMMARY_CHARS)
+      onProgress?.(++completedChunks)
       pending = ''
       await new Promise<void>((resolve) => setImmediate(resolve))
     }

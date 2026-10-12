@@ -141,6 +141,12 @@ export interface SearchIndexStatus {
   lastIndexedAt: number | null
   /** Latest background summarization or embedding failure, displayed by Search settings. */
   error?: string | null
+  /** Current thread and completed summary chunks during a sweep. */
+  progress?: {
+    threadTitle: string
+    stage: 'summarizing' | 'embedding'
+    completedChunks: number
+  } | null
 }
 
 export interface SearchState {
