@@ -47,7 +47,7 @@
   async function copyExchange(): Promise<void> {
     const json = JSON.stringify(formatExchange(ex), null, 2)
     try {
-      await copyText(json)
+      await copyText(json, null)
       copiedId = ex.id
       setTimeout(() => (copiedId = null), 1500)
     } catch {

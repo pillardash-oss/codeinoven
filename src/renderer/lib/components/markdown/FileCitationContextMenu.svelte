@@ -12,7 +12,7 @@
     Save
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { copyText as copyTextToClipboard, notifyClipboard } from '$lib/copy-text'
+  import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { revealCitationFile } from '$lib/reveal-file'
   import { osFileManagerLabel, revealInOsFileManager } from '$lib/os-file-manager'
@@ -224,8 +224,7 @@
 
   async function copyText(text: string, successMessage: string): Promise<void> {
     try {
-      await copyTextToClipboard(text)
-      notifyClipboard(successMessage)
+      await copyTextToClipboard(text, successMessage)
     } catch (error) {
       reportError(error, 'Copy failed.')
     }

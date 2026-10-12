@@ -3,7 +3,7 @@
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { appPanelSlot } from '$lib/app-panel-portal'
-  import { copyText, notifyClipboard } from '$lib/copy-text'
+  import { copyText } from '$lib/copy-text'
   import { invoke } from '$lib/ipc.svelte'
   import {
     contextSidebarState,
@@ -406,8 +406,7 @@
         return
       case 'copyThreadId':
         try {
-          await copyText(current.threadId)
-          notifyClipboard('Thread ID copied')
+          await copyText(current.threadId, 'Thread ID copied')
         } catch (error) {
           reportError(error, 'The thread ID could not be copied.')
         }

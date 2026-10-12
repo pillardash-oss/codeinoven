@@ -763,12 +763,10 @@
   async function copyForPaste(paths: string[], mode: ProjectFileTransferMode): Promise<void> {
     const label = selectionLabel(paths)
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
-    try {
-      await copyText(paths.map((path) => `@${path}`).join('\n'))
-      notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
-    } catch {
-      notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
-    }
+    // The notice describes the in-app clipboard, which is already set. A failed OS
+    // clipboard write changes nothing about it, so that copy stays quiet.
+    void copyText(paths.map((path) => `@${path}`).join('\n'), null).catch(() => {})
+    notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
   }
 
   async function copyPaths(paths: string[]): Promise<void> {
@@ -777,8 +775,7 @@
       const infos = await Promise.all(
         paths.map((path) => projectFilesWorkspace.fileInfo(projectId, path))
       )
-      await copyText(infos.map((info) => info.absolutePath).join('\n'))
-      notifyClipboard(`${label} copied`)
+      await copyText(infos.map((info) => info.absolutePath).join('\n'), `${label} copied`)
     } catch {
       toast.error(`The ${label.toLocaleLowerCase()} could not be copied`)
     }

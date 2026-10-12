@@ -1,5 +1,5 @@
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-import { copyText, notifyClipboard } from '$lib/copy-text'
+import { copyText } from '$lib/copy-text'
 import { feature } from '$lib/feature-registry'
 import { scopeState } from '$lib/stores/scope.svelte'
 import type { Thread } from '$shared/types'
@@ -100,8 +100,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const thread = config.getThread()
     if (!thread) return
     try {
-      await copyText(thread.id)
-      notifyClipboard('Thread ID copied.')
+      await copyText(thread.id, 'Thread ID copied.')
     } catch {
       toast.error('The thread ID could not be copied.')
     }

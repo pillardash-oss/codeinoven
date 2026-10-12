@@ -273,7 +273,7 @@
   async function copyPath(provider: ProviderConnectionInfo): Promise<void> {
     if (!provider.resolvedPath) return
     try {
-      await copyText(provider.resolvedPath)
+      await copyText(provider.resolvedPath, null)
       copiedPathId = provider.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => {

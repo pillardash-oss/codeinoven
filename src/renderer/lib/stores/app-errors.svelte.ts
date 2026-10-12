@@ -141,7 +141,7 @@ function copyAction(text: string): ToastCopyAction {
     label: 'Copy',
     [INJECTED_COPY]: true,
     onClick: () => {
-      void copyText(text).catch(() => {})
+      void copyText(text, null).catch(() => {})
     }
   }
 }

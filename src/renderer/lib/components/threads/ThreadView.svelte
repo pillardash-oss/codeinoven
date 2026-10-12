@@ -10735,7 +10735,7 @@
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
-      await copyText(messageText(msg))
+      await copyText(messageText(msg), null)
       copiedMessageId = msg.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)

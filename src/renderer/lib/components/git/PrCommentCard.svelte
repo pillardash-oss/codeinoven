@@ -166,12 +166,12 @@
 
   async function copyEntryLink(): Promise<void> {
     if (!entry.url) return
-    await copyText(entry.url)
+    await copyText(entry.url, null)
     onNotice('Comment link copied')
   }
 
   async function copyEntryMarkdown(): Promise<void> {
-    await copyText(entry.body.trim())
+    await copyText(entry.body.trim(), null)
     onNotice('Comment Markdown copied')
   }
 
@@ -194,7 +194,7 @@
    */
   async function referenceInNewIssue(): Promise<void> {
     const reference = commentReference()
-    await copyText(reference)
+    await copyText(reference, null)
     await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
     onNotice('Reference copied, new issue opened on GitHub')
   }
@@ -275,7 +275,7 @@
    * copied first: the user pastes it there instead of hunting for it again.
    */
   async function reportEntry(): Promise<void> {
-    if (entry.url) await copyText(entry.url)
+    if (entry.url) await copyText(entry.url, null)
     await openInBrowser(githubAbuseReportUrl())
     onNotice(
       entry.url

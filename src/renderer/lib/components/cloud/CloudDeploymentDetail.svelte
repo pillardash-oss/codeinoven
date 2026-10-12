@@ -17,7 +17,7 @@
     X
   } from '@lucide/svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import { copyText as copyTextToClipboard, notifyClipboard } from '$lib/copy-text'
+  import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { toast } from 'svelte-sonner'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
@@ -296,8 +296,7 @@
   async function copyLog(): Promise<void> {
     if (!readableLog) return
     try {
-      await copyTextToClipboard(readableLog)
-      notifyClipboard('Deployment log copied.')
+      await copyTextToClipboard(readableLog, 'Deployment log copied.')
     } catch {
       toast.error('The log could not be copied.')
     }
@@ -307,8 +306,7 @@
   async function copyRawLog(): Promise<void> {
     if (!log) return
     try {
-      await copyTextToClipboard(log)
-      notifyClipboard('Raw log copied.')
+      await copyTextToClipboard(log, 'Raw log copied.')
     } catch {
       toast.error('The raw log could not be copied.')
     }

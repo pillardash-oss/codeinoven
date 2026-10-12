@@ -3,7 +3,7 @@
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { copyText as copyTextToClipboard, notifyClipboard } from '$lib/copy-text'
+  import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -473,7 +473,9 @@
   }
 
   function copyModelDraft(model: ModelDraft): void {
-    void copyText(serializeModelClipboard(model), `Copied “${model.name || model.id}”.`)
+    void copyText(serializeModelClipboard(model), `Copied “${model.name || model.id}”.`).catch(
+      (copyError) => reportError(copyError, 'Clipboard copy failed.')
+    )
   }
 
   async function pasteModelFromClipboard(): Promise<void> {
@@ -552,15 +554,6 @@
       reasoning: model.reasoning,
       defaultThinkingLevel: model.defaultThinkingLevel,
       vision: model.vision
-    }
-  }
-
-  async function copyText(text: string, successMessage: string): Promise<void> {
-    try {
-      await copyTextToClipboard(text)
-      notifyClipboard(successMessage)
-    } catch (copyError) {
-      reportError(copyError, 'Clipboard copy failed.')
     }
   }
 </script>

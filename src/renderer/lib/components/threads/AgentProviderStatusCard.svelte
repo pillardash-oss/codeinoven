@@ -127,7 +127,7 @@
 
   async function copyRawError(): Promise<void> {
     try {
-      await copyText(rawError)
+      await copyText(rawError, null)
       copiedRawError = true
       setTimeout(() => (copiedRawError = false), 1500)
     } catch {

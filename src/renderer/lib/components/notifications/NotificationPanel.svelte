@@ -430,7 +430,7 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message)
+      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message, null)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
@@ -451,7 +451,7 @@
 
   async function copyNotificationError(n: InAppNotification): Promise<void> {
     try {
-      await copyText(notificationErrorText(n))
+      await copyText(notificationErrorText(n), null)
       copiedId = n.id
       window.setTimeout(() => {
         if (copiedId === n.id) copiedId = null
