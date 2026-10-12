@@ -2540,6 +2540,62 @@ export class BrowserService {
   }
 
   /**
+   * Show an app-owned page in the thread's own browser tab.
+   *
+   * The design and video boards move the thread's one tab through every screen of
+   * a design, and they do it while the app is idle: there is no live conversation
+   * to hold, so routing the navigation through the agent's `navigate` utility
+   * operation would ask for a browser-action approval nobody can answer and leave
+   * the board with no pictures. This is the app showing its own served folder, so
+   * it does the same work the `open` utility operation does, except that it reuses
+   * the thread's existing tab instead of stacking a second one.
+   *
+   * A newly opened tab reveals itself only when the caller asked for focus and the
+   * user has not shown they dismiss agent-opened tabs, exactly as `open` does; a
+   * reused tab reveals only when the caller asked, so a capture never disturbs the
+   * page the user is watching.
+   */
+  async showThreadWorkTab(input: {
+    projectId: string
+    threadId: string
+    url: string
+    attention: 'focus' | 'background'
+    reveal: boolean
+  }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    const projectId = validateProjectId(input.projectId)
+    const threadId = validateThreadId(input.threadId)
+    const url = validateBrowserUrl(input.url)
+    const contextKey = browserContextKey(projectId, threadId)
+    const existing = this.agentTabFor(projectId, threadId)
+    const reused = existing !== null && this.tabs.has(existing)
+    const tabId = reused ? existing : `browser:agent:${crypto.randomUUID()}`
+    const tab = this.ensureTab(tabId, projectId, threadId)
+    if (!reused) {
+      tab.initialNavigationStarted = true
+      // Mount the tab offscreen before anything else: the page must run whether
+      // or not the user ends up looking at it.
+      this.parkTab(tabId)
+    } else if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
+      // A tab the parked cap evicted has no stage window left, so it is mounted
+      // again before it navigates, exactly as an agent's operation revives one.
+      this.parkTab(tabId)
+    }
+    this.agentTabIds.set(contextKey, tabId)
+    this.load(tabId, url)
+    const reveal =
+      input.reveal || (!reused && input.attention === 'focus' && !this.isRelaxed(threadId))
+    if (reveal) this.rememberReveal(tabId, threadId)
+    sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
+      projectId,
+      threadId,
+      requestedTabId: tabId,
+      reveal,
+      boxId: tab.boxId
+    })
+    return { tabId, tab: reused ? 'reused' : 'opened' }
+  }
+
+  /**
    * The URL a tab is showing right now, or null when it is gone.
    *
    * A preview asks this before loading something, because a page the tab already

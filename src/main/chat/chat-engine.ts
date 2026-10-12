@@ -2556,6 +2556,9 @@ export class ChatEngine {
     ipcMain.handle('agent:listQuestions', (_, projectId: string, threadId: string) =>
       this.listQuestions(projectId, threadId)
     )
+    // A side chat opened from a card keeps the user active while it is in use,
+    // so the card's countdown stays held. This carries no answer or decision.
+    ipcMain.handle('agent:userActivity', () => this.noteUserActivity())
     ipcMain.handle(
       'agent:updateQuestion',
       (
@@ -22159,26 +22162,28 @@ export class ChatEngine {
   }
 
   /**
+   * Record activity from a surface that is not a card interaction, such as the
+   * composer. Composer typing is a user working in the app, so it holds every
+   * pending card's countdown exactly as answer typing does; the renderer
+   * forwards it at a throttled pace so a busy composer never floods the main
+   * process with one call per keystroke.
+   */
+  noteUserActivity(): void {
+    this.touchUserActivity()
+  }
+
+  /**
    * Whether the user has interacted with the app recently enough to be
    * considered "active". When the user is active, pending questions will not
    * auto-answer   the countdown is paused until they become inactive.
    *
-   * This is app-wide activity, not attention to any one card, which is why the
-   * pause it buys is bounded by {@link pendingQuestionDeadline} rather than
-   * open-ended: working in a project keeps this true indefinitely, and a pause
-   * that never ends is a question that never clears.
+   * This is app-wide activity, not attention to any one card: the pause holds
+   * while the user works anywhere in the app, and is released only once they
+   * stop. The card then gets a fresh window of its own, so an abandoned request
+   * still closes without a countdown ever running under an active user.
    */
   private isUserActive(): boolean {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
-  }
-
-  /**
-   * When a question must be settled no matter what, counted from the moment its
-   * card appeared. The activity pause can hold a card open, so this is the one
-   * deadline that survives it.
-   */
-  private pendingQuestionDeadline(pending: PendingQuestionInfo): number {
-    return pending.request.createdAt + pending.timeoutMs
   }
 
   /**
@@ -22293,25 +22298,25 @@ export class ChatEngine {
       return
     }
 
-    // The activity pause keeps a card from being answered under someone who is
-    // still reading it. It is a courtesy, not a hold: `pendingQuestionDeadline`
-    // is the backstop that the pause cannot push past, so working elsewhere in
-    // the app for the whole window no longer parks this question forever. The
-    // deadline stays visible while it runs, because a card the user cannot see
-    // the end of is a card they have no reason to answer.
-    const deadline = this.pendingQuestionDeadline(pending)
-    if (this.isUserActive() && Date.now() < deadline) {
-      pending.request.expiresAt = deadline
+    // The activity pause is a real hold, exactly as it is on a secret card: while
+    // the user is active anywhere in the app the countdown stops outright, so a
+    // card can never be answered under someone who is still typing their answer
+    // (in this card, or in another thread). Once the user stops working, the card
+    // gets a full window of its own rather than an absolute deadline from when it
+    // appeared, so an abandoned request still closes and settles the turn it
+    // blocks without ever cutting off the person answering it.
+    if (this.isUserActive()) {
+      pending.request.expiresAt = undefined
       pending.timer = setTimeout(
         () => this.schedulePendingQuestion(pending),
-        Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+        ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
       )
       return
     }
 
     const expiresAt = pending.request.expiresAt
-    if (expiresAt === undefined || expiresAt > deadline) {
-      pending.request.expiresAt = deadline
+    if (expiresAt === undefined) {
+      pending.request.expiresAt = Date.now() + pending.timeoutMs
       this.schedulePendingQuestion(pending)
       return
     }
@@ -22326,15 +22331,13 @@ export class ChatEngine {
         return
       }
 
-      // Re-pause only while the hard deadline still lies ahead. Past it, activity
-      // anywhere in the app stops mattering: this question is answered so the
-      // turn it is blocking can finish, exactly as it would have if the user had
-      // stepped away.
-      if (this.isUserActive() && Date.now() < deadline) {
-        pending.request.expiresAt = deadline
+      // The user started working again while this window ran: hold the card
+      // instead of answering a question under their hands.
+      if (this.isUserActive()) {
+        pending.request.expiresAt = undefined
         pending.timer = setTimeout(
           () => this.schedulePendingQuestion(pending),
-          Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+          ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
         )
         return
       }

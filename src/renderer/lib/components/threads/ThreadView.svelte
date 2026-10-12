@@ -11016,7 +11016,7 @@
    *  understand it (and its options) before answering. The card already pauses
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
-  function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
+  function handleQuestionExplain(requestId: string, question: AgentQuestion): void {
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
@@ -11025,20 +11025,24 @@
       temporaryConversationContext(),
       settings,
       true,
-      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT
+      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT,
+      requestId
     )
   }
 
   /** Open a user-driven quick chat with the active agent question attached as
    *  its selection and the surrounding thread available as read-only context. */
-  function handleQuestionQuickChat(_requestId: string, question: AgentQuestion): void {
+  function handleQuestionQuickChat(requestId: string, question: AgentQuestion): void {
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
       'quick',
       formatQuestionForTemporaryChat(question),
       temporaryConversationContext(),
-      settings
+      settings,
+      true,
+      undefined,
+      requestId
     )
   }
 

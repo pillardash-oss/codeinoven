@@ -82,13 +82,18 @@
 /* ─── Branded status toasts ───────────────────────────────────────────────
    Obsidian / Ivory / Auric system: each status toast keeps the ivory
    surface but carries a status tint in the background wash, the hairline
-   border, the icon chip and a slim accent bar on the left edge. */
-[data-sonner-toast][data-type='success'],
-[data-sonner-toast][data-type='error'],
-[data-sonner-toast][data-type='warning'],
-[data-sonner-toast][data-type='info'] {
-  position: relative;
-}
+   border, the icon chip and a slim accent bar on the left edge.
+
+   Never set `position` on a toast here. svelte-sonner stacks the cards by
+   taking them out of flow (`[data-sonner-toast] { position: absolute }`) and
+   translating each one by its computed `--offset`; the offset already includes
+   the height of every card above it. A `position: relative` on the status types
+   (which these rules once carried, for a `::before` accent bar that is now a
+   real border) put those cards back into flow, so their height counted twice:
+   the flow position plus the same offset, which is why a status card sat a full
+   card-height apart from the one above it while a plain toast sat the correct
+   14px away. Sonner's own rule is not `!important`, so any `position` we state
+   at higher specificity silently wins and breaks the stack. */
 
 [data-sonner-toast][data-type='success'] {
   --status: var(--color-success);
@@ -162,6 +167,55 @@
   flex-shrink: 0;
   align-self: flex-start;
   margin-top: 1px;
+}
+
+/* ─── The native toast document keeps the desktop geometry ────────────────
+   Every toast in this app is drawn by `NativeToastSurface.svelte`, and it is
+   drawn in a bounded native view whose width is capped at one card plus its
+   offset (`NativeToastView.position()` in `src/main/browser/native-toast-view.ts`),
+   so that document's viewport is ~412px. svelte-sonner switches to a
+   full-width mobile layout below 600px, so that document is the one place
+   inside the library's mobile branch: without this, every card is
+   `calc(100% - mobile-offset*2)` (≈348px instead of 356px) and the stack
+   takes its geometry from the mobile offsets.
+
+   The desktop geometry is therefore pinned here, scoped to the toast
+   document's own `data-native-toasts` marker (set in `src/renderer/browser-overlay.ts`)
+   and not to a width, because a narrow width is a real layout this app has:
+   the mobile client is a viewport under 600px, where the library's mobile
+   cards are the ones that belong. Nothing outside that document is affected.
+
+   These were once scoped to `[data-toast-overlay]` and were dropped when the
+   overlay documents were renamed; the bounded toast view that landed after
+   that put toasts back inside the mobile branch, which is what this restores. */
+html[data-native-toasts] [data-sonner-toaster] {
+  width: var(--width) !important;
+}
+
+html[data-native-toasts] [data-sonner-toaster][data-x-position='right'] {
+  right: var(--offset-right) !important;
+  left: auto !important;
+}
+
+html[data-native-toasts] [data-sonner-toaster][data-x-position='left'] {
+  left: var(--offset-left) !important;
+  right: auto !important;
+}
+
+html[data-native-toasts] [data-sonner-toaster][data-y-position='top'] {
+  top: var(--offset-top) !important;
+  bottom: auto !important;
+}
+
+html[data-native-toasts] [data-sonner-toaster][data-y-position='bottom'] {
+  bottom: var(--offset-bottom) !important;
+  top: auto !important;
+}
+
+html[data-native-toasts] [data-sonner-toaster] [data-sonner-toast] {
+  left: auto !important;
+  right: auto !important;
+  width: var(--width) !important;
 }
 
 /* Native cards keep Sonner's transform/opacity motion and respond without IPC. */

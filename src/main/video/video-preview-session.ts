@@ -87,13 +87,6 @@ export interface VideoPreviewResult {
   tabId: string | null
 }
 
-/** The tab id an in-app browser operation reported, or null when it reported none. */
-function tabIdOf(result: unknown): string | null {
-  if (typeof result !== 'object' || result === null) return null
-  const tabId = (result as Record<string, unknown>)['tabId']
-  return typeof tabId === 'string' && tabId.length > 0 ? tabId : null
-}
-
 /**
  * Serve one composition folder and show it in the project and thread's browser tab.
  *
@@ -130,7 +123,6 @@ export async function openVideoPreview(
   // a tab already watching this composition is left on the moving page.
   let loaded = url
   if (browser) {
-    const target = { projectId: request.projectId, threadId: request.threadId }
     const existing = browser.agentTabFor(request.projectId, request.threadId)
     if (existing) {
       tabId = existing
@@ -143,18 +135,33 @@ export async function openVideoPreview(
       const watching = posterUrl !== null && showing === playUrl
       if (watching) {
         loaded = playUrl
-      } else if (showing !== url) {
-        tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target)) ?? tabId
+        if (request.reveal) browser.revealTab(tabId)
+      } else if (showing === url) {
+        if (request.reveal) browser.revealTab(tabId)
+      } else {
+        // The app's own composition surface, moved while the app is idle, so it
+        // goes through the app-owned path rather than the agent's gated `navigate`
+        // operation, which needs a live conversation.
+        const shown = await browser.showThreadWorkTab({
+          projectId: request.projectId,
+          threadId: request.threadId,
+          url,
+          attention: request.attention,
+          reveal: request.reveal
+        })
+        tabId = shown.tabId
       }
     } else {
-      tabId = tabIdOf(
-        await browser.executeUtility('open', { url, attention: request.attention }, target)
-      )
+      const shown = await browser.showThreadWorkTab({
+        projectId: request.projectId,
+        threadId: request.threadId,
+        url,
+        attention: request.attention,
+        reveal: request.reveal
+      })
+      tabId = shown.tabId
       tab = 'opened'
     }
-    // The capability's own open reveals; a reused tab does not, so a composition
-    // the user asked for again is brought forward explicitly.
-    if (tabId && request.reveal) browser.revealTab(tabId)
   }
 
   return {

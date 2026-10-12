@@ -1048,14 +1048,14 @@ export class NotificationService {
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
     // An assistant run says what it did; naming the hidden assistant space as
-    // the project it "finished in" would read as a project thread.
+    // the project it "finished in" would read as a project thread, and repeating
+    // the title in the body reads as noise beside a title that is already the
+    // routine or task name, so a completed assistant run states its outcome.
     const body =
       kind === 'completed'
-        ? assistantName
-          ? `${assistantName} finished.`
-          : isAssistant
-            ? `${thread.title} finished.`
-            : `${thread.title} finished in ${projectName}.`
+        ? isAssistant
+          ? 'Run completed'
+          : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant
             ? `${thread.title} is waiting for your input.`
@@ -1077,6 +1077,9 @@ export class NotificationService {
       ...(lastError ? { errorDetail: lastError } : {}),
       projectId: thread.projectId,
       threadId: thread.id,
+      // The owning routine rides on the payload so the panel's routines/tasks
+      // filter is authoritative without re-reading the thread it names.
+      ...(thread.routineId ? { routineId: thread.routineId } : {}),
       source,
       projectName,
       projectColor

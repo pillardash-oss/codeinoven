@@ -251,6 +251,7 @@ export const invokeAgentContract = {
     ],
     PendingAgentQuestionRequest | null
   >,
+  'agent:userActivity': {} as Contract<[], void>,
   'agent:listPermissions': {} as Contract<
     [projectId: string, threadId: string],
     PermissionRequest[]

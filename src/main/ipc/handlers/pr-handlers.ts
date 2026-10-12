@@ -127,7 +127,11 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const provider = await providerForProject(safeProjectId)
-      if (!provider) throw new Error('Sign in to GitHub to create pull requests')
+      // A compare with nobody signed in is not a branch fact, and it is the one
+      // failure the form can resolve: signing in again re-arms it, whereas
+      // "nothing to compare" is the branches answering for themselves. Reported
+      // as data so the two never read the same in the panel.
+      if (!provider) return { status: 'signed_out' as const }
       const safeBase = canonicalGitHubBranch(validateBranchName(base, 'Compare base'))
       const safeHead = canonicalGitHubBranch(validateBranchName(head, 'Compare head'))
       if (safeBase === safeHead) {

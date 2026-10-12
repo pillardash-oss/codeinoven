@@ -200,6 +200,22 @@ export interface PullRequestCompare {
   existing?: PullRequestSummary | null
 }
 
+/**
+ * The compare could not run because nobody is signed in to GitHub.
+ *
+ * Creating a pull request is a GitHub mutation, so a signed-out compare is a
+ * different fact from "these branches share no history": the form can offer
+ * sign-in instead of reporting a failure the reader has no way to fix here.
+ * It travels as data rather than a thrown message because a rejected `invoke`
+ * crosses IPC as a bare string, which cannot be told apart from a real fault.
+ */
+export interface PullRequestCompareSignedOut {
+  status: 'signed_out'
+}
+
+/** A compare answer, or the reason it could not be produced. */
+export type PullRequestCompareResult = PullRequestCompare | PullRequestCompareSignedOut
+
 /** Full pull request view, loaded when one is opened in the sidebar. */
 export interface PullRequestDetail extends PullRequestSummary {
   body: string

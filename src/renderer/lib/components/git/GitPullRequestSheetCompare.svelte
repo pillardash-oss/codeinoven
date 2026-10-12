@@ -8,6 +8,11 @@
     branches: string[]
     comparing: boolean
     compareError: string
+    /**
+     * The compare came back signed out rather than failing: the branches have
+     * not been judged at all, and signing in is what judges them.
+     */
+    loginRequired: boolean
     compare: PullRequestCompare | null
     sameBranch: boolean
     willCreateCommit: boolean
@@ -15,6 +20,7 @@
     existingPr: PullRequestSummary | null
     onHeadChange: (event: Event) => void
     onBaseChange: (event: Event) => void
+    onSignIn: () => void
     onViewExistingPr: () => void
   }
 
@@ -24,12 +30,14 @@
     branches,
     comparing,
     compareError,
+    loginRequired,
     compare,
     sameBranch,
     willCreateCommit,
     existingPr,
     onHeadChange,
     onBaseChange,
+    onSignIn,
     onViewExistingPr
   }: Props = $props()
 </script>
@@ -105,6 +113,26 @@
       </span>
     {/if}
   </div>
+  {#if loginRequired}
+    <!--
+      Not a comparison failure: nothing was compared, because there is no signed-in
+      account to compare against GitHub with. So the form says what is missing and
+      hands over the same sign-in control every other GitHub surface offers.
+    -->
+    <div class="mt-2 flex items-center gap-2">
+      <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
+        Sign in to GitHub to create a pull request.
+      </p>
+      <button
+        type="button"
+        class="h-8 shrink-0 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        title="Sign in to GitHub"
+        onclick={onSignIn}
+      >
+        Sign in to GitHub
+      </button>
+    </div>
+  {/if}
   {#if existingPr}
     <div class="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
       <div class="flex items-start gap-2">

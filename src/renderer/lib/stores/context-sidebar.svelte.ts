@@ -867,7 +867,8 @@ class ContextSidebarState {
     initialContext: string,
     settings: ThreadSettings,
     selectionAttached = true,
-    autoPrompt?: string
+    autoPrompt?: string,
+    sourceRequestId?: string
   ): TemporaryChatContextTab {
     return this.tabContexts.openTemporaryChat(
       projectId,
@@ -877,7 +878,8 @@ class ContextSidebarState {
       initialContext,
       settings,
       selectionAttached,
-      autoPrompt
+      autoPrompt,
+      sourceRequestId
     )
   }
 
