@@ -1674,7 +1674,10 @@ export class GlobalBrowserState {
     browserAudio.forget(tabId)
     this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
-      const neighbour = remaining[Math.min(index, remaining.length - 1)]
+      // Closing the active tab lands on the previous tab in the strip, not
+      // the next one, so focus moves back through visited tabs. Closing the
+      // first tab has no previous, so it falls through to what is now first.
+      const neighbour = remaining[index - 1] ?? remaining[Math.min(index, remaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
     }
