@@ -63,9 +63,18 @@ export interface FileEditorController {
   undo(): boolean
   redo(): boolean
   scrollToLine(line: number): void
+  /** Centre the view on a line and outline it for a moment, so a jump from a
+   *  citation link or Go to line is easy to spot once the scroll settles. */
+  revealLine(line: number): void
   focus(): void
   destroy(): void
 }
+
+/**
+ * How long a revealed line stays outlined. It matches three 0.7s runs of the
+ * shared `reveal-flash` animation the jump targets elsewhere use.
+ */
+const LINE_FLASH_DURATION = 2_100
 
 export interface CreateFileEditorOptions {
   host: HTMLElement
@@ -163,6 +172,14 @@ export async function createFileEditor(
     }
   }
 
+  let flashTimer: ReturnType<typeof setTimeout> | null = null
+  let destroyed = false
+  const clearFlashTimer = (): void => {
+    if (flashTimer === null) return
+    clearTimeout(flashTimer)
+    flashTimer = null
+  }
+
   const matchMark = api.Decoration.mark({ class: 'cm-file-find-match' })
   const setMatches = api.StateEffect.define<Array<[number, number]>>()
   const findField = api.StateField.define({
@@ -177,6 +194,32 @@ export async function createFileEditor(
       return next
     },
     provide: (field) => api.EditorView.decorations.from(field)
+  })
+
+  // The line a jump just landed on. It is a plain line number rather than a
+  // mapped range: a document edit makes the outline stale, so it is dropped
+  // instead of following the caret's edits, and the decoration is rebuilt from
+  // the number so a line decoration is always anchored to a line start.
+  const setFlashLine = api.StateEffect.define<number | null>()
+  const flashField = api.StateField.define<number | null>({
+    create: () => null,
+    update(value, transaction) {
+      let next = value
+      for (const effect of transaction.effects) {
+        if (effect.is(setFlashLine)) next = effect.value
+      }
+      if (next !== null && transaction.docChanged) next = null
+      return next
+    },
+    provide: (field) =>
+      api.EditorView.decorations.compute([field], (state) => {
+        const line = state.field(field)
+        if (line === null) return api.Decoration.none
+        const clamped = Math.max(1, Math.min(line, state.doc.lines))
+        return api.Decoration.set([
+          api.Decoration.line({ class: 'cm-jump-line' }).range(state.doc.line(clamped).from)
+        ])
+      })
   })
 
   interface ConflictDecorationState {
@@ -281,6 +324,7 @@ export async function createFileEditor(
     ),
     api.EditorView.contentAttributes.of({ 'aria-label': ariaLabel, 'data-region': 'editor' }),
     findField,
+    flashField,
     conflictField,
     api.invertedEffects.of((transaction) => {
       const changesConflictState =
@@ -502,10 +546,40 @@ export async function createFileEditor(
         effects: api.EditorView.scrollIntoView(doc.line(targetLine).from, { y: 'center' })
       })
     },
+    revealLine(line: number): void {
+      const requested = Math.max(1, Math.floor(line))
+      const doc = view.state.doc
+      const targetLine = Math.min(requested, doc.lines)
+      // Clear first, then outline on the next frame: re-clicking the same link
+      // must restart the flash animation, which only happens when the class
+      // leaves the line for at least one painted frame.
+      const cleared = view.state.field(flashField) !== null
+      view.dispatch({
+        effects: [
+          ...(cleared ? [setFlashLine.of(null)] : []),
+          api.EditorView.scrollIntoView(doc.line(targetLine).from, { y: 'center' })
+        ]
+      })
+      clearFlashTimer()
+      const paintOutline = (): void => {
+        if (destroyed) return
+        view.dispatch({ effects: setFlashLine.of(targetLine) })
+        flashTimer = setTimeout(() => {
+          flashTimer = null
+          if (!destroyed && view.state.field(flashField) !== null) {
+            view.dispatch({ effects: setFlashLine.of(null) })
+          }
+        }, LINE_FLASH_DURATION)
+      }
+      if (cleared) requestAnimationFrame(paintOutline)
+      else paintOutline()
+    },
     focus(): void {
       view.focus()
     },
     destroy(): void {
+      destroyed = true
+      clearFlashTimer()
       view.destroy()
     }
   }

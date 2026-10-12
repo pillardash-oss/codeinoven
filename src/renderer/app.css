@@ -963,6 +963,34 @@ html body [data-sonner-toaster] {
   animation: reveal-flash-border 0.7s ease-in-out 3;
 }
 
+/*
+ * A line a citation link, a source row, or Go to line just landed on in the
+ * file editor. It is the same accent-gold flash as `.reveal-flash`, but drawn
+ * as an outline rather than a border: a border box would make the line two
+ * pixels taller for as long as it flashed and desync CodeMirror's line-height
+ * map (every later line would jump). The outline is animated through the same
+ * three pulses and then removed by the editor.
+ */
+@keyframes reveal-flash-outline {
+  0%,
+  100% {
+    outline-color: transparent;
+    background-color: transparent;
+  }
+  40%,
+  60% {
+    outline-color: var(--color-accent);
+    background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+}
+
+.cm-jump-line {
+  outline: 1.5px solid transparent;
+  outline-offset: -1px;
+  border-radius: 3px;
+  animation: reveal-flash-outline 0.7s ease-in-out 3;
+}
+
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`
