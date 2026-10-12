@@ -317,12 +317,23 @@
     return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
   }
 
+  /**
+   * Acknowledge one notice: retire it, and retire the unattended run it stands
+   * for when a failure left both a notice and a ledger entry for one run. The
+   * panel draws those two as a single row, so both leave together.
+   */
+  function acknowledgeNotification(n: InAppNotification): void {
+    notificationPanelState.dismiss(n.id)
+    const run = notificationPanelState.assistantRunPairedWithNotice(n)
+    if (run) void dismissBackgroundRun(run.runThreadId)
+  }
+
   async function navigateToNotification(n: InAppNotification): Promise<void> {
     busyId = n.id
     try {
       if (onOpenThread) {
         await onOpenThread(n.projectId, n.threadId, n.temporaryChatId)
-        notificationPanelState.dismiss(n.id)
+        acknowledgeNotification(n)
         return
       }
       const [project, thread] = await Promise.all([
@@ -333,7 +344,7 @@
       const openDesktopThread = workspaceState.openThreadFromNotification
       if (!openDesktopThread) return
       await openDesktopThread(thread, project, n.temporaryChatId)
-      notificationPanelState.dismiss(n.id)
+      acknowledgeNotification(n)
     } catch {
       // Thread or project may have been deleted
     } finally {
@@ -383,6 +394,15 @@
     } catch {
       // Main pushes the fresh ledger list; a failure simply leaves the row.
     }
+  }
+
+  /**
+   * Open an unattended run and acknowledge it: the row leaves the panel the
+   * moment its thread opens, exactly as any other thread's notice does.
+   */
+  async function openBackgroundRun(run: BackgroundRun): Promise<void> {
+    await openMissedRun(run.runThreadId)
+    await dismissBackgroundRun(run.runThreadId)
   }
 
   async function runMissedRunNow(id: string): Promise<void> {
@@ -690,7 +710,7 @@
       class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
       title="Open this run"
       aria-label="Open unattended run for {backgroundRunTitle(run)}"
-      onclick={() => void openMissedRun(run.runThreadId)}
+      onclick={() => void openBackgroundRun(run)}
     >
       <div class="flex w-2 shrink-0 pt-1">
         <StatusBadge

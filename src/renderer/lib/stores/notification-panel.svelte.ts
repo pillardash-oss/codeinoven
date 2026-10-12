@@ -264,6 +264,23 @@ class NotificationPanelState {
     )
   }
 
+  /**
+   * The unattended run an assistant notice stands for, when one run left both a
+   * notice and a ledger entry.
+   *
+   * A failed unattended run is recorded twice: the scheduler writes the ledger
+   * entry and the failure raises the notice. The panel draws the two as one row
+   * (`assistantBackgroundRunsFor`), so a reader acknowledging the notice has to
+   * retire the ledger entry with it. Dismissing only the notice would un-hide the
+   * hidden half and ask the same run to be dismissed a second time.
+   */
+  assistantRunPairedWithNotice(n: InAppNotification): BackgroundRun | null {
+    if (!this.isAssistant(n)) return null
+    return (
+      assistantRoutines.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
+    )
+  }
+
   /** Items for the currently active top tab + sub filter. Project and chat
    *  listings lead with their newest entry; app errors are rendered by the panel
    *  straight from `appErrorState` (already newest first), so this returns an
