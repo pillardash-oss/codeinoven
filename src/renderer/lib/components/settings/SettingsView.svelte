@@ -75,6 +75,7 @@
   import Switch from '../ui/Switch.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
+  import AboutToastPlayground from './AboutToastPlayground.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import BrowserSettingsTab from './BrowserSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
@@ -1732,6 +1733,8 @@
         </div>
 
         <AboutCommunity {config} {settingsReady} {updateConfig} />
+
+        <AboutToastPlayground />
 
         <!-- Latest release notes, channel-aware, rendered as markdown -->
         <AboutChangelog />
