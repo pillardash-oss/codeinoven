@@ -63,6 +63,8 @@
     if (!hostElement) return
     let cancelled = false
     let created: FileEditorController | null = null
+    const syncDocument = (): void => created?.setRoot(hostElement.ownerDocument)
+    hostElement.addEventListener('native-floating-document-change', syncDocument)
     void createFileEditor({
       host: hostElement,
       value,
@@ -80,10 +82,12 @@
         return
       }
       created = instance
+      syncDocument()
       controller = instance
     })
     return () => {
       cancelled = true
+      hostElement.removeEventListener('native-floating-document-change', syncDocument)
       controller = null
       created?.destroy()
     }
@@ -154,4 +158,5 @@
   bind:this={host}
   class="min-h-0 min-w-0 flex-1 overflow-hidden bg-app"
   data-editor-codemirror
+  data-floating-document
 ></div>

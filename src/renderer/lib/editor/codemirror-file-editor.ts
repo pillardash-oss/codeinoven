@@ -38,6 +38,8 @@ export interface FileEditorRangeViewportRect {
  */
 
 export interface FileEditorController {
+  /** Retain the editor state when its live DOM moves into a native child. */
+  setRoot(root: Document | ShadowRoot): void
   setValue(text: string): void
   setPath(path: string): void
   setWrap(wrap: boolean): void
@@ -383,6 +385,9 @@ export async function createFileEditor(
   }
 
   return {
+    setRoot(root: Document | ShadowRoot): void {
+      if (view.root !== root) view.setRoot(root)
+    },
     setValue(text: string): void {
       if (view.state.doc.toString() === text) return
       view.dispatch({

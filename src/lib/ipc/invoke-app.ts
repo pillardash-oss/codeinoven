@@ -9,6 +9,7 @@ import type {
   InstanceRole,
   ProjectTextFile
 } from '../types'
+import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
@@ -119,6 +120,15 @@ export const invokeAppContract = {
   'shell:revealExternalPath': {} as Contract<[path: string], boolean>,
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': {} as Contract<[hostnames: string[]], Record<string, string | null>>,
+  'app:prepareFloatingPanel': {} as Contract<
+    [id: string, bounds: NativeFloatingPanelBounds],
+    string
+  >,
+  'app:updateFloatingPanel': {} as Contract<
+    [id: string, bounds: NativeFloatingPanelBounds, visible: boolean],
+    boolean
+  >,
+  'app:releaseFloatingPanel': {} as Contract<[id: string], void>,
   'app:confirmClose': {} as Contract<[], void>,
   /**
    * The renderer approved parking the window: it is torn down and the backend

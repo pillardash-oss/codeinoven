@@ -37,6 +37,10 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:transferInstanceControl',
   'app:rendererReady',
   'app:waitForFeatures',
+  // Native panel hosts are registered with the parent before navigation.
+  'app:prepareFloatingPanel',
+  'app:updateFloatingPanel',
+  'app:releaseFloatingPanel',
   // Registered with the same pre-navigation surface
   // (`registerGlobalBrowserIpcHandlers`), and read by the Ctrl+Tab switcher and
   // by `loadBrowser` while the browser's own modules are still unloaded. Waiting
