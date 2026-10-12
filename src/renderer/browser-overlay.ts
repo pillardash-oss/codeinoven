@@ -39,14 +39,33 @@ window.addEventListener('pagehide', stopTypography, { once: true })
 const target = document.getElementById('browser-overlay')
 if (target) {
   const mode = new URLSearchParams(window.location.search).get('surface')
-  const toasts = mode === 'toasts'
-  document.documentElement.toggleAttribute('data-native-toasts', toasts)
-  const surface = toasts
-    ? import('$lib/components/ui/NativeToastSurface.svelte')
-    : mode === 'strip'
-      ? import('$lib/components/ui/NativeStripSurface.svelte')
-      : import('$lib/components/ui/BrowserOverlaySurface.svelte')
-  void surface
-    .then(({ default: component }) => mount(component, { target }))
-    .catch((error) => logRendererError('The native overlay could not load', error))
+  document.documentElement.toggleAttribute('data-native-toasts', mode === 'toasts')
+  const failed = (error: unknown): void =>
+    logRendererError('The native overlay could not load', error)
+  /**
+   * One `import()` per surface, each in its own statement on purpose.
+   *
+   * Written as one expression that picks between three dynamic imports (a
+   * ternary), the bundler emits a single shared preload list for all three and
+   * computes it for only one branch. The toasts surface then never preloaded
+   * `svelte-sonner`'s stylesheet   the card background, its border and the
+   * absolute positioning of the stack   so in production, where that stylesheet
+   * is a lazily-loaded CSS chunk rather than a style tag injected by the dev
+   * server, every card drew transparent and unpositioned. Keep them separate, and
+   * check `out/renderer`: every emitted `.css` must be named by the bundle or the
+   * document that loads it.
+   */
+  if (mode === 'toasts') {
+    void import('$lib/components/ui/NativeToastSurface.svelte')
+      .then(({ default: component }) => mount(component, { target }))
+      .catch(failed)
+  } else if (mode === 'strip') {
+    void import('$lib/components/ui/NativeStripSurface.svelte')
+      .then(({ default: component }) => mount(component, { target }))
+      .catch(failed)
+  } else {
+    void import('$lib/components/ui/BrowserOverlaySurface.svelte')
+      .then(({ default: component }) => mount(component, { target }))
+      .catch(failed)
+  }
 }
