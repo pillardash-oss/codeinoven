@@ -49,6 +49,23 @@ export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
 export const CHATS_CWD_DIR = 'chats-cwd'
 
 /**
+ * App-storage root holding one workspace directory per assistant-space task.
+ * `assistant-cwd/<routineId ?? threadId>` is the directory the task's session
+ * runs in, the mount root of its file tree, and the task's own scratch
+ * directory. The name lives here for the same reason `CHATS_CWD_DIR` does: the
+ * renderer needs the same segment to turn a path an agent cited back into a
+ * tree-relative one.
+ */
+export const ASSISTANT_CWD_DIR = 'assistant-cwd'
+
+/**
+ * App-storage root holding one workspace directory per global-browser tab's
+ * agent chat: `browser-cwd/<threadId>`. Renderer-visible for the same reason
+ * as `CHATS_CWD_DIR`.
+ */
+export const BROWSER_CWD_DIR = 'browser-cwd'
+
+/**
  * Fixed hidden containers that hold many independent conversations under one
  * project id. Every per-conversation surface keys off the open thread's
  * conversation scope inside them: a standalone chat owns its own file mount and
@@ -90,6 +107,29 @@ export function conversationScopeId(
  */
 export function usesThreadWorkspaceMount(projectId: string): boolean {
   return isConversationContainer(projectId) || projectId === GLOBAL_BROWSER_PROJECT_ID
+}
+
+/**
+ * Storage-root-relative workspace directory one conversation's file tree is
+ * mounted on, or `null` when the container mounts on a project root instead. A
+ * chat mounts `chats-cwd/<threadId>`, an assistant task mounts
+ * `assistant-cwd/<routineId ?? threadId>`, and a browser tab mounts
+ * `browser-cwd/<threadId>`.
+ *
+ * Shared so the renderer strips exactly the directory the main process resolves
+ * the tree against: main assembles the same segment from the same three names,
+ * so a cited absolute path can be turned back into a mount-relative one without
+ * the two drifting apart.
+ */
+export function conversationWorkspaceDirectory(
+  projectId: string,
+  threadId: string,
+  routineId?: string | null
+): string | null {
+  if (projectId === INBOX_PROJECT_ID) return `${CHATS_CWD_DIR}/${threadId}`
+  if (projectId === ASSISTANT_SPACE_ID) return `${ASSISTANT_CWD_DIR}/${routineId ?? threadId}`
+  if (projectId === GLOBAL_BROWSER_PROJECT_ID) return `${BROWSER_CWD_DIR}/${threadId}`
+  return null
 }
 
 export type ChangeTrackingMode = 'git' | 'manual'

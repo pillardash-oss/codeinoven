@@ -9,27 +9,35 @@ import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
-import { CHATS_CWD_DIR, INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '$shared/types'
+import { conversationWorkspaceDirectory, usesThreadWorkspaceMount } from '$shared/types'
 import type { ProjectFileEntry } from '$shared/types'
 import { fileUrlToPath } from '$lib/mime'
 
-/** Whether an absolute path sits inside the given inbox thread's workspace
- *  directory, and the mount-relative path below that directory. */
-function chatWorkspaceRelativePath(threadId: string, absolutePath: string): string | null {
+/**
+ * The open conversation thread whose app-owned workspace directory contains an
+ * absolute path, with that path below the directory.
+ *
+ * A chat, an assistant task, and a browser tab each own an app-storage
+ * directory mounted as their file tree (`chats-cwd/<threadId>`,
+ * `assistant-cwd/<routineId ?? threadId>`, `browser-cwd/<threadId>`), and a
+ * path an agent cites from one of them is absolute. Only the conversation the
+ * view is showing can own it - a tree mounts one directory at a time - so the
+ * open thread decides which mount to strip.
+ */
+function conversationWorkspaceTarget(
+  projectId: string,
+  absolutePath: string
+): { threadId: string; relativePath: string } | null {
+  if (!usesThreadWorkspaceMount(projectId)) return null
+  const thread = workspaceState.selectedThread
+  if (!thread || thread.projectId !== projectId) return null
+  const directory = conversationWorkspaceDirectory(projectId, thread.id, thread.routineId)
+  if (!directory) return null
   const normalized = normalizeCitationPath(absolutePath)
-  const marker = `/${CHATS_CWD_DIR}/${threadId}/`
+  const marker = `/${directory}/`
   const index = normalized.indexOf(marker)
   if (index < 0) return null
-  return normalized.slice(index + marker.length)
-}
-
-/** The inbox thread whose workspace directory contains this path, if any. */
-function chatWorkspaceThreadForPath(projectId: string, absolutePath: string): string | null {
-  if (projectId !== INBOX_PROJECT_ID) return null
-  const threadId =
-    workspaceState.selectedThread?.projectId === projectId ? workspaceState.selectedThread.id : null
-  if (!threadId) return null
-  return absolutePath.includes(`/${CHATS_CWD_DIR}/${threadId}/`) ? threadId : null
+  return { threadId: thread.id, relativePath: normalized.slice(index + marker.length) }
 }
 
 async function ensureProjectFilesReady(projectId: string, mountThreadId?: string): Promise<void> {
@@ -86,13 +94,13 @@ async function exactEntry(projectId: string, path: string): Promise<ProjectFileE
 }
 
 export async function revealFileInAppTree(projectId: string, path: string): Promise<void> {
-  const chatThread = chatWorkspaceThreadForPath(projectId, path)
-  const projectPath = chatThread ? '' : workspaceState.activeProject?.path
-  if (!chatThread && !projectPath) return
+  const conversation = conversationWorkspaceTarget(projectId, path)
+  const projectPath = conversation ? '' : workspaceState.activeProject?.path
+  if (!conversation && !projectPath) return
 
-  await ensureProjectFilesReady(projectId, chatThread ?? undefined)
-  const relativePath = chatThread
-    ? (chatWorkspaceRelativePath(chatThread, path) ?? '')
+  await ensureProjectFilesReady(projectId, conversation?.threadId)
+  const relativePath = conversation
+    ? conversation.relativePath
     : relativeProjectPath(projectPath ?? '', path)
   const entry = await exactEntry(projectId, relativePath)
   if (entry) await revealEntry(projectId, entry)
@@ -178,11 +186,10 @@ export async function revealLocalFile(projectId: string | undefined, url: string
   if (!projectId || !url.startsWith('file://')) return
 
   const absolutePath = fileUrlToPath(url)
-  // A file a chat's own session produced lives in that thread's workspace
-  // directory: reveal it inside the chat's mounted tree even though no project
-  // path is active.
-  const chatThread = chatWorkspaceThreadForPath(projectId, absolutePath)
-  if (chatThread) {
+  // A file a conversation's own session produced lives in that thread's
+  // app-owned workspace directory: reveal it inside the conversation's mounted
+  // tree even though no project path is active.
+  if (conversationWorkspaceTarget(projectId, absolutePath)) {
     await revealFileInAppTree(projectId, absolutePath)
     return
   }
@@ -253,14 +260,11 @@ export async function revealCitationFile(
   citationPath: string,
   focusLine?: number
 ): Promise<void> {
-  // A chat workspace citation (absolute path inside the thread's own workspace
-  // directory) resolves against the mounted chat tree, not a project root.
-  const chatThread =
-    chatWorkspaceThreadForPath(projectId, citationPath) ??
-    (projectId === INBOX_PROJECT_ID && workspaceState.selectedThread?.projectId === projectId
-      ? workspaceState.selectedThread.id
-      : null)
-  if (chatThread && citationPath.includes(`/${CHATS_CWD_DIR}/${chatThread}/`)) {
+  // A path inside a conversation's own workspace directory (a chat's, an
+  // assistant task's, a browser tab's) resolves against that conversation's
+  // mounted tree, not a project root - and those containers have no project
+  // path at all.
+  if (conversationWorkspaceTarget(projectId, citationPath)) {
     await revealFileInAppTree(projectId, citationPath)
     return
   }
