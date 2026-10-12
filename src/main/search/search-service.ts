@@ -3,6 +3,7 @@ import type { Database } from '../database/database'
 import { Logger } from '../system/logger'
 import { SEARCH_MODEL_CATALOG, searchModelsForRuntime } from '../../lib/search/model-catalog'
 import {
+  clampSearchContextTokens,
   DEFAULT_SEARCH_SETTINGS,
   type IntentThreadMatch,
   type InstalledSearchModel,
@@ -192,6 +193,23 @@ export class SearchService {
     this.emitStatus()
   }
 
+  /**
+   * Change the embedding context window. The window decides how much of a
+   * thread is embedded, so vectors produced under a different window are not
+   * comparable: the index is dropped and rebuilt from scratch.
+   */
+  async setContextTokens(tokens: number): Promise<void> {
+    const next = clampSearchContextTokens(tokens)
+    if (this.settings.contextTokens === next) return
+    this.settings.contextTokens = next
+    await this.saveSettings()
+    await this.disposeRuntime()
+    await this.index.reset()
+    this.sweepTotals = { total: 0, pending: 0 }
+    if (this.settings.enabled && this.activeModel()) await this.runSweep('context-changed')
+    this.emitStatus()
+  }
+
   async rebuildIndex(): Promise<void> {
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
@@ -325,7 +343,11 @@ export class SearchService {
     if (model.runtime !== 'gguf') {
       throw new Error(`No local runtime is available for ${model.runtime} models.`)
     }
-    const runtime = new LlamaEmbeddingRuntime(model.directory, model.contextTokens, this.host)
+    const runtime = new LlamaEmbeddingRuntime(
+      model.directory,
+      this.settings.contextTokens,
+      this.host
+    )
     this.runtime = runtime
     this.runtimeModelId = model.id
     return runtime
@@ -397,7 +419,12 @@ export class SearchService {
         this.settings = {
           enabled: record['enabled'] === true,
           activeModelId:
-            typeof record['activeModelId'] === 'string' ? record['activeModelId'] : null
+            typeof record['activeModelId'] === 'string' ? record['activeModelId'] : null,
+          contextTokens: clampSearchContextTokens(
+            typeof record['contextTokens'] === 'number'
+              ? record['contextTokens']
+              : DEFAULT_SEARCH_SETTINGS.contextTokens
+          )
         }
       }
     } catch {

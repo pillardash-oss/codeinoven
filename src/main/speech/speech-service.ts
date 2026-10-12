@@ -1453,7 +1453,11 @@ export class SpeechService {
       byteSize: artifact.byteSize,
       source: 'download',
       externalReference: false,
-      available: true
+      available: true,
+      // Record what the artifact is for, so the installed index stays
+      // self-describing and the UI never has to infer a capability it could
+      // have been told.
+      capability: artifact.capability
     })
     await this.persistInstalledIndex()
   }

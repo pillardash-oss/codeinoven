@@ -57,6 +57,30 @@ export function activeIdFor(settings: SpeechSettings, sub: ModelSubTab): string 
   return settings.cleanupArtifactId
 }
 
+/** The persisted active artifact id for a capability. */
+export function activeIdForCapability(
+  settings: SpeechSettings,
+  capability: SpeechCapability
+): string | undefined {
+  return activeIdFor(settings, modelSubTabForCapability(capability))
+}
+
+/** True when the artifact is the active model of the given capability. */
+export function isActiveCapability(
+  settings: SpeechSettings,
+  artifactId: string,
+  capability: SpeechCapability
+): boolean {
+  return activeIdForCapability(settings, capability) === artifactId
+}
+
+/** The model sub-tab a capability belongs to. */
+export function modelSubTabForCapability(capability: SpeechCapability): ModelSubTab {
+  if (capability === 'asr') return 'asr'
+  if (capability === 'tts') return 'tts'
+  return 'llm'
+}
+
 /** True when the artifact is the active model of the given capability. */
 export function isActiveArtifact(
   settings: SpeechSettings,
@@ -139,17 +163,27 @@ export function downloadPercent(download: { bytesReceived: number; totalBytes: n
   )
 }
 
-export function isImportedForCapability(
-  artifact: { capability?: SpeechCapability; runtime: SpeechRuntime },
-  cap: SpeechCapability
-): boolean {
-  if (artifact.capability) return artifact.capability === cap
-  // Fallback for legacy imports without capability: infer via runtime
-  // gguf only belongs to cleanup, coreml only to asr
-  if (artifact.runtime === 'gguf') return cap === 'cleanup'
-  if (artifact.runtime === 'coreml') return cap === 'asr'
-  // mlx/sherpa-onnx could be any, but without capability we hide to avoid leakage - only show on asr as safest fallback
-  return cap === 'asr'
+/**
+ * The capability an installed artifact serves.
+ *
+ * The catalog is the authority: a downloaded model is identified by its
+ * catalog entry. An imported model carries the capability it was imported for,
+ * and a legacy import written before that field existed is inferred from its
+ * runtime (a single good guess rather than a guess per row).
+ */
+export function installedCapability(
+  installed: { artifactId?: string; capability?: SpeechCapability; runtime: SpeechRuntime },
+  catalogArtifacts: SpeechModelArtifact[]
+): SpeechCapability {
+  const catalog =
+    installed.artifactId !== undefined
+      ? catalogArtifacts.find((artifact) => artifact.id === installed.artifactId)
+      : undefined
+  if (catalog) return catalog.capability
+  if (installed.capability) return installed.capability
+  if (installed.runtime === 'gguf') return 'cleanup'
+  if (installed.runtime === 'coreml') return 'asr'
+  return 'asr'
 }
 
 export function runtimesForSubTab(sub: ModelSubTab): SpeechRuntime[] {

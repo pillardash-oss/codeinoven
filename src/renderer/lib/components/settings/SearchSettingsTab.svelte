@@ -1,22 +1,38 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { CircleAlert, Download, LoaderCircle, RefreshCw, Trash2, Upload } from '@lucide/svelte'
+  import {
+    CircleAlert,
+    ClipboardPaste,
+    Download,
+    LoaderCircle,
+    RefreshCw,
+    Trash2,
+    Upload
+  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { searchSettingsStore as search } from '$lib/stores/search.svelte'
   import { formatCompactAge } from '../../../../lib/date-time-format'
-  import type { SearchDownloadState, SearchModelArtifact } from '../../../../lib/search/types'
+  import {
+    SEARCH_CONTEXT_TOKENS_MAX,
+    SEARCH_CONTEXT_TOKENS_MIN,
+    clampSearchContextTokens,
+    type SearchDownloadState,
+    type SearchModelArtifact
+  } from '../../../../lib/search/types'
   import type { SpeechLlamaRuntimeStatus } from '../../../../lib/speech/types'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import PasteModelPathModal from './PasteModelPathModal.svelte'
   import { downloadPercent, formatBytes } from './sound-settings-helpers'
 
-  const state = $derived(search.state)
-  const status = $derived(state?.status ?? null)
-  const models = $derived(state?.models ?? [])
-  const catalog = $derived(state?.catalog ?? [])
-  const downloads = $derived(state?.downloads ?? {})
-  const enabled = $derived(state?.settings.enabled ?? false)
+  const searchState = $derived(search.state)
+  const status = $derived(searchState?.status ?? null)
+  const models = $derived(searchState?.models ?? [])
+  const catalog = $derived(searchState?.catalog ?? [])
+  const downloads = $derived(searchState?.downloads ?? {})
+  const enabled = $derived(searchState?.settings.enabled ?? false)
+  const contextTokens = $derived(searchState?.settings.contextTokens ?? SEARCH_CONTEXT_TOKENS_MIN)
   const installedIds = $derived(new Set(models.map((model) => model.id)))
   const availableArtifacts = $derived(catalog.filter((artifact) => !installedIds.has(artifact.id)))
   const activeModelLabel = $derived(
@@ -25,6 +41,7 @@
 
   let llamaRuntime: SpeechLlamaRuntimeStatus | null = $state(null)
   let installingRuntime = $state(false)
+  let pasteOpen = $state(false)
   let pendingDelete: { id: string; label: string } | null = $state(null)
   let deleting = $state(false)
 
@@ -63,6 +80,16 @@
     await search.deleteModel(pendingDelete.id)
     deleting = false
     pendingDelete = null
+  }
+
+  function saveContextTokens(event: Event & { currentTarget: HTMLInputElement }): void {
+    const next = Number(event.currentTarget.value)
+    if (!Number.isFinite(next)) return
+    const clamped = clampSearchContextTokens(next)
+    // Reflect the clamped value even when the write is a no-op, so the field
+    // never keeps a number the app did not accept.
+    event.currentTarget.value = String(clamped)
+    if (clamped !== contextTokens) void search.setContextTokens(clamped)
   }
 
   onMount(() => {
@@ -206,16 +233,28 @@
     <div class="rounded-xl border bg-surface p-4">
       <div class="mb-1 flex items-center justify-between gap-3">
         <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Embedding model</h3>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
-          title="Import a GGUF embedding model from disk"
-          aria-label="Import an embedding model"
-          onclick={() => void search.importModel()}
-        >
-          <Upload size={12} aria-hidden="true" />
-          Import
-        </button>
+        <div class="flex items-center gap-1.5">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            title="Paste a path to a GGUF embedding model"
+            aria-label="Paste an embedding model path"
+            onclick={() => (pasteOpen = true)}
+          >
+            <ClipboardPaste size={12} aria-hidden="true" />
+            Paste path
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            title="Import a GGUF embedding model from disk"
+            aria-label="Import an embedding model"
+            onclick={() => void search.importModel()}
+          >
+            <Upload size={12} aria-hidden="true" />
+            Import
+          </button>
+        </div>
       </div>
 
       {#if models.length === 0}
@@ -285,6 +324,32 @@
           </ul>
         </div>
       {/if}
+
+      <div class="mt-4 border-t pt-3">
+        <div class="flex items-start justify-between gap-6">
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Context window</p>
+            <p class="mt-0.5 text-xs leading-relaxed text-muted">
+              How many tokens of each thread the model reads when it embeds. A wider window keeps
+              more of a long conversation; a narrower one is faster.
+            </p>
+            <p class="mt-1 text-xs text-dimmed">Changing it clears the index and rebuilds it.</p>
+          </div>
+          <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+            <input
+              class="w-24 rounded-lg border bg-elevated px-2 py-1 text-right tabular-nums"
+              type="number"
+              min={SEARCH_CONTEXT_TOKENS_MIN}
+              max={SEARCH_CONTEXT_TOKENS_MAX}
+              step="1024"
+              value={contextTokens}
+              aria-label="Embedding context window in tokens"
+              onchange={saveContextTokens}
+            />
+            tokens
+          </label>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -354,3 +419,14 @@
     files from disk? Intent search turns off if this is the active model.
   </p>
 </ConfirmDialog>
+
+<PasteModelPathModal
+  open={pasteOpen}
+  title="Paste embedding model path"
+  help="Embedding models are GGUF files. Paste an absolute path to a .gguf file, or a folder that contains one."
+  placeholder="/Users/you/models/embeddinggemma-2-Q8_0.gguf"
+  validate={(raw) => invoke('search:validateModelPath', raw)}
+  onImport={(path) => search.importModelFromPath(path)}
+  onClose={() => (pasteOpen = false)}
+  onImported={() => void search.load()}
+/>

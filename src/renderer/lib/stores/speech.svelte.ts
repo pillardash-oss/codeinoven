@@ -71,11 +71,11 @@ class SpeechSettingsStore {
   async importModel(
     path: string,
     capability?: import('../../../lib/speech/types').SpeechCapability
-  ): Promise<boolean> {
+  ): Promise<import('../../../lib/speech/types').SpeechInstalledArtifact | null> {
     const result = await invoke('speech:importModel', path, capability)
     if (!result.ok) this.error = result.error.message
     await this.load()
-    return result.ok
+    return result.ok ? result.value : null
   }
 
   async unregisterModel(artifactId: string, token: string): Promise<boolean> {
@@ -131,6 +131,10 @@ class SpeechSettingsStore {
   private onProgress(progress: SpeechProgressEvent): void {
     if (progress.kind === 'download') {
       this.downloads = { ...this.downloads, [progress.artifactId]: progress.download }
+      // A finished download changes the installed set, so the page must re-read
+      // it   otherwise the new model shows up only after leaving and reopening
+      // the page, which is exactly the lag the install badge must not have.
+      if (progress.download.state === 'installed') void this.load()
       return
     }
     if (progress.kind === 'history') void this.load()

@@ -12,9 +12,14 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
-  import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
+  import {
+    describeSupportedFormatsForCapability,
+    parseModelIdentityFromPath
+  } from '../../../../lib/speech/model-path-validation'
   import type {
     SpeechCapability,
+    SpeechInstalledArtifact,
+    SpeechModelArtifact,
     SpeechRuntime,
     SpeechSettings
   } from '../../../../lib/speech/types'
@@ -25,9 +30,10 @@
     bestForBadge,
     downloadPercent,
     formatBytes,
-    isActiveArtifact,
-    isImportedForCapability,
+    installedCapability,
+    isActiveCapability,
     labelForInstalled,
+    modelSubTabForCapability,
     modelSubTabs,
     runtimeBadge,
     runtimeBadgeClass,
@@ -41,6 +47,13 @@
     settings: SpeechSettings
     patch: (next: Partial<SpeechSettings>) => void
     onRequestDelete: (pending: PendingDeletion) => void
+  }
+
+  interface InstalledRow {
+    installed: SpeechInstalledArtifact
+    capability: SpeechCapability
+    /** The catalog entry when the model came from the catalog, null when imported. */
+    artifact: SpeechModelArtifact | null
   }
 
   let { settings, patch, onRequestDelete }: Props = $props()
@@ -59,10 +72,35 @@
   const visibleArtifacts = $derived(
     sortedForSubTab(catalogArtifacts, activeModelSubTab, runtimeFilter)
   )
-  const importedForTab = $derived(
-    installedArtifacts.filter(
-      (item) => item.source === 'import' && isImportedForCapability(item, pasteCapability)
+
+  /** Installed models of the current capability, active one first. */
+  const installedRows = $derived.by((): InstalledRow[] => {
+    const activeId = activeIdFor(settings, activeModelSubTab)
+    return installedArtifacts
+      .map((installed) => ({
+        installed,
+        capability: installedCapability(installed, catalogArtifacts),
+        artifact: catalogArtifacts.find((artifact) => artifact.id === installed.artifactId) ?? null
+      }))
+      .filter((row) => row.capability === pasteCapability)
+      .filter((row) => runtimeFilter === 'all' || row.installed.runtime === runtimeFilter)
+      .sort((a, b) => {
+        if (a.installed.artifactId === activeId) return -1
+        if (b.installed.artifactId === activeId) return 1
+        return b.installed.installedAt - a.installed.installedAt
+      })
+  })
+
+  /** Every installed id of this capability, so none is offered twice. */
+  const installedIds = $derived(
+    new Set(
+      installedArtifacts
+        .filter((item) => installedCapability(item, catalogArtifacts) === pasteCapability)
+        .map((item) => item.artifactId)
     )
+  )
+  const availableArtifacts = $derived(
+    visibleArtifacts.filter((artifact) => !installedIds.has(artifact.id))
   )
 
   function setActive(sub: ModelSubTab, artifactId: string): void {
@@ -71,13 +109,35 @@
     else patch({ cleanupArtifactId: artifactId })
   }
 
+  /**
+   * Download an artifact and make it active the moment it lands. Waiting for a
+   * manual "Set Active" after a multi-hundred-megabyte download is busywork:
+   * downloading a model is the request to use it.
+   */
+  async function downloadAndActivate(artifact: SpeechModelArtifact): Promise<void> {
+    await speech.download(artifact.id)
+    const sub = modelSubTabForCapability(artifact.capability)
+    if (activeIdFor(settings, sub) !== artifact.id) setActive(sub, artifact.id)
+  }
+
+  /** An imported model becomes active the same way a downloaded one does. */
+  async function importAndActivate(path: string): Promise<boolean> {
+    const installed = await speech.importModel(path, pasteCapability)
+    if (!installed) return false
+    const capability = installedCapability(installed, catalogArtifacts)
+    if (!isActiveCapability(settings, installed.artifactId, capability)) {
+      setActive(modelSubTabForCapability(capability), installed.artifactId)
+    }
+    return true
+  }
+
   async function pickImport(): Promise<void> {
     if (importing) return
     importing = true
     try {
       const path = await invoke('dialog:pickFolder')
       if (!path) return
-      await speech.importModel(path, pasteCapability)
+      await importAndActivate(path)
     } catch (cause) {
       speech.error = cause instanceof Error ? cause.message : String(cause)
     } finally {
@@ -85,12 +145,15 @@
     }
   }
 
-  function removeImported(artifactId: string, importPath: string): void {
+  function removeInstalled(row: InstalledRow): void {
+    const isImported = row.installed.source === 'import'
     onRequestDelete({
       action: 'model',
-      targetId: artifactId,
-      label: `imported model ${importPath}`,
-      isImported: true
+      targetId: row.installed.artifactId,
+      label: isImported
+        ? `imported model ${row.installed.importPath ?? row.installed.artifactId}`
+        : (row.artifact?.label ?? row.installed.artifactId),
+      isImported
     })
   }
 
@@ -172,131 +235,6 @@
       </button>
     </div>
   </div>
-  {#if !activeIdFor(settings, activeModelSubTab)}
-    <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
-      No active model import or download one and set it active.
-    </p>
-  {/if}
-
-  {#if importedForTab.length > 0}
-    <div class="space-y-2">
-      <p class="text-xs font-semibold uppercase tracking-wide text-muted">
-        Imported · {activeModelSubTab.toUpperCase()}
-        {importedForTab.length} model{importedForTab.length === 1 ? '' : 's'}
-      </p>
-      {#each importedForTab as artifact (artifact.artifactId)}
-        {@const parsedImp = artifact.importPath
-          ? parseModelIdentityFromPath(artifact.importPath, artifact.runtime)
-          : null}
-        {@const impDetails = parsedImp
-          ? parsedImp.details.filter((d) => d.label !== 'Family' && d.label !== 'Runtime')
-          : []}
-        <div
-          id="model-card-{artifact.artifactId}"
-          class="flex items-start gap-3 rounded-xl border px-3 py-3 {isActiveArtifact(
-            settings,
-            artifact.artifactId,
-            activeModelSubTab
-          )
-            ? 'bg-success/[0.04] border-success/25'
-            : 'bg-elevated border-border/70'}"
-        >
-          <div class="min-w-0 flex-1">
-            {#if parsedImp}
-              <div class="flex flex-wrap items-center gap-1.5">
-                <p
-                  class="truncate text-sm font-semibold leading-none"
-                  title={parsedImp.baseWithoutExtension}
-                >
-                  {parsedImp.displayName}
-                </p>
-                <span
-                  class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
-                    artifact.runtime
-                  )}">{runtimeBadge(artifact.runtime)}</span
-                >
-                <span class="text-[0.625rem] text-dimmed">· external</span>
-                {#if !artifact.available}
-                  <span
-                    class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
-                    title={artifact.unavailableReason ??
-                      'The imported model path no longer exists.'}
-                    ><X size={10} aria-hidden="true" /> Not found</span
-                  >
-                {/if}
-                {#if isActiveArtifact(settings, artifact.artifactId, activeModelSubTab)}
-                  <span
-                    class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white"
-                    ><Check size={10} aria-hidden="true" /> Active</span
-                  >
-                {/if}
-              </div>
-              <p
-                class="mt-1 truncate font-mono text-[0.6875rem] leading-none text-dimmed"
-                title={artifact.importPath}
-              >
-                {artifact.importPath}
-              </p>
-              {#if impDetails.length}
-                <p
-                  class="mt-1.5 flex flex-wrap items-center gap-x-1 text-[0.6875rem] leading-none text-muted"
-                >
-                  {#each impDetails as d, i (d.label)}
-                    <span class="font-medium">{d.value}</span>{#if i < impDetails.length - 1}<span
-                        class="mx-0.5 opacity-30">·</span
-                      >{/if}
-                  {/each}
-                </p>
-              {/if}
-              {#if parsedImp.tokens.length}
-                <p class="mt-1 font-mono text-[0.625rem] leading-none text-dimmed/80">
-                  {parsedImp.tokens.join(' · ')}
-                </p>
-              {/if}
-            {:else}
-              <p class="truncate text-sm font-medium">{artifact.importPath}</p>
-              <p class="mt-1 inline-flex items-center gap-1.5 text-[0.625rem] text-dimmed">
-                <span
-                  class="inline-flex rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
-                    artifact.runtime
-                  )}">{runtimeBadge(artifact.runtime)}</span
-                >
-                <span>· external</span>
-                {#if !artifact.available}
-                  <span
-                    class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
-                    title={artifact.unavailableReason ??
-                      'The imported model path no longer exists.'}
-                    ><X size={10} aria-hidden="true" /> Not found</span
-                  >
-                {/if}
-              </p>
-            {/if}
-          </div>
-          <div class="flex shrink-0 items-center gap-1">
-            {#if !isActiveArtifact(settings, artifact.artifactId, activeModelSubTab) && artifact.available}
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
-                title="Make this imported model active"
-                aria-label="Make imported {artifact.importPath} active"
-                onclick={() => setActive(activeModelSubTab, artifact.artifactId)}
-                ><Star size={11} aria-hidden="true" /> Set Active</button
-              >
-            {/if}
-            {#if !isActiveArtifact(settings, artifact.artifactId, activeModelSubTab) || !artifact.available}<button
-                type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
-                title={`Unregister ${artifact.importPath}`}
-                aria-label={`Unregister ${artifact.importPath}`}
-                onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
-                ><Trash2 size={12} aria-hidden="true" /></button
-              >{/if}
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
 
   <!-- Runtime filter -->
   <div class="flex flex-wrap items-center gap-1.5">
@@ -319,76 +257,114 @@
     {/each}
   </div>
 
-  <!-- Catalog models - no max-height, expands naturally; imported already at top -->
-  <div class="space-y-3">
-    {#each visibleArtifacts as artifact (artifact.id)}
-      {@const installed = installedArtifacts.find((item) => item.artifactId === artifact.id)}
-      {@const active =
-        isActiveArtifact(settings, artifact.id, activeModelSubTab) && installed?.available}
-      {@const selectedUnavailable =
-        isActiveArtifact(settings, artifact.id, activeModelSubTab) &&
-        installed &&
-        !installed.available}
-      {@const download = speech.downloads[artifact.id]}
-      {@const badge = bestForBadge(artifact)}
-      {@const isRetired = artifact.qualification.status === 'retired'}
-      {@const downloadLabel = isRetired
-        ? `${artifact.label} is retired`
-        : `Download ${artifact.label}`}
-      <div
-        id="model-card-{artifact.id}"
-        class="rounded-xl border p-3 {active
-          ? 'bg-success/5 border-success/30 ring-1 ring-success/20'
-          : 'bg-elevated'}"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <p class="truncate text-sm font-semibold">{artifact.label}</p>
+  <!-- Installed: the active model first, everything the user has on disk -->
+  <section class="space-y-3">
+    <div class="flex items-baseline justify-between gap-3">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Installed</h3>
+      <span class="text-[0.6875rem] text-dimmed">
+        {installedRows.length} model{installedRows.length === 1 ? '' : 's'}
+      </span>
+    </div>
+    {#if installedRows.length === 0}
+      <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
+        Nothing installed for {activeModelSubTab.toUpperCase()} yet. Download one below, or import your
+        own.
+      </p>
+    {:else}
+      {#each installedRows as row (row.installed.artifactId)}
+        {@render installedRow(row)}
+      {/each}
+    {/if}
+  </section>
+
+  <!-- Available: catalog models the user has not downloaded yet -->
+  {#if availableArtifacts.length > 0}
+    <section class="space-y-3">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Available</h3>
+      {#each availableArtifacts as artifact (artifact.id)}
+        {@render availableRow(artifact)}
+      {/each}
+    </section>
+  {/if}
+</div>
+
+{#snippet installedRow(row: InstalledRow)}
+  {@const artifact = row.artifact}
+  {@const parsedImport =
+    !artifact && row.installed.importPath
+      ? parseModelIdentityFromPath(row.installed.importPath, row.installed.runtime)
+      : null}
+  {@const isActive = isActiveCapability(settings, row.installed.artifactId, row.capability)}
+  <div
+    id="model-card-{row.installed.artifactId}"
+    class="rounded-xl border p-3 {isActive
+      ? 'bg-success/5 border-success/30 ring-1 ring-success/20'
+      : 'bg-elevated'}"
+  >
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <p
+            class="truncate text-sm font-semibold"
+            title={parsedImport?.baseWithoutExtension ?? row.installed.artifactId}
+          >
+            {artifact?.label ??
+              parsedImport?.displayName ??
+              row.installed.importPath ??
+              row.installed.artifactId}
+          </p>
+          <span
+            class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
+              row.installed.runtime
+            )}">{runtimeBadge(row.installed.runtime)}</span
+          >
+          {#if artifact}
+            {@const badge = bestForBadge(artifact)}
+            {#if badge}
               <span
-                class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
-                  artifact.runtime
-                )}">{runtimeBadge(artifact.runtime)}</span
+                class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
+                >{badge.label}</span
               >
-              {#if badge}
-                <span
-                  class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
-                  >{badge.label}</span
-                >
-              {/if}
-              {#if active}
-                <span
-                  class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white border-success"
-                  ><Check size={10} aria-hidden="true" /> Active</span
-                >
-              {:else if selectedUnavailable}
-                <span
-                  class="inline-flex items-center rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-[0.625rem] font-semibold text-amber-600"
-                  >Selected · unavailable</span
-                >
-              {/if}
-            </div>
-            <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
-            <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
-              <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
-              <span class="opacity-40">·</span>
-              <span>{artifact.license}</span>
-              <span class="opacity-40">·</span>
-              <span
-                class={artifact.qualification.status === 'qualified'
-                  ? 'text-success'
-                  : 'text-amber-600'}>{artifact.qualification.status}</span
-              >
-              {#if artifact.languages.length}
-                <span class="opacity-40">·</span>
-                <span>{artifact.languages.join(', ')}</span>
-              {/if}
-            </p>
-            {#if installed && !installed.available}
-              <p class="mt-1 text-[0.6875rem] text-amber-600">
-                {installed.unavailableReason ?? 'The model runtime is unavailable.'}
-              </p>
             {/if}
+          {/if}
+          {#if isActive}
+            <span
+              class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white"
+              ><Check size={10} aria-hidden="true" /> Active</span
+            >
+          {/if}
+          {#if !row.installed.available}
+            <span
+              class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
+              title={row.installed.unavailableReason ?? 'The model path no longer exists.'}
+              ><X size={10} aria-hidden="true" /> Not found</span
+            >
+          {/if}
+        </div>
+        {#if artifact?.description}
+          <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
+        {/if}
+        {#if !artifact && row.installed.importPath}
+          <p
+            class="mt-1 truncate font-mono text-[0.6875rem] text-dimmed"
+            title={row.installed.importPath}
+          >
+            {row.installed.importPath}
+          </p>
+        {/if}
+        {#if artifact}
+          <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
+            <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
+            <span class="opacity-40">·</span>
+            <span>{artifact.license}</span>
+            {#if artifact.languages.length}
+              <span class="opacity-40">·</span>
+              <span>{artifact.languages.join(', ')}</span>
+            {/if}
+          </p>
+        {/if}
+        {#if row.installed.available}
+          {#if artifact}
             <a
               href={artifact.sourcePageUrl}
               target="_blank"
@@ -397,146 +373,173 @@
             >
               Hugging Face <ExternalLink size={10} aria-hidden="true" />
             </a>
-          </div>
-          <div class="flex shrink-0 flex-col items-end gap-1.5">
-            {#if installed}
-              {#if !isActiveArtifact(settings, artifact.id, activeModelSubTab)}
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                  title={`Delete ${artifact.label}`}
-                  aria-label={`Delete ${artifact.label}`}
-                  onclick={() =>
-                    onRequestDelete({
-                      action: 'model',
-                      targetId: artifact.id,
-                      label: artifact.label
-                    })}><Trash2 size={14} aria-hidden="true" /></button
-                >{/if}
-            {:else if download?.state === 'downloading' || download?.state === 'verifying' || download?.state === 'queued'}
-              <button
-                type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-muted/20"
-                title={`Cancel ${artifact.label} download`}
-                aria-label={`Cancel ${artifact.label} download`}
-                onclick={() => void speech.cancelDownload(artifact.id)}
-                ><X size={14} aria-hidden="true" /></button
-              >
-            {:else}
-              <button
-                type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                title={downloadLabel}
-                aria-label={downloadLabel}
-                disabled={isRetired}
-                onclick={() => void speech.download(artifact.id)}
-                ><Download size={14} aria-hidden="true" /></button
-              >
-            {/if}
-          </div>
-        </div>
-        {#if download?.state === 'downloading' || download?.state === 'verifying' || download?.state === 'queued'}
-          {@const pct =
-            download.state === 'queued'
-              ? 0
-              : download.state === 'verifying'
-                ? 100
-                : downloadPercent(download)}
-          {@const isVerifying = download.state === 'verifying'}
-          {@const isQueued = download.state === 'queued'}
-          <div class="mt-3">
-            <DownloadProgress
-              percent={pct}
-              label={isVerifying
-                ? 'Verifying…'
-                : isQueued
-                  ? 'Queued…   waiting to start'
-                  : 'Downloading…'}
-              detail={download.state === 'downloading'
-                ? `${formatBytes(download.bytesReceived)} / ${formatBytes(download.totalBytes)}`
-                : isVerifying
-                  ? `${formatBytes(download.bytesReceived)} · checksum`
-                  : `Position ${download.position}`}
-              tone={isVerifying ? 'verifying' : 'default'}
-              ariaLabel={`Download progress ${pct}%`}
-              onCancel={() => void speech.cancelDownload(artifact.id)}
-              cancelLabel={`Cancel ${artifact.label} download`}
-              hint={download.state === 'downloading'
-                ? 'Large models can take a few minutes   you can keep using the app.'
-                : undefined}
-            />
-          </div>
-        {/if}
-        {#if download?.state === 'failed'}
-          <div
-            class="mt-3 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
-          >
-            <p class="text-[0.6875rem] leading-snug text-danger">
-              Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
-            </p>
-            <button
-              type="button"
-              class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] font-medium text-foreground hover:bg-surface"
-              onclick={() => void speech.download(artifact.id)}>Retry</button
-            >
-          </div>
-        {/if}
-        {#if download?.state === 'cancelled'}
-          <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
-            Download cancelled.
+          {/if}
+        {:else}
+          <p class="mt-1 text-[0.6875rem] text-amber-600">
+            {row.installed.unavailableReason ?? 'The model runtime is unavailable.'}
           </p>
         {/if}
-        <div class="mt-3 flex items-center gap-1.5 border-t pt-3">
-          {#if installed}
-            {#if isActiveArtifact(settings, artifact.id, activeModelSubTab)}
-              <span
-                class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[0.6875rem] font-semibold text-success border border-success/20"
-              >
-                <Check size={11} aria-hidden="true" /> Active
-              </span>
-            {:else}
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary hover:bg-primary/15"
-                title="Make {artifact.label} active"
-                aria-label="Make {artifact.label} active"
-                onclick={() => setActive(activeModelSubTab, artifact.id)}
-              >
-                <Star size={11} aria-hidden="true" /> Set Active
-              </button>
-            {/if}
-          {/if}
-          <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] text-muted hover:text-foreground disabled:opacity-50"
-            title="Import a local model file for this family"
-            aria-label="Import for {artifact.label}"
-            disabled={importing}
-            onclick={() => void pickImport()}
-          >
-            <Upload size={11} aria-hidden="true" /> Import
-          </button>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] text-muted hover:text-foreground"
-            title="Paste a filesystem path for this family"
-            aria-label="Paste path for {artifact.label}"
-            onclick={() => (pasteOpen = true)}
-          >
-            <ClipboardPaste size={11} aria-hidden="true" /> Paste Path
-          </button>
-        </div>
       </div>
-    {/each}
-    {#if visibleArtifacts.length === 0}
-      <p class="py-8 text-center text-sm text-dimmed">No models in this category.</p>
+      <div class="flex shrink-0 items-center gap-1.5">
+        {#if !isActive && row.installed.available}
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary hover:bg-primary/15"
+            title="Make {artifact?.label ?? row.installed.artifactId} active"
+            aria-label="Make {artifact?.label ?? row.installed.artifactId} active"
+            onclick={() =>
+              setActive(modelSubTabForCapability(row.capability), row.installed.artifactId)}
+          >
+            <Star size={11} aria-hidden="true" /> Set Active
+          </button>
+        {/if}
+        {#if !isActive || !row.installed.available}
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+            title="Remove {artifact?.label ?? row.installed.artifactId}"
+            aria-label="Remove {artifact?.label ?? row.installed.artifactId}"
+            onclick={() => removeInstalled(row)}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+          </button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet availableRow(artifact: SpeechModelArtifact)}
+  {@const download = speech.downloads[artifact.id]}
+  {@const badge = bestForBadge(artifact)}
+  {@const isRetired = artifact.qualification.status === 'retired'}
+  {@const downloadLabel = isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
+  {@const busy =
+    download?.state === 'downloading' ||
+    download?.state === 'verifying' ||
+    download?.state === 'queued'}
+  <div id="model-card-{artifact.id}" class="rounded-xl border bg-elevated p-3">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <p class="truncate text-sm font-semibold">{artifact.label}</p>
+          <span
+            class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
+              artifact.runtime
+            )}">{runtimeBadge(artifact.runtime)}</span
+          >
+          {#if badge}
+            <span
+              class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
+              >{badge.label}</span
+            >
+          {/if}
+        </div>
+        <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
+        <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
+          <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
+          <span class="opacity-40">·</span>
+          <span>{artifact.license}</span>
+          {#if artifact.languages.length}
+            <span class="opacity-40">·</span>
+            <span>{artifact.languages.join(', ')}</span>
+          {/if}
+        </p>
+        <a
+          href={artifact.sourcePageUrl}
+          target="_blank"
+          rel="noreferrer"
+          class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
+        >
+          Hugging Face <ExternalLink size={10} aria-hidden="true" />
+        </a>
+      </div>
+      <div class="flex shrink-0 items-center gap-1.5">
+        {#if busy}
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-muted/20"
+            title={`Cancel ${artifact.label} download`}
+            aria-label={`Cancel ${artifact.label} download`}
+            onclick={() => void speech.cancelDownload(artifact.id)}
+            ><X size={14} aria-hidden="true" /></button
+          >
+        {:else}
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            title={downloadLabel}
+            aria-label={downloadLabel}
+            disabled={isRetired}
+            onclick={() => void downloadAndActivate(artifact)}
+            ><Download size={14} aria-hidden="true" /></button
+          >
+        {/if}
+      </div>
+    </div>
+    {#if busy}
+      {@const pct =
+        download.state === 'queued'
+          ? 0
+          : download.state === 'verifying'
+            ? 100
+            : downloadPercent(download)}
+      {@const isVerifying = download.state === 'verifying'}
+      {@const isQueued = download.state === 'queued'}
+      <div class="mt-3">
+        <DownloadProgress
+          percent={pct}
+          label={isVerifying
+            ? 'Verifying…'
+            : isQueued
+              ? 'Queued…   waiting to start'
+              : 'Downloading…'}
+          detail={download.state === 'downloading'
+            ? `${formatBytes(download.bytesReceived)} / ${formatBytes(download.totalBytes)}`
+            : isVerifying
+              ? `${formatBytes(download.bytesReceived)} · checksum`
+              : `Position ${download.position}`}
+          tone={isVerifying ? 'verifying' : 'default'}
+          ariaLabel={`Download progress ${pct}%`}
+          onCancel={() => void speech.cancelDownload(artifact.id)}
+          cancelLabel={`Cancel ${artifact.label} download`}
+          hint={download.state === 'downloading'
+            ? 'Large models can take a few minutes   you can keep using the app.'
+            : undefined}
+        />
+      </div>
+    {/if}
+    {#if download?.state === 'failed'}
+      <div
+        class="mt-3 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
+      >
+        <p class="text-[0.6875rem] leading-snug text-danger">
+          Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
+        </p>
+        <button
+          type="button"
+          class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] font-medium text-foreground hover:bg-surface"
+          onclick={() => void downloadAndActivate(artifact)}>Retry</button
+        >
+      </div>
+    {/if}
+    {#if download?.state === 'cancelled'}
+      <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
+        Download cancelled.
+      </p>
     {/if}
   </div>
-</div>
+{/snippet}
 
 <PasteModelPathModal
   open={pasteOpen}
-  capability={pasteCapability}
+  help={describeSupportedFormatsForCapability(pasteCapability)}
+  placeholder="/Users/you/models/whisper.mlx  or  /path/to/model.gguf"
+  validate={async (raw) => {
+    const result = await invoke('speech:validateModelPath', raw, pasteCapability)
+    if (!result.ok) throw new Error(result.error.message)
+    return result.value
+  }}
+  onImport={(path) => importAndActivate(path)}
   onClose={() => (pasteOpen = false)}
-  onImported={() => void speech.load()}
 />

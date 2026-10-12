@@ -11,6 +11,13 @@ export const invokeSearchContract = {
     [path: string],
     import('../search/types').InstalledSearchModel
   >,
+  /** Validates a pasted local model path without importing it. */
+  'search:validateModelPath': {} as Contract<
+    [path: string],
+    import('../speech/types').ModelPathValidationResult
+  >,
+  /** Sets the embedding context window, in tokens. */
+  'search:setContextTokens': {} as Contract<[tokens: number], void>,
   'search:setEnabled': {} as Contract<[enabled: boolean], void>,
   'search:setActiveModel': {} as Contract<[modelId: string | null], void>,
   'search:rebuildIndex': {} as Contract<[], void>

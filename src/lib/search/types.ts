@@ -67,16 +67,38 @@ export interface InstalledSearchModel {
   source: 'catalog' | 'imported'
 }
 
+/** Bounds the embedding runtime accepts for its context window. */
+export const SEARCH_CONTEXT_TOKENS_MIN = 1024
+export const SEARCH_CONTEXT_TOKENS_MAX = 32768
+/**
+ * Default context window. EmbeddingGemma 2 is trained at 8K, which is also a
+ * sane ceiling for a thread-sized document, so it is what a fresh install gets.
+ */
+export const SEARCH_CONTEXT_TOKENS_DEFAULT = 8192
+
+/** Clamp a requested context window into the supported range. */
+export function clampSearchContextTokens(value: number): number {
+  if (!Number.isFinite(value)) return SEARCH_CONTEXT_TOKENS_DEFAULT
+  return Math.min(SEARCH_CONTEXT_TOKENS_MAX, Math.max(SEARCH_CONTEXT_TOKENS_MIN, Math.round(value)))
+}
+
 export interface SearchSettings {
   /** Whether intent search is active. Only meaningful once a model is installed. */
   enabled: boolean
   /** Installed model id used for embedding, or null when none is selected. */
   activeModelId: string | null
+  /**
+   * Tokens of each thread the embedding runtime may attend to. User-adjustable:
+   * a larger window captures more of a long conversation, a smaller one is
+   * faster. Persisted so a restart keeps the user's choice.
+   */
+  contextTokens: number
 }
 
 export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
   enabled: false,
-  activeModelId: null
+  activeModelId: null,
+  contextTokens: SEARCH_CONTEXT_TOKENS_DEFAULT
 }
 
 export type SearchDownloadState =

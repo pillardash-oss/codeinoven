@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog } from 'electron'
 import type { WebContents } from 'electron'
 import type { SearchService } from '../search/search-service'
+import { validateSearchModelPath } from '../search/search-path-validation'
 import { sendToRenderer } from './renderer-delivery'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 
@@ -71,6 +72,15 @@ export function registerSearchSettingsIpc(
   ipcMain.handle('search:importModel', (_event, rawPath: unknown) =>
     service.importModel(requirePath(rawPath))
   )
+  ipcMain.handle('search:validateModelPath', (_event, rawPath: unknown) =>
+    validateSearchModelPath(requirePath(rawPath))
+  )
+  ipcMain.handle('search:setContextTokens', (_event, rawTokens: unknown) => {
+    if (typeof rawTokens !== 'number' || !Number.isFinite(rawTokens)) {
+      throw new TypeError('Context window must be a number.')
+    }
+    return service.setContextTokens(rawTokens)
+  })
   ipcMain.handle('search:setEnabled', (_event, rawEnabled: unknown) => {
     if (typeof rawEnabled !== 'boolean') throw new TypeError('Enabled flag must be a boolean.')
     return service.setEnabled(rawEnabled)

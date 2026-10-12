@@ -1,19 +1,47 @@
 <script lang="ts">
   import { LoaderCircle, CheckCircle2, AlertCircle, Info } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
-  import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
-  import type { ModelPathValidationResult, ParsedModelIdentity, SpeechCapability } from '../../../../lib/speech/types'
-  import { buildParsedIdentityForValidation, describeSupportedFormatsForCapability, inferRuntimeFromExtension } from '../../../../lib/speech/model-path-validation'
+  import type { ModelPathValidationResult, ParsedModelIdentity } from '../../../../lib/speech/types'
+  import {
+    buildParsedIdentityForValidation,
+    inferRuntimeFromExtension
+  } from '../../../../lib/speech/model-path-validation'
   import Modal from '../ui/Modal.svelte'
 
+  /**
+   * The shared "paste a model path" dialog.
+   *
+   * The shell (input, live validation band, detected-identity card, tips) is
+   * identical everywhere; only what a path must look like and what importing it
+   * does differ, so both are injected. Sound passes its capability-aware speech
+   * validator, Search passes the embedding validator, and neither has to
+   * reimplement the flow.
+   */
   interface Props {
     open: boolean
-    capability: SpeechCapability
+    /** Dialog heading. */
+    title?: string
+    /** One line describing the formats this target accepts. */
+    help: string
+    /** Example path shown while the field is empty. */
+    placeholder?: string
+    /** Validates a raw paste. Must resolve (not throw) for an invalid path. */
+    validate: (raw: string) => Promise<ModelPathValidationResult>
+    /** Imports a validated, normalized path. Resolves true once it landed. */
+    onImport: (normalizedPath: string) => Promise<boolean>
     onClose: () => void
     onImported?: () => void
   }
 
-  let { open, capability, onClose, onImported }: Props = $props()
+  let {
+    open,
+    title = 'Paste model path',
+    help,
+    placeholder = '/Users/you/models/model.gguf',
+    validate,
+    onImport,
+    onClose,
+    onImported
+  }: Props = $props()
 
   let rawPath = $state('')
   let validation = $state<ModelPathValidationResult | null>(null)
@@ -21,9 +49,6 @@
   let importing = $state(false)
   let debounceId: ReturnType<typeof setTimeout> | null = null
   let lastValidatedFor = $state('')
-
-  const helpText = $derived(describeSupportedFormatsForCapability(capability))
-  const placeholder = '/Users/you/models/whisper.mlx  or  /path/to/model.gguf'
 
   function scheduleValidate(nextRaw: string): void {
     if (debounceId !== null) clearTimeout(debounceId)
@@ -35,7 +60,7 @@
         normalizedPath: '',
         wasNormalized: false,
         code: 'empty',
-        reason: helpText,
+        reason: help,
         parsedIdentity: null
       }
       return
@@ -47,22 +72,10 @@
   async function runValidate(forRaw: string): Promise<void> {
     lastValidatedFor = forRaw
     try {
-      const result = await invoke('speech:validateModelPath', forRaw, capability)
+      const result = await validate(forRaw)
       // Only apply if still relevant (avoid stale overwrites)
       if (lastValidatedFor !== forRaw) return
-      if (!result.ok) {
-        // IPC-level error (e.g. path too long) - map to validation display
-        validation = {
-          ok: false,
-          normalizedPath: forRaw.trim(),
-          wasNormalized: false,
-          code: 'unsupported-format',
-          reason: result.error.message,
-          parsedIdentity: buildParsedIdentityForValidation(forRaw.trim(), inferRuntimeFromExtension(forRaw.trim()))
-        }
-      } else {
-        validation = result.value
-      }
+      validation = result
     } catch (cause) {
       validation = {
         ok: false,
@@ -70,7 +83,10 @@
         wasNormalized: false,
         code: 'unsupported-format',
         reason: cause instanceof Error ? cause.message : String(cause),
-        parsedIdentity: buildParsedIdentityForValidation(forRaw.trim(), inferRuntimeFromExtension(forRaw.trim()))
+        parsedIdentity: buildParsedIdentityForValidation(
+          forRaw.trim(),
+          inferRuntimeFromExtension(forRaw.trim())
+        )
       }
     } finally {
       validating = false
@@ -81,19 +97,6 @@
     rawPath = event.currentTarget.value
     scheduleValidate(rawPath)
   }
-
-  // Validate on open and on rawPath changes via schedule
-  $effect(() => {
-    if (open) {
-      // Small delay to let Modal focus handling run, then validate current value
-      scheduleValidate(rawPath)
-    } else {
-      if (debounceId !== null) clearTimeout(debounceId)
-      debounceId = null
-      validating = false
-      // Do not clear rawPath immediately so that reopening retains? Spec says fresh; reset on close
-    }
-  })
 
   function resetAndClose(): void {
     if (debounceId !== null) clearTimeout(debounceId)
@@ -109,7 +112,7 @@
     if (!validation?.ok || validating || importing) return
     importing = true
     try {
-      const ok = await speech.importModel(validation.normalizedPath, capability)
+      const ok = await onImport(validation.normalizedPath)
       if (ok) {
         onImported?.()
         resetAndClose()
@@ -138,7 +141,11 @@
     if (!raw) return null
     // Strip outer quotes like normalizePastedPath for preview
     let norm = raw
-    if (norm.length >= 2 && ((norm[0] === '"' && norm[norm.length - 1] === '"') || (norm[0] === "'" && norm[norm.length - 1] === "'"))) {
+    if (
+      norm.length >= 2 &&
+      ((norm[0] === '"' && norm[norm.length - 1] === '"') ||
+        (norm[0] === "'" && norm[norm.length - 1] === "'"))
+    ) {
       const inner = norm.slice(1, -1).trim()
       if (inner) norm = inner
     }
@@ -148,10 +155,10 @@
   const hasBreakup = $derived(liveParsed !== null && liveParsed.details.length > 0)
 </script>
 
-<Modal open={open} title="Paste model path" onClose={resetAndClose} size="md">
+<Modal {open} {title} onClose={resetAndClose} size="md">
   <div class="space-y-4" onkeydown={handleKeydown} role="presentation">
     <p class="text-xs text-muted">
-      Paste a local filesystem path. {helpText} Path is validated locally; no download is performed.
+      Paste a local filesystem path. {help} Path is validated locally; no download is performed.
     </p>
 
     <label class="block text-xs font-medium text-muted" for="paste-model-path-input">
@@ -160,7 +167,7 @@
         id="paste-model-path-input"
         class="mt-1 w-full rounded-lg border bg-elevated px-3 py-2.5 font-mono text-xs outline-none focus:border-primary"
         type="text"
-        placeholder={placeholder}
+        {placeholder}
         autocomplete="off"
         spellcheck="false"
         value={rawPath}
@@ -185,7 +192,9 @@
       class:text-muted={validation?.code === 'empty'}
       class:border={true}
       class:border-success-border={validation?.ok}
-      class:border-danger-border={validation !== null && !validation.ok && validation.code !== 'empty'}
+      class:border-danger-border={validation !== null &&
+        !validation.ok &&
+        validation.code !== 'empty'}
       class:border-border={validation?.code === 'empty'}
       role="status"
       aria-live="polite"
@@ -211,27 +220,47 @@
           {validation.reason}
         </span>
       {:else}
-        <span class="text-muted">Paste a path to validate.</span>
+        <span class="text-muted">{help}</span>
       {/if}
     </div>
 
     {#if hasBreakup && liveParsed}
       <div class="rounded-xl border bg-surface p-3">
-        <p class="mb-2 flex items-center justify-between text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">
+        <p
+          class="mb-2 flex items-center justify-between text-[0.6875rem] font-semibold uppercase tracking-wide text-muted"
+        >
           <span>Detected model</span>
           {#if liveParsed.confidence === 'high'}
-            <span class="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">High confidence</span>
+            <span
+              class="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success"
+              >High confidence</span
+            >
           {:else if liveParsed.confidence === 'medium'}
-            <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.625rem] font-medium text-amber-600">Medium confidence</span>
+            <span
+              class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.625rem] font-medium text-amber-600"
+              >Medium confidence</span
+            >
           {:else}
-            <span class="rounded-full bg-surface-hover px-2 py-0.5 text-[0.625rem] font-medium text-dimmed">Low confidence</span>
+            <span
+              class="rounded-full bg-surface-hover px-2 py-0.5 text-[0.625rem] font-medium text-dimmed"
+              >Low confidence</span
+            >
           {/if}
         </p>
-        <p class="text-sm font-semibold leading-none" title={liveParsed.baseWithoutExtension}>{liveParsed.displayName}</p>
-        <p class="mt-1 truncate font-mono text-[0.6875rem] text-dimmed" title={liveParsed.rawBasename}>{liveParsed.rawBasename}</p>
+        <p class="text-sm font-semibold leading-none" title={liveParsed.baseWithoutExtension}>
+          {liveParsed.displayName}
+        </p>
+        <p
+          class="mt-1 truncate font-mono text-[0.6875rem] text-dimmed"
+          title={liveParsed.rawBasename}
+        >
+          {liveParsed.rawBasename}
+        </p>
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each liveParsed.details as d (d.label)}
-            <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[0.6875rem]">
+            <span
+              class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[0.6875rem]"
+            >
               <span class="font-medium text-muted">{d.label}:</span>
               <span class="font-semibold">{d.value}</span>
             </span>
@@ -251,8 +280,9 @@
 
     {#if validation !== null && !validation.ok && validation.code === 'unsupported-format'}
       <p class="text-[0.6875rem] text-dimmed">
-        Tip: use an absolute path. On macOS/Linux use <code class="rounded bg-elevated px-1">/path/to/model</code>,
-        on Windows use <code class="rounded bg-elevated px-1">C:\path\to\model</code>. Case is
+        Tip: use an absolute path. On macOS/Linux use <code class="rounded bg-elevated px-1"
+          >/path/to/model</code
+        >, on Windows use <code class="rounded bg-elevated px-1">C:\path\to\model</code>. Case is
         platform-dependent.
       </p>
     {/if}
@@ -264,9 +294,7 @@
     {/if}
 
     {#if validation !== null && validation.code === 'not-found'}
-      <p class="text-[0.6875rem] text-dimmed">
-        Verify the path exists and is accessible.
-      </p>
+      <p class="text-[0.6875rem] text-dimmed">Verify the path exists and is accessible.</p>
     {/if}
   </div>
 

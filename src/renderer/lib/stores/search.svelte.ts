@@ -1,5 +1,4 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { toast } from 'svelte-sonner'
 import { reportError } from './app-errors.svelte'
 import type { SearchProgressEvent, SearchState } from '../../../lib/search/types'
 
@@ -58,10 +57,35 @@ class SearchSettingsStore {
     try {
       const path = await invoke('search:pickModelFile')
       if (!path) return
-      await invoke('search:importModel', path)
-      toast.success('Embedding model imported.')
+      await this.importModelFromPath(path)
+      return
     } catch (cause) {
       reportError(cause, 'The embedding model could not be imported.')
+    }
+    await this.load()
+  }
+
+  /**
+   * Imports an embedding model from a path the user supplied, already validated
+   * by the paste dialog. Returns false when the import is refused so the dialog
+   * can keep itself open with the error on screen.
+   */
+  async importModelFromPath(path: string): Promise<boolean> {
+    try {
+      await invoke('search:importModel', path)
+      await this.load()
+      return true
+    } catch (cause) {
+      this.error = cause instanceof Error ? cause.message : String(cause)
+      return false
+    }
+  }
+
+  async setContextTokens(tokens: number): Promise<void> {
+    try {
+      await invoke('search:setContextTokens', tokens)
+    } catch (cause) {
+      reportError(cause, 'The context window could not be changed.')
     }
     await this.load()
   }
@@ -104,6 +128,10 @@ class SearchSettingsStore {
         ...this.state,
         downloads: { ...this.state.downloads, [progress.artifactId]: progress.download }
       }
+      // A finished download changes the model list itself, so the page has to
+      // re-read it   otherwise the new model stays in "Available" until the
+      // user leaves and reopens the page.
+      if (progress.download.state === 'installed') void this.load()
       return
     }
     this.state = { ...this.state, status: progress.status }
