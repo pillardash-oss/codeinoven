@@ -886,6 +886,19 @@ export class GlobalBrowserState {
     return [...this.groups].sort((a, b) => Number(b.pinned) - Number(a.pinned))
   }
 
+  /**
+   * Every tab in the order the strip draws it: the pinned block first, then
+   * each group's tabs in group order, then the ungrouped rest. A grouped tab
+   * keeps its stored position while its row moves into the fold, so this is
+   * not the stored list order, and it is what "the previous tab" means.
+   */
+  get stripOrder(): GlobalBrowserTab[] {
+    const ordered = [...this.pinnedTabs]
+    for (const group of this.orderedGroups) ordered.push(...this.tabsInGroup(group.id))
+    ordered.push(...this.tabsInGroup(null))
+    return ordered
+  }
+
   groupById(groupId: string): GlobalBrowserGroup | null {
     return this.groups.find((group) => group.id === groupId) ?? null
   }
@@ -1679,10 +1692,17 @@ export class GlobalBrowserState {
     browserAudio.forget(tabId)
     this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
-      // Closing the active tab lands on the previous tab in the strip, not
-      // the next one, so focus moves back through visited tabs. Closing the
-      // first tab has no previous, so it falls through to what is now first.
-      const neighbour = remaining[index - 1] ?? remaining[Math.min(index, remaining.length - 1)]
+      // Closing the active tab lands on the previous tab of the strip order,
+      // not the next one, so focus moves back through the tabs as the user
+      // sees them. The stored list order is not that: a grouped tab keeps its
+      // stored position while its row moves into the fold, so the neighbour
+      // is read off `stripOrder` instead. Closing the first row has no
+      // previous, so it falls through to what is now first.
+      const visualIndex = this.stripOrder.findIndex((tab) => tab.id === tabId)
+      const visuallyRemaining = this.stripOrder.filter((tab) => tab.id !== tabId)
+      const neighbour =
+        visuallyRemaining[visualIndex - 1] ??
+        visuallyRemaining[Math.min(visualIndex, visuallyRemaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) {
         neighbour.lastUsedAt = Date.now()
