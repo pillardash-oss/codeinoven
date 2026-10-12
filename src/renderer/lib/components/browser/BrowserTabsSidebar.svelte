@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -102,6 +102,10 @@
    *  itself is an OS popup above the page view, so this only tracks the button. */
   let siteMenuOpen = $state(false)
 
+  /** The sidebar's own scrollable strip, so the active tab's row can be kept in
+   *  view the way the thread sidebar keeps the active thread in view. */
+  let tabScroller = $state<HTMLElement | null>(null)
+
   // The native site menu reports its own dismissal, which is the only signal the
   // button has to drop its expanded state.
   onMount(() => subscribe('browser:siteMenuClosed', () => (siteMenuOpen = false)))
@@ -197,6 +201,83 @@
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
     return globalBrowser.tabsInGroup(groupId).filter(matches)
   }
+
+  /** The active tab's row in the strip. Rows hidden by the search filter have no
+   *  layout box, so they are skipped: those a folded group owns are simply not
+   *  in the DOM until the group is expanded. */
+  function findTabRow(tabId: string): HTMLElement | null {
+    const root = tabScroller ?? (typeof document === 'undefined' ? null : document)
+    if (!root) return null
+    const rows = root.querySelectorAll<HTMLElement>(`[data-browser-tab-id="${tabId}"]`)
+    for (const row of rows) {
+      if (row.getClientRects().length > 0) return row
+    }
+    return null
+  }
+
+  /** Whether a row already sits fully inside the strip's visible band, so an
+   *  already-visible tab costs no scroll and never fights the reader. */
+  function isTabRowVisible(row: HTMLElement, scroller: HTMLElement): boolean {
+    const rowRect = row.getBoundingClientRect()
+    const scrollerRect = scroller.getBoundingClientRect()
+    return (
+      rowRect.top >= scrollerRect.top - 1 &&
+      rowRect.bottom <= scrollerRect.bottom + 1 &&
+      rowRect.width > 0 &&
+      rowRect.height > 0
+    )
+  }
+
+  function nextAnimationFrame(): Promise<void> {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  }
+
+  /**
+   * Bring the active tab's row into view with the minimal scroll, the way the
+   * thread sidebar reveals the active thread. The row can mount a tick late (a
+   * folded group expanding, the strip re-sorting), so the reveal is retried over
+   * a few frames before giving up.
+   */
+  async function revealActiveTab(tabId: string): Promise<void> {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (attempt > 0) await nextAnimationFrame()
+      const scroller = tabScroller
+      if (!scroller) return
+      const row = findTabRow(tabId)
+      if (!row) continue
+      if (isTabRowVisible(row, scroller)) return
+      row.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      return
+    }
+  }
+
+  // Keep the tab on screen visible in the strip: whenever the active tab changes
+  // (the user picked one, a link opened a new tab, the switcher cycled, the
+  // workspace came back), bring its row into view so it is never hidden past the
+  // strip's scroll edge. Mirrors the thread sidebar's reveal of the active
+  // thread, including expanding the group that holds the row, because a folded
+  // group renders no rows to measure.
+  //
+  // The reveal is gated on the active tab actually changing, or the strip
+  // attaching, so folding the active tab's group is not immediately undone and a
+  // background update (a favicon, a loading state) never re-scrolls the strip
+  // under the reader.
+  let lastRevealedTabId: string | null = null
+  let lastScroller: HTMLElement | null = null
+  $effect(() => {
+    const scroller = tabScroller
+    const tabId = globalBrowser.activeTabId
+    if (!scroller || !tabId) return
+    const activeChanged = tabId !== lastRevealedTabId
+    const scrollerAttached = scroller !== lastScroller
+    lastScroller = scroller
+    if (!activeChanged && !scrollerAttached) return
+    lastRevealedTabId = tabId
+    const tab = globalBrowser.tabById(tabId)
+    const group = tab?.groupId ? globalBrowser.groupById(tab.groupId) : null
+    if (group?.collapsed) globalBrowser.toggleGroupCollapsed(group.id)
+    void tick().then(() => revealActiveTab(tabId))
+  })
 
   function handleTabClick(tabId: string, event: MouseEvent): void {
     const additive = event.metaKey || event.ctrlKey
@@ -725,6 +806,7 @@
     panel={captureNativePanel}
     trackOcclusion={false}
     holdOpen={() => browserStripOverlay.pointerHeld}
+    bind:scroller={tabScroller}
     {chrome}
   >
     {#if searchGroupId === null && pinned.length > 0}
