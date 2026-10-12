@@ -18,6 +18,7 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import type {
@@ -42,6 +43,7 @@
     canonicalBranch,
     createdPullRequestSummary,
     divergenceResolutionPrompt,
+    isSignedOutCompare,
     loadPrCreationPreferences,
     parseRemoteIdentity,
     persistPrCreationPreferences,
@@ -134,6 +136,14 @@
   let compare = $state<PullRequestCompare | null>(null)
   let comparing = $state(false)
   let compareError = $state('')
+  /**
+   * Set when the compare came back signed out rather than failing.
+   *
+   * Kept apart from `compareError`: a signed-out compare is fixed by signing in,
+   * so the form offers that instead of a failure the reader cannot act on. It
+   * clears the moment a comparison runs again.
+   */
+  let loginRequired = $state(false)
   let compareSequence = 0
   let initialCompareStarted = false
   /** True while the commit → push → create sequence runs. */
@@ -254,6 +264,7 @@
     Boolean(
       originError ||
       compareError ||
+      loginRequired ||
       composeIssue ||
       createError ||
       gitState.error ||
@@ -372,6 +383,7 @@
     const sequence = ++compareSequence
     compare = null
     compareError = ''
+    loginRequired = false
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
@@ -390,11 +402,16 @@
         head
       )
       if (sequence !== compareSequence) return
-      if (snapshot) {
-        compare = snapshot
-      } else {
+      if (snapshot === null) {
         compare = null
         compareError = 'Could not compare these branches.'
+      } else if (isSignedOutCompare(snapshot)) {
+        // The branches are fine; there is just nobody signed in to compare them
+        // against GitHub, and the form can hand the reader that sign-in.
+        compare = null
+        loginRequired = true
+      } else {
+        compare = snapshot
       }
     } catch (reason) {
       if (sequence !== compareSequence) return
@@ -545,8 +562,9 @@
           base,
           head
         )
-        compare = fresh
-        createErrorIsNoCommits = fresh !== null && !fresh.hasChanges
+        const compared = fresh !== null && !isSignedOutCompare(fresh) ? fresh : null
+        compare = compared
+        createErrorIsNoCommits = compared !== null && !compared.hasChanges
       }
     }
   }
@@ -794,6 +812,13 @@
   onMount(() => {
     gitState.activate(projectId, scopeBucketId)
     void loadOrigin().then(() => void initializeBranchSelection())
+    // Signing in is what re-arms a compare this sheet was refused, and the token
+    // it replaces does not change the panel's own connected state, so nothing
+    // else would retry it: the form would sit on the sign-in message after the
+    // user had already done what it asked.
+    return githubSignIn.onAuthorized(() => {
+      if (loginRequired) void runCompare()
+    })
   })
 </script>
 
@@ -956,12 +981,14 @@
         {branches}
         {comparing}
         {compareError}
+        {loginRequired}
         {compare}
         {sameBranch}
         {willCreateCommit}
         {existingPr}
         onHeadChange={changeHead}
         onBaseChange={changeBase}
+        onSignIn={() => githubSignIn.start()}
         onViewExistingPr={() => {
           onClose()
           if (existingPr) onView?.(existingPr)

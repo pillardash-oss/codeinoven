@@ -56,7 +56,7 @@ import type {
   PrState,
   PullRequestBundle,
   PullRequestComment,
-  PullRequestCompare,
+  PullRequestCompareResult,
   PullRequestDetail,
   PullRequestFile,
   PullRequestLabel,
@@ -349,7 +349,7 @@ export const invokeGitContract = {
       head: string,
       scopeBucketId?: string
     ],
-    PullRequestCompare
+    PullRequestCompareResult
   >,
   'pr:reopen': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],

@@ -1,5 +1,22 @@
 import { APP_SLUG } from '$shared/brand'
-import type { PullRequestReference, PullRequestSummary } from '$shared/types'
+import type {
+  PullRequestCompareResult,
+  PullRequestCompareSignedOut,
+  PullRequestReference,
+  PullRequestSummary
+} from '$shared/types'
+
+/**
+ * Tell the signed-out answer apart from a real comparison.
+ *
+ * The form has to say "sign in" for one and "could not compare" for the other,
+ * and the two arrive through the same call.
+ */
+export function isSignedOutCompare(
+  result: PullRequestCompareResult
+): result is PullRequestCompareSignedOut {
+  return result.status === 'signed_out'
+}
 
 export interface PrCreationPreferences {
   head?: string
