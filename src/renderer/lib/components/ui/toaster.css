@@ -82,13 +82,18 @@
 /* ─── Branded status toasts ───────────────────────────────────────────────
    Obsidian / Ivory / Auric system: each status toast keeps the ivory
    surface but carries a status tint in the background wash, the hairline
-   border, the icon chip and a slim accent bar on the left edge. */
-[data-sonner-toast][data-type='success'],
-[data-sonner-toast][data-type='error'],
-[data-sonner-toast][data-type='warning'],
-[data-sonner-toast][data-type='info'] {
-  position: relative;
-}
+   border, the icon chip and a slim accent bar on the left edge.
+
+   Never set `position` on a toast here. svelte-sonner stacks the cards by
+   taking them out of flow (`[data-sonner-toast] { position: absolute }`) and
+   translating each one by its computed `--offset`; the offset already includes
+   the height of every card above it. A `position: relative` on the status types
+   (which these rules once carried, for a `::before` accent bar that is now a
+   real border) put those cards back into flow, so their height counted twice:
+   the flow position plus the same offset, which is why a status card sat a full
+   card-height apart from the one above it while a plain toast sat the correct
+   14px away. Sonner's own rule is not `!important`, so any `position` we state
+   at higher specificity silently wins and breaks the stack. */
 
 [data-sonner-toast][data-type='success'] {
   --status: var(--color-success);
