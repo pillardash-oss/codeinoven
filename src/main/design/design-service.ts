@@ -8,8 +8,10 @@ import {
 import type {
   AuthoredWorkKind,
   DesignEntry,
+  DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
+  DesignPageHistoryState,
   DesignRevisionCause,
   DesignScreen,
   DesignScreenShot,
@@ -115,6 +117,21 @@ function requireId(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 240) {
     throw new TypeError(`${label} is invalid`)
   }
+  return value
+}
+
+/**
+ * Validation for a file path inside an authored-work folder.
+ *
+ * Longer than an id because a nested page is a real path, and NUL-free because the
+ * filesystem layer must never see one. Containment is checked where the path is
+ * resolved against the folder, not here.
+ */
+function requirePath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1024) {
+    throw new TypeError('Page path is invalid')
+  }
+  if (value.includes('\u0000')) throw new TypeError('Page path is invalid')
   return value
 }
 
@@ -260,6 +277,30 @@ export class DesignService {
           requireId(rawRevisionId, 'revision id')
         )
     )
+    // The page-scoped history: one file's own line, and moving that one file to a
+    // point on it. The whole-folder cursor is not involved, so a page can be taken
+    // back without disturbing the rest of the design.
+    ipcMain.handle(
+      'design:historyPage',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawPath) =>
+        this.historyPage(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requirePath(rawPath)
+        )
+    )
+    ipcMain.handle(
+      'design:historyRestoreFile',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawPath, rawRevisionId) =>
+        this.historyRestoreFile(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requirePath(rawPath),
+          requireId(rawRevisionId, 'revision id')
+        )
+    )
   }
 
   /**
@@ -287,6 +328,45 @@ export class DesignService {
   ): Promise<DesignHistoryState> {
     const target = await this.historyTarget(projectId, threadId, directory)
     return this.history.restore(target, revisionId)
+  }
+
+  /** One page's own line through a folder's history. */
+  async historyPage(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    path: string
+  ): Promise<DesignPageHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.pageState(target, path)
+  }
+
+  /** Move one page to one point in its own history. */
+  async historyRestoreFile(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    path: string,
+    revisionId: string
+  ): Promise<DesignHistoryRestoreFileResult> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.restoreFile(target, revisionId, path)
+  }
+
+  /**
+   * Drop the history of authored-work folders that are no longer on disk.
+   *
+   * Called after a CIO Cleanup run and once at boot, so a design the sweep or the
+   * user removed does not leave its timeline and bytes behind in the database.
+   * Best-effort: a reconciliation that cannot read a project must not fail the
+   * caller that triggered it.
+   */
+  async reconcileHistory(): Promise<void> {
+    try {
+      await this.history.reconcile()
+    } catch (error) {
+      Logger.dev('Design history reconciliation was skipped:', error)
+    }
   }
 
   /** One history request resolved against the project and the thread's session kind. */

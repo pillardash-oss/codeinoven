@@ -46,8 +46,10 @@ export interface StoredDesignRevision {
   skippedFiles: string[]
   /** Paths whose blob could not be persisted; never restorable. */
   unavailableFiles: string[]
-  /** Files added, changed, or removed from `parentId`. */
+  /** Paths added, changed, or removed from `parentId`. */
   changedFiles: number
+  /** The paths behind `changedFiles`, so a timeline row can name what moved. */
+  changedPaths: string[]
   fileCount: number
   totalBytes: number
   createdAt: number
@@ -59,9 +61,16 @@ export interface StoredDesignRevisionSummary {
   sequence: number
   cause: DesignRevisionCause
   changedFiles: number
+  changedPaths: string[]
   fileCount: number
   totalBytes: number
   createdAt: number
+}
+
+/** One folder a project keeps history for, for reconciliation. */
+export interface DesignHistoryFolderRef {
+  projectId: string
+  directory: string
 }
 
 interface RevisionRow {
@@ -76,6 +85,7 @@ interface RevisionRow {
   skipped_files: string | null
   unavailable_files: string | null
   changed_files: number
+  changed_paths: string | null
   file_count: number
   total_bytes: number
   created_at: number
@@ -86,6 +96,7 @@ interface SummaryRow {
   sequence: number
   cause: string
   changed_files: number
+  changed_paths: string | null
   file_count: number
   total_bytes: number
   created_at: number
@@ -108,7 +119,7 @@ function parseJson<T>(value: string | null, fallback: T): T {
 
 const REVISION_COLUMNS =
   'id, project_id, directory, sequence, parent_id, cause, digest, files, skipped_files, ' +
-  'unavailable_files, changed_files, file_count, total_bytes, created_at'
+  'unavailable_files, changed_files, changed_paths, file_count, total_bytes, created_at'
 
 function toRevision(row: RevisionRow): StoredDesignRevision {
   return {
@@ -123,6 +134,7 @@ function toRevision(row: RevisionRow): StoredDesignRevision {
     skippedFiles: parseJson<string[]>(row.skipped_files, []),
     unavailableFiles: parseJson<string[]>(row.unavailable_files, []),
     changedFiles: row.changed_files,
+    changedPaths: parseJson<string[]>(row.changed_paths, []),
     fileCount: row.file_count,
     totalBytes: row.total_bytes,
     createdAt: row.created_at
@@ -135,6 +147,7 @@ function toSummary(row: SummaryRow): StoredDesignRevisionSummary {
     sequence: row.sequence,
     cause: causeOfRow(row.cause),
     changedFiles: row.changed_files,
+    changedPaths: parseJson<string[]>(row.changed_paths, []),
     fileCount: row.file_count,
     totalBytes: row.total_bytes,
     createdAt: row.created_at
@@ -148,17 +161,48 @@ export class DesignRevisionRepo {
   async listViaWorker(
     projectId: string,
     directory: string,
-    maxRows: number
+    maxRows: number,
+    afterSequence = 0
   ): Promise<StoredDesignRevision[]> {
     const result = await this.db.queryViaWorker(
       `SELECT ${REVISION_COLUMNS} FROM design_revisions
-        WHERE project_id = ? AND directory = ?
+        WHERE project_id = ? AND directory = ? AND sequence > ?
         ORDER BY sequence ASC LIMIT ?`,
-      [projectId, directory, maxRows],
+      [projectId, directory, afterSequence, maxRows],
       maxRows
     )
     if (!result.ok) return []
     return (result.rows as unknown as RevisionRow[]).map(toRevision)
+  }
+
+  /** Return one file's hashes without sending whole snapshots to the main process. */
+  async fileStatesViaWorker(
+    projectId: string,
+    directory: string,
+    path: string,
+    maxRows: number
+  ): Promise<Array<{ id: string; sequence: number; createdAt: number; hash: string | null }>> {
+    const result = await this.db.queryViaWorker(
+      `SELECT id, sequence, created_at,
+      (SELECT json_extract(value, '$.hash') FROM json_each(files) WHERE key = ? LIMIT 1) AS hash
+      FROM design_revisions WHERE project_id = ? AND directory = ? ORDER BY sequence LIMIT ?`,
+      [path, projectId, directory, maxRows],
+      maxRows
+    )
+    if (!result.ok) throw new Error('File history could not be read')
+    return (
+      result.rows as Array<{
+        id: string
+        sequence: number
+        created_at: number
+        hash: string | null
+      }>
+    ).map((row) => ({
+      id: row.id,
+      sequence: row.sequence,
+      createdAt: row.created_at,
+      hash: row.hash
+    }))
   }
 
   /**
@@ -174,7 +218,7 @@ export class DesignRevisionRepo {
     maxRows: number
   ): Promise<StoredDesignRevisionSummary[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, sequence, cause, changed_files, file_count, total_bytes, created_at
+      `SELECT id, sequence, cause, changed_files, changed_paths, file_count, total_bytes, created_at
          FROM design_revisions
         WHERE project_id = ? AND directory = ?
         ORDER BY sequence ASC LIMIT ?`,
@@ -261,12 +305,48 @@ export class DesignRevisionRepo {
     return typeof row?.cursor_id === 'string' && row.cursor_id.length > 0 ? row.cursor_id : null
   }
 
+  async pageCursorViaWorker(
+    projectId: string,
+    directory: string,
+    path: string
+  ): Promise<string | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT revision_id FROM design_history_page_heads WHERE project_id = ? AND directory = ? AND path = ?',
+      [projectId, directory, path],
+      1
+    )
+    if (!result.ok) throw new Error('Page history cursor could not be read')
+    const row = result.rows[0] as { revision_id?: string } | undefined
+    return row?.revision_id ?? null
+  }
+
+  setPageCursor(projectId: string, directory: string, path: string, revisionId: string): void {
+    this.db.run(
+      `INSERT INTO design_history_page_heads (project_id, directory, path, revision_id)
+      VALUES (?, ?, ?, ?) ON CONFLICT(project_id, directory, path)
+      DO UPDATE SET revision_id = excluded.revision_id`,
+      projectId,
+      directory,
+      path,
+      revisionId
+    )
+  }
+
+  clearPageCursors(projectId: string, directory: string): void {
+    this.db.run(
+      'DELETE FROM design_history_page_heads WHERE project_id = ? AND directory = ?',
+      projectId,
+      directory
+    )
+  }
+
   insert(revision: StoredDesignRevision): void {
     this.db.run(
       `INSERT INTO design_revisions (
          id, project_id, directory, sequence, parent_id, cause, digest, files,
-         skipped_files, unavailable_files, changed_files, file_count, total_bytes, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         skipped_files, unavailable_files, changed_files, changed_paths, file_count,
+         total_bytes, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       revision.id,
       revision.projectId,
       revision.directory,
@@ -278,10 +358,58 @@ export class DesignRevisionRepo {
       revision.skippedFiles.length > 0 ? JSON.stringify(revision.skippedFiles) : null,
       revision.unavailableFiles.length > 0 ? JSON.stringify(revision.unavailableFiles) : null,
       revision.changedFiles,
+      revision.changedPaths.length > 0 ? JSON.stringify(revision.changedPaths) : null,
       revision.fileCount,
       revision.totalBytes,
       revision.createdAt
     )
+  }
+
+  /**
+   * Every folder the app keeps history for, across projects, for reconciliation.
+   *
+   * Bounded so a database that somehow accumulated folders still answers: the
+   * caller sweeps what it reads and the next pass reads the rest.
+   */
+  async listFoldersAllViaWorker(
+    maxRows: number,
+    afterProject = '',
+    afterDirectory = ''
+  ): Promise<DesignHistoryFolderRef[]> {
+    const result = await this.db.queryViaWorker(
+      `SELECT project_id, directory FROM design_history_heads
+       WHERE project_id > ? OR (project_id = ? AND directory > ?)
+       UNION
+       SELECT project_id, directory FROM design_revisions
+       WHERE project_id > ? OR (project_id = ? AND directory > ?)
+       ORDER BY project_id, directory LIMIT ?`,
+      [
+        afterProject,
+        afterProject,
+        afterDirectory,
+        afterProject,
+        afterProject,
+        afterDirectory,
+        maxRows
+      ],
+      maxRows
+    )
+    if (!result.ok) return []
+    return (result.rows as Array<{ project_id: string; directory: string }>).map((row) => ({
+      projectId: row.project_id,
+      directory: row.directory
+    }))
+  }
+
+  /** Every folder one project keeps history for, for a project-scoped sweep. */
+  async listFoldersViaWorker(projectId: string, maxRows: number): Promise<string[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT directory FROM design_revisions WHERE project_id = ? GROUP BY directory LIMIT ?',
+      [projectId, maxRows],
+      maxRows
+    )
+    if (!result.ok) return []
+    return (result.rows as Array<{ directory: string }>).map((row) => row.directory)
   }
 
   /** Point a folder at one of its revisions, creating the row on first use. */
@@ -338,21 +466,19 @@ export class DesignRevisionRepo {
   }
 
   deleteProject(projectId: string): void {
+    this.db.run('DELETE FROM design_history_page_heads WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM design_revisions WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM design_history_heads WHERE project_id = ?', projectId)
   }
 
   /** Forget a folder's history entirely, for a folder that no longer exists. */
-  deleteFolder(projectId: string, directory: string): void {
-    this.db.run(
-      'DELETE FROM design_revisions WHERE project_id = ? AND directory = ?',
-      projectId,
-      directory
-    )
-    this.db.run(
-      'DELETE FROM design_history_heads WHERE project_id = ? AND directory = ?',
-      projectId,
-      directory
-    )
+  async deleteFolder(projectId: string, directory: string): Promise<void> {
+    for (const table of ['design_history_page_heads', 'design_revisions', 'design_history_heads']) {
+      const result = await this.db.executeViaWorker(
+        `DELETE FROM ${table} WHERE project_id = ? AND directory = ?`,
+        [projectId, directory]
+      )
+      if (!result.ok) throw new Error(result.error ?? 'Design history removal failed')
+    }
   }
 }

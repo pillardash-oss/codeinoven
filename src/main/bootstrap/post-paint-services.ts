@@ -266,7 +266,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
       Promise.resolve(false),
     onProgress: broadcastCioCleanupProgress,
-    onStateChanged: broadcastCioCleanupState
+    onStateChanged: broadcastCioCleanupState,
+    onSweepComplete: () => state.designService?.reconcileHistory() ?? Promise.resolve()
   })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
@@ -640,7 +641,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     previews: state.directoryPreviewService,
     browser: () => state.browserService
   })
+  state.designService = designService
   designService.registerIpc()
+  void designService.reconcileHistory()
   // What each thread decided about the experts its design or video session may
   // delegate to. One service answers it, because the playbook that names the
   // experts and the `delegate` operation that would run one have to agree: a

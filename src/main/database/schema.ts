@@ -1083,7 +1083,9 @@ CREATE TABLE IF NOT EXISTS thread_experts (
  * `sequence` orders the timeline and is contiguous from the oldest kept revision;
  * `parent_id` and `digest` let a capture tell an unchanged folder from a new
  * iteration. `files` is a snapshot, never a diff, because restoring content has to
- * be exact even after the revisions around it are pruned.
+ * be exact even after the revisions around it are pruned. `changed_paths` is the
+ * diff's path list, kept beside the count so a timeline row can name what moved and
+ * a page can be picked out of it without re-reading every snapshot.
  */
 const DESIGN_REVISIONS_SQL = `
 CREATE TABLE IF NOT EXISTS design_revisions (
@@ -1098,6 +1100,7 @@ CREATE TABLE IF NOT EXISTS design_revisions (
   skipped_files   TEXT,
   unavailable_files TEXT,
   changed_files   INTEGER NOT NULL DEFAULT 0,
+  changed_paths   TEXT,
   file_count      INTEGER NOT NULL DEFAULT 0,
   total_bytes     INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL
@@ -1120,6 +1123,15 @@ CREATE INDEX IF NOT EXISTS idx_design_revisions_digest
  * folder for a new edit.
  */
 const DESIGN_HISTORY_HEADS_SQL = `
+CREATE TABLE IF NOT EXISTS design_history_page_heads (
+  project_id TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  path TEXT NOT NULL,
+  revision_id TEXT NOT NULL REFERENCES design_revisions(id) ON DELETE CASCADE,
+  PRIMARY KEY (project_id, directory, path)
+);
+CREATE INDEX IF NOT EXISTS idx_design_history_page_heads_revision ON design_history_page_heads(revision_id);
+
 CREATE TABLE IF NOT EXISTS design_history_heads (
   project_id TEXT NOT NULL,
   directory  TEXT NOT NULL,

@@ -1,6 +1,8 @@
 import type {
+  DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
+  DesignPageHistoryState,
   DesignRevisionCause,
   DesignScreenShot,
   DesignThumbnail,
@@ -90,5 +92,25 @@ export const invokeDesignContract = {
   'design:historyRestore': {} as Contract<
     [projectId: string, threadId: string, directory: string, revisionId: string],
     DesignHistoryState
+  >,
+  /**
+   * One page's own line through the history, so the user can undo just that page.
+   *
+   * The states are the distinct contents the file held, read from the folder's
+   * revisions, so stepping between two neighbours rewrites one file and leaves the
+   * rest of the design alone.
+   */
+  'design:historyPage': {} as Contract<
+    [projectId: string, threadId: string, directory: string, path: string],
+    DesignPageHistoryState
+  >,
+  /**
+   * Move one page to one point in its own history, which is what a page-scoped
+   * Undo and Redo do. Answers with the folder's history and the page's line after
+   * the move, so the board redraws the design and the timeline in one round trip.
+   */
+  'design:historyRestoreFile': {} as Contract<
+    [projectId: string, threadId: string, directory: string, path: string, revisionId: string],
+    DesignHistoryRestoreFileResult
   >
 }

@@ -560,7 +560,7 @@
     void loadCanvas()
   }
 
-  $effect(() => {
+  onMount(() => {
     // The agent writes the canvas inside a turn, so the board re-reads when that
     // turn settles. Nothing polls: a canvas that appeared is read then, and one
     // that was rewritten is read again then.
@@ -1088,14 +1088,16 @@
         {/if}
       {/if}
     </div>
-    <DesignHistoryPanel
-      {projectId}
-      {threadId}
-      directory={selected.directory}
-      {noun}
-      open={historyOpen}
-      onRestored={restoreBoard}
-      onClose={() => (historyOpen = false)}
-    />
+    {#key `${projectId}:${threadId}:${selected.directory}`}
+      <DesignHistoryPanel
+        {projectId}
+        {threadId}
+        directory={selected.directory}
+        {noun}
+        open={historyOpen}
+        onRestored={restoreBoard}
+        onClose={() => (historyOpen = false)}
+      />
+    {/key}
   </div>
 </div>

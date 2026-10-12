@@ -872,6 +872,7 @@ export class Database {
       this.migrateRoutineExecution(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
+      this.migrateDesignRevisionChangedPaths(connection)
     })()
   }
 
@@ -1123,6 +1124,24 @@ export class Database {
       if (authoredWorkKindOf(row.directory, DEFAULT_WORK_ROOTS) !== 'video') continue
       update.run('video', row.thread_id)
     }
+  }
+
+  /**
+   * Record the paths each revision changed, so a timeline row can name what moved
+   * without re-reading every snapshot.
+   *
+   * The column arrived after the revisions table, so an existing database gets it
+   * here; rows written before it read back as changing no named path, which the
+   * board treats as "unknown" rather than as a wrong answer.
+   */
+  private migrateDesignRevisionChangedPaths(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(design_revisions)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0 || columns.has('changed_paths')) return
+    connection.exec('ALTER TABLE design_revisions ADD COLUMN changed_paths TEXT')
   }
 
   /**
