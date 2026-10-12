@@ -12,8 +12,8 @@
     /** Data URL of the project's custom icon. */
     iconUrl?: string | null
     expanded: boolean
-    /** Whether any thread inside this folder is currently being worked on. */
-    working?: boolean
+    /** How many threads inside this folder are currently being worked on. */
+    workingCount?: number
     onToggle: () => void
     /** Hover actions rendered on the right (e.g. new-thread button, ellipsis menu). */
     actions?: Snippet
@@ -34,7 +34,7 @@
     project,
     iconUrl = null,
     expanded,
-    working = false,
+    workingCount = 0,
     onToggle,
     actions,
     actionsPinned = false,
@@ -172,11 +172,18 @@
        instead of reserving width in the flex flow, so the project name always keeps
        the full width of the row until the actions are actually visible. The left-to-right
        fade keeps the overlaid controls legible over a long name. -->
-  {#if working}
+  {#if workingCount > 0}
     <span
-      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center gap-1 bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
-      <StatusBadge stage="working" animated title="Agent is working" />
+      <StatusBadge
+        stage="working"
+        animated
+        title="{workingCount} {workingCount === 1 ? 'thread' : 'threads'} working"
+      />
+      <span class="text-[0.5625rem] font-semibold tabular-nums text-thread-working">
+        {workingCount}
+      </span>
     </span>
   {/if}
 
