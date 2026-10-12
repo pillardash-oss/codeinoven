@@ -378,6 +378,10 @@ export interface TemporaryChatContextTab {
    *  explain a specific selection (e.g. an agent question) rather than the
    *  generic "explain this selection" elaboration. */
   autoPrompt?: string
+  /** The pending question request this side chat was opened from, when a card's
+   *  Explain or Quick chat opened it. While the tab is in use the card's
+   *  countdown is held, because the user is working to understand the request. */
+  sourceRequestId?: string
   sessionStarted: boolean
   expired: boolean
   expiresAt: number

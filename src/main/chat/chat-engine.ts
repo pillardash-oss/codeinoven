@@ -2556,6 +2556,9 @@ export class ChatEngine {
     ipcMain.handle('agent:listQuestions', (_, projectId: string, threadId: string) =>
       this.listQuestions(projectId, threadId)
     )
+    // A side chat opened from a card keeps the user active while it is in use,
+    // so the card's countdown stays held. This carries no answer or decision.
+    ipcMain.handle('agent:userActivity', () => this.noteUserActivity())
     ipcMain.handle(
       'agent:updateQuestion',
       (

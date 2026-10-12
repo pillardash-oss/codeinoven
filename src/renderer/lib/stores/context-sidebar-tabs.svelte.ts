@@ -767,7 +767,8 @@ export class SidebarTabContexts {
     initialContext: string,
     settings: ThreadSettings,
     selectionAttached = true,
-    autoPrompt?: string
+    autoPrompt?: string,
+    sourceRequestId?: string
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
 
@@ -786,6 +787,7 @@ export class SidebarTabContexts {
       )
       if (existing) {
         existing.selections = [...existing.selections, selection]
+        if (sourceRequestId) existing.sourceRequestId = sourceRequestId
         this.focusInContext(context, existing.id)
         this.touchTemporaryChat(existing)
         return existing
@@ -839,6 +841,7 @@ export class SidebarTabContexts {
       autoPromptSent: false,
       autoPromptMessageId,
       autoPrompt,
+      sourceRequestId,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
