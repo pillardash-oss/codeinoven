@@ -39,6 +39,7 @@
     tone: 'default' | 'primary' | 'danger' | 'accent'
     disabled: boolean
     spin: boolean
+    progress?: number
   }
 
   const settingsShortcut = $derived(keymapState.keysFor('nav-settings'))
@@ -72,14 +73,19 @@
           disabled: false,
           spin: false
         }
-      case 'downloading':
+      case 'downloading': {
+        const progress = Number.isFinite(status.downloadProgress)
+          ? Math.min(100, Math.max(0, Math.round(status.downloadProgress ?? 0)))
+          : 0
         return {
           icon: Loader2,
-          label: `Downloading update. ${status.downloadProgress}%`,
+          label: `Downloading update. ${progress}%`,
           tone: 'default',
           disabled: true,
-          spin: true
+          spin: false,
+          progress
         }
+      }
       case 'downloaded':
         return {
           icon: RefreshCw,
@@ -198,6 +204,7 @@
     tone={updateControl.tone}
     disabled={updateControl.disabled}
     spin={updateControl.spin}
+    progress={updateControl.progress}
     onHover={onUpdateHover}
     onSelect={onUpdateSelect}
   />
