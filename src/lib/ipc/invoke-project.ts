@@ -6,6 +6,7 @@ import type {
   EditorId,
   ManagedWorktreeDescriptor,
   Project,
+  ProjectDirectorySize,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -211,6 +212,13 @@ export const invokeProjectContract = {
   'projectFiles:info': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
+  >,
+  /** Measure what a directory holds (total bytes, file and folder counts).
+   *  Asked for only by surfaces that display a folder's size, since it walks
+   *  the tree instead of reading one inode. */
+  'projectFiles:directorySize': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
+    ProjectDirectorySize
   >,
   /** Serve one project directory (or the directory holding one HTML file) on a
    *  loopback origin and return the URL to open in the in-app browser. */

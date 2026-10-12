@@ -1,6 +1,7 @@
 import { ovenRootKey, ovenRootThread } from '$lib/oven-root-target'
 import type {
   DirectoryPreviewSession,
+  ProjectDirectorySize,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -261,6 +262,12 @@ class ProjectFilesWorkspace {
 
   fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
     return this.explorer.fileInfo(projectId, path)
+  }
+
+  /** Total bytes plus file and folder counts below a directory, walked on
+   *  demand. Only the File info surface asks for it. */
+  directorySize(projectId: string, path: string): Promise<ProjectDirectorySize> {
+    return this.explorer.directorySize(projectId, path)
   }
 
   /**

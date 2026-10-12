@@ -26,6 +26,7 @@ const FILE_METHODS: Readonly<Record<string, keyof ProjectFilesService>> = {
   'projectFiles:create': 'createFile',
   'projectFiles:createDirectory': 'createDirectory',
   'projectFiles:info': 'getInfo',
+  'projectFiles:directorySize': 'directorySize',
   'projectFiles:read': 'readText',
   'projectFiles:rename': 'renameEntry',
   'projectFiles:save': 'writeText',

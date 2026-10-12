@@ -6,6 +6,7 @@ import { toPosixPath } from '../../lib/paths'
 import { INBOX_PROJECT_ID } from '../../lib/types'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
+  ProjectDirectorySize,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -31,6 +32,7 @@ import type {
   ProjectFilesThreadWorkspaceRoots
 } from './project-files/project-files-roots'
 import { ProjectFilesTransfer } from './project-files/project-files-transfer'
+import { measureDirectorySize } from './project-files/project-files-directory-size'
 import {
   externalCitationPathExists,
   resolveCitationPath
@@ -536,6 +538,26 @@ export class ProjectFilesService {
       modifiedAt: metadata.mtimeMs,
       mode: metadata.mode
     }
+  }
+
+  /**
+   * Measure what a directory holds: total bytes, plus file and folder counts.
+   *
+   * Kept out of `getInfo` on purpose. A folder's bytes are not metadata but a
+   * walk of everything below it, and the copy-path/reveal callers of `getInfo`
+   * have no use for that walk, so only the surface that displays a size asks
+   * for one. The walk itself is bounded in
+   * `project-files/project-files-directory-size.ts`.
+   */
+  async directorySize(
+    projectId: string,
+    relativePath: string,
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<ProjectDirectorySize> {
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    const directory = await this.roots.resolveExistingPath(root, relativePath, true)
+    return await measureDirectorySize(directory)
   }
 
   async resolveForExternalEditor(

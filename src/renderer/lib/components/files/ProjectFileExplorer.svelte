@@ -5,6 +5,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type {
     CioCleanupMount,
+    ProjectDirectorySize,
     ProjectFileEntry,
     ProjectFileInfo,
     ProjectFileTransferMode
@@ -142,6 +143,13 @@
   let browserPreviewPending = $state(false)
   let deleteTarget = $state<{ paths: string[]; label: string } | null>(null)
   let info = $state<ProjectFileInfo | null>(null)
+  /** What the open File info dialog's folder holds, measured while it is open.
+   *  Null until the walk answers, or when it failed. */
+  let infoDirectorySize = $state<ProjectDirectorySize | null>(null)
+  let infoDirectorySizePending = $state(false)
+  /** Bumped on every File info request, so a measurement that lands after the
+   *  dialog was closed or reopened against another entry is dropped. */
+  let infoRequest = 0
   let treeScroll = $state<HTMLDivElement | null>(null)
   let treeScrollTop = $state(0)
   let treeViewportHeight = $state(0)
@@ -1091,10 +1099,29 @@
   }
 
   async function showInfo(entry: ProjectFileEntry): Promise<void> {
+    const request = (infoRequest += 1)
+    infoDirectorySize = null
+    infoDirectorySizePending = false
     try {
-      info = await projectFilesWorkspace.fileInfo(projectId, entry.path)
+      const next = await projectFilesWorkspace.fileInfo(projectId, entry.path)
+      if (request !== infoRequest) return
+      info = next
     } catch (error) {
       reportError(error, 'File information is unavailable')
+      return
+    }
+    // A folder's bytes are a walk of its whole tree, so they are measured only
+    // because this dialog is open, and the dialog says so while it waits.
+    if (info?.kind !== 'directory') return
+    infoDirectorySizePending = true
+    try {
+      const measured = await projectFilesWorkspace.directorySize(projectId, entry.path)
+      if (request !== infoRequest) return
+      infoDirectorySize = measured
+    } catch (error) {
+      reportError(error, 'The folder size could not be measured')
+    } finally {
+      if (request === infoRequest) infoDirectorySizePending = false
     }
   }
 
@@ -1340,5 +1367,12 @@
   onClearDeleteTarget={() => (deleteTarget = null)}
   onConfirmDelete={() => void deleteSelected()}
   {info}
-  onClearInfo={() => (info = null)}
+  directorySize={infoDirectorySize}
+  directorySizePending={infoDirectorySizePending}
+  onClearInfo={() => {
+    // Abandon any measurement still running for this entry: its answer belongs
+    // to a dialog that no longer exists.
+    infoRequest += 1
+    info = null
+  }}
 />

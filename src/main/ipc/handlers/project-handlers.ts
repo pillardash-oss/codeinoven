@@ -871,6 +871,18 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       )
   )
   ipcMain.handle(
+    'projectFiles:directorySize',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
+      projectFilesService.directorySize(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
+      )
+  )
+  ipcMain.handle(
     'directoryPreview:open',
     async (
       _,
