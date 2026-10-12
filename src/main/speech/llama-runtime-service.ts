@@ -30,6 +30,19 @@ export type LlamaRuntimeInstallation = SpeechLlamaRuntimeInstallation
 
 export type LlamaRuntimeStatus = SpeechLlamaRuntimeStatus
 
+let sharedInstance: LlamaRuntimeService | null = null
+
+/**
+ * The single {@link LlamaRuntimeService} shared by every consumer of the local
+ * llama.cpp runtime (speech cleanup and, now, search embeddings). Two instances
+ * would each own the same on-disk orphan journal and could race on its
+ * read-modify-write flush, so the app keeps exactly one.
+ */
+export function sharedLlamaRuntimeService(): LlamaRuntimeService {
+  sharedInstance ??= new LlamaRuntimeService()
+  return sharedInstance
+}
+
 interface RuntimeCandidate {
   path: string
   source: LlamaRuntimeSource
@@ -158,8 +171,7 @@ export class LlamaRuntimeService {
         continue
       }
       const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)
-      const commandMatches =
-        root.command.length > 0 && entry.command.includes(root.command)
+      const commandMatches = root.command.length > 0 && entry.command.includes(root.command)
       if (!orphaned || !commandMatches) {
         skipped.push(root.pid)
         continue

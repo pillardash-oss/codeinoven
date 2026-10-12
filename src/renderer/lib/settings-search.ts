@@ -217,6 +217,26 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: Volume2
   },
   {
+    id: 'search',
+    section: 'search',
+    title: 'Search',
+    description:
+      'Intent search: embed the local embedding model, index your threads, and find them by meaning.',
+    keywords: [
+      'semantic',
+      'intent',
+      'embedding',
+      'gemma',
+      'vector',
+      'hybrid',
+      'threads',
+      'index',
+      'model',
+      'import'
+    ],
+    icon: Search
+  },
+  {
     id: 'keymap',
     section: 'keymap',
     title: 'Keymap',

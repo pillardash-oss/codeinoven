@@ -387,9 +387,9 @@ export interface CreateThreadInput {
 }
 
 /** Where a thread search match was found. */
-export type ThreadSearchMatchKind = 'title' | 'message'
+export type ThreadSearchMatchKind = 'title' | 'message' | 'intent'
 
-/** One thread surfaced by full-text search, with the strongest match context. */
+/** One thread surfaced by thread search, with the strongest match context. */
 export interface ThreadSearchResult {
   thread: Thread
   kind: ThreadSearchMatchKind
@@ -399,6 +399,11 @@ export interface ThreadSearchResult {
   snippet?: string
   /** Timestamp of the best matching message. */
   timestamp?: number
+  /**
+   * Cosine similarity for an intent match. Present only when `kind` is
+   * `'intent'`; the exact value is internal to ranking and never shown.
+   */
+  score?: number
 }
 
 /**

@@ -364,6 +364,11 @@ export const IPC_EVENT_CONTRACT = {
   'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
+   * Intent-search model download and index status. The Search settings page
+   * mirrors this so a long download and a background reindex both report live.
+   */
+  'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
+  /**
    * One live stage of a managed-worktree creation/adoption job. The renderer
    * keeps its docked job panel on these so the user sees real progress while
    * git, the environment copy and the setup commands run.

@@ -36,6 +36,7 @@ import type { HarnessInstallService } from '../agents/harness-install-service'
 import type { NotificationService } from '../notifications/notification-service'
 import type { ModelPricingService } from '../providers/model-pricing-service'
 import type { SpeechService } from '../speech/speech-service'
+import type { SearchService } from '../search/search-service'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import type { PrototypePreviewService } from '../prototypes/prototype-preview-service'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
@@ -120,6 +121,9 @@ export interface BootstrapState {
   modelPricingService: ModelPricingService | null
   speechService: SpeechService | null
   unregisterSpeechIpc: (() => void) | null
+  /** Intent (semantic) search: model catalog, downloads, and the thread index. */
+  searchService: SearchService | null
+  unregisterSearchIpc: (() => void) | null
   prototypePreviewService: PrototypePreviewService | null
   /** Loopback static servers behind the file tree's "Open in browser" action. */
   directoryPreviewService: DirectoryPreviewService | null
@@ -196,6 +200,8 @@ export function createBootstrapState(): BootstrapState {
     modelPricingService: null,
     speechService: null,
     unregisterSpeechIpc: null,
+    searchService: null,
+    unregisterSearchIpc: null,
     prototypePreviewService: null,
     directoryPreviewService: null,
     backgroundLifecycle: null,

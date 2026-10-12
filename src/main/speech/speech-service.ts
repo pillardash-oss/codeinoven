@@ -47,7 +47,7 @@ import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
 import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
-import { LlamaRuntimeService } from './llama-runtime-service'
+import { LlamaRuntimeService, sharedLlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
@@ -146,7 +146,7 @@ export class SpeechService {
   private installed: InstalledArtifactIndex = { version: 1, artifacts: [] }
   private readonly cleanup = new SpeechCleanupService()
   private readonly learning: SpeechLearningService
-  private readonly llamaRuntime = new LlamaRuntimeService()
+  private readonly llamaRuntime = sharedLlamaRuntimeService()
   private readonly playback = new TtsPlaybackService()
   private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
