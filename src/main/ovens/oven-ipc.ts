@@ -120,7 +120,6 @@ export function registerOvenIpc(
   ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))
   ipcMain.handle('oven:save', async (_event, raw: unknown) => {
     const input = validateSaveOven(raw)
-    if (input.imagePath) input.imagePath = await resolveImagePath(input.imagePath)
     if (input.connection.authentication === 'identity')
       input.connection.identityFile = await validateIdentityPath(input.connection.identityFile)
     return registry.save(input)

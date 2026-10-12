@@ -1,11 +1,4 @@
-import { extname } from 'node:path'
-import { stat } from 'node:fs/promises'
-import {
-  isSupportedIconExtension,
-  storeIconFile,
-  readIconDataUrl,
-  removeIconFile
-} from '../../lib/icon-file'
+import { readIconDataUrl, removeIconFile, storeCustomIconFile } from '../../lib/icon-file'
 import { randomUUID } from 'node:crypto'
 import { LOCAL_OVEN_ID, type Oven, type OvenState, type SaveOvenInput } from '../../lib/ovens'
 import type { SecretVault } from '../storage/secret-vault'
@@ -153,15 +146,12 @@ export class OvenRegistry {
         if (oven.connection?.authentication === 'password' && !oven.passwordRef)
           throw new Error('Enter the SSH account password.')
         const imageDirectory = this.storage.resolve(`ovens/${oven.id}`)
-        if (input.imagePath) {
-          const info = await stat(input.imagePath)
-          if (
-            !info.isFile() ||
-            info.size > 2 * 1024 * 1024 ||
-            !isSupportedIconExtension(extname(input.imagePath))
+        if (input.image) {
+          oven.imageFile = await storeCustomIconFile(
+            imageDirectory,
+            input.image,
+            existing?.imageFile
           )
-            throw new Error('Choose an icon image smaller than 2 MiB.')
-          oven.imageFile = await storeIconFile(imageDirectory, input.imagePath, existing?.imageFile)
         } else if (input.clearImage) {
           if (existing?.imageFile) await removeIconFile(imageDirectory, existing.imageFile)
           oven.imageFile = undefined

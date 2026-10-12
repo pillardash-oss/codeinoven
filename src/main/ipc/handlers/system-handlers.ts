@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG, GITHUB_URL } from '../../../lib/brand'
 import { atomicWrite } from '../../../lib/utils'
-import { ICON_MIME, storeAppearanceImage } from '../../../lib/icon-file'
+import { storeCustomAppearanceImage } from '../../../lib/icon-file'
+import { validateCustomIconImage } from '../../../lib/custom-icon'
 import { Logger } from '../../system/logger'
 import { resolveFavicons } from '../../editor/favicon-service'
 import { resolveAvatars } from '../../git/github-avatars'
@@ -324,19 +325,17 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     }
   })
 
-  privileged('appearance:storeImage', async (_event, sourcePath: unknown) => {
-    // A picked path is authorized for this process only, so it cannot be the
-    // path an appearance record keeps: that record outlives the process, and
-    // the next launch would read the stored path as out of scope. Copy the
-    // image into the app-owned appearance directory (registered as an artifact
-    // root) and answer with that copy plus its data URL, so the editor
-    // previews the very image it is about to persist.
-    const source = await privilegedIpc.resolveScopedPath(sourcePath)
-    const stored = await storeAppearanceImage(source)
+  privileged('appearance:storeImage', async (_event, rawImage: unknown) => {
+    // The renderer's custom-icon pipeline is the only WebP encoder, so what
+    // arrives here is already the finished icon: square, 64 px, compressed. The
+    // main process writes it into the app-owned appearance directory (registered
+    // as an artifact root) and answers with that copy plus its data URL, so the
+    // editor previews the very image it is about to persist.
+    const image = validateCustomIconImage(rawImage)
+    const stored = await storeCustomAppearanceImage(image)
     await privilegedIpc.registerUserSelectedFile(stored)
-    const mime = ICON_MIME[extname(stored).toLowerCase()] ?? 'image/png'
-    const buffer = await readFile(stored)
-    return { path: stored, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+    const base64 = Buffer.from(image.data).toString('base64')
+    return { path: stored, dataUrl: `data:image/webp;base64,${base64}` }
   })
 
   privileged('shell:openExternal', async (_event, url: unknown) => {

@@ -10,6 +10,7 @@ import type {
   ProjectTextFile
 } from '../types'
 import type { RendererLogEntry } from './logging'
+import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
 
 /** One file the user explicitly chooses to save from the renderer. */
@@ -41,7 +42,10 @@ export const invokeAppContract = {
    *  sticky note icon) as an app-owned copy and answer with that copy's path and
    *  its data URL. A picked path is authorized for one process only, so it is
    *  never what an appearance record keeps. */
-  'appearance:storeImage': {} as Contract<[sourcePath: string], { path: string; dataUrl: string }>,
+  'appearance:storeImage': {} as Contract<
+    [image: CustomIconImage],
+    { path: string; dataUrl: string }
+  >,
   'diagnostics:export': {} as Contract<[], string | null>,
   'file:read': {} as Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>,
   'file:readAsDataUrl': {} as Contract<[filePath: string], string | null>,

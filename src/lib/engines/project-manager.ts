@@ -1,13 +1,9 @@
-import { join, extname, relative } from 'path'
+import { join, relative } from 'path'
 import { readdir, realpath } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
-import {
-  isSupportedIconExtension,
-  readIconDataUrl,
-  removeIconFile,
-  storeIconFile
-} from '../icon-file'
+import { readIconDataUrl, removeIconFile, storeCustomIconFile, storeIconFile } from '../icon-file'
+import type { CustomIconImage } from '../custom-icon'
 import type { Project, CreateProjectInput } from '../types'
 import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../ipc/browser'
@@ -679,20 +675,15 @@ export class ProjectManager {
     return candidates[0].path
   }
 
-  async setIcon(projectId: string, sourcePath: string): Promise<Project> {
+  async setIcon(projectId: string, image: CustomIconImage): Promise<Project> {
     const existing = this.projectRepo.get(projectId)
     if (!existing) {
       throw new Error(`Project not found: ${projectId}`)
     }
 
-    const ext = extname(sourcePath).toLowerCase() || '.png'
-    if (!isSupportedIconExtension(ext)) {
-      throw new Error(`Unsupported icon format: ${ext}`)
-    }
-
-    const iconFile = await storeIconFile(
+    const iconFile = await storeCustomIconFile(
       join(getConfigRoot(), 'projects', projectId),
-      sourcePath,
+      image,
       existing.icon
     )
 

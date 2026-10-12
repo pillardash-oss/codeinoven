@@ -34,6 +34,7 @@ import type {
   UpdateRoutineInput
 } from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
+import { validateCustomIconImage } from '../../../lib/custom-icon'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ROUTINE_DELIVERY_CHANNEL_IDS)
@@ -369,10 +370,10 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return routine
   })
 
-  ipcMain.handle('routine:setIcon', async (_, routineId: unknown, sourcePath: unknown) => {
+  ipcMain.handle('routine:setIcon', async (_, routineId: unknown, rawImage: unknown) => {
     const routine = await routineManager.setIcon(
       validateEntityId(routineId, 'Routine ID'),
-      requireString(sourcePath, 'Routine icon path')
+      validateCustomIconImage(rawImage)
     )
     broadcastRoutines()
     return routine

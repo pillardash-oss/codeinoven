@@ -2,6 +2,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { flashElement } from '$lib/reveal-flash'
@@ -81,7 +82,7 @@
   let editorOpen = $state(false)
   let agentOpen = $state(false)
   let name = $state('')
-  let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
+  let pendingIcon = $state<OptimizedCustomIcon | undefined>()
   let clearImage = $state(false)
   let icon = $state<OvenIcon>('server')
   let customSvg = $state<string | undefined>()
@@ -704,13 +705,12 @@
 
   async function uploadImage(): Promise<void> {
     try {
-      const path = await invoke('dialog:pickImage')
-      if (!path) return
-      const dataUrl = await invoke('file:readAsDataUrl', path)
-      if (dataUrl) {
-        pendingIcon = { path, dataUrl }
-        clearImage = false
-      }
+      // The shared pipeline finishes the icon (square, 64 px, WebP) before the
+      // draft holds it, so Save persists exactly what the preview shows.
+      const picked = await pickCustomIconImage()
+      if (!picked) return
+      pendingIcon = picked
+      clearImage = false
     } catch (failure) {
       modalError = message(failure)
     }
@@ -740,7 +740,7 @@
       ...(editing ? { id: editing.id } : {}),
       name,
       icon,
-      ...(pendingIcon ? { imagePath: pendingIcon.path } : {}),
+      ...(pendingIcon ? { image: pendingIcon.image } : {}),
       clearImage,
       ...(customSvg ? { customSvg } : {}),
       color,

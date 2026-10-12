@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import type { CustomIconImage } from '$shared/custom-icon'
 import {
   nextRunAtExcluding,
   type BackgroundRun,
@@ -271,8 +272,8 @@ class AssistantRoutinesState {
   }
 
   /** Store a custom icon image for a routine, mirroring project icons. */
-  async setRoutineIcon(routineId: string, sourcePath: string): Promise<Routine> {
-    const routine = await invoke('routine:setIcon', routineId, sourcePath)
+  async setRoutineIcon(routineId: string, image: CustomIconImage): Promise<Routine> {
+    const routine = await invoke('routine:setIcon', routineId, image)
     await this.refresh()
     return routine
   }

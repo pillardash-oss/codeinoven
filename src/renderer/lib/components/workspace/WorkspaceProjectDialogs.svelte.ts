@@ -1,5 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
+import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
+import { reportError } from '$lib/stores/app-errors.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -41,7 +43,7 @@ export class WorkspaceProjectDialogs {
   editProjectIconType = $state<string | undefined>()
   editProjectCustomSvg = $state<string | undefined>()
   editProjectCustomSvgSelected = $state(false)
-  editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
+  editProjectPendingIcon = $state<OptimizedCustomIcon | undefined>()
 
   constructor(options: WorkspaceProjectDialogsOptions) {
     this.options = options
@@ -84,7 +86,7 @@ export class WorkspaceProjectDialogs {
       // Persist the new image, then the appearance the form holds. An image wins
       // the preview, but the colour and icon type still save so a colour picked
       // in the same session is never dropped.
-      await invoke('project:setIcon', editProject.id, this.editProjectPendingIcon.path)
+      await invoke('project:setIcon', editProject.id, this.editProjectPendingIcon.image)
       updated = await invoke('project:update', editProject.id, patch)
     } else {
       const hadCustomIcon = !!editProject.icon
@@ -146,13 +148,16 @@ export class WorkspaceProjectDialogs {
 
   async changeEditProjectIcon(): Promise<void> {
     if (!this.editProject) return
-    const imagePath = await invoke('dialog:pickImage')
-    if (!imagePath) return
-    // Read the file as a data URL for local preview only   never persist here
-    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
-    if (!dataUrl) return
-    this.editProjectCustomSvgSelected = false
-    this.editProjectPendingIcon = { path: imagePath, dataUrl }
+    try {
+      // The shared pipeline crops, scales and encodes the pick, so the editor
+      // only ever previews and persists the finished icon.
+      const picked = await pickCustomIconImage()
+      if (!picked) return
+      this.editProjectCustomSvgSelected = false
+      this.editProjectPendingIcon = picked
+    } catch (caught) {
+      reportError(caught, 'Could not use that image')
+    }
   }
 
   askRemoveProject(projectId: string): void {

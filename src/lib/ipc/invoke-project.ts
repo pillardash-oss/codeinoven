@@ -29,6 +29,7 @@ import type {
   ScopeWorktreeSourceInfo
 } from '../types'
 import type { Contract } from './contract-helpers'
+import type { CustomIconImage } from '../custom-icon'
 
 export const invokeProjectContract = {
   'icon-library:list': {} as Contract<[], CustomIcon[]>,
@@ -155,7 +156,7 @@ export const invokeProjectContract = {
   'project:openInEditor': {} as Contract<[projectId: string], void>,
   'project:reorder': {} as Contract<[orderedIds: string[]], Project[]>,
   'project:setPinned': {} as Contract<[projectId: string, pinned: boolean], Project>,
-  'project:setIcon': {} as Contract<[projectId: string, sourcePath: string], Project>,
+  'project:setIcon': {} as Contract<[projectId: string, image: CustomIconImage], Project>,
   'project:clearIcon': {} as Contract<[projectId: string], Project>,
   'project:update': {} as Contract<
     [projectId: string, input: Partial<CreateProjectInput>],

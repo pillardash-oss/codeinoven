@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, rm } from 'fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { extname, join } from 'path'
 import { getConfigRoot } from './utils'
+import { isWebpImage, MAX_CUSTOM_ICON_BYTES, type CustomIconImage } from './custom-icon'
 
 /** MIME types for stored icon images, keyed by lowercase file extension. */
 export const ICON_MIME: Record<string, string> = {
@@ -13,15 +14,13 @@ export const ICON_MIME: Record<string, string> = {
   '.webp': 'image/webp'
 }
 
-/** Whether an icon file extension can be stored and served back to the renderer. */
-export function isSupportedIconExtension(extension: string): boolean {
-  return extension.toLowerCase() in ICON_MIME
-}
-
 /**
  * Copy `sourcePath` into `dir` as `icon<ext>`, replacing any previous icon file.
- * Returns the stored filename. Extension validation is the caller's concern so
- * the auto-detected-icon path can keep its best-effort behaviour.
+ *
+ * This is the **auto-detected** path only (a project's own bundled icon found at
+ * add time). Every user-picked image goes through the renderer's custom-icon
+ * pipeline and lands through `storeCustomIconFile` instead, already cropped,
+ * scaled and WebP-encoded, so nothing the user chooses keeps its original size.
  */
 export async function storeIconFile(
   dir: string,
@@ -33,6 +32,21 @@ export async function storeIconFile(
   await mkdir(dir, { recursive: true })
   await copyFile(sourcePath, join(dir, iconFile))
   return iconFile
+}
+
+/**
+ * Validate the bytes the renderer's pipeline produced.
+ *
+ * The renderer is the only WebP encoder, so the main process trusts the shape it
+ * promises and re-checks it here rather than the format: a payload that is not a
+ * bounded WebP is a bug or a forgery, and it never reaches disk.
+ */
+function requireCustomIconBytes(image: CustomIconImage): Buffer {
+  const bytes = Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength)
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_CUSTOM_ICON_BYTES || !isWebpImage(bytes)) {
+    throw new TypeError('Icon image must be a WebP no larger than 512 KB')
+  }
+  return bytes
 }
 
 /** Best-effort removal of a stored icon file. */
@@ -69,23 +83,40 @@ export function appearanceImagesDirectory(): string {
   return join(getConfigRoot(), 'appearance-images')
 }
 
+/** The filename every pipelined entity icon takes inside its own directory. */
+export const CUSTOM_ICON_FILE = 'icon.webp'
+
 /**
- * Copy a picked appearance image into {@link appearanceImagesDirectory} and
- * return the stored path.
+ * Write a pipelined icon image into an entity's own directory.
  *
- * Nothing is deleted here. A pick is not a save, so the image the entity wears
- * right now has to stay readable until the record pointing at it changes: a
- * replaced copy is left behind rather than risk an icon that disappears because
- * a modal was closed without saving.
+ * The entity keeps the filename, so the variant, colour and markup beside it can
+ * all change while the image stays one known path. A previous icon is removed
+ * unless it is already this path.
  */
-export async function storeAppearanceImage(sourcePath: string): Promise<string> {
-  const extension = extname(sourcePath).toLowerCase()
-  if (!isSupportedIconExtension(extension)) {
-    throw new TypeError(`Unsupported icon format: ${extension || '(none)'}`)
-  }
+export async function storeCustomIconFile(
+  dir: string,
+  image: CustomIconImage,
+  previousIcon?: string
+): Promise<string> {
+  const bytes = requireCustomIconBytes(image)
+  if (previousIcon && previousIcon !== CUSTOM_ICON_FILE) await removeIconFile(dir, previousIcon)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, CUSTOM_ICON_FILE), bytes)
+  return CUSTOM_ICON_FILE
+}
+
+/**
+ * Write a pipelined icon image into the shared appearance directory.
+ *
+ * Browser tabs, groups, boxes, bookmarks and sticky notes all wear an image from
+ * this one directory, each under its own id, so a replaced copy is left behind
+ * rather than risk an icon that disappears because a modal was closed unsaved.
+ */
+export async function storeCustomAppearanceImage(image: CustomIconImage): Promise<string> {
+  const bytes = requireCustomIconBytes(image)
   const directory = appearanceImagesDirectory()
   await mkdir(directory, { recursive: true })
-  const storedPath = join(directory, `${randomUUID()}${extension}`)
-  await copyFile(sourcePath, storedPath)
+  const storedPath = join(directory, `${randomUUID()}.webp`)
+  await writeFile(storedPath, bytes)
   return storedPath
 }
