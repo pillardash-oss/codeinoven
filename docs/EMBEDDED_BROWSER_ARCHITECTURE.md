@@ -119,6 +119,18 @@ material way, and the difference is deliberate.
   ports carried over the same bridge, and implements `chrome.permissions` from the
   extension's declared manifest in the worker and, through the extension-page
   preload, in the extension's own pages.
+- **An extension's offscreen document is kept focused.** Electron implements
+  `chrome.offscreen`, so an extension that cannot write the clipboard from its
+  worker (a password manager copying a generated password from its context menu)
+  creates an offscreen document and asks it to. Electron never marks that document
+  focused, so it reports `document.hasFocus() === false`, `clipboard.writeText`
+  rejects with `NotAllowedError: Document is not focused`, and the
+  `execCommand('copy')` fallback returns `false`, so the write is silently lost. The
+  app restores Chromium's behaviour: `BrowserExtensionOffscreenDocuments`
+  (`browser-extension-offscreen-documents.ts`) focuses each browser-created
+  extension document (`WebContents` of type `remote` on a `chrome-extension://`
+  URL) on every load. The document is never shown, so the window the user is
+  working in keeps the keyboard, and it stays focused for the document's life.
 - **An extension's own popup is told which tab it is acting on.** The app hosts an
   action's popup in a rail popup and gives it the keyboard on first show, so the
   runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's

@@ -54,6 +54,7 @@ import { browserJarFor, browserPartitionFor } from '../browser-service/browser-v
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import { BrowserExtensionNativeMessaging } from './browser-native-messaging'
+import { BrowserExtensionOffscreenDocuments } from './browser-extension-offscreen-documents'
 import type { NativeHostLookupOptions } from './browser-native-host-manifest'
 import { nativeMessagingCommand } from './browser-extension-bridge'
 import {
@@ -349,6 +350,9 @@ export class BrowserExtensionService {
   /** The namespaced OS notification ids each extension currently has raised, so
    *  a `clearAll` can dismiss exactly that extension's cards. */
   private readonly raisedNotifications = new Map<string, Set<string>>()
+  /** Keeps every extension offscreen document focused, so the APIs that need a
+   *  focused document   the clipboard, for one   work from one. */
+  private readonly offscreenDocuments = new BrowserExtensionOffscreenDocuments()
   private disposed = false
 
   constructor(
@@ -743,6 +747,7 @@ export class BrowserExtensionService {
    *  is going away. */
   async dispose(): Promise<void> {
     this.disposed = true
+    this.offscreenDocuments.dispose()
     if (this.updateCheckTimer) {
       clearInterval(this.updateCheckTimer)
       this.updateCheckTimer = null
