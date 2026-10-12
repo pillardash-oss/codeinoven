@@ -1,8 +1,8 @@
 <script lang="ts">
   import { MessagesCircle } from '@lucide/svelte'
-  import { toast } from 'svelte-sonner'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import { appPanelSlot } from '$lib/app-panel-portal'
   import { copyText } from '$lib/copy-text'
   import { invoke } from '$lib/ipc.svelte'
   import {
@@ -406,8 +406,7 @@
         return
       case 'copyThreadId':
         try {
-          await copyText(current.threadId)
-          toast.success('Thread ID copied')
+          await copyText(current.threadId, 'Thread ID copied')
         } catch (error) {
           reportError(error, 'The thread ID could not be copied.')
         }
@@ -441,14 +440,10 @@
 </script>
 
 {#snippet railContent()}
-  {#if notificationsTab}
-    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-      <NotificationPanel />
-    {/await}
-  {:else if stickyNotesTab}
-    {#await import('$lib/components/notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
-      <StickyNotesPanel />
-    {/await}
+  {#if notificationsTab || stickyNotesTab}
+    <!-- The app's global panels are mounted once by `AppPanelHost`; this rail
+         only offers the body slot it fills. -->
+    <div class="h-full" {@attach appPanelSlot}></div>
   {:else if globalBrowser.popupsSidebarShown}
     {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
       <BrowserPopupWindowPanel popupId={activePopup?.id ?? ''} />

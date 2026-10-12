@@ -139,7 +139,12 @@ export function foldEventIntoMessages(messages: AgentMessage[], event: AgentEven
       if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
       if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
       if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
-      if (event.cost !== undefined) message.cost = event.cost
+      // A usage refresh reports the session's CUMULATIVE spend, not this
+      // response's own cost. Writing it over `message.cost` made every reader
+      // that sums per-message cost double-count, and let pi's mirrored-cost
+      // fallback re-add its own running total on each refresh (doubling every
+      // request). Keep it on the dedicated cumulative field instead.
+      if (event.cost !== undefined) message.sessionCostUsd = event.cost
       if (event.rateLimits) message.rateLimits = event.rateLimits
       if (event.credits) message.credits = event.credits
       if (event.bankedResets) message.bankedResets = event.bankedResets

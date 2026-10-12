@@ -76,6 +76,10 @@ export async function handleFatalStartup(
       {
         name: 'speechService',
         close: () => void state.speechService?.dispose()
+      },
+      {
+        name: 'searchService',
+        close: () => void state.searchService?.dispose()
       }
     ],
     showErrorBox: (title, message) => dialog.showErrorBox(title, message),

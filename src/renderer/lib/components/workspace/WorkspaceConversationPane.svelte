@@ -1,37 +1,13 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
-  import ChatComposer from '$lib/components/chats/ChatComposer.svelte'
-  import AiAccountSetupCard from '$lib/components/threads/AiAccountSetupCard.svelte'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
-  import { threadNeedsAiAccount } from '$lib/ai-account'
-  import { invoke } from '$lib/ipc.svelte'
-  import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
-  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import {
-    FIRST_RUN_PROVIDER_SEARCH,
-    providerConnectFlow
-  } from '$lib/stores/provider-connect-flow.svelte'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
-  import {
-    chatEffectiveSettings,
-    chatSettings,
-    threadSettings
-  } from '$lib/stores/thread-settings.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { routineHowToComplete } from '$shared/types'
-  import {
-    INBOX_PROJECT_ID,
-    DRAFT_CHAT_THREAD_ID,
-    type AgentHarnessUsage,
-    type Project,
-    type Thread
-  } from '$shared/types'
+  import { routineHowToComplete, type Project, type Thread } from '$shared/types'
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
 
   interface Props {
@@ -71,9 +47,6 @@
     visibleProjects,
     projectIcons,
     threadsByProject,
-    config,
-    updateConfig,
-    restoreKey,
     sidebarHasContent,
     assistantForeignRunThreadId,
     onNavigate,
@@ -81,12 +54,8 @@
     onContinueInProject,
     onProjectCreated,
     onOpenScopeView,
-    onSendChat,
-    onStartChatDraft,
     onRequestAddProject
   }: Props = $props()
-
-  let chatsComposer: ChatComposer | undefined = $state(undefined)
 
   /** Assistant mode reuses the chat thread renderer, but a routine's task
    *  authors its how-to conversationally, so the view needs the routine. */
@@ -99,84 +68,6 @@
       : null
   )
 
-  const chatSuggestedPrompts = [
-    'Research a question using my device',
-    'Run a task for me on this computer',
-    'Brainstorm ideas with me'
-  ]
-
-  /** Provider catalog for the Chats tab   feeds the empty-state composer so the
-      model picker is populated before the first message creates a thread. */
-  let chatInboxId = $state<string | null>(null)
-  let chatProviders = $derived(
-    chatInboxId
-      ? (providerCatalog.cached(chatInboxId) ?? providerCatalog.allCached())
-      : providerCatalog.allCached()
-  )
-  /** Effective chat settings: the chat's own model once one has been picked,
-   *  else the last project model so a fresh chat starts on the model in use. */
-  let chatComposerSettings = $derived(chatEffectiveSettings(threadSettings.lastUsed))
-
-  /** Harness display name for the chat setup card, straight from the registry. */
-  let chatHarnessName = $derived(
-    providerStore.providers.find((provider) => provider.id === chatComposerSettings.harnessId)
-      ?.name ?? chatComposerSettings.harnessId
-  )
-  /** True while the new-chat composer has a provider and a model to run on. */
-  let chatCanRunTurns = $derived(!threadNeedsAiAccount(chatComposerSettings))
-  /** Armed by the composer refusing a send the chat has no account for. */
-  let chatAiAccountPromptOpen = $state(false)
-  let chatAiAccountPromptVisible = $derived(chatAiAccountPromptOpen && !chatCanRunTurns)
-
-  /** Open the harness's provider list for the chat that has not been created
-   *  yet, then re-probe the inbox catalog so the connected models show up. */
-  function openChatAiAccountSetup(): void {
-    providerConnectFlow.open(chatComposerSettings.harnessId, {
-      search: FIRST_RUN_PROVIDER_SEARCH,
-      onConnected: () => {
-        if (chatInboxId) void providerCatalog.refresh(chatInboxId, true)
-      }
-    })
-  }
-
-  /** Live account quota for the not-yet-created "Start a new chat" composer
-   *  the exact same provider-level hover-fetch cache the thread battery uses. */
-  const newChatUsage = createAccountUsageCache()
-  function revealNewChatUsage(): void {
-    if (newChatUsage.isStale()) {
-      void newChatUsage.refresh({
-        harnessId: chatComposerSettings.harnessId,
-        providerId: chatComposerSettings.providerId
-      })
-    }
-  }
-  const newChatHarnessUsage = $derived.by((): AgentHarnessUsage[] =>
-    newChatUsage.usage.map((usage) => ({
-      harnessId: usage.harnessId,
-      providerId: usage.providerId,
-      costUsd: 0,
-      rateLimits: usage.rateLimits,
-      ...(usage.credits ? { credits: usage.credits } : {}),
-      ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
-    }))
-  )
-  $effect(() => {
-    if (mode !== 'chats') return
-    let alive = true
-    void (async () => {
-      try {
-        const inbox = await invoke('project:ensureInbox')
-        if (!alive) return
-        chatInboxId = inbox.id
-      } catch {
-        if (alive) chatInboxId = null
-      }
-    })()
-    return () => {
-      alive = false
-    }
-  })
-
   function handleConversationRenderError(error: unknown): void {
     const thread = workspaceState.selectedThread
     if (!thread) return
@@ -184,39 +75,6 @@
       projectId: thread.projectId,
       threadId: thread.id
     })
-  }
-
-  /** Guards the one-shot hand-off of the welcome composer's draft: the
-   *  composer remounts into ThreadView once the thread it hands the draft to
-   *  exists, so a hand-off already in flight must not start a second one. */
-  let startingChatDraft = false
-
-  /**
-   * Materialise the welcome composer's draft as a real thread.
-   *
-   * That composer is not backed by a thread, so a draft typed there would never
-   * appear in the Chats sidebar. As soon as it holds content, the draft is
-   * handed to an inbox thread: the row shows as a draft and the next New chat
-   * starts another one, so several drafts can coexist exactly like project
-   * threads. Nothing is sent, the draft stays a draft.
-   */
-  function startChatDraft(): void {
-    if (startingChatDraft) return
-    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
-    const files = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
-    if (!draft.trim() && files.length === 0) return
-    startingChatDraft = true
-    void onStartChatDraft().finally(() => {
-      startingChatDraft = false
-    })
-  }
-
-  /** A draft restored from recovery (an upgrade, or a failed hand-off) is
-   *  materialised when the welcome composer mounts, not only on the next
-   *  keystroke. */
-  function startRestoredChatDraft(node: HTMLElement): void {
-    void node
-    startChatDraft()
   }
 </script>
 
@@ -278,112 +136,14 @@
       {/key}
     </div>
   {:else if mode === 'chats'}
-    <!-- Empty state   greeting, composer, and suggested prompts centered -->
-    <div
-      class="flex h-full flex-col items-center justify-center px-6"
-      data-drop-region="conversation"
-    >
-      <div class="mb-6 text-center">
-        <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
-        <p class="mt-1 text-[0.875rem] text-muted">Send a message to begin no project needed</p>
-      </div>
-      <div class="w-full max-w-4xl" {@attach startRestoredChatDraft}>
-        {#if chatAiAccountPromptVisible}
-          <div class="mb-3">
-            <AiAccountSetupCard
-              harnessName={chatHarnessName}
-              providers={chatProviders}
-              settings={chatComposerSettings}
-              projectId={chatInboxId ?? INBOX_PROJECT_ID}
-              favoriteModels={rendererRecovery.chatFavoriteModels}
-              recentModels={rendererRecovery.chatRecentModels}
-              onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
-              onToggleFavorite={(providerId, modelId, harnessId) =>
-                rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-              onModelChange={(next) => chatSettings.commit(next)}
-              onConnect={openChatAiAccountSetup}
-              onDismiss={() => (chatAiAccountPromptOpen = false)}
-            />
-          </div>
-        {/if}
-        {#key restoreKey}
-          <ChatComposer
-            bind:this={chatsComposer}
-            placeholder="What do you want to work on?"
-            autofocus
-            showEngineeringMode={false}
-            showChatModes
-            hidePermissionSelector
-            settings={chatComposerSettings}
-            onSettingsChange={(settings) => chatSettings.commit(settings)}
-            providers={chatProviders}
-            projectId={chatInboxId}
-            attachmentStorage={{
-              kind: 'chat',
-              projectId: INBOX_PROJECT_ID,
-              threadId: DRAFT_CHAT_THREAD_ID
-            }}
-            harnessId={chatComposerSettings.harnessId}
-            favoriteModels={rendererRecovery.chatFavoriteModels}
-            onToggleFavorite={(providerId, modelId, harnessId) =>
-              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-            recentModels={rendererRecovery.chatRecentModels}
-            onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
-            onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-            imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
-            imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
-            onImageDescriptorDefaultChange={(selection) =>
-              void updateConfig?.({
-                agentDefaults: {
-                  ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
-                  imageDescriptor: selection
-                }
-              })}
-            onImageDescriptorAskAgainChange={(value) =>
-              void updateConfig?.({ imageDescriptorAskAgain: value })}
-            initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)}
-            onValueChange={(value) => {
-              rendererRecovery.setDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID, value)
-              startChatDraft()
-            }}
-            initialAttachments={rendererRecovery.attachmentsFor(
-              INBOX_PROJECT_ID,
-              DRAFT_CHAT_THREAD_ID
-            )}
-            onAttachmentsChange={(files) => {
-              rendererRecovery.setDraft(
-                INBOX_PROJECT_ID,
-                DRAFT_CHAT_THREAD_ID,
-                rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID),
-                files
-              )
-              startChatDraft()
-            }}
-            onSend={(msg, files) => void onSendChat(msg, files)}
-            onNeedsAiAccount={() => (chatAiAccountPromptOpen = true)}
-            onRevealUsage={revealNewChatUsage}
-            onHideUsage={() => newChatUsage.markStale()}
-            usageRefreshing={newChatUsage.refreshing}
-            harnessUsage={newChatHarnessUsage}
-          />
-          <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
-            {#each chatSuggestedPrompts as prompt (prompt)}
-              <button
-                type="button"
-                class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                onclick={() => chatsComposer?.setComposerText(prompt)}
-              >
-                {prompt}
-              </button>
-            {/each}
-          </div>
-        {/key}
-      </div>
-    </div>
+    <WelcomeStart
+      variant="chats"
+      {sidebarHasContent}
+      onNewChat={() => workspaceState.requestNewChat()}
+      onToggleSidebar={() => sidebarState.toggle()}
+      onOpenSettings={() => onNavigate('settings')}
+      onShowTour={() => workspaceState.requestViewTour('chats')}
+    />
   {:else if mode === 'assistant'}
     <!-- Assistant empty state   routines and tasks start here, exactly the way a
          project does in the Projects view. -->

@@ -124,19 +124,29 @@ process.stdout.write(
   ].join('\n')
 )
 
+const probeEnvironment: NodeJS.ProcessEnv = {
+  ...process.env,
+  CODEINOVEN_CONFIG_ROOT: probeRoot,
+  // Hand the dev server the port this probe minted (or was pinned to). It is
+  // set after the inherited environment on purpose: an inherited
+  // CODEINOVEN_RENDERER_PORT names the port the running dev app is on, which is
+  // the collision the mint exists to avoid.
+  CODEINOVEN_RENDERER_PORT: String(probeRendererPort),
+  CODEINOVEN_NO_BACKGROUND: '1'
+}
+
+// CodeInOven exports `ELECTRON_RUN_AS_NODE` to the agent processes it spawns, and
+// an agent shell is exactly where a probe is launched from. Inherited, it makes
+// the Electron binary start as plain Node, so the main process dies on its first
+// `import { app } from 'electron'` with "does not provide an export named
+// 'app'": an error that reads like a broken checkout rather than an inherited
+// variable. A probe is always a real Electron app, so the variable is dropped.
+delete probeEnvironment.ELECTRON_RUN_AS_NODE
+
 const child = spawn('bun', ['run', 'dev', ...process.argv.slice(2)], {
   stdio: 'inherit',
   cwd: projectRoot,
-  env: {
-    ...process.env,
-    CODEINOVEN_CONFIG_ROOT: probeRoot,
-    // Hand the dev server the port this probe minted (or was pinned to). It is
-    // set after the inherited environment on purpose: an inherited
-    // CODEINOVEN_RENDERER_PORT names the port the running dev app is on, which is
-    // the collision the mint exists to avoid.
-    CODEINOVEN_RENDERER_PORT: String(probeRendererPort),
-    CODEINOVEN_NO_BACKGROUND: '1'
-  }
+  env: probeEnvironment
 })
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
-  import { APP_NAME, FEEDBACK_URL, GITHUB_URL, SUPPORT_EMAIL } from '$shared/brand'
+  import { FEEDBACK_URL, GITHUB_URL, SUPPORT_EMAIL } from '$shared/brand'
   import type { AppConfig, AppConfigPatch } from '$shared/types'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -60,10 +60,10 @@
   }
 </script>
 
-<div class="mt-4 rounded-xl border bg-surface p-4">
+<div id="settings-block-about-community" class="mt-4 rounded-xl border bg-surface p-4">
   <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Community</h3>
   <p class="text-xs leading-relaxed text-dimmed">
-    Help improve {APP_NAME}. Report a bug, email your feedback, or contribute on GitHub.
+    Report a bug, send feedback, or contribute on GitHub.
   </p>
   <div class="mt-3 flex flex-wrap gap-2">
     {#each actions as action (action.label)}
@@ -80,26 +80,14 @@
   </div>
 </div>
 
-<div class="mt-4 rounded-xl border bg-surface p-4">
-  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Privacy</h3>
-  <div class="flex items-start justify-between gap-4">
-    <div>
-      <p class="text-sm font-medium">Share anonymous usage statistics</p>
-      <p
-        id="usage-statistics-description"
-        class="mt-1 max-w-xl text-xs leading-relaxed text-dimmed"
-      >
-        Send daily activity, app version, operating system, and CPU architecture to PostHog using a
-        random installation ID. No prompts, code, project paths, or conversation history. Disabled
-        by default. You can turn it off at any time.
-      </p>
-    </div>
+<div id="settings-block-about-privacy" class="mt-4 rounded-xl border bg-surface p-4">
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <p class="text-sm font-medium">Share anonymous daily active ping</p>
     <Switch
       checked={config.shareAnonymousUsage === true}
       disabled={!settingsReady || saving}
-      title="Share anonymous usage statistics"
-      aria-label="Share anonymous usage statistics"
-      aria-describedby="usage-statistics-description"
+      title="Share anonymous daily active ping"
+      aria-label="Share anonymous daily active ping"
       onchange={(enabled) => void setConsent(enabled)}
     />
   </div>

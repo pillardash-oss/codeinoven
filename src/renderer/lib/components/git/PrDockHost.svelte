@@ -63,6 +63,7 @@
     onClose={() => store.close(draft.id)}
     onView={(pullRequest) => void revealPullRequest(draft.projectId, draft.threadId, pullRequest)}
     storageKey={store.storageKeyFor(draft.id)}
+    seed={draft.seed}
     onCreated={() => {
       // The per-panel prListRefresh signal is intentionally not wired here
       // the panel refetches on next open. Global drafts still create the PR

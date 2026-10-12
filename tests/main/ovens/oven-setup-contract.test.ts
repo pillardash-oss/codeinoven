@@ -67,9 +67,9 @@ describe('oven setup assessment', () => {
     expect(plan.blockers).toEqual([])
     expect(plan.steps.map((step) => step.id).slice(0, 4)).toEqual([
       'preflight',
+      'timezone',
       'packages',
-      'git',
-      'curl'
+      'git'
     ])
     expect(plan.steps.findIndex((step) => step.id === 'node')).toBeGreaterThan(1)
   })

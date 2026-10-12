@@ -1,4 +1,5 @@
-import { readdir } from 'node:fs/promises'
+import { marketSkillName } from '../../lib/skill-market-identity'
+import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -173,15 +174,88 @@ export async function listInstalledSkillLocations(
     nativeSkillLocations(projects),
     new SkillInstallRecordStore(storage).list()
   ])
-  // The install record is the only place that remembers where a copy came
-  // from, and it is keyed by skill id. First record wins, so the earliest
-  // install of a skill names its vendor even after a re-install.
-  const sources = new Map<string, string>()
-  for (const record of records) {
-    if (!sources.has(record.skillId)) sources.set(record.skillId, record.source)
+  const locks = new Map<string, Promise<unknown>>()
+  const readLock = (path: string): Promise<unknown> => {
+    let pending = locks.get(path)
+    if (!pending) {
+      pending = readFile(path, 'utf-8')
+        .then((text): unknown => JSON.parse(text))
+        .catch(() => null)
+      locks.set(path, pending)
+    }
+    return pending
   }
-  return [...registryLocations, ...nativeLocations].map((location) => {
-    const source = sources.get(location.skillId)
-    return source ? { ...location, source } : location
-  })
+  const attributed: InstalledSkillLocation[] = []
+  for (const location of [
+    ...registryLocations,
+    ...nativeLocations.map((location) => ({ ...location, folderName: location.skillId }))
+  ]) {
+    if (location.manager === 'native') {
+      try {
+        const marker: unknown = JSON.parse(
+          await readFile(join(location.path, location.skillId, '.cio-market.json'), 'utf-8')
+        )
+        if (
+          typeof marker === 'object' &&
+          marker !== null &&
+          'source' in marker &&
+          'skillId' in marker &&
+          typeof marker.source === 'string' &&
+          typeof marker.skillId === 'string' &&
+          marketSkillName(marker.source, marker.skillId) === location.skillId
+        ) {
+          attributed.push({ ...location, source: marker.source, skillId: marker.skillId })
+          continue
+        }
+      } catch {
+        // Legacy folders have no app-owned provenance marker.
+      }
+    }
+    if (location.manager === 'native') {
+      const lockPath =
+        location.scope === 'project'
+          ? join(location.path, '..', '..', 'skills-lock.json')
+          : join(homedir(), '.agents', '.skill-lock.json')
+      const lock = await readLock(lockPath)
+      if (
+        typeof lock === 'object' &&
+        lock !== null &&
+        'skills' in lock &&
+        typeof lock.skills === 'object' &&
+        lock.skills !== null
+      ) {
+        const entry: unknown = (lock.skills as Record<string, unknown>)[location.skillId]
+        if (
+          typeof entry === 'object' &&
+          entry !== null &&
+          'source' in entry &&
+          typeof entry.source === 'string'
+        ) {
+          const source = entry.source
+            .replace(/^https:\/\/github\.com\//u, '')
+            .replace(/\.git$/u, '')
+          attributed.push({ ...location, source })
+          continue
+        }
+      }
+    }
+    const candidates = records.filter(
+      (record) =>
+        record.manager === location.manager &&
+        (record.skillId === location.skillId ||
+          marketSkillName(record.source, record.skillId) === location.skillId) &&
+        (record.scope === location.scope ||
+          (record.scope === 'harness' && location.scope === 'global')) &&
+        record.projectId === location.projectId &&
+        (!location.harnessId ||
+          !record.harnessIds?.length ||
+          record.harnessIds.includes(location.harnessId))
+    )
+    const sources = new Set(candidates.map((record) => record.source.toLowerCase()))
+    const record = sources.size === 1 ? candidates[0] : undefined
+    attributed.push(
+      record ? { ...location, skillId: record.skillId, source: record.source } : location
+    )
+  }
+  return attributed
 }

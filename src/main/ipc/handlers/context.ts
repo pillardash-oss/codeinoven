@@ -57,6 +57,7 @@ import type { BrowserService } from '../../browser/browser-service'
 import type { AttachmentStorageScope } from '../../../lib/types'
 import type { CioCleanupService } from '../../cio-cleanup/cio-cleanup-service'
 import type { UtilityScopeFootprintService } from '../../utilities/utility-scope-footprint'
+import type { SearchService } from '../../search/search-service'
 
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
@@ -92,6 +93,11 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+  /**
+   * Intent search service. When present, the thread search gains semantic
+   * matches; when absent (or disabled), search stays keyword-only.
+   */
+  searchService?: SearchService
   /**
    * Credential vault and GitHub auth, created by the composition root so main
    * services outside the IPC layer (the skill updater) resolve the same token.
@@ -133,11 +139,14 @@ export type IpcChatEngine = Pick<
   | 'connectionRestored'
   | 'deleteThreadSession'
   | 'activeTurnChangeSummary'
+  | 'markTurnRankingUndone'
+  | 'clearTurnRankingUndone'
   | 'hasActiveProcessesInScope'
   | 'abort'
   | 'recordUserFileSave'
   | 'sendPrompt'
   | 'readRoutineCheckpoint'
+  | 'noteUserActivity'
 > &
   Partial<
     Pick<

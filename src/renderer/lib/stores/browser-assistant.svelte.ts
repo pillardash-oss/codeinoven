@@ -265,6 +265,7 @@ class BrowserAssistantState {
     const chat: BrowserAssistantChat = { threadId: thread.id, browserTabId, thread }
     this.byThread.set(thread.id, chat)
     this.byTab.set(browserTabId, thread.id)
+    this.#bindSession(thread)
     return chat
   }
 
@@ -276,6 +277,26 @@ class BrowserAssistantState {
     // rail's tab, the strip row's model, the panel's settings) sees the new row:
     // a mutated object inside the map would never notify them.
     this.byThread.set(thread.id, { ...known, thread })
+    this.#bindSession(thread)
+  }
+
+  /**
+   * Bind this conversation's harness session in the shared streaming routing
+   * table, so live agent events reach it whether or not its panel is mounted.
+   *
+   * The panel binds the session itself on mount, but a conversation created by
+   * its first message has no session yet at that moment: main creates the
+   * session during the send and reports it only through `thread:updated`. That
+   * left the routing table without this conversation's session, so every live
+   * event for the turn   including the `session.idle` that ends it   resolved to
+   * no conversation and was dropped. The optimistically set busy flag then never
+   * cleared, and the tab read as working long after the agent finished.
+   *
+   * The store already owns these rows and already subscribes to `thread:updated`,
+   * so binding here covers both registration and every later row update.
+   */
+  #bindSession(thread: Thread): void {
+    if (thread.sessionId) threadMessages.setSessionId(thread.projectId, thread.id, thread.sessionId)
   }
 
   private forget(threadId: string): void {

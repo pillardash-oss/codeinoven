@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Archive, GitBranch, GitMergeConflict, GitPullRequest } from '@lucide/svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
+  import { preloadGitPanelChunk } from '$lib/sidebar-panel-preload'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -47,7 +48,7 @@
     const projectId = thread.projectId
     scheduleDeferredWork(`git:panel-warm:${projectId}`, () => {
       // The panel is code-split, so its chunk is part of the open path too.
-      void import('../git/GitStatusPanel.svelte').catch(() => undefined)
+      void preloadGitPanelChunk().catch(() => undefined)
       gitState.warmGitPanel(projectId)
     })
   }

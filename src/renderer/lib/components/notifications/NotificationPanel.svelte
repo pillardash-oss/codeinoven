@@ -11,12 +11,15 @@
     RotateCcw,
     X
   } from '@lucide/svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
+    type NotificationAssistantSubject,
     type NotificationSubFilter,
     type NotificationTopTab,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
+  import NotificationFilterMenu from './NotificationFilterMenu.svelte'
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
@@ -27,9 +30,9 @@
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    groupBackgroundRunsByRoutine,
-    groupMissedRunsByRoutine,
-    missedRunReasonText
+    groupActivityByRoutine,
+    missedRunReasonText,
+    UNGROUPED_MISSED_RUNS
   } from '$lib/components/assistant/assistant-view'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -51,6 +54,34 @@
       temporaryChatId?: string
     ) => void | Promise<void>
   }
+
+  /**
+   * One row the Assistants tab can show under a routine: a notice, a missed
+   * fire, or an unattended run, each tagged with the moment it reports and the
+   * routine it belongs to, so all three fold together per routine.
+   */
+  type AssistantActivity =
+    | {
+        kind: 'notice'
+        id: string
+        at: number
+        routineId: string | undefined
+        notification: InAppNotification
+      }
+    | {
+        kind: 'missed'
+        id: string
+        at: number
+        routineId: string | undefined
+        run: MissedRun
+      }
+    | {
+        kind: 'background'
+        id: string
+        at: number
+        routineId: string | undefined
+        run: BackgroundRun
+      }
 
   let { onOpenThread }: Props = $props()
 
@@ -75,10 +106,11 @@
         return ['all', 'done', 'attention', 'spec', 'issues']
       case 'chats':
         return ['all', 'done', 'attention', 'issues']
-      // Assistants carry only missed runs, rendered straight from the assistant
-      // store: no sub-filter tabs, and nothing at all until a run is missed.
+      // Assistants carry assistant notices plus the missed and unattended runs
+      // rendered straight from the assistant store, so they narrow exactly like
+      // Chats does. No Spec: the assistant space never raises one.
       case 'assistants':
-        return []
+        return ['all', 'done', 'attention', 'issues']
       case 'app-errors':
         return []
     }
@@ -158,15 +190,101 @@
   const routineNameById = $derived(
     new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
   )
-  let missedGroups = $derived(
-    groupMissedRunsByRoutine(assistantRoutines.missedRuns, routineNameById)
+
+  /**
+   * The missed fires and unattended runs the panel shows both come straight
+   * from the store (`assistantVisibleMissedRuns` / `assistantVisibleBackgroundRuns`),
+   * which applies the same sub-filter, routines/tasks filter, and run/notice
+   * de-duplication to them as it does to the notices it owns. Keeping the rule in
+   * one place is what makes the tab badge match the rows on screen.
+   */
+
+  /**
+   * One entry per row an assistant section can show: a notice, a missed fire, or
+   * an unattended run, each carrying the moment it reports and the routine it
+   * belongs to.
+   */
+  const assistantActivity = $derived.by<AssistantActivity[]>(() => {
+    const entries: AssistantActivity[] = []
+    for (const n of notificationPanelState.assistantVisibleNotifications) {
+      entries.push({
+        kind: 'notice',
+        id: `notice:${n.id}`,
+        at: n.timestamp,
+        routineId: n.routineId,
+        notification: n
+      })
+    }
+    for (const run of notificationPanelState.assistantVisibleMissedRuns) {
+      entries.push({
+        kind: 'missed',
+        id: `missed:${run.id}`,
+        at: run.dueAt,
+        routineId: run.routineId,
+        run
+      })
+    }
+    for (const run of notificationPanelState.assistantVisibleBackgroundRuns) {
+      entries.push({
+        kind: 'background',
+        id: `background:${run.runThreadId}`,
+        at: run.settledAt ?? run.startedAt,
+        routineId: run.routineId,
+        run
+      })
+    }
+    return entries
+  })
+
+  /**
+   * The Assistants tab folds per routine: one section per routine (plus one for
+   * activity owned by no routine), newest update first inside each section and
+   * across them, so a routine that just updated rises to the top of the list.
+   */
+  const assistantSections = $derived(
+    groupActivityByRoutine(assistantActivity, routineNameById, { key: UNGROUPED_MISSED_RUNS })
   )
 
-  // Unattended runs get their own routine grouping: one group per owning
-  // routine, plus a single group for routine-less tasks, mirroring missed runs.
-  const backgroundGroups = $derived(
-    groupBackgroundRunsByRoutine(assistantRoutines.recentBackgroundRuns, routineNameById)
+  // Sections the user folded shut, keyed by routine (or the routine-less
+  // bucket). Open is the default, so a fresh routine stays visible until folded.
+  const collapsedAssistantSections = new SvelteSet<string>()
+
+  function toggleAssistantSection(key: string): void {
+    if (collapsedAssistantSections.has(key)) collapsedAssistantSections.delete(key)
+    else collapsedAssistantSections.add(key)
+  }
+
+  // The assistants tab's routines/tasks narrowing, behind the filter button at
+  // the end of the sub-filter row.
+  const assistantSubjectOptions: Array<{
+    id: NotificationAssistantSubject
+    label: string
+    hint: string
+  }> = [
+    { id: 'all', label: 'Routines and tasks', hint: 'Everything the assistant ran' },
+    { id: 'routine', label: 'Routines only', hint: 'Runs owned by a scheduled routine' },
+    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no routine' }
+  ]
+
+  const assistantSubjectLabel = $derived(
+    assistantSubjectOptions.find((option) => option.id === notificationPanelState.assistantSubject)
+      ?.label ?? 'Routines and tasks'
   )
+
+  /** Whether any assistant activity exists before either filter narrows it. */
+  const assistantHasActivity = $derived(
+    notificationPanelState.assistantNotifications.length > 0 ||
+      assistantRoutines.missedRuns.length > 0 ||
+      assistantRoutines.backgroundRuns.length > 0
+  )
+
+  /** Whether the active filters hide everything there is to show. */
+  const assistantFilteredEmpty = $derived(assistantHasActivity && assistantSections.length === 0)
+
+  function resetAssistantFilters(): void {
+    notificationPanelState.setSubFilter('all')
+    notificationPanelState.setAssistantSubject('all')
+  }
 
   /**
    * The task a run row reports for, resolved from the loaded thread list. A
@@ -200,12 +318,23 @@
     return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
   }
 
+  /**
+   * Acknowledge one notice: retire it, and retire the unattended run it stands
+   * for when a failure left both a notice and a ledger entry for one run. The
+   * panel draws those two as a single row, so both leave together.
+   */
+  function acknowledgeNotification(n: InAppNotification): void {
+    notificationPanelState.dismiss(n.id)
+    const run = notificationPanelState.assistantRunPairedWithNotice(n)
+    if (run) void dismissBackgroundRun(run.runThreadId)
+  }
+
   async function navigateToNotification(n: InAppNotification): Promise<void> {
     busyId = n.id
     try {
       if (onOpenThread) {
         await onOpenThread(n.projectId, n.threadId, n.temporaryChatId)
-        notificationPanelState.dismiss(n.id)
+        acknowledgeNotification(n)
         return
       }
       const [project, thread] = await Promise.all([
@@ -216,7 +345,7 @@
       const openDesktopThread = workspaceState.openThreadFromNotification
       if (!openDesktopThread) return
       await openDesktopThread(thread, project, n.temporaryChatId)
-      notificationPanelState.dismiss(n.id)
+      acknowledgeNotification(n)
     } catch {
       // Thread or project may have been deleted
     } finally {
@@ -268,6 +397,15 @@
     }
   }
 
+  /**
+   * Open an unattended run and acknowledge it: the row leaves the panel the
+   * moment its thread opens, exactly as any other thread's notice does.
+   */
+  async function openBackgroundRun(run: BackgroundRun): Promise<void> {
+    await openMissedRun(run.runThreadId)
+    await dismissBackgroundRun(run.runThreadId)
+  }
+
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
@@ -293,7 +431,7 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message)
+      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message, null)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
@@ -314,7 +452,7 @@
 
   async function copyNotificationError(n: InAppNotification): Promise<void> {
     try {
-      await copyText(notificationErrorText(n))
+      await copyText(notificationErrorText(n), null)
       copiedId = n.id
       window.setTimeout(() => {
         if (copiedId === n.id) copiedId = null
@@ -330,12 +468,26 @@
     return `color-mix(in srgb, ${notificationPanelState.accentColor(n)} 40%, transparent)`
   }
 
+  /**
+   * The line under an entry's title.
+   *
+   * An assistant completion states its outcome: the reader is on the Assistants
+   * tab, the title is already the routine or task name, and the payload's body
+   * repeated that name ("Shower News finished."). Entries the durable inbox
+   * restored from an older session still carry that repetition, so the outcome
+   * is derived here rather than trusted from the stored body.
+   */
+  function displayBody(n: InAppNotification): string {
+    if (notificationPanelState.isAssistant(n) && n.kind === 'completed') return 'Run completed'
+    return n.body
+  }
+
   function kindLabel(kind: InAppNotification['kind']): string {
     switch (kind) {
       case 'completed':
         return 'Project complete'
       case 'chat-completed':
-        return 'Chat response available'
+        return 'Temporary chat response'
       case 'attention':
         return 'Needs attention'
       case 'spec':
@@ -351,18 +503,6 @@
 
   function appErrorLabel(kind: AppErrorEntry['kind']): string {
     return kind === 'error' ? 'Error' : 'Warning'
-  }
-
-  function formatTime(ts: number): string {
-    const diff = Date.now() - ts
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 60) return 'just now'
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
   }
 </script>
 
@@ -404,7 +544,7 @@
     role="button"
     tabindex="0"
     aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
-    title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
+    title={`${n.title}${displayBody(n) ? `   ${displayBody(n)}` : ''}`}
     onclick={() => void navigateToNotification(n)}
     onkeydown={(e: KeyboardEvent) => {
       // Ignore keys that belong to a nested control (the stack-trace
@@ -422,33 +562,41 @@
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
-        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(n.timestamp)}</span>
       </div>
-      <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
-        {#if n.source === 'chat'}
-          <MessageSquare size={10} class="shrink-0" />
-          <span>Chat</span>
-        {:else}
-          <span
-            class="h-1.5 w-1.5 shrink-0 rounded-full"
-            style="background: {n.projectColor ?? 'var(--color-border)'}"
-            role="presentation"
-          ></span>
-          <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span>
-          {#if n.source === 'temporary-chat'}
-            <span class="shrink-0">·</span>
-            <MessageCircleDashed
-              size={10}
-              class="shrink-0 text-info"
-              title="Temporary chat"
-              aria-hidden="true"
-            />
+      <!--
+        An assistant notice drops the source line: the reader is already on the
+        Assistants tab, so naming the assistant space under every row said
+        nothing, and the row's own title plus its outcome line carry the meaning.
+      -->
+      {#if !notificationPanelState.isAssistant(n)}
+        <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
+          {#if n.source === 'chat'}
+            <MessageSquare size={10} class="shrink-0" />
+            <span>Chat</span>
+          {:else}
+            <span
+              class="h-1.5 w-1.5 shrink-0 rounded-full"
+              style="background: {n.projectColor ?? 'var(--color-border)'}"
+              role="presentation"
+            ></span>
+            <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span
+            >
+            {#if n.source === 'temporary-chat'}
+              <span class="shrink-0">·</span>
+              <MessageCircleDashed
+                size={10}
+                class="shrink-0 text-temporary-chat"
+                title="Temporary chat"
+                aria-hidden="true"
+              />
+            {/if}
           {/if}
-        {/if}
-      </div>
-      {#if n.body}
+        </div>
+      {/if}
+      {#if displayBody(n)}
         <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
-          {n.body}
+          {displayBody(n)}
         </p>
       {/if}
       {#if n.kind === 'error' && n.errorDetail && hasUsefulDetails(errorHeadline(n.body), n.errorDetail)}
@@ -483,6 +631,115 @@
     >
       <X size={11} />
     </button>
+  </div>
+{/snippet}
+
+{#snippet missedRunRow(run: MissedRun)}
+  {@const active = busyId === run.id}
+  <div
+    class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 {active
+      ? 'opacity-60 pointer-events-none'
+      : ''}"
+    style="border-color: var(--color-missed)"
+  >
+    <div class="flex w-2 shrink-0 pt-1">
+      <StatusBadge tone="missed" title="Missed run" />
+    </div>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2">
+        <span class="truncate text-[0.6875rem] font-medium text-foreground"
+          >{missedRunTitle(run)}</span
+        >
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(run.dueAt)}</span>
+      </div>
+      <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
+        {missedRunReasonText(run.reason)}
+      </p>
+    </div>
+    <div class="flex shrink-0 items-center gap-1">
+      <button
+        class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
+        aria-label="Dismiss missed run"
+        title="Dismiss"
+        onclick={() => void dismissMissedRun(run.id)}
+      >
+        Dismiss
+      </button>
+      <button
+        class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+        aria-label="Run missed task now"
+        title="Run now"
+        onclick={() => void runMissedRunNow(run.id)}
+      >
+        <RotateCcw size={11} strokeWidth={1.8} />
+        Run now
+      </button>
+      <button
+        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        aria-label="Open task"
+        title="Open task"
+        onclick={() => void openMissedRun(run.threadId)}
+      >
+        <Bot size={11} />
+      </button>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet backgroundRunRow(run: BackgroundRun)}
+  {@const active = busyId === run.runThreadId}
+  <div
+    class="group flex items-stretch border-l-2 bg-surface transition-colors hover:bg-elevated {active
+      ? 'pointer-events-none opacity-60'
+      : ''}"
+    style="border-left-color: {STATUS_TONE_COLORS[backgroundRunTone(run.outcome)]}"
+  >
+    <button
+      type="button"
+      class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
+      title="Open this run"
+      aria-label="Open unattended run for {backgroundRunTitle(run)}"
+      onclick={() => void openBackgroundRun(run)}
+    >
+      <div class="flex w-2 shrink-0 pt-1">
+        <StatusBadge
+          tone={backgroundRunTone(run.outcome)}
+          title={backgroundRunOutcomeLabel(run.outcome)}
+        />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="truncate text-[0.6875rem] font-medium text-foreground"
+            >{backgroundRunTitle(run)}</span
+          >
+          <span class="shrink-0 text-[0.625rem] text-dimmed"
+            >{formatCompactAge(run.settledAt ?? run.startedAt)}</span
+          >
+        </div>
+        <p class="mt-0.5 text-[0.625rem] text-muted">
+          {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(run.reason)}
+        </p>
+        {#if run.outcome === 'failed' && run.errorSummary}
+          <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">{run.errorSummary}</p>
+        {/if}
+        {#if run.autoAnswered > 0}
+          <p class="mt-0.5 text-[0.625rem] text-dimmed">
+            {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered automatically
+          </p>
+        {/if}
+      </div>
+    </button>
+    <div class="flex shrink-0 items-start px-1.5 pt-2">
+      <button
+        type="button"
+        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
+        title="Dismiss"
+        onclick={() => void dismissBackgroundRun(run.runThreadId)}
+      >
+        <X size={11} />
+      </button>
+    </div>
   </div>
 {/snippet}
 
@@ -546,6 +803,18 @@
           {/if}
         </button>
       {/each}
+      {#if notificationPanelState.topTab === 'assistants'}
+        <div class="ml-auto">
+          <NotificationFilterMenu
+            value={notificationPanelState.assistantSubject}
+            options={assistantSubjectOptions}
+            onValueChange={(next) => notificationPanelState.setAssistantSubject(next)}
+            label="Filter assistant notifications by routines or tasks"
+            current={assistantSubjectLabel}
+            narrowed={notificationPanelState.assistantSubject !== 'all'}
+          />
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -585,7 +854,7 @@
                     {appErrorLabel(e.kind)}
                   </span>
                   <span class="shrink-0 text-[0.625rem] text-dimmed">
-                    {formatTime(e.timestamp)}
+                    {formatCompactAge(e.timestamp)}
                     {#if e.count > 1}
                       <span class="text-dimmed">· ×{e.count}</span>
                     {/if}
@@ -635,165 +904,67 @@
         </div>
       {/if}
     {:else if showingAssistants}
-      {#if notificationPanelState.assistantNotifications.length === 0 && assistantRoutines.missedRuns.length === 0 && assistantRoutines.backgroundRuns.length === 0}
+      {#if !assistantHasActivity}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
           <Bot size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No assistant activity</p>
         </div>
+      {:else if assistantFilteredEmpty}
+        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+          <Bell size={20} class="text-dimmed" />
+          <p class="text-xs text-muted">Nothing matches this filter</p>
+          <button
+            class="rounded px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Clear the assistant filters"
+            aria-label="Clear the assistant filters"
+            onclick={resetAssistantFilters}
+          >
+            Show all
+          </button>
+        </div>
       {:else}
-        {#if notificationPanelState.assistantNotifications.length > 0}
-          <div class="space-y-px p-1.5">
-            {#each notificationPanelState.assistantNotifications as n (n.id)}
-              {@render notificationCard(n)}
-            {/each}
-          </div>
-        {/if}
-        {#each missedGroups as group (group.key)}
-          <div class="pb-1.5">
-            <div
-              class="px-3 pt-2 pb-1 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
-            >
-              {group.label}
-            </div>
-            <div class="space-y-px" aria-label={`${group.label} missed runs`}>
-              {#each group.runs as run (run.id)}
-                {@const active = busyId === run.id}
-                <div
-                  class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 {active
-                    ? 'opacity-60 pointer-events-none'
-                    : ''}"
-                  style="border-color: var(--color-missed)"
+        <div class="space-y-1 p-1.5">
+          {#each assistantSections as section (section.key)}
+            {@const collapsed = collapsedAssistantSections.has(section.key)}
+            <div class="overflow-hidden rounded-md border border-border bg-surface">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                aria-expanded={!collapsed}
+                aria-label="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
+                title="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
+                onclick={() => toggleAssistantSection(section.key)}
+              >
+                <ChevronDown
+                  size={12}
+                  class="shrink-0 text-dimmed transition-transform {collapsed ? '-rotate-90' : ''}"
+                />
+                <span class="truncate text-[0.6875rem] font-semibold text-foreground"
+                  >{section.label}</span
                 >
-                  <div class="flex w-2 shrink-0 pt-1">
-                    <StatusBadge tone="missed" title="Missed run" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                      <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                        >{missedRunTitle(run)}</span
-                      >
-                      <span class="shrink-0 text-[0.625rem] text-dimmed"
-                        >{formatTime(run.dueAt)}</span
-                      >
-                    </div>
-                    <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
-                      {missedRunReasonText(run.reason)}
-                    </p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <button
-                      class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
-                      aria-label="Dismiss missed run"
-                      title="Dismiss"
-                      onclick={() => void dismissMissedRun(run.id)}
-                    >
-                      Dismiss
-                    </button>
-                    <button
-                      class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      aria-label="Run missed task now"
-                      title="Run now"
-                      onclick={() => void runMissedRunNow(run.id)}
-                    >
-                      <RotateCcw size={11} strokeWidth={1.8} />
-                      Run now
-                    </button>
-                    <button
-                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                      aria-label="Open task"
-                      title="Open task"
-                      onclick={() => void openMissedRun(run.threadId)}
-                    >
-                      <Bot size={11} />
-                    </button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/each}
-
-        {#if backgroundGroups.length > 0}
-          <div class="border-t border-border pt-1.5">
-            <div
-              class="px-3 pt-2 pb-1 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
-            >
-              While you were away
-            </div>
-            {#each backgroundGroups as group (group.key)}
-              <div class="pb-1.5">
-                {#if backgroundGroups.length > 1}
-                  <div class="px-3 pt-1 pb-0.5 text-[0.5625rem] text-dimmed">{group.label}</div>
-                {/if}
-                <div class="space-y-px" aria-label={`${group.label} unattended runs`}>
-                  {#each group.runs as run (run.runThreadId)}
-                    {@const active = busyId === run.runThreadId}
-                    <div
-                      class="group flex items-stretch border-l-2 bg-surface transition-colors hover:bg-elevated {active
-                        ? 'pointer-events-none opacity-60'
-                        : ''}"
-                      style="border-left-color: {STATUS_TONE_COLORS[
-                        backgroundRunTone(run.outcome)
-                      ]}"
-                    >
-                      <button
-                        type="button"
-                        class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
-                        title="Open this run"
-                        aria-label="Open unattended run for {backgroundRunTitle(run)}"
-                        onclick={() => void openMissedRun(run.runThreadId)}
-                      >
-                        <div class="flex w-2 shrink-0 pt-1">
-                          <StatusBadge
-                            tone={backgroundRunTone(run.outcome)}
-                            title={backgroundRunOutcomeLabel(run.outcome)}
-                          />
-                        </div>
-                        <div class="min-w-0 flex-1">
-                          <div class="flex items-center gap-2">
-                            <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                              >{backgroundRunTitle(run)}</span
-                            >
-                            <span class="shrink-0 text-[0.625rem] text-dimmed"
-                              >{formatTime(run.settledAt ?? run.startedAt)}</span
-                            >
-                          </div>
-                          <p class="mt-0.5 text-[0.625rem] text-muted">
-                            {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(
-                              run.reason
-                            )}
-                          </p>
-                          {#if run.outcome === 'failed' && run.errorSummary}
-                            <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">
-                              {run.errorSummary}
-                            </p>
-                          {/if}
-                          {#if run.autoAnswered > 0}
-                            <p class="mt-0.5 text-[0.625rem] text-dimmed">
-                              {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered
-                              automatically
-                            </p>
-                          {/if}
-                        </div>
-                      </button>
-                      <div class="flex shrink-0 items-start px-1.5 pt-2">
-                        <button
-                          type="button"
-                          class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                          aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
-                          title="Dismiss"
-                          onclick={() => void dismissBackgroundRun(run.runThreadId)}
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
-                    </div>
+                <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed"
+                  >{section.items.length}</span
+                >
+                <span class="shrink-0 text-[0.625rem] text-dimmed"
+                  >{formatCompactAge(section.latestAt)}</span
+                >
+              </button>
+              {#if !collapsed}
+                <div class="space-y-px border-t border-border pt-px">
+                  {#each section.items as item (item.id)}
+                    {#if item.kind === 'notice'}
+                      {@render notificationCard(item.notification)}
+                    {:else if item.kind === 'missed'}
+                      {@render missedRunRow(item.run)}
+                    {:else}
+                      {@render backgroundRunRow(item.run)}
+                    {/if}
                   {/each}
                 </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
     {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">

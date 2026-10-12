@@ -1,8 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
-
-  /** Semantic tone that maps to a design token (no raw colors). */
-  export type StatusTone = 'success' | 'danger' | 'warning' | 'neutral' | 'info'
+  import type { StatusTone } from './status-tone'
 
   interface Props {
     /** Semantic tone driving the token-based pill colour. */

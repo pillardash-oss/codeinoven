@@ -215,6 +215,47 @@ export class ModelRankingSnapshotRepo {
     )
   }
 
+  /**
+   * Mark the queued conversation window that answers `anchorMessageId` as
+   * undone: the user reverted this turn's file changes, so the window is a
+   * rejection the rubric cannot improve on.
+   *
+   * The drain records a 0 for it without spending a judge call (see
+   * `drainRankingQueue`), which is why only the flag is written here. A row
+   * already claimed by an in-flight judge is reset to `pending` with its claim
+   * cleared, so the stale result can no longer apply and the window is scored
+   * 0 on its next pass instead. Returns how many rows were marked, so the
+   * caller can tell an undo that landed on a queued turn from one whose score
+   * already left the queue.
+   */
+  markUndoneForAnchor(threadId: string, anchorMessageId: string, nowMs: number): number {
+    return this.db
+      .prepare(
+        `UPDATE model_ranking_snapshots
+         SET undone_at_ms = ?,
+             status = CASE WHEN status = 'processing' THEN 'pending' ELSE status END,
+             claim_token = CASE WHEN status = 'processing' THEN NULL ELSE claim_token END
+         WHERE thread_id = ? AND anchor_message_id = ? AND status IN ('pending','processing')`
+      )
+      .run(nowMs, threadId, anchorMessageId).changes
+  }
+
+  /**
+   * Undo a previous `markUndoneForAnchor` when the user redoes the changes, so
+   * the restored model work is graded normally again. Only a still-queued
+   * window can be cleared; a window already scored and deleted keeps its 0.
+   */
+  clearUndoneForAnchor(threadId: string, anchorMessageId: string): number {
+    return this.db
+      .prepare(
+        `UPDATE model_ranking_snapshots
+         SET undone_at_ms = NULL
+         WHERE thread_id = ? AND anchor_message_id = ? AND undone_at_ms IS NOT NULL
+           AND status IN ('pending','processing')`
+      )
+      .run(threadId, anchorMessageId).changes
+  }
+
   /** Close every open snapshot of the given threads for immediate grading. */
   closeForThreads(threadIds: string[], nowMs: number): void {
     if (threadIds.length === 0) return

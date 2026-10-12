@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS projects (
   path               TEXT NOT NULL DEFAULT '',
   source             TEXT NOT NULL DEFAULT 'local' CHECK(source IN ('local','ssh')),
   host               TEXT,
+  oven_id            TEXT,
   provider_id        TEXT NOT NULL DEFAULT '',
   workflow_id        TEXT NOT NULL DEFAULT 'default',
   thread_limit       INTEGER NOT NULL DEFAULT 70,
@@ -376,6 +377,10 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
  * only its contribution to `model_rankings` remains (agreed product decision,
  * not data loss). Timing is captured as started_at/ended_at timestamps; no
  * pre-rounded duration column is persisted.
+ *
+ * `undone_at_ms` records the user undoing the window's file changes: the turn
+ * was rejected, so the drain records a 0 without spending a judge call. A redo
+ * clears it, restoring a normal grade   see `markTurnRankingUndone`.
  */
 export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
@@ -400,6 +405,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   last_attempt_at_ms  INTEGER,
   claim_token         TEXT,
+  undone_at_ms        INTEGER,
   created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
@@ -1061,6 +1067,81 @@ CREATE TABLE IF NOT EXISTS thread_experts (
   updated_at INTEGER NOT NULL
 );`
 
+/**
+ * A design's or composition's change history, one row per point in time.
+ *
+ * A design is iterated, and the app keeps the iterations so the user can walk back
+ * and forward through them the way Git lets them walk back through a project's
+ * commits. The row holds the snapshot's file map as JSON   paths to the hash, size
+ * and binary flag of each file's content   while the content itself lives in the
+ * project's design blob store under that hash, so an unchanged file is stored once
+ * no matter how many revisions hold it.
+ *
+ * The history is per folder rather than per thread: a folder is what the user
+ * iterates on, so two threads that worked on the same design share one timeline.
+ *
+ * `sequence` orders the timeline and is contiguous from the oldest kept revision;
+ * `parent_id` and `digest` let a capture tell an unchanged folder from a new
+ * iteration. `files` is a snapshot, never a diff, because restoring content has to
+ * be exact even after the revisions around it are pruned. `changed_paths` is the
+ * diff's path list, kept beside the count so a timeline row can name what moved and
+ * a page can be picked out of it without re-reading every snapshot.
+ */
+const DESIGN_REVISIONS_SQL = `
+CREATE TABLE IF NOT EXISTS design_revisions (
+  id              TEXT PRIMARY KEY NOT NULL,
+  project_id      TEXT NOT NULL,
+  directory       TEXT NOT NULL,
+  sequence        INTEGER NOT NULL,
+  parent_id       TEXT,
+  cause           TEXT NOT NULL DEFAULT 'user' CHECK(cause IN ('initial','agent','user')),
+  digest          TEXT NOT NULL,
+  files           TEXT NOT NULL,
+  skipped_files   TEXT,
+  unavailable_files TEXT,
+  changed_files   INTEGER NOT NULL DEFAULT 0,
+  changed_paths   TEXT,
+  label           TEXT,
+  checkpoint_entry TEXT,
+  file_count      INTEGER NOT NULL DEFAULT 0,
+  total_bytes     INTEGER NOT NULL DEFAULT 0,
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_design_revisions_folder
+  ON design_revisions(project_id, directory, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_design_revisions_digest
+  ON design_revisions(project_id, directory, digest);`
+
+/**
+ * Where each design folder currently sits in its own history.
+ *
+ * The cursor is the point the folder is checked out at: Undo moves it back a step,
+ * Redo forward one, and a fresh edit made while it sits behind the tip cuts the
+ * steps ahead of it away, the way editing after an undo does anywhere else. It is
+ * stored beside the history rather than derived, because the folder on disk is the
+ * only other place it could be read from and a capture would then mistake a restored
+ * folder for a new edit.
+ */
+const DESIGN_HISTORY_HEADS_SQL = `
+CREATE TABLE IF NOT EXISTS design_history_page_heads (
+  project_id TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  path TEXT NOT NULL,
+  revision_id TEXT NOT NULL REFERENCES design_revisions(id) ON DELETE CASCADE,
+  PRIMARY KEY (project_id, directory, path)
+);
+CREATE INDEX IF NOT EXISTS idx_design_history_page_heads_revision ON design_history_page_heads(revision_id);
+
+CREATE TABLE IF NOT EXISTS design_history_heads (
+  project_id TEXT NOT NULL,
+  directory  TEXT NOT NULL,
+  cursor_id  TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, directory)
+);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -1082,5 +1163,7 @@ export const DATABASE_SCHEMA_SQL = [
   STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
   THREAD_EXPERTS_SQL,
+  DESIGN_REVISIONS_SQL,
+  DESIGN_HISTORY_HEADS_SQL,
   ROUTINES_SQL
 ].join('\n')

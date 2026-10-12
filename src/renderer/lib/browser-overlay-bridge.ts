@@ -104,8 +104,7 @@ function memoryProposalProps(
  * its own props instead, with the one button it shows. Any future component
  * toast has nothing the overlay can draw, so it is dropped here rather than
  * drawn empty: it is the one case where a toast would be invisible over a page,
- * and it is visible in the app window in every layout that does not cover the
- * stack's corner.
+ * and must receive a serializable projection before a caller can use it.
  */
 export function projectToast(entry: ToastT): ToastOverlayToast | null {
   const memory = memoryProposalProps(entry)
@@ -140,14 +139,15 @@ export function projectToast(entry: ToastT): ToastOverlayToast | null {
 /** The whole stack, as the overlay receives it. */
 export function projectStack(
   toasts: readonly ToastT[],
-  theme: 'light' | 'dark'
+  theme: 'light' | 'dark',
+  typography?: ToastOverlayStack['typography']
 ): ToastOverlayStack {
   const projected: ToastOverlayToast[] = []
   for (const entry of toasts) {
     const card = projectToast(entry)
     if (card) projected.push(card)
   }
-  return { toasts: projected, theme }
+  return { toasts: projected, theme, typography }
 }
 
 /**

@@ -11,6 +11,7 @@ import type {
   Thread,
   UpdateRoutineInput
 } from '../types'
+import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
 
 /**
@@ -36,8 +37,8 @@ export const invokeAssistantContract = {
   'routine:reorder': {} as Contract<[orderedIds: string[]], Routine[]>,
   /** Pin or unpin a routine so it sorts above the rest. */
   'routine:setPinned': {} as Contract<[routineId: string, pinned: boolean], Routine>,
-  /** Store a custom icon image for a routine from a local file path. */
-  'routine:setIcon': {} as Contract<[routineId: string, sourcePath: string], Routine>,
+  /** Store a custom icon image for a routine from the shared icon pipeline. */
+  'routine:setIcon': {} as Contract<[routineId: string, image: CustomIconImage], Routine>,
   /** Remove a routine's custom icon image. */
   'routine:clearIcon': {} as Contract<[routineId: string], Routine>,
   /** Read a routine's custom icon as a data URL, or null when it has none. */

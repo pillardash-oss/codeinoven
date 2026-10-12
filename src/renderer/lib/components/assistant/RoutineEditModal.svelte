@@ -2,6 +2,7 @@
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { CustomIcon, Routine } from '$shared/types'
@@ -33,8 +34,8 @@
   let iconType = $state<string | undefined>(undefined)
   let customSvg = $state<string | undefined>(undefined)
   let customSvgSelected = $state(false)
-  /** Newly picked image, previewed locally until Save persists it. */
-  let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>(undefined)
+  /** Newly picked icon, previewed locally until Save persists it. */
+  let pendingIcon = $state<OptimizedCustomIcon | undefined>(undefined)
   let busy = $state(false)
   let error = $state<string | null>(null)
 
@@ -60,13 +61,16 @@
   )
 
   async function uploadImage(): Promise<void> {
-    const imagePath = await invoke('dialog:pickImage')
-    if (!imagePath) return
-    // Read the file for local preview only; nothing is persisted until Save.
-    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
-    if (!dataUrl) return
-    customSvgSelected = false
-    pendingIcon = { path: imagePath, dataUrl }
+    try {
+      // The shared pipeline crops, scales and encodes the pick before anything
+      // is held, so the preview and the saved icon are the same finished image.
+      const picked = await pickCustomIconImage()
+      if (!picked) return
+      customSvgSelected = false
+      pendingIcon = picked
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : 'Could not use that image'
+    }
   }
 
   function resetAppearance(): void {
@@ -99,7 +103,7 @@
         // takes precedence over the SVG icon in the preview, but the colour and
         // icon type still save so clearing the image later restores them, and a
         // colour picked in the same session is never dropped.
-        await assistantRoutines.setRoutineIcon(target.id, pendingIcon.path)
+        await assistantRoutines.setRoutineIcon(target.id, pendingIcon.image)
         saved = await assistantRoutines.updateRoutine(target.id, appearance)
       } else {
         const hadCustomIcon = Boolean(target.icon)

@@ -14,6 +14,7 @@ import {
   Router,
   Server,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   UsersRound,
@@ -214,6 +215,27 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
     keywords: ['microphone', 'voice', 'asr', 'tts', 'recording', 'models', 'import', 'cleanup'],
     icon: Volume2
+  },
+  {
+    id: 'search',
+    section: 'search',
+    title: 'Search',
+    description:
+      'Intent search: embed a local EmbeddingGemma model, index your threads, and find them by meaning.',
+    keywords: [
+      'semantic',
+      'intent',
+      'embedding',
+      'gemma',
+      'embeddinggemma',
+      'vector',
+      'hybrid',
+      'threads',
+      'index',
+      'model',
+      'import'
+    ],
+    icon: Search
   },
   {
     id: 'keymap',
@@ -469,5 +491,23 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Release notes for the latest published build.',
     keywords: ['release notes', 'what’s new', 'changes'],
     icon: Info
+  },
+  {
+    id: 'about-community',
+    section: 'about',
+    blockId: 'about-community',
+    title: 'Community',
+    description: 'Report a bug, send feedback, or contribute on GitHub.',
+    keywords: ['feedback', 'bug report', 'contribute', 'github', 'issue'],
+    icon: UsersRound
+  },
+  {
+    id: 'about-privacy',
+    section: 'about',
+    blockId: 'about-privacy',
+    title: 'Share anonymous daily active ping',
+    description: 'Share one anonymous daily active ping.',
+    keywords: ['privacy', 'analytics', 'telemetry', 'posthog', 'usage statistics'],
+    icon: ShieldCheck
   }
 ]

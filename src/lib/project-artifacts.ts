@@ -3,7 +3,7 @@ import { readFile } from 'fs/promises'
 import type { Database } from '../main/database/database'
 import { ThreadRepo } from '../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../main/database/repositories/project-repo'
-import { CHATS_CWD_DIR, type Project } from './types'
+import { ASSISTANT_CWD_DIR, BROWSER_CWD_DIR, CHATS_CWD_DIR, type Project } from './types'
 import { atomicWrite, ensureDir } from './utils'
 import { APP_NAME } from './brand'
 import { CIO_CLEANUP_SPECS_FOLDER, CIO_SCRATCH_DIRECTORY } from './cio-cleanup'
@@ -17,22 +17,12 @@ export const PROJECT_SPECS_DIRECTORY = CIO_CLEANUP_SPECS_FOLDER
  *  standalone (inbox) chats, so a chat session never runs against a real
  *  project folder. Each chat owns `chats-cwd/<threadId>/`: the one directory
  *  it runs in, mounts in its file tree, and keeps its own files in. */
-export { CHATS_CWD_DIR }
+export { ASSISTANT_CWD_DIR, BROWSER_CWD_DIR, CHATS_CWD_DIR }
 
 /** Legacy per-chat artifact root that chat generated images were written to
  *  before each chat got its own `chats-cwd/<threadId>/` workspace. Kept
  *  readable so a chat started earlier still shows the images it produced. */
 export const LEGACY_CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
-
-/** App-storage root directory used as the neutral working directory for
- *  assistant-space routine tasks, so authoring a how-to never runs against a
- *  real project folder either. */
-export const ASSISTANT_CWD_DIR = 'assistant-cwd'
-
-/** App-storage root directory holding one workspace per browser tab's agent
- *  chat, so a conversation about a web page never runs against a real project
- *  folder and never shares a directory with another tab. */
-export const BROWSER_CWD_DIR = 'browser-cwd'
 
 /** Legacy inbox-chat generated-image root kept readable for older threads. */
 export const LEGACY_CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'

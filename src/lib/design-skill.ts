@@ -1,3 +1,4 @@
+import { authoredWorkCheckpointGuidance } from './design/checkpoint-guidance'
 import {
   expertDelegationGuidance,
   EXPERT_FALLBACK_GUIDANCE,
@@ -115,6 +116,8 @@ export function designCapabilityDocs(
   return `# Design studio
 
 Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
+
+${authoredWorkCheckpointGuidance('design')}
 
 ## Starting from nothing
 

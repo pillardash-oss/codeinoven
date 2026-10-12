@@ -264,12 +264,27 @@ export function browserTabTitleForUrl(url: string): string {
   }
 }
 
-/** Whether an idle tab is past the configured hibernation window. A pinned tab
- *  never hibernates: it survives the sweep the way a pinned thread survives
- *  cleanup. */
+/**
+ * Whether a tab's page may be released while its row stays in the strip.
+ *
+ * The same three refusals the strip has always made, in one place: a tab already
+ * released has nothing to release, a pinned tab never hibernates (it survives
+ * the sweep the way a pinned thread survives cleanup), and a tab with no address
+ * has no page at all   its empty state is the address field. `activeTabId` names
+ * the tab the surface has on screen, whose page is what the user is looking at
+ * and therefore the one page that is never taken away.
+ */
+export function canHibernateTab(
+  tab: Pick<GlobalBrowserTab, 'hibernated' | 'pinned' | 'url' | 'id'>,
+  activeTabId: string | null
+): boolean {
+  if (tab.hibernated || tab.pinned || tab.url === '') return false
+  return tab.id !== activeTabId
+}
+
+/** Whether an idle tab is past the configured hibernation window. */
 export function isTabIdlePastWindow(tab: GlobalBrowserTab, now: number, windowMs: number): boolean {
-  if (tab.hibernated) return false
-  if (tab.pinned) return false
+  if (!canHibernateTab(tab, null)) return false
   return now - tab.lastUsedAt >= windowMs
 }
 

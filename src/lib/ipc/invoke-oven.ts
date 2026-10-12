@@ -2,6 +2,7 @@ import type {
   Oven,
   OvenState,
   OvenProbe,
+  OvenPeek,
   SaveOvenInput,
   OvenRun,
   OvenWorkspaceRequest,
@@ -45,7 +46,11 @@ export const invokeOvenContract = {
   'oven:setDefault': {} as Contract<[id: string], OvenState>,
   'oven:reorder': {} as Contract<[ids: string[]], OvenState>,
   'oven:install': {} as Contract<[id: string], OvenProbe>,
-  'oven:probe': {} as Contract<[id: string], OvenProbe>,
+  /** `refresh` forces the Oven to re-scan harness versions instead of
+   *  answering from its own short-lived cache; ordinary probes stay cheap. */
+  'oven:probe': {} as Contract<[id: string, refresh?: boolean], OvenProbe>,
+  /** The unified, cached check for one Oven: device, harnesses, and packages. */
+  'oven:peek': {} as Contract<[id: string, refresh?: boolean], OvenPeek>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
@@ -65,8 +70,12 @@ export const invokeOvenContract = {
   >,
   'oven:setup:cancel': {} as Contract<[id: string], OvenSetupOperation>,
   'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
-  'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
+  'oven:harness:inventory': {} as Contract<
+    [id: string, refresh?: boolean],
+    OvenHarnessInventoryItem[]
+  >,
   'oven:timezone:sync': {} as Contract<[id: string], OvenTimezoneSyncResult>,
+  'oven:harness:install': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:uninstall': {} as Contract<
     [id: string, harnessId: string],
@@ -74,6 +83,7 @@ export const invokeOvenContract = {
   >,
   'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
   'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
+  'oven:agent:test': {} as Contract<[input: OvenAgentRegistrationInput], OvenConnectionStatus>,
   'oven:agent:reachable': {} as Contract<[code: string], OvenEndpoint | null>,
   'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

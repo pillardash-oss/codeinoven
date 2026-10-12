@@ -129,7 +129,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -481,6 +481,11 @@
   // svelte-ignore state_referenced_locally
   const mountedThread = threadProp
   let thread = $derived(threadProp ?? mountedThread)
+  let citationThreadContext = $derived({
+    projectId: thread.projectId,
+    threadId: thread.id,
+    scopeBucketId: thread.scopeBucketId
+  })
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -1675,6 +1680,33 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven workstation control session   the slash spelling of the
+    // @cio-hey composer tag. Selecting sends the tag (plus any typed
+    // arguments) through the normal send path, so the main-process
+    // orchestration contract owns the tooling that goes with it.
+    actions.push({
+      id: 'command:cio-orchestrate',
+      title: '/cio-hey',
+      description:
+        'Start a workstation control turn: run work on a machine, model and account, or drive the app itself',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: [
+        'hey',
+        'cio',
+        'orchestrate',
+        'workstation',
+        'oven',
+        'machine',
+        'model',
+        'app',
+        'panel',
+        'rail'
+      ],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -1735,6 +1767,10 @@
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
+    // The harness's own session-cumulative spend (pi reports it on every usage
+    // refresh). Preferred over the per-message sum when present, because the
+    // loaded transcript can be a page while this covers the whole session.
+    let latestSessionCostUsd: number | undefined
 
     const emptyTokens: NonNullable<AgentContextUsage['tokens']> = {
       input: 0,
@@ -1771,6 +1807,7 @@
         0
       )
       costUsd += message.cost ?? stepCost
+      if (message.sessionCostUsd !== undefined) latestSessionCostUsd = message.sessionCostUsd
       // Prefer the message-level (whole-turn) usage the harness reports; while
       // a turn is still streaming, sum every completed step so the indicator
       // grows monotonically instead of bouncing between per-step token counts
@@ -1834,16 +1871,23 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
-    const contextEstimated = latestReportedContextUsed === undefined
+    // Only the explicit composed-request estimate is an estimate. Falling back
+    // to the harness's own reported token total is a provider reading   the
+    // last request's prompt plus completion is the occupancy the provider
+    // actually processed   so it must never wear the "this harness does not
+    // report context telemetry" caveat while the turn is still running.
+    const contextEstimated =
+      latestReportedContextUsed === undefined && latestEstimatedContextUsed !== undefined
     const contextUsed =
       latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
+    const displayCostUsd = latestSessionCostUsd ?? costUsd
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
       latestCredits === undefined &&
-      costUsd <= 0
+      displayCostUsd <= 0
     ) {
       return undefined
     }
@@ -1854,7 +1898,7 @@
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
-      costUsd,
+      costUsd: displayCostUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
       rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
@@ -6043,6 +6087,52 @@
     threadMessages.setSessionId(projectId, id, readySessionId)
   }
 
+  /**
+   * Park a composer send in the thread's FIFO queue instead of dispatching it
+   * now: the idle dispatcher drains one message per idle turn.
+   *
+   * The queue, the persisted recovery snapshot and the dispatch path all key on
+   * `thread.projectId:thread.id`, so this is exactly the parking the primary
+   * surface uses   and it is why a controller-driven conversation backed by a
+   * real thread (a browser tab's assistant) can queue too.
+   */
+  function parkComposerSend(send: {
+    text: string
+    attachments: PromptAttachment[]
+    promptContext?: string
+    promptReferences: ResponseReferenceAnchor[]
+    projectReferences: PromptProjectReference[]
+    presentation?: UserMessagePresentation
+    taskReferences: PromptAssignmentTaskReference[]
+    startAfterThreads: StartAfterThreadReference[]
+  }): void {
+    queuedMessage = send.text
+    queuedAttachments = send.attachments
+    queuedPromptContext = send.promptContext
+    queuedPromptReferences = send.promptReferences
+    queuedProjectReferences = send.projectReferences
+    queuedPresentation = send.presentation
+    queuedTaskReferences = send.taskReferences
+    queuedStartAfterThreads = send.startAfterThreads
+    queuedHasContent = true
+    // Append to the thread's FIFO queue   a later queued message sends after
+    // earlier ones, one per idle turn. The in-memory mirror then follows the
+    // store head so the queue card always shows the next message to send.
+    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      text: send.text,
+      attachments: send.attachments,
+      promptContext: send.promptContext,
+      promptReferences: send.promptReferences,
+      projectReferences: send.projectReferences,
+      presentation: send.presentation,
+      taskReferences: send.taskReferences,
+      startAfterThreads: send.startAfterThreads
+    })
+    syncQueuedFromStore()
+    idleAttentionHandled = false
+    void handleIdleAttention()
+  }
+
   async function sendMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -6068,6 +6158,30 @@
       // change it   identical to the thread path, so mid-turn composer edits
       // never re-label the running trace.
       captureLiveWorkingSelection()
+      // A controller-driven conversation backed by a real thread (a browser
+      // tab's assistant) queues exactly like the primary surface: while the
+      // agent is busy a plain send parks behind the running turn instead of
+      // steering it, and a direct send still reaches the live turn. A temporary
+      // side chat owns no durable thread to park in, so it always dispatches
+      // straight through its controller.
+      if (controller.kind === 'thread') {
+        const dependencyThreads = startAfterThreads.filter(
+          (reference) => reference.id !== thread.id && reference.id.length > 0
+        )
+        if (dependencyThreads.length > 0 || (busy && !direct)) {
+          parkComposerSend({
+            text: normalizeComposerMessage(text, projectReferences),
+            attachments,
+            promptContext,
+            promptReferences,
+            projectReferences,
+            presentation,
+            taskReferences,
+            startAfterThreads: dependencyThreads
+          })
+          return
+        }
+      }
       const payload: SendPayload = {
         text,
         attachments,
@@ -6120,19 +6234,7 @@
     const pendingScopeSwitch =
       !hasController && scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
     if (dependencyThreads.length > 0 || (busy && !direct) || pendingScopeSwitch) {
-      queuedMessage = msg
-      queuedAttachments = attachments
-      queuedPromptContext = promptContext
-      queuedPromptReferences = promptReferences
-      queuedProjectReferences = projectReferences
-      queuedPresentation = presentation
-      queuedTaskReferences = taskReferences
-      queuedStartAfterThreads = dependencyThreads
-      queuedHasContent = true
-      // Append to the thread's FIFO queue   a later queued message sends after
-      // earlier ones, one per idle turn. The in-memory mirror then follows the
-      // store head so the queue card always shows the next message to send.
-      rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      parkComposerSend({
         text: msg,
         attachments,
         promptContext,
@@ -6142,9 +6244,6 @@
         taskReferences,
         startAfterThreads: dependencyThreads
       })
-      syncQueuedFromStore()
-      idleAttentionHandled = false
-      void handleIdleAttention()
       return
     }
 
@@ -6385,14 +6484,17 @@
 
     try {
       await invoke('agent:abort', projectId, id)
-      clearLocalTurn()
-      agentRuns.setIdle(projectId, id)
-      providerStatus = null
-      void refreshMessages()
-      void refreshCheckpoints()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
+    // The user's stop has to be visible even when the abort itself failed: a
+    // remote run that vanished mid-turn used to leave this stuck as working,
+    // because the failure skipped the local settle below.
+    clearLocalTurn()
+    agentRuns.setIdle(projectId, id)
+    providerStatus = null
+    void refreshMessages()
+    void refreshCheckpoints()
   }
 
   let showBankedResetConfirm = $state(false)
@@ -6456,6 +6558,15 @@
   function triggerCioVideoTurn(args: string): void {
     const request = args.trim()
     sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
+  }
+
+  /** Open a workstation control session   the slash spelling of the @cio-hey
+   *  composer tag. The main process owns the orchestration contract and the
+   *  tools that go with it, so this only has to send the tag and whatever the
+   *  user typed after it. */
+  function triggerCioOrchestrateTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-hey ${request}` : '@cio-hey', [])
   }
 
   /** Ask the agent to load and follow a skill by name. This is the route for
@@ -6769,6 +6880,10 @@
       triggerCioVideoTurn(args)
       return
     }
+    if (commandId === 'command:cio-orchestrate') {
+      triggerCioOrchestrateTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6887,6 +7002,7 @@
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
       action.id === 'command:cio-video' ||
+      action.id === 'command:cio-orchestrate' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')
@@ -10619,7 +10735,7 @@
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
-      await copyText(messageText(msg))
+      await copyText(messageText(msg), null)
       copiedMessageId = msg.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)
@@ -10955,7 +11071,7 @@
    *  understand it (and its options) before answering. The card already pauses
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
-  function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
+  function handleQuestionExplain(requestId: string, question: AgentQuestion): void {
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
@@ -10964,20 +11080,24 @@
       temporaryConversationContext(),
       settings,
       true,
-      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT
+      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT,
+      requestId
     )
   }
 
   /** Open a user-driven quick chat with the active agent question attached as
    *  its selection and the surrounding thread available as read-only context. */
-  function handleQuestionQuickChat(_requestId: string, question: AgentQuestion): void {
+  function handleQuestionQuickChat(requestId: string, question: AgentQuestion): void {
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
       'quick',
       formatQuestionForTemporaryChat(question),
       temporaryConversationContext(),
-      settings
+      settings,
+      true,
+      undefined,
+      requestId
     )
   }
 
@@ -11822,7 +11942,7 @@
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} />
+                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
                     <InlineImageFigure
                       url={part.url}
@@ -11951,6 +12071,7 @@
                         {#if explicitPresentation.body}
                           <MarkdownView
                             text={explicitPresentation.body}
+                            citationThread={citationThreadContext}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -11958,6 +12079,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          citationThread={citationThreadContext}
                           inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12299,6 +12421,7 @@
                           {:else}
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              citationThread={citationThreadContext}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />

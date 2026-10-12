@@ -1,3 +1,4 @@
+import { authoredWorkCheckpointGuidance } from './design/checkpoint-guidance'
 import {
   expertDelegationGuidance,
   EXPERT_FALLBACK_GUIDANCE,
@@ -69,6 +70,8 @@ export function videoCapabilityDocs(
   return `# Video studio
 
 Make a video as a small web project, then watch it in this app while the turn is still running. A title sequence, a product walkthrough, a captioned social cut, an explainer, an animated chart, a montage: anything that is a piece of motion rather than a page.
+
+${authoredWorkCheckpointGuidance('video')}
 
 ## Why it is a web project
 

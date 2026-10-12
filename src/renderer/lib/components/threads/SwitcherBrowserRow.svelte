@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Eye, Globe, Loader2 } from '@lucide/svelte'
+  import { Eye, Globe, Loader2, Volume2 } from '@lucide/svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -69,6 +69,16 @@
         title="Peek open on this tab"
         aria-label="Peek open on this tab"><Eye size={12} /></span
       >
+    {/if}
+    {#if runtime.audible && !runtime.muted}
+      <span
+        role="img"
+        class="flex shrink-0 items-center text-info"
+        title="Playing audio"
+        aria-label="Playing audio"
+      >
+        <Volume2 size={12} />
+      </span>
     {/if}
     {#if box}
       <span

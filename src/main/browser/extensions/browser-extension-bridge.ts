@@ -32,6 +32,10 @@
 import { WebContentsView, webContents, type Session } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import type {
+  BrowserExtensionNativeMessaging,
+  NativeMessagingDelivery
+} from './browser-native-messaging'
 import {
   parseUserScriptFileRequest,
   type UserScriptFileRequest,
@@ -172,6 +176,15 @@ export interface BrowserExtensionBridgeDeps {
    * compatibility preamble asks for the write here and waits for the answer.
    */
   materializeUserScripts?: (request: UserScriptFileRequest) => Promise<UserScriptFileResult>
+  /**
+   * The native messaging ports this extension holds.
+   *
+   * The worker cannot reach a host process, and Electron refuses every
+   * `connectNative` call, so the preamble asks for the port through the bridge and
+   * this is the app's half. Its lifetime is the bridge's: disposing the bridge
+   * closes every port.
+   */
+  nativeMessaging?: BrowserExtensionNativeMessaging
 }
 
 /** Chromium's details for the install/update event the app synthesizes. */
@@ -334,11 +347,81 @@ function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupReques
   return request
 }
 
+/**
+ * One native messaging request the extension's worker posted.
+ *
+ * A `connect` opens a host for a request id; `post` writes to a port already
+ * opened; `disconnect` closes one. Everything is worker-supplied and therefore
+ * untrusted: the name and the port id are checked here before they are used.
+ */
+export type BrowserExtensionNativeRequest =
+  | { requestId: number; op: 'connect'; application: string }
+  | { requestId: number; op: 'post'; portId: string; message: unknown }
+  | { requestId: number; op: 'disconnect'; portId: string }
+
+/** The longest host name the app will act on, matching the manifest rule. */
+const MAX_NATIVE_HOST_NAME_LENGTH = 256
+
+/** A port id is the app's own UUID, so anything longer is not one of ours. */
+const MAX_NATIVE_PORT_ID_LENGTH = 64
+
+/** Whether an unknown value from the wire is a usable native messaging request. */
+export function toNativeRequest(value: unknown): BrowserExtensionNativeRequest | null {
+  const record = asRecord(value)
+  const requestId = record['requestId']
+  const op = record['op']
+  if (typeof requestId !== 'number' || !Number.isSafeInteger(requestId) || requestId <= 0)
+    return null
+  if (op === 'connect') {
+    const application = record['application']
+    if (
+      typeof application !== 'string' ||
+      application.length === 0 ||
+      application.length > MAX_NATIVE_HOST_NAME_LENGTH
+    ) {
+      return null
+    }
+    return { requestId, op, application }
+  }
+  const portId = record['portId']
+  if (
+    typeof portId !== 'string' ||
+    portId.length === 0 ||
+    portId.length > MAX_NATIVE_PORT_ID_LENGTH
+  ) {
+    return null
+  }
+  if (op === 'post') {
+    if (record['message'] === undefined) return null
+    return { requestId, op, portId, message: record['message'] }
+  }
+  if (op === 'disconnect') return { requestId, op, portId }
+  return null
+}
+
+/** One delivery from the app's native port manager, as the worker reads it. */
+export function nativeMessagingCommand(delivery: NativeMessagingDelivery): Record<string, unknown> {
+  switch (delivery.kind) {
+    case 'connect-result':
+      return {
+        kind: 'native-connect-result',
+        requestId: delivery.requestId,
+        portId: delivery.portId,
+        error: delivery.error
+      }
+    case 'message':
+      return { kind: 'native-message', portId: delivery.portId, message: delivery.message }
+    case 'disconnect':
+      return { kind: 'native-disconnect', portId: delivery.portId, error: delivery.error }
+  }
+}
+
 export class BrowserExtensionBridge {
   private view: WebContentsView | null = null
   private poll: ReturnType<typeof setInterval> | null = null
   private draining = false
   private readingFrames = false
+  private answeringNative = false
   private disposed = false
   /** The worker life the last snapshot came from. */
   private generation = ''
@@ -391,6 +474,7 @@ export class BrowserExtensionBridge {
         this.poll = setInterval(() => {
           void this.drain()
           void this.answerFrameRequests()
+          void this.answerNativeRequests()
           void this.writeUserScriptFiles()
           void this.reassertUserScripts()
         }, MAILBOX_POLL_INTERVAL_MS)
@@ -522,6 +606,48 @@ export class BrowserExtensionBridge {
       })
     } finally {
       this.readingFrames = false
+    }
+  }
+
+  /**
+   * Handle the native messaging requests the worker left for the app.
+   *
+   * A worker cannot reach a host process and Electron refuses `connectNative`
+   * itself, so `chrome.runtime.connectNative` in the preamble records what was
+   * asked and this drains it. A connect is allowed to take as long as a manifest
+   * lookup takes, so it is fired and its answer pushed back into the worker when
+   * the app has one; post and disconnect are synchronous.
+   */
+  private async answerNativeRequests(): Promise<void> {
+    const native = this.deps.nativeMessaging
+    if (!native) return
+    const view = this.view
+    if (!view || this.disposed || this.answeringNative) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.answeringNative = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainNativeRequests ? globalThis.__cioBridgeDrainNativeRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 16)) {
+        const request = toNativeRequest(value)
+        if (!request) continue
+        if (request.op === 'connect') void native.connect(request.requestId, request.application)
+        else if (request.op === 'post') native.post(request.portId, request.message)
+        else native.disconnect(request.portId)
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension native messaging requests could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.answeringNative = false
     }
   }
 
@@ -680,6 +806,9 @@ export class BrowserExtensionBridge {
       clearInterval(this.poll)
       this.poll = null
     }
+    // Closing the bridge ends every host process it opened: the worker that owned
+    // them is going away with it.
+    this.deps.nativeMessaging?.dispose()
     const view = this.view
     this.view = null
     if (!view) return

@@ -4,7 +4,8 @@
   import type { GitCommitInfo, GitConflictSide, GitStashEntry } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
-  import { absoluteTime, relativeTime } from './git-status-panel-format'
+  import { absoluteTime } from './git-status-panel-format'
+  import { formatCompactAge } from '$shared/date-time-format'
 
   interface Props {
     stashDropTarget: GitStashEntry | null
@@ -233,7 +234,7 @@
         <dt class="text-dimmed">Committed</dt>
         <dd class="text-foreground">
           {absoluteTime(info.date)}
-          <span class="text-dimmed">({relativeTime(info.date)})</span>
+          <span class="text-dimmed">({formatCompactAge(info.date)})</span>
         </dd>
         <dt class="text-dimmed">Short hash</dt>
         <dd class="font-mono text-foreground">{info.shortHash}</dd>

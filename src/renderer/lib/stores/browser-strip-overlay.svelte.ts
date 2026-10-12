@@ -1,7 +1,6 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   OVERLAY_ACK_TIMEOUT_MS,
-  TOAST_OVERLAY_TOP,
   type BrowserOverlayAck,
   type BrowserStripOverlayAction,
   type BrowserStripOverlayInteraction,
@@ -46,12 +45,6 @@ const HOVER_GRACE_MS = 260
 
 class BrowserStripOverlayState {
   /**
-   * True while the overlay window is drawing the strip, which is exactly when
-   * the app window must not draw it as well.
-   */
-  live = $state(false)
-
-  /**
    * Whether the overlay's reports can reach this window at all.
    *
    * The reports travel over IPC channels the preload has to expose, and a preload
@@ -68,6 +61,27 @@ class BrowserStripOverlayState {
   theme = $state<'light' | 'dark'>(
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
+
+  /** Whether a native panel host is holding the pointer this window gave up.
+   *  The panel is drawn in a bounded view above the app window, so the app's own
+   *  panel sees the pointer leave the instant the host appears under it. */
+  get pointerHeld(): boolean {
+    return this.pointerInside
+  }
+
+  /**
+   * Take ownership of the pointer for the panel that was just handed over.
+   *
+   * The reveal gesture ends inside the panel's own band, so the pointer starts
+   * out over it: the host reports the pointer's real position from its first
+   * move, and until then the panel must not read the `mouseleave` the handover
+   * itself produced as the user walking away.
+   */
+  holdOpen(): void {
+    this.pointerInside = true
+    if (this.closeTimer !== undefined) clearTimeout(this.closeTimer)
+    this.closeTimer = undefined
+  }
 
   /** The revision stamped on the next strip this window publishes. */
   private nextRevision = 0
@@ -158,7 +172,6 @@ class BrowserStripOverlayState {
     const token = (this.requestToken += 1)
     if (strip === null) {
       this.stopAckWatch()
-      this.live = false
       this.pointerInside = false
       void invoke('browser:setStripOverlay', null).catch(() => {})
       return
@@ -170,14 +183,13 @@ class BrowserStripOverlayState {
     this.pointerInside = true
     const revision = (this.nextRevision += 1)
     try {
+      this.armAckWatch(revision)
       const available = await invoke('browser:setStripOverlay', { ...strip, revision })
       if (token !== this.requestToken) return
       if (!available) {
         this.abandon('its window could not be created')
         return
       }
-      this.live = true
-      this.armAckWatch(revision)
     } catch {
       if (token !== this.requestToken) return
       this.abandon('a request to draw the strip was refused')
@@ -197,7 +209,6 @@ class BrowserStripOverlayState {
     this.stopAckWatch()
     if (this.unavailable) return
     this.unavailable = true
-    this.live = false
     logRendererError(
       `The native browser overlay was abandoned for the floating tab strip: ${reason}. The panel is drawn in the app window again, and a browser page it covers is parked for as long as it is open.`
     )
@@ -296,16 +307,16 @@ class BrowserStripOverlayState {
           browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon, tab.boxId)
         return
       case 'open-site-menu':
-        // The overlay document's own point, translated into the app window's
-        // content space: the overlay window starts TOAST_OVERLAY_TOP below it.
-        // The box comes along because the padlock clears the jar it was opened
-        // from, which for the global browser is the active tab's own box.
+        // The overlay document shares the app window's content coordinates, so
+        // the point is already in the app renderer's own space. The box comes
+        // along because the padlock clears the jar it was opened from, which for
+        // the global browser is the active tab's own box.
         void openBrowserSiteMenuAt(
           GLOBAL_BROWSER_PROJECT_ID,
           browserSiteHost(tab.url),
           browserSiteOrigin(tab.url),
           x,
-          y + TOAST_OVERLAY_TOP,
+          y,
           globalBrowser.activeTabBoxId,
           globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
         )

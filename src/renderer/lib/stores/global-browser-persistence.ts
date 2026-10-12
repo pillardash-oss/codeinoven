@@ -114,12 +114,14 @@ export function globalBrowserTabsSnapshot(
   tabs: readonly GlobalBrowserTab[],
   groups: readonly GlobalBrowserGroup[],
   boxes: readonly GlobalBrowserBox[],
-  activeTabId: string | null
+  activeTabId: string | null,
+  defaultBoxId: string
 ): GlobalBrowserTabsSnapshot {
   return {
     tabs: tabs.map(persistedTabFromRuntime),
     groups: groups.map(persistedGroupFromRuntime),
     boxes: boxes.map(persistedBoxFromRuntime),
+    defaultBoxId,
     activeTabId
   }
 }

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { TriangleAlert, Unplug, X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import type { GitFileChange } from '$shared/types'
   import { REMOTE_ISSUE_ICONS, REMOTE_ISSUE_TITLES } from './git-remote-issue'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
@@ -86,10 +86,9 @@
     <button
       type="button"
       class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
-      data-external-url={gitState.githubPermission?.settingsUrl ?? ''}
-      onclick={() => void openInBrowser(gitState.githubPermission?.settingsUrl ?? '')}
+      onclick={() => githubSignIn.start()}
     >
-      Update GitHub access
+      Sign in to GitHub
     </button>
     <NoticeDismissButton
       id={permissionId}

@@ -14,6 +14,26 @@ let scopeChunkPromise: Promise<unknown> | null = null
 let browserChunkPromise: Promise<unknown> | null = null
 let taskManagerChunkPromise: Promise<unknown> | null = null
 let updateBlockersChunkPromise: Promise<unknown> | null = null
+let spotlightChunkPromise: Promise<unknown> | null = null
+
+/**
+ * Warm the command palette's module chunk so the spotlight opens instantly.
+ *
+ * The spotlight is the app's most-used surface and it is a dynamic import at
+ * its render site, so the first Cmd/Ctrl+K of a session pays the chunk fetch and
+ * module eval on the gesture itself. Nothing warns it ahead of time   it is a
+ * shortcut, not a button the pointer can hover first   so it is warmed once the
+ * renderer is idle instead.
+ */
+export function preloadSpotlightChunk(): void {
+  spotlightChunkPromise ??= import('$lib/components/actions/CommandPalette.svelte').catch(
+    (error) => {
+      // Reset so a transient failure can be retried on the next open.
+      spotlightChunkPromise = null
+      throw error
+    }
+  )
+}
 
 /** Warm the SettingsView module chunk so opening Settings is instant. */
 export function preloadSettingsChunk(): void {

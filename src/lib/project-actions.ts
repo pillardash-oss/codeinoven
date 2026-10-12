@@ -11,6 +11,10 @@ export interface ProjectAction {
   variables: ProjectActionVariable[]
   /** Optional label colour (hex) shown as the entry's left border. */
   color?: string | null
+  /** When the action was last launched, in epoch milliseconds, so an entry
+   *  whose terminal still shows output says how old that run is. Absent until
+   *  the action has been run at least once. */
+  lastRunAt?: number
   createdAt: number
   updatedAt: number
 }

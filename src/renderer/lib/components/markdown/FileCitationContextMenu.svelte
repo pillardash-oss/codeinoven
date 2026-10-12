@@ -224,8 +224,7 @@
 
   async function copyText(text: string, successMessage: string): Promise<void> {
     try {
-      await copyTextToClipboard(text)
-      toast.success(successMessage)
+      await copyTextToClipboard(text, successMessage)
     } catch (error) {
       reportError(error, 'Copy failed.')
     }

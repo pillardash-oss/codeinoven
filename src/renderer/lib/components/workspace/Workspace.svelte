@@ -61,7 +61,8 @@
     persistInheritedThreadSettings,
     settingsForNewAssistantTask,
     settingsForNewThread,
-    threadWithInheritedSettings
+    threadWithInheritedSettings,
+    withProjectOven
   } from '$lib/thread-settings-inheritance'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { toPosixPath } from '$shared/paths'
@@ -91,6 +92,7 @@
     DEFAULT_THREAD_TITLE,
     DRAFT_CHAT_THREAD_ID,
     INBOX_PROJECT_ID,
+    isBrowserAssistantThread,
     isOrchestrationChildThread,
     isThreadBusy,
     threadTracksReadStatus,
@@ -1998,8 +2000,10 @@
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const incoming = new Map<string, Thread>()
     for (const thread of threads) {
-      // Orchestration children are internals; see `upsertThreadInList`.
-      if (isOrchestrationChildThread(thread)) continue
+      // Orchestration children are internals; see `upsertThreadInList`. Browser
+      // assistant conversations are the browser rail's own rows, not the
+      // Threads timeline's, so a page can never merge one in.
+      if (isOrchestrationChildThread(thread) || isBrowserAssistantThread(thread)) continue
       incoming.set(thread.id, thread)
     }
     if (incoming.size === 0) return
@@ -2033,6 +2037,11 @@
     // one, and every later `thread:updated` for it was then skipped by the same
     // predicate, freezing that row on the stale snapshot it was restored with.
     if (isOrchestrationChildThread(thread)) return
+    // A browser tab's assistant conversation lives in the hidden global browser
+    // container. Its surface is the browser's own rail, so a `thread:updated`
+    // broadcast for one must never plant a phantom row in the Threads timeline
+    // (the browser store already owns that conversation).
+    if (isBrowserAssistantThread(thread)) return
     const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
       allThreads = [thread, ...allThreads]
@@ -2117,7 +2126,8 @@
       // still cover them: the coordinator panel renders a worker's live status
       // chip from its own thread row, so an opened worker settles unread to
       // read exactly like a regular thread.
-      if (!isOrchestrationChildThread(updated)) upsertThreadInList(updated)
+      if (!isOrchestrationChildThread(updated) && !isBrowserAssistantThread(updated))
+        upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         // Auto-mark the selected thread read only while the window actually
@@ -3242,54 +3252,6 @@
     void hydrateThreadsViewGuarantees()
   })
 
-  /** The chat a Chats view with nothing to restore should land on: the last chat
-   *  the user actually visited (`recentThreadVisits` is persisted visit order),
-   *  else the family's most recently active thread. `allThreads` order is not
-   *  visit recency, so it is only ever the activity fallback. */
-  function lastChatToLandOn(): Thread | null {
-    const chats = allThreads.filter((t) => !t.archived && t.projectId === INBOX_PROJECT_ID)
-    const byVisit = new Map(chats.map((t) => [threadVisitKey(t), t]))
-    return (
-      workspaceState.recentThreadVisits
-        .map((key) => byVisit.get(key))
-        .find((t) => t !== undefined) ??
-      chats.sort((a, b) => b.lastActivity - a.lastActivity)[0] ??
-      null
-    )
-  }
-
-  /** True once the Chats view has been shown, so the entry guarantee below runs
-   *  once per entry instead of on every reactive pass while the view stays open.
-   *  Clearing the thread for a fresh chat must not immediately create another. */
-  let chatViewEntered = false
-
-  // The Chats view is thread-backed: its composer, its conversation and its
-  // right rail all belong to a thread, so showing it with nothing selected must
-  // still land on one. The shell restores a chat the user visited this session;
-  // when that leaves nothing (a first visit, or a session holding chats it has
-  // never opened) the view lands on the most recently active chat, and only a
-  // family with no thread at all falls through to creating the empty draft chat
-  // it would otherwise create on the first keystroke. Without this the view
-  // opened on its thread-less welcome composer, and the right rail had no thread
-  // to belong to. `loading` keeps it from racing the startup thread restore.
-  $effect(() => {
-    if (!active || mode !== 'chats' || loading) {
-      chatViewEntered = false
-      return
-    }
-    if (chatViewEntered) return
-    chatViewEntered = true
-    if (workspaceState.selectedThread) return
-    const existing = lastChatToLandOn()
-    if (existing) {
-      workspaceState.openThread(existing, inboxProject())
-      return
-    }
-    // Nothing to land on: open the blank chat row the view is built around, so
-    // it never paints the thread-less welcome composer (and never loses its rail).
-    openNewChatThread()
-  })
-
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
    *  project filter can render far fewer than 200 rows even though matching
    *  threads exist beyond the window. The filter must replace hidden rows with
@@ -3623,7 +3585,11 @@
     const inheritedSettings =
       project.id === ASSISTANT_SPACE_ID
         ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
-        : settingsForNewThread(activeThread, threadSettings.lastUsed)
+        : withProjectOven(
+            settingsForNewThread(activeThread, threadSettings.lastUsed),
+            project,
+            activeThread?.projectId === project.id
+          )
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
       // A routine-scoped create always lands inside its routine, even when it
@@ -3679,7 +3645,9 @@
         workspaceState.requestFocusComposer()
       } else {
         // Open instantly   settings/lifecycle sync is best-effort off the critical path
-        const needsSettingsUpdate = Boolean(activeThread?.settings)
+        // A project bound to an Oven always refreshes the reused blank thread, so
+        // it starts on the project's Oven even when nothing was open to inherit.
+        const needsSettingsUpdate = Boolean(activeThread?.settings) || Boolean(project.ovenId)
         const thread = existing
         upsertThreadInList(thread)
         threadMessages.seedEmpty(thread.projectId, thread.id)

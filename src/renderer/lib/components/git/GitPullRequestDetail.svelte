@@ -24,7 +24,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   // The `@query` detection is shared with the chat composer rather than
@@ -86,6 +86,8 @@
     onOpenThread: (threadId: string) => void
     /** Reveal a GitHub Actions check in the in-app Deployments tab. */
     onOpenWorkflowRun: (runId: number) => void
+    /** Open a commit the pull request's history names, in the Git panel. */
+    onOpenCommit: (commitId: string) => void
     /** Resolve a conflicting PR locally: check out the head, merge base, show conflict UI. */
     onResolveLocally?: (pr: PullRequestSummary) => void
     /** Hand a conflicting PR to an agent to resolve and push. */
@@ -114,6 +116,7 @@
     onAssignAgent,
     onOpenThread,
     onOpenWorkflowRun,
+    onOpenCommit,
     onResolveLocally,
     onResolveWithAgent,
     onFullscreen,
@@ -276,11 +279,17 @@
   })
 
   /**
-   * Conversation as one chronological stream: the PR description, issue
-   * comments, submitted reviews, and inline code comments, the same context
-   * GitHub shows, so a merge decision never needs the browser.
+   * Conversation as one chronological stream: the PR description, issue comments,
+   * submitted reviews, inline code comments and the pull request's own history, the
+   * same context GitHub shows, so a merge decision never needs the browser.
+   *
+   * The history is read apart from the bundle, so a slow one never holds back the
+   * description and the comments the reader came for. It arrives as an empty list
+   * until then, which is a stream that is merely incomplete for a moment.
    */
-  const conversation = $derived(buildConversation(bundle))
+  const conversation = $derived(
+    buildConversation(bundle, gitState.conversationTimeline(identity.owner, identity.repo, number))
+  )
 
   /**
    * The active view is one of these. In the full screen reader they become a
@@ -296,6 +305,11 @@
 
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
+    // The history is read again with it, because every write this reader makes can
+    // add a row to it: a close, a reopen, a merge, a draft transition. Reading it
+    // here is what keeps the stream matching what the reader just did, and it is one
+    // request against the bundle's several.
+    void gitState.ensureConversationTimeline(projectId, identity.owner, identity.repo, number, true)
     agentReports = await gitState.loadAgentReports(projectId, number)
   }
 
@@ -681,6 +695,10 @@
     const owner = identity.owner
     const repo = identity.repo
     void gitState.ensurePullRequestBundle(projectId, owner, repo, number)
+    // The pull request's history, read after the bundle rather than with it. A pull
+    // request is an issue to GitHub's timeline, so this is the same read the issue
+    // reader makes.
+    void gitState.ensureConversationTimeline(projectId, owner, repo, number)
   })
 
   // Seed the merge method from the configured default (squash by default).
@@ -784,7 +802,7 @@
       {#if summary.authorIsBot}
         <BotBadge />
       {/if}
-      <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
+      <span class="shrink-0">· {formatCompactAge(summary.updatedAt)}</span>
       {#if detail}
         <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
           <span class="text-success">+{detail.additions}</span>
@@ -1029,6 +1047,7 @@
         onQuote={(entry) => void quoteEntry(entry)}
         onCommentChat={openCommentChat}
         onAssignAgent={assignCommentToAgent}
+        {onOpenCommit}
         reactions={bundle?.reactions ?? {}}
         onReact={reactToComment}
         onNotice={(message) => (notice = message)}

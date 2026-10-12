@@ -1,6 +1,6 @@
 import type { OvenPreflightReport, OvenSetupGitConfiguration } from '../../lib/ovens'
 import { collectPreflight } from './oven-setup-bootstrap'
-import { syncOvenTimezone } from './oven-timezone'
+import { syncOvenClock, syncOvenTimezone } from './oven-timezone'
 import { OvenGitIdentityService } from './oven-git-identity'
 import { syncOvenAccount } from './oven-accounts'
 import type { OvenSetupPorts } from './oven-setup-service'
@@ -13,6 +13,12 @@ export interface OvenSetupPortDependencies {
   service: OvenService
   accounts: HarnessAccountRegistry
   vault: SecretVault
+  /**
+   * The most recent completed check for one Oven, when it is young enough to
+   * authorize a setup. Setup reuses it instead of opening its own read, so a
+   * dialog the user just watched check does not check again on Start.
+   */
+  recentReport?: (ovenId: string) => OvenPreflightReport | null
 }
 
 export type OvenSetupRuntime = OvenSetupPorts & { gitIdentity: OvenGitIdentityService }
@@ -35,6 +41,7 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
   return {
     gitIdentity,
     ssh: dependencies.service.ssh,
+    ...(dependencies.recentReport ? { recentReport: dependencies.recentReport } : {}),
     waitForHarnessIdle: async (ovenId, command) => {
       while (
         (await dependencies.service.runs(ovenId)).some(
@@ -52,8 +59,30 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
       await dependencies.service.install(ovenId)
     },
     syncTimezone: async (ovenId, zone, observation) => {
-      const result = await syncOvenTimezone(dependencies.service.ssh, ovenId, zone, observation)
-      Logger.info('Oven clock matched', { ovenId, zone: result.zone, status: result.status })
+      /* The absolute clock and the zone are separate problems: `apt` reads the
+         first and the user reads the second, so this step corrects both. */
+      const clock = await syncOvenClock(dependencies.service.ssh, ovenId, observation)
+      const timezone = await syncOvenTimezone(dependencies.service.ssh, ovenId, zone, observation)
+      const changed =
+        clock.status === 'updated'
+          ? [clock.message, ...(timezone.status === 'updated' ? [timezone.message] : [])]
+          : timezone.status === 'updated'
+            ? [timezone.message]
+            : []
+      const unsupported =
+        changed.length === 0 && clock.status === 'unsupported' ? clock.message : null
+      const result = {
+        status: (changed.length > 0 ? 'updated' : unsupported ? 'unsupported' : 'current') as
+          'updated' | 'current' | 'unsupported',
+        zone: timezone.zone,
+        message: changed.length > 0 ? changed.join(' ') : (unsupported ?? timezone.message)
+      }
+      Logger.info('Oven clock matched', {
+        ovenId,
+        zone: result.zone,
+        status: result.status,
+        offset: clock.message
+      })
       return result
     },
     syncAccounts: async (ovenId, selections, synchronizeConfiguration) => {

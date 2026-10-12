@@ -21,12 +21,18 @@ class InstalledSkillStore {
   error = $state('')
 
   /** Install locations recorded for one marketplace skill. */
-  locationsFor(skillId: string): InstalledSkillLocation[] {
-    return this.locations.filter((location) => location.skillId === skillId)
+  locationsFor(skillId: string, source: string): InstalledSkillLocation[] {
+    return this.locations.filter(
+      (location) =>
+        location.skillId === skillId && location.source?.toLowerCase() === source.toLowerCase()
+    )
   }
 
-  isInstalled(skillId: string): boolean {
-    return this.locations.some((location) => location.skillId === skillId)
+  isInstalled(skillId: string, source: string): boolean {
+    return this.locations.some(
+      (location) =>
+        location.skillId === skillId && location.source?.toLowerCase() === source.toLowerCase()
+    )
   }
 
   /** Loads at most once per session; concurrent callers share one request. */

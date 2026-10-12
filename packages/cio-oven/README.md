@@ -86,12 +86,14 @@ private key is inside them.
 ## Publishing
 
 This package is built from the CodeInOven repository, and it is not hand-edited.
-Its version, its embedded service bundle, and the revision it reports to the app
-all come from one app build:
+Its embedded service bundle and the revision it reports to the app come from one
+app build. Its own version is independent of the desktop app's, which the release
+pipeline bumps on its own; releasing the CLI never moves it:
 
 ```sh
-bun run build            # produces out/main/oven-service.mjs
-bun run oven:cli:build   # writes packages/cio-oven/dist and syncs the version
+bun run build              # produces out/main/oven-service.mjs
+bun run oven:cli:build     # writes packages/cio-oven/dist from that bundle
+bun run oven:version:bump  # bumps only packages/cio-oven/package.json
 cd packages/cio-oven
 npm publish
 ```

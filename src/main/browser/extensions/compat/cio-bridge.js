@@ -48,6 +48,14 @@
   const requests = new Map()
   let requestSequence = 0
   const frameRequests = []
+  /**
+   * Native messaging requests the worker posted, waiting for main to pick them up.
+   *
+   * The worker cannot call main, so it leaves each `chrome.runtime.connectNative`
+   * open, post and close here and main drains them on the same poll as the frame
+   * queries. Bounded so a worker that loops cannot grow the page's memory.
+   */
+  const nativeRequests = []
   const ensurePort = () => {
     if (port) return port
     try {
@@ -65,6 +73,10 @@
         }
         if (request && request.kind === 'frames-query' && frameRequests.length < 64) {
           frameRequests.push(request)
+          return
+        }
+        if (request && request.kind === 'native-request' && nativeRequests.length < 64) {
+          nativeRequests.push(request)
         }
       })
       if (port && port.onDisconnect && typeof port.onDisconnect.addListener === 'function') {
@@ -113,6 +125,9 @@
 
   /** Main answers a small batch using the session's actual frame tree. */
   globalThis.__cioBridgeDrainFrameRequests = () => JSON.stringify(frameRequests.splice(0, 8))
+
+  /** Main opens, writes to, and closes native messaging ports through this. */
+  globalThis.__cioBridgeDrainNativeRequests = () => JSON.stringify(nativeRequests.splice(0, 16))
 
   /** Main reads the worker's mailbox through this. */
   globalThis.__cioBridgeDrain = () =>

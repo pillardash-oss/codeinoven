@@ -15,7 +15,7 @@ import type {
   PrReviewEvent,
   PrState,
   PullRequestComment,
-  PullRequestCompare,
+  PullRequestCompareResult,
   PullRequestLabel,
   PullRequestMilestone,
   PullRequestReference,
@@ -266,7 +266,8 @@ export class GitPullRequestOperations {
 
   /**
    * Compare two refs so the create-PR form can gate on there being a real
-   * change. Returns null on failure so the form can disable creation safely.
+   * change. A signed-out compare comes back as its own answer; any other
+   * failure returns null so the form can disable creation safely.
    */
   async comparePullRequests(
     projectId: string,
@@ -274,7 +275,7 @@ export class GitPullRequestOperations {
     repo: string,
     base: string,
     head: string
-  ): Promise<PullRequestCompare | null> {
+  ): Promise<PullRequestCompareResult | null> {
     try {
       const scopeBucketId = this.access.scopeFor(projectId)
       return scopeBucketId

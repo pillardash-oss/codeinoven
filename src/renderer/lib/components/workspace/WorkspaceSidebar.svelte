@@ -917,7 +917,9 @@
                   {@const expanded =
                     sidebar.expandedFolders.has(project.id) ||
                     sidebar.projectSearchOpen.has(project.id)}
-                  {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
+                  {@const workingCount = folderThreads.filter((thread) =>
+                    threadHasVisibleWork(thread)
+                  ).length}
                   <DropdownMenu.Root
                     open={openProjectMenuId === project.id}
                     onOpenChange={(o) => {
@@ -929,7 +931,7 @@
                         {project}
                         iconUrl={projectIcons.get(project.id) ?? null}
                         {expanded}
-                        {working}
+                        {workingCount}
                         showLocation={hasProjectNameCollision(project, visibleProjects)}
                         actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                           openProjectMenuId === project.id}
@@ -1155,7 +1157,9 @@
               {@const expanded =
                 sidebar.expandedFolders.has(project.id) ||
                 sidebar.projectSearchOpen.has(project.id)}
-              {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
+              {@const workingCount = folderThreads.filter((thread) =>
+                threadHasVisibleWork(thread)
+              ).length}
               <DropdownMenu.Root
                 open={openProjectMenuId === project.id}
                 onOpenChange={(o) => {
@@ -1167,7 +1171,7 @@
                     {project}
                     iconUrl={projectIcons.get(project.id) ?? null}
                     {expanded}
-                    {working}
+                    {workingCount}
                     showLocation={hasProjectNameCollision(project, visibleProjects)}
                     actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                       openProjectMenuId === project.id}

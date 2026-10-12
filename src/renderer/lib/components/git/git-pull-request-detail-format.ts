@@ -8,9 +8,11 @@ import type {
   PullRequestFile,
   PullRequestReview,
   PullRequestReviewComment,
-  PullRequestReviewThread
+  PullRequestReviewThread,
+  IssueTimelineEvent
 } from '$shared/types'
 import { githubDisplayLogin } from '$lib/format/github-login'
+import { issueTimelineLine, type IssueTimelineLine } from './issue-view'
 
 export type ConversationEntryKind = 'description' | 'comment' | 'review' | 'inline'
 
@@ -128,10 +130,21 @@ export type ConversationNode =
   | { kind: 'comment'; key: string; at: string; entry: ConversationEntry }
   | { kind: 'review'; key: string; at: string; entry: ConversationEntry; threads: ReviewThread[] }
   | { kind: 'threads'; key: string; at: string; threads: ReviewThread[] }
+  /**
+   * Something that happened to the pull request: a label, a close, a merge, a
+   * commit that named it, a review asked for. Its sentence is already built, because
+   * the same builder words an issue's history.
+   */
+  | { kind: 'event'; key: string; at: string; event: IssueTimelineEvent; line: IssueTimelineLine }
 
 /**
  * Conversation as GitHub organises it: the description, then a chronological
- * stream in which each submitted review carries its own inline threads.
+ * stream of what was said and what happened to it, in which each submitted review
+ * carries its own inline threads.
+ *
+ * The history is merged into the same stream rather than drawn in a block of its
+ * own, because the order is the story: a review requested, then the review, then
+ * the merge only reads as a history when each sits where it happened.
  *
  * Each entry also carries everything the per-comment actions need: the
  * provider's own permalink, the id and collection a mutation addresses, the
@@ -139,7 +152,10 @@ export type ConversationNode =
  * that here means the rows and the menus read one shape instead of each of them
  * reaching back into the bundle and guessing which provider field applies.
  */
-export function buildConversation(bundle: PullRequestBundle | undefined): ConversationNode[] {
+export function buildConversation(
+  bundle: PullRequestBundle | undefined,
+  timeline: readonly IssueTimelineEvent[] = []
+): ConversationNode[] {
   if (!bundle) return []
   const nodes: ConversationNode[] = []
   // The description is the pull request itself and holds the top of the stream.
@@ -202,6 +218,21 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
   }
 
   const threads = buildThreads(bundle.reviewComments, bundle.files, bundle.reviewThreads)
+
+  // What happened to the pull request, in the same stream as what was said about it.
+  // The provider has already dropped the events another part of the reader draws
+  // (the comments, the reviews, the commits), so every row here is one nothing else
+  // in this reader shows.
+  for (const event of timeline) {
+    nodes.push({
+      kind: 'event',
+      key: `e${event.id}`,
+      at: event.createdAt,
+      event,
+      line: issueTimelineLine(event)
+    })
+  }
+
   const threadsByReview = new Map<number, ReviewThread[]>()
   const unclaimed: ReviewThread[] = []
   for (const thread of threads) {
@@ -431,6 +462,9 @@ function reviewCommentEntry(
 export function conversationEntryCount(nodes: ConversationNode[]): number {
   let count = 0
   for (const node of nodes) {
+    // An event is something that happened rather than something said, so it is not
+    // a comment and the count of what people wrote does not move for it.
+    if (node.kind === 'event') continue
     if (node.kind === 'threads') {
       count += countThreadComments(node.threads)
       continue

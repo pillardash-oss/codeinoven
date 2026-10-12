@@ -349,13 +349,77 @@
     },
     ['onClicked', 'onClosed', 'onButtonClicked', 'onPermissionLevelChanged']
   )
+  // `chrome.permissions` is absent from this runtime entirely, and a password
+  // manager cannot enable its own optional capability without it: Bitwarden asks
+  // `chrome.permissions.request({permissions:['nativeMessaging']})` before it will
+  // save "Unlock with biometrics", and a stub that always answers `false` is
+  // exactly why the toggle never stuck. The declared manifest is the source of
+  // truth: a permission the extension already declares   required or optional   is
+  // one the app has, so a request for it is granted. `nativeMessaging` is a real
+  // capability here now (see the native messaging section below), not a stub.
+  const declaredPermissionNames = () => {
+    const names = new Set()
+    try {
+      const manifest =
+        chromeApi.runtime && typeof chromeApi.runtime.getManifest === 'function'
+          ? chromeApi.runtime.getManifest() || {}
+          : {}
+      for (const key of ['permissions', 'optional_permissions']) {
+        const list = manifest[key]
+        if (!Array.isArray(list)) continue
+        for (const entry of list) if (typeof entry === 'string' && entry) names.add(entry)
+      }
+    } catch (error) {
+      state.errors.push('permissions-manifest: ' + String(error))
+    }
+    return names
+  }
+  const declaredHosts = () => {
+    const hosts = []
+    try {
+      const manifest =
+        chromeApi.runtime && typeof chromeApi.runtime.getManifest === 'function'
+          ? chromeApi.runtime.getManifest() || {}
+          : {}
+      for (const key of ['host_permissions', 'optional_host_permissions']) {
+        const list = manifest[key]
+        if (!Array.isArray(list)) continue
+        for (const entry of list)
+          if (typeof entry === 'string' && entry && !hosts.includes(entry)) hosts.push(entry)
+      }
+    } catch (error) {
+      state.errors.push('permissions-hosts: ' + String(error))
+    }
+    return hosts
+  }
+  const permissionRequestIsGranted = (details) => {
+    const request = details && typeof details === 'object' ? details : {}
+    const permissions = Array.isArray(request.permissions)
+      ? request.permissions.filter((entry) => typeof entry === 'string' && entry)
+      : []
+    const origins = Array.isArray(request.origins)
+      ? request.origins.filter((entry) => typeof entry === 'string' && entry)
+      : []
+    const known = declaredPermissionNames()
+    if (permissions.every((name) => known.has(name)) === false) return false
+    // A requested origin is one the extension declares host access for in its own
+    // manifest; whether a script may run on a site is the app's site-permission
+    // layer's decision, not this namespace's.
+    if (origins.every((origin) => typeof origin === 'string' && origin.length > 0) === false)
+      return false
+    return true
+  }
   ensureNamespace(
     'permissions',
     {
-      contains: answering(false),
-      request: answering(false),
-      remove: answering(false),
-      getAll: answering({})
+      contains: (details, callback) => answerWith(callback, permissionRequestIsGranted(details)),
+      request: (details, callback) => answerWith(callback, permissionRequestIsGranted(details)),
+      remove: (_details, callback) => answerWith(callback, false),
+      getAll: (callback) =>
+        answerWith(callback, {
+          permissions: [...declaredPermissionNames()],
+          origins: declaredHosts()
+        })
     },
     ['onAdded', 'onRemoved']
   )
@@ -1916,9 +1980,228 @@
         tabActivity.activeTabId = command.tab.id
       }
       contextMenuClicked.__cioEmit([command.info || {}, command.tab || null])
+    } else if (
+      command.kind === 'native-connect-result' ||
+      command.kind === 'native-message' ||
+      command.kind === 'native-disconnect'
+    ) {
+      handleNativeCommand(command)
     }
     scheduleMailbox()
   }
+
+  // ── native messaging ────────────────────────────────────────────────────────
+  // Electron implements `chrome.runtime.connectNative` and `sendNativeMessage` but
+  // refuses every call, an installed host and a bogus host name alike, with "Access
+  // to the native messaging host was disabled by the system administrator"
+  // (measured). A password manager's desktop bridge   the whole of its biometric
+  // unlock   therefore cannot connect at all, so the app opens the host itself in
+  // main and this section is the extension's end of that: a Port that behaves the
+  // way `chrome.runtime` documents one, carried over the same bridge port the frame
+  // queries use. There is no `nativeMessaging` permission to check here; main owns
+  // the manifest's `allowed_origins` gate.
+  const nativePortsByRequest = new Map()
+  const nativePortsById = new Map()
+  const pendingNativeCommands = []
+  let nativeSequence = 0
+
+  const nativeRequestId = () => {
+    nativeSequence += 1
+    return nativeSequence
+  }
+
+  const sendNativeCommand = (command) => {
+    if (bridgePort) {
+      try {
+        bridgePort.postMessage(command)
+        return
+      } catch (error) {
+        state.errors.push('native-bridge: ' + String(error))
+        bridgePort = null
+      }
+    }
+    // A worker can call `connectNative` before the bridge page has connected. The
+    // command is held and flushed the moment it does, rather than dropped.
+    if (pendingNativeCommands.length < 64) pendingNativeCommands.push(command)
+  }
+
+  const setRuntimeLastError = (message) => {
+    try {
+      Object.defineProperty(chromeApi.runtime, 'lastError', {
+        value: message ? { message } : undefined,
+        configurable: true,
+        writable: true
+      })
+    } catch {
+      // A runtime that refuses the property simply has no lastError to read.
+    }
+  }
+
+  const closeNativePort = (record, error, notify) => {
+    if (record.closed) return
+    record.closed = true
+    nativePortsByRequest.delete(record.requestId)
+    if (record.portId) nativePortsById.delete(record.portId)
+    if (!notify) return
+    setRuntimeLastError(error)
+    try {
+      record.onDisconnect.__cioEmit([record.port])
+    } catch (dispatchError) {
+      state.errors.push('native-disconnect: ' + String(dispatchError))
+    }
+    setRuntimeLastError(null)
+  }
+
+  const handleNativeCommand = (command) => {
+    if (command.kind === 'native-connect-result') {
+      const record = nativePortsByRequest.get(command.requestId)
+      if (!record) return
+      if (!command.portId || command.error) {
+        closeNativePort(
+          record,
+          command.error || 'the native messaging host could not be started',
+          true
+        )
+        return
+      }
+      record.portId = command.portId
+      record.connected = true
+      nativePortsById.set(command.portId, record)
+      for (const message of record.queue.splice(0)) {
+        sendNativeCommand({
+          kind: 'native-request',
+          requestId: nativeRequestId(),
+          op: 'post',
+          portId: record.portId,
+          message
+        })
+      }
+      return
+    }
+    if (command.kind === 'native-message') {
+      const record = nativePortsById.get(command.portId)
+      if (!record || record.closed) return
+      try {
+        record.onMessage.__cioEmit([command.message, record.port])
+      } catch (dispatchError) {
+        state.errors.push('native-message: ' + String(dispatchError))
+      }
+      return
+    }
+    if (command.kind === 'native-disconnect') {
+      const record = nativePortsById.get(command.portId)
+      if (!record) return
+      closeNativePort(record, command.error || null, true)
+    }
+  }
+
+  const createNativePort = (application) => {
+    const onMessage = makeRealEvent()
+    const onDisconnect = makeRealEvent()
+    const record = {
+      requestId: nativeRequestId(),
+      application,
+      portId: null,
+      connected: false,
+      closed: false,
+      queue: [],
+      onMessage,
+      onDisconnect,
+      port: null
+    }
+    const port = {
+      name: application,
+      sender: undefined,
+      onMessage,
+      onDisconnect,
+      postMessage(message) {
+        if (record.closed) return
+        // A message written before the host is up waits, which is what Chrome does
+        // with a port whose connection is still being established.
+        if (!record.connected || !record.portId) {
+          if (record.queue.length < 256) record.queue.push(message)
+          return
+        }
+        sendNativeCommand({
+          kind: 'native-request',
+          requestId: nativeRequestId(),
+          op: 'post',
+          portId: record.portId,
+          message
+        })
+      },
+      disconnect() {
+        if (record.closed) return
+        if (record.portId) {
+          sendNativeCommand({
+            kind: 'native-request',
+            requestId: nativeRequestId(),
+            op: 'disconnect',
+            portId: record.portId
+          })
+        }
+        // Chrome fires `onDisconnect` on the other end of a disconnect, not on the
+        // caller's own listeners, so nothing is emitted here.
+        closeNativePort(record, null, false)
+      }
+    }
+    record.port = port
+    nativePortsByRequest.set(record.requestId, record)
+    sendNativeCommand({
+      kind: 'native-request',
+      requestId: record.requestId,
+      op: 'connect',
+      application
+    })
+    return port
+  }
+
+  for (const root of roots) {
+    const runtime = root && root.runtime
+    if (!runtime) continue
+    try {
+      Object.defineProperty(runtime, 'connectNative', {
+        value: (application) => {
+          if (typeof application !== 'string' || application.length === 0) {
+            throw new Error('Invalid native messaging host name')
+          }
+          return createNativePort(application)
+        },
+        configurable: true,
+        writable: true
+      })
+      Object.defineProperty(runtime, 'sendNativeMessage', {
+        value: (application, message, callback) => {
+          if (typeof application !== 'string' || application.length === 0) {
+            return answerWith(callback, undefined)
+          }
+          return new Promise((resolve) => {
+            const port = createNativePort(application)
+            let settled = false
+            const finish = (response) => {
+              if (settled) return
+              settled = true
+              try {
+                port.disconnect()
+              } catch {
+                // Already closed.
+              }
+              answerWith(callback, response)
+              resolve(response)
+            }
+            port.onMessage.addListener((incoming) => finish(incoming))
+            port.onDisconnect.addListener(() => finish(undefined))
+            port.postMessage(message)
+          })
+        },
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('native-messaging: ' + String(error))
+    }
+  }
+
   // A port, not a message: `runtime.sendMessage` is delivered to every one of
   // the extension's own `onMessage` listeners, and a real extension's listener
   // can throw on a shape it does not know (uBlock Origin Lite's does, measured:
@@ -1933,6 +2216,13 @@
           if (!port || port.name !== BRIDGE_PORT_NAME) return
           bridgePort = port
           for (const request of frameRequests.values()) sendFrameRequest(request)
+          for (const command of pendingNativeCommands.splice(0)) {
+            try {
+              port.postMessage(command)
+            } catch (error) {
+              state.errors.push('native-bridge: ' + String(error))
+            }
+          }
           port.onDisconnect.addListener(() => {
             if (bridgePort === port) bridgePort = null
           })
@@ -2012,7 +2302,7 @@
 
   // ── runtime.getContexts repair ──────────────────────────────────────────────
   // Electron never calls `extensions::SetViewType` anywhere in its shell
-  // (measured on v44.4.5: zero call sites), so every WebContents it hosts reports
+  // (measured on v44.7.0: zero call sites), so every WebContents it hosts reports
   // `mojom::ViewType::kInvalid` (0). Chromium's
   // `RuntimeGetContextsFunction::GetFrameContexts` treats that value as a bug
   // ("NOTREACHED hit. Unexpected view type found: 0"), skips the frame and answers

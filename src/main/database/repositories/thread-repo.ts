@@ -4,6 +4,7 @@ import { DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
   type AgentTokenUsage,
@@ -255,9 +256,23 @@ function buildSnippet(rawText: string, rawQuery: string): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
 }
 
+/**
+ * Which thread family a search is scoped to.
+ *
+ * `projects` searches every engineering project thread, `chats` the standalone
+ * conversations in the inbox, and `assistant` the assistant space (optionally
+ * narrowed to one routine). Omitted, a search spans every family except the
+ * hidden browser-chat container, which is how the in-view thread searches have
+ * always behaved.
+ */
+export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant'
+
 export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
+  family?: ThreadSearchFamily
+  /** Narrow an assistant search to one routine. Ignored for other families. */
+  routineId?: string
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -303,6 +318,30 @@ function buildOrderBy(options: ThreadListOptions): string {
 }
 
 /**
+ * The reserved hidden containers that hold conversations rather than projects:
+ * the chats inbox, the assistant space, and the global browser. No project-thread
+ * query may ever return one of their rows; the surfaces that need them read them
+ * through their own container-scoped queries.
+ */
+const HIDDEN_CONTAINER_PROJECT_IDS: readonly string[] = [
+  INBOX_PROJECT_ID,
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID
+]
+
+/**
+ * WHERE fragment and params keeping only real project threads, across every
+ * project. This is the load boundary for a threads view, so the list never has
+ * to filter another container's rows out after the fact.
+ */
+function projectThreadsOnlyClause(): { where: string; params: string[] } {
+  return {
+    where: `project_id NOT IN (${HIDDEN_CONTAINER_PROJECT_IDS.map(() => '?').join(', ')})`,
+    params: [...HIDDEN_CONTAINER_PROJECT_IDS]
+  }
+}
+
+/**
  * The WHERE clause for every thread a Threads view must carry whatever the
  * recency window is: pinned rows, rows in a status that a Threads view ranks
  * above done, and every row of a pinned-like scope. The non-done and scoped
@@ -312,7 +351,8 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
   where: string
   params: unknown[]
 } {
-  const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
+  const only = projectThreadsOnlyClause()
+  const params: unknown[] = [...only.params]
   const statusPlaceholders = DONE_THREAD_STATUSES.map(() => '?').join(', ')
   params.push(...DONE_THREAD_STATUSES)
   let visibility = `(pinned = 1 OR status NOT IN (${statusPlaceholders}))`
@@ -324,7 +364,7 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
     params.push(...bucketIds)
   }
   return {
-    where: `WHERE archived = 0 AND project_id != ? AND ${visibility}`,
+    where: `WHERE archived = 0 AND ${only.where} AND ${visibility}`,
     params
   }
 }
@@ -826,6 +866,34 @@ export class ThreadRepo {
   }
 
   /**
+   * Real project threads only, across every project, for the Threads view.
+   *
+   * Unlike {@link listAllViaWorker}, which is the shared list the navigator and
+   * the container views read, this never returns a hidden container's row, so a
+   * threads view loads exactly what it shows and drops nothing afterwards.
+   */
+  async listProjectThreadsViaWorker(
+    options: ThreadListOptions = {},
+    hydrateUsage = true
+  ): Promise<Thread[]> {
+    const only = projectThreadsOnlyClause()
+    const { where, params, limit } = buildListClauses([only.where], only.params, options)
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where}
+       ${buildOrderBy(options)}${limit}`,
+      params,
+      0
+    )
+    if (!result.ok) {
+      return this.listAll(options).filter(
+        (thread) => !HIDDEN_CONTAINER_PROJECT_IDS.includes(thread.projectId)
+      )
+    }
+    const rows = result.rows as unknown as ThreadRow[]
+    return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
+  }
+
+  /**
    * Every active thread the Threads view must carry whatever the bounded
    * recency window pulls: pinned rows, rows in a non-done status, and every row
    * of a pinned-like scope (see `ScopeManager.scopedBucketIds`). Without this,
@@ -879,6 +947,24 @@ export class ThreadRepo {
       }
     }
     return titles
+  }
+
+  /**
+   * Whole thread rows for the given ids, read on the database worker. Used to
+   * hydrate semantic search matches, which arrive as ids and scores and must
+   * become full `Thread` results without a synchronous read.
+   */
+  async listByIdsViaWorker(ids: readonly string[]): Promise<Thread[]> {
+    const unique = [...new Set(ids)].filter((id) => id.length > 0)
+    if (unique.length === 0) return []
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads WHERE id IN (${placeholders})`,
+      unique,
+      0
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => rowToThread(row as unknown as ThreadRow))
   }
 
   /**
@@ -1213,18 +1299,19 @@ export function buildThreadSearchSql(
   useSearchMeta = false
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
-  const projectId = options.projectId ?? null
   const trimmed = raw.trim()
+  const titleScope = threadSearchScopeClause('t', options)
   const title = {
     sql: `SELECT t.* FROM threads t
-      WHERE (? IS NULL OR t.project_id = ?)
-        AND t.project_id != ?
+      WHERE ${titleScope.sql}
         AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, `%${escapeLike(trimmed)}%`, trimmed]
+    params: [...titleScope.params, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
+  const metaScope = threadSearchScopeClause('st', options)
+  const legacyScope = threadSearchScopeClause('t', options)
   const fts = ftsQuery
     ? useSearchMeta
       ? {
@@ -1240,15 +1327,14 @@ export function buildThreadSearchSql(
           WHERE agent_messages_fts MATCH ?
             AND m.session_id IS NULL
             AND m.visibility = 'conversation'
-            AND (? IS NULL OR st.project_id = ?)
-            AND st.project_id != ?
+            AND ${metaScope.sql}
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
         JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, messageLimit]
+          params: [ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
@@ -1259,13 +1345,100 @@ export function buildThreadSearchSql(
         WHERE agent_messages_fts MATCH ?
           AND am.session_id IS NULL
           AND am.visibility = 'conversation'
-          AND (? IS NULL OR t.project_id = ?)
-          AND t.project_id != ?
+          AND ${legacyScope.sql}
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID]
+          params: [ftsQuery, ...legacyScope.params]
         }
     : null
   return { title, fts, limit }
+}
+
+/**
+ * The WHERE fragment that scopes a thread search to its family.
+ *
+ * The table alias is a parameter because the FTS query joins `threads` twice
+ * (`st` inside the ranking subquery, `t` outside it) and both need the same
+ * restriction. Params are positional and must be spread in the same order the
+ * fragment declares them.
+ */
+function threadSearchScopeClause(
+  alias: string,
+  options: ThreadSearchOptions
+): { sql: string; params: unknown[] } {
+  const projectId = options.projectId ?? null
+  const routineId = options.routineId ?? null
+  switch (options.family) {
+    case 'chats':
+      return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
+    case 'assistant': {
+      const clauses = [`${alias}.project_id = ?`]
+      const params: unknown[] = [ASSISTANT_SPACE_ID]
+      if (routineId) {
+        clauses.push(`${alias}.routine_id = ?`)
+        params.push(routineId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+    case 'projects': {
+      // Every engineering project, never the hidden inbox/assistant/browser
+      // containers that share the same table.
+      const clauses = [
+        `${alias}.project_id != ?`,
+        `${alias}.project_id != ?`,
+        `${alias}.project_id != ?`
+      ]
+      const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID]
+      if (projectId) {
+        clauses.push(`${alias}.project_id = ?`)
+        params.push(projectId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+    default: {
+      // Unscoped/global: every family except the hidden browser-chat container,
+      // optionally narrowed to one project.
+      const clauses = [`${alias}.project_id != ?`]
+      const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
+      if (projectId) {
+        clauses.push(`${alias}.project_id = ?`)
+        params.push(projectId)
+      }
+      return { sql: clauses.join(' AND '), params }
+    }
+  }
+}
+
+/**
+ * Whether a thread belongs to the family a search was scoped to. This is the
+ * in-memory twin of {@link threadSearchScopeClause}, used by the semantic path
+ * after matches are hydrated back into `Thread` rows (which carry `projectId`
+ * and `routineId` but no SQL to filter against).
+ */
+export function threadMatchesSearchScope(
+  thread: Pick<Thread, 'projectId' | 'routineId'>,
+  options: ThreadSearchOptions
+): boolean {
+  switch (options.family) {
+    case 'chats':
+      return thread.projectId === INBOX_PROJECT_ID
+    case 'assistant':
+      return (
+        thread.projectId === ASSISTANT_SPACE_ID &&
+        (!options.routineId || thread.routineId === options.routineId)
+      )
+    case 'projects':
+      if (
+        thread.projectId === GLOBAL_BROWSER_PROJECT_ID ||
+        thread.projectId === ASSISTANT_SPACE_ID ||
+        thread.projectId === INBOX_PROJECT_ID
+      ) {
+        return false
+      }
+      return !options.projectId || thread.projectId === options.projectId
+    default:
+      if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return false
+      return !options.projectId || thread.projectId === options.projectId
+  }
 }
 
 /**

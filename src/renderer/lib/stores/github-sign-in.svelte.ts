@@ -198,7 +198,7 @@ class GitHubSignInState {
     if (!device) return false
     this.copyError = ''
     try {
-      await copyText(device.userCode)
+      await copyText(device.userCode, null)
       this.copied = true
       this.stopCopyFeedback()
       this.copyTimer = setTimeout(() => (this.copied = false), COPIED_FEEDBACK_MS)

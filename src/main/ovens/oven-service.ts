@@ -17,14 +17,11 @@ import {
 import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
 import { serviceBundleRevision } from './oven-service-bundle'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
-import { OvenSsh } from './oven-ssh'
+import { OvenSsh, OvenServiceMissingError } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
 import { remoteShell } from './oven-remote-shell'
-import {
-  remoteInstallServiceCommand,
-  remoteServiceCommand
-} from './oven-remote-command'
+import { remoteInstallServiceCommand, remoteServiceCommand } from './oven-remote-command'
 
 export class OvenService {
   readonly ssh: OvenSsh
@@ -182,7 +179,17 @@ export class OvenService {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
     const shell = await remoteShell(this.ssh, id)
-    return this.ssh.execute(id, remoteServiceCommand(shell, ['request']), `${data}\n`)
+    const command = remoteServiceCommand(shell, ['request'])
+    try {
+      return await this.ssh.execute(id, command, `${data}\n`)
+    } catch (error) {
+      // The service file is the app's own artifact on the Oven. When it is gone
+      // (a reimaged machine or a wiped home), place it again and run the request
+      // once more instead of failing the Oven for a file only this app manages.
+      if (!(error instanceof OvenServiceMissingError)) throw error
+      await this.install(id)
+      return await this.ssh.execute(id, command, `${data}\n`)
+    }
   }
 
   private decode<T>(output: string): T {

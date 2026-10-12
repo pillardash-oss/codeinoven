@@ -62,6 +62,11 @@
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
   --color-thread-working-paused: var(--color-warning);
+  /* Temporary (side) chat indicator — the context-rail tab icon, the parent
+     thread's side-chat badge and every temporary-chat notification share this
+     one colour, so a side chat reads as a side chat by one accent everywhere
+     it appears, whichever entity it belongs to. */
+  --color-temporary-chat: var(--color-info);
   /* Quiet but unmistakable purple for reviewable engineering artifacts. */
   --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);
@@ -958,6 +963,34 @@ html body [data-sonner-toaster] {
   animation: reveal-flash-border 0.7s ease-in-out 3;
 }
 
+/*
+ * A line a citation link, a source row, or Go to line just landed on in the
+ * file editor. It is the same accent-gold flash as `.reveal-flash`, but drawn
+ * as an outline rather than a border: a border box would make the line two
+ * pixels taller for as long as it flashed and desync CodeMirror's line-height
+ * map (every later line would jump). The outline is animated through the same
+ * three pulses and then removed by the editor.
+ */
+@keyframes reveal-flash-outline {
+  0%,
+  100% {
+    outline-color: transparent;
+    background-color: transparent;
+  }
+  40%,
+  60% {
+    outline-color: var(--color-accent);
+    background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+}
+
+.cm-jump-line {
+  outline: 1.5px solid transparent;
+  outline-offset: -1px;
+  border-radius: 3px;
+  animation: reveal-flash-outline 0.7s ease-in-out 3;
+}
+
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`
@@ -976,32 +1009,18 @@ html body [data-sonner-toaster] {
  * Note: content-visibility was removed here deliberately. It once carried its
  * weight when the whole transcript mounted, but the mounted window is now
  * bounded (~40 messages) and oversized single runs render collapsed via
- * LongTextBlock, so there is nothing left for it to skip — and its
+ * LongTextBlock, so there is nothing left for it to skip, and its
  * near-viewport misclassification during batch mounts above the scroll
  * position was observed to blank the entire conversation while the reader was
- * scrolled up (recovered only on the next paint). The entrance fade stays.
+ * scrolled up (recovered only on the next paint).
+ *
+ * The per-block entrance fade is gone for the same reason. An `opacity`
+ * animation promotes every message block to its own compositor layer for the
+ * length of the animation, so a window fill or a scroll that mounts a batch of
+ * 12 to 20 blocks (INITIAL_REVEAL_BATCH and MOUNTED_EXPAND_BATCH in ThreadView)
+ * promoted that many layers in one frame. On a large, high-density window that
+ * layer churn starves raster: the conversation pane stops painting its content
+ * while its scroll geometry and the rest of the chrome stay intact, then
+ * recovers a beat later (measured in the 2026-10-09 recording). A hard pop-in
+ * on mount is the cheaper trade.
  */
-.message-block {
-  /* Subtle entrance: window fills and streaming appends mount blocks in
-   * batches, and a hard pop-in reads as jank. A short opacity-only fade
-   * (no transform — a transform here would briefly become the containing
-   * block for fixed-position tooltips inside the block) masks the appearance
-   * without costing layout. Compositor-only, so it stays cheap even when
-   * dozens of blocks mount in one batch. */
-  animation: message-block-enter 150ms ease-out;
-}
-
-@keyframes message-block-enter {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .message-block {
-    animation: none;
-  }
-}

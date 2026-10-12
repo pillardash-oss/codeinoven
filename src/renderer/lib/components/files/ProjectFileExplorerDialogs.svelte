@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ProjectFileInfo } from '$shared/types'
+  import type { ProjectDirectorySize, ProjectFileInfo } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import FileInfoDialog from './FileInfoDialog.svelte'
 
@@ -9,6 +9,8 @@
     onClearDeleteTarget: () => void
     onConfirmDelete: () => void
     info: ProjectFileInfo | null
+    directorySize: ProjectDirectorySize | null
+    directorySizePending: boolean
     onClearInfo: () => void
   }
 
@@ -18,6 +20,8 @@
     onClearDeleteTarget,
     onConfirmDelete,
     info,
+    directorySize,
+    directorySizePending,
     onClearInfo
   }: Props = $props()
 </script>
@@ -38,4 +42,4 @@
   </p>
 </ConfirmDialog>
 
-<FileInfoDialog {info} onClear={onClearInfo} />
+<FileInfoDialog {info} {directorySize} {directorySizePending} onClear={onClearInfo} />

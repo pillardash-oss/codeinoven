@@ -71,12 +71,18 @@ function isPersistedNotification(value: unknown): value is PersistedAgentNotific
   )
 }
 
+/**
+ * Which family a notification belongs to, from the entity that owns it.
+ *
+ * The owning project decides, never the source: a temporary (side) chat carries
+ * its parent thread's project, so a side chat opened from a project thread
+ * groups under that project, one opened from the assistant space under the
+ * assistant, and one opened from an inbox chat under Chats. Grouping it by its
+ * `temporary-chat` source instead forced every side chat onto the Chats tab and
+ * rail, whichever entity had actually spawned it.
+ */
 function familyOf(notification: AgentNotificationPayload): NotificationFamily {
-  if (
-    notification.source === 'chat' ||
-    notification.source === 'temporary-chat' ||
-    notification.projectId === INBOX_PROJECT_ID
-  ) {
+  if (notification.source === 'chat' || notification.projectId === INBOX_PROJECT_ID) {
     return 'chat'
   }
   if (notification.source === 'assistant' || notification.projectId === ASSISTANT_SPACE_ID) {
@@ -172,6 +178,49 @@ export class NotificationInboxStore {
    *  renderer cannot rebuild an entry the user has already retired. */
   dismissedIds(): string[] {
     return [...this.dismissed]
+  }
+
+  /**
+   * Heal assistant entries written before the payload carried their routine.
+   *
+   * `routineId` joined the payload after this store had already been in use, so
+   * entries written by an older build carry no routine and the panel grouped
+   * every one of those routine runs under "Tasks without a routine". The run
+   * thread has always known its routine, so `resolve` reads it back from there.
+   *
+   * Only distinct thread ids that are genuinely missing the routine are queried,
+   * each entry is written once, and the file is rewritten a single time, so this
+   * is a no-op from the second launch on. A thread that has since been purged
+   * resolves to null and its entry is left alone rather than guessed by name.
+   */
+  async resolveMissingRoutineIds(
+    resolve: (threadId: string) => Promise<string | null>
+  ): Promise<void> {
+    const byThread = new Map<string, PersistedAgentNotification[]>()
+    for (const entry of this.notifications.values()) {
+      if (entry.source !== 'assistant' || entry.routineId) continue
+      const bucket = byThread.get(entry.threadId)
+      if (bucket) bucket.push(entry)
+      else byThread.set(entry.threadId, [entry])
+    }
+    if (byThread.size === 0) return
+
+    let healed = false
+    await Promise.all(
+      [...byThread].map(async ([threadId, entries]) => {
+        try {
+          const routineId = await resolve(threadId)
+          if (!routineId) return
+          for (const entry of entries) {
+            this.notifications.set(entry.id, { ...entry, routineId })
+          }
+          healed = true
+        } catch (error) {
+          Logger.dev('Assistant notification routine backfill failed:', error)
+        }
+      })
+    )
+    if (healed) this.persist()
   }
 
   /** Retire one entry the user dismissed by hand. */

@@ -4,9 +4,20 @@ import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
-import { isWindowsShell, powershellLiteral, remoteShell, windowsEncodedCommand } from './oven-remote-shell'
+import {
+  isWindowsShell,
+  powershellLiteral,
+  remoteShell,
+  windowsEncodedCommand
+} from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
 import { validateIdentityPath } from './oven-validation'
+import {
+  ensureMultiplexDirectory,
+  multiplexControlPath,
+  multiplexOptions,
+  multiplexSupported
+} from './oven-ssh-multiplex'
 
 type OvenSshRegistry = Pick<OvenRegistry, 'require'> & {
   storage: Pick<OvenRegistry['storage'], 'resolve'>
@@ -26,8 +37,70 @@ export function sshQuote(value: string): string {
   return `'${value.replace(/'/gu, `'"'"'`)}'`
 }
 
+/**
+ * Credential-shaped content this app must never echo back to the renderer: an
+ * assignment or header that carries a value, plus the SSH transport's own
+ * host-key chatter. A bare word such as `secret` or `token` inside a path is not
+ * a credential, so a line like that is kept and stays useful.
+ */
+const UNREPORTABLE_DETAIL =
+  /(?:authorization\s*[:=]|bearer\s+\S|\b(?:password|passphrase|api[-_]?key|access[-_]?token|secret[-_]?key|client[-_]?secret)\s*[:=]|Permanently added|known_hosts)/iu
+
+/**
+ * Node's own runtime noise: the internal loader banner, stack frames, the error
+ * property dump, and the trailing version banner. It never names a cause, which
+ * is why the tail of a failed run is the least useful part of its stderr.
+ */
+const NODE_ERROR_NOISE =
+  /^(?:node:internal\/|throw err;?$|\^|at .+|code: |errno: |syscall: |path: |require\s?stack:|Node\.js v|\})/iu
+
+/** The lines that actually name what went wrong, ranked above the noise. */
+const REPORTABLE_ERROR =
+  /(?:error:|cannot find module|enoent|eacces|eperm|econnrefused|econnreset|syntaxerror|typeerror|referenceerror|is not a function|is not defined|command not found|no such file or directory)/iu
+
+/**
+ * A failed Oven command whose cause is the app-managed service bundle missing on
+ * the Oven. The app owns that file, so a caller repairs it instead of reporting it.
+ */
+export class OvenServiceMissingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OvenServiceMissingError'
+  }
+}
+
+function isMissingService(stderr: string): boolean {
+  return /MODULE_NOT_FOUND|Cannot find module/iu.test(stderr) && /service\.mjs/iu.test(stderr)
+}
+
+/**
+ * The line that names a remote failure, with home paths reduced and
+ * credential-shaped content dropped, so an unclassified exit code explains
+ * itself instead of reporting Node's error trailer.
+ */
+function remoteFailureDetail(stderr: string): string {
+  const lines = stderr
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(
+      (line) => line.length > 0 && !UNREPORTABLE_DETAIL.test(line) && !NODE_ERROR_NOISE.test(line)
+    )
+    .map((line) => line.replace(/\/(?:home|Users)\/[A-Za-z0-9._-]+/gu, '~').slice(0, 240))
+  const reportable = lines.filter((line) => REPORTABLE_ERROR.test(line))
+  return (reportable.length > 0 ? reportable : lines).slice(-3).join(' · ')
+}
+
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
 function remoteCommandIssue(stderr: string): string {
+  const nodeVersion = /Node\.js 22 or later is required on this Oven \(found (v[\d.]+)\)/u.exec(
+    stderr
+  )
+  if (nodeVersion)
+    return `The Oven runs Node.js ${nodeVersion[1]}, but version 22 or later is required. Install or select a newer Node.js on the Oven, then retry this step.`
+  if (/Node\.js 22 or later is required on this Oven/u.test(stderr))
+    return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
+  if (isMissingService(stderr))
+    return "The Oven's CodeInOven service file is missing, so no request can run. Reinstalling it repairs this Oven."
   if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
     return 'Permission denied: npm cannot write to its installation prefix or cache. The Oven needs a writable user-owned npm directory.'
   if (
@@ -52,6 +125,8 @@ function remoteCommandIssue(stderr: string): string {
     return 'Another package operation holds the package-manager lock. Wait for it to finish, then retry.'
   if (/dpkg was interrupted/iu.test(stderr))
     return 'The Oven has an interrupted package configuration. Repair it on the Oven before retrying setup.'
+  if (/is not valid yet|Release file .* not valid|not valid for another/iu.test(stderr))
+    return 'The Oven clock is behind the package mirrors, so their metadata was rejected as not yet valid. CodeInOven matches the Oven clock before upgrading packages; if this repeats, correct the Oven time source, then retry this step.'
   if (/command not found|is not recognized|No such file or directory/iu.test(stderr))
     return 'A command or file required by this step is missing on the Oven.'
   if (/no space left on device/iu.test(stderr))
@@ -60,16 +135,26 @@ function remoteCommandIssue(stderr: string): string {
     /could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr)
   )
     return 'The remote command could not reach its package source. Check the Oven network and repositories.'
-  return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
+  const detail = remoteFailureDetail(stderr)
+  if (detail) return `The Oven reported: ${detail}`
+  return 'Check the package manager or command on the Oven, then retry this step.'
 }
 
 export class OvenSsh {
-  private tail: Promise<unknown> = Promise.resolve()
+  /**
+   * One queue per Oven, so commands to the same machine stay serialized without
+   * making every Oven wait behind every other one. A single shared queue meant a
+   * list of Ovens checked one at a time no matter how many could answer at once;
+   * keyed by Oven, each machine still runs one command at a time (so it is never
+   * flooded) while distinct machines run together.
+   */
+  private readonly tails = new Map<string, Promise<unknown>>()
   private initialized: Promise<void> | undefined
+  private multiplexReady: Promise<void> | undefined
 
   constructor(private readonly registry: OvenSshRegistry) {}
 
-  /** Serialize transport work so reconnect/probe cannot flood a low-end device. */
+  /** Serialize transport work per Oven, so a reconnect never floods one device. */
   execute(
     id: string,
     command: string,
@@ -85,7 +170,8 @@ export class OvenSsh {
       maxOutputBytes > 8 * 1024 * 1024
     )
       throw new TypeError('Invalid Oven response limit.')
-    const result = this.tail
+    const previous = this.tails.get(id) ?? Promise.resolve()
+    const result = previous
       .catch(() => undefined)
       .then(async () => {
         this.initialized ??= this.cleanStaleCredentials()
@@ -101,7 +187,12 @@ export class OvenSsh {
           maxOutputBytes
         )
       })
-    this.tail = result
+    this.tails.set(id, result)
+    void result
+      .catch(() => undefined)
+      .then(() => {
+        if (this.tails.get(id) === result) this.tails.delete(id)
+      })
     return result
   }
 
@@ -297,6 +388,42 @@ export class OvenSsh {
     }
   }
 
+  /**
+   * Close the shared connection for one Oven if this app opened it.
+   *
+   * The master is a background process, so the app closes it deliberately on
+   * quit instead of waiting out the idle watchdog. `-O exit` only signals the
+   * local control socket, so it reuses the same connection args (and therefore
+   * finds the right master) without talking to the Oven again.
+   */
+  async closeShared(id: string): Promise<void> {
+    if (!multiplexSupported()) return
+    this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
+    await this.multiplexReady
+    const prepared = await this.prepare(id, undefined, false)
+    const separator = prepared.args.indexOf('--')
+    if (separator < 0) return
+    const args = [
+      ...prepared.args.slice(0, separator),
+      '-O',
+      'exit',
+      ...prepared.args.slice(separator)
+    ]
+    try {
+      await new Promise<void>((resolve) => {
+        const child = spawn(prepared.executable, args, {
+          env: prepared.env,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore']
+        })
+        child.once('error', () => resolve())
+        child.once('close', () => resolve())
+      })
+    } finally {
+      await prepared.dispose()
+    }
+  }
+
   /** Reclaim private identity files left by a crash without touching a live connection. */
   private async cleanStaleCredentials(): Promise<void> {
     const root = this.registry.storage.resolve('ovens/credentials')
@@ -363,6 +490,23 @@ export class OvenSsh {
       '-o',
       'ClearAllForwardings=yes'
     ]
+    // Share one SSH connection per Oven across every command in the app, so a
+    // turn does not pay a full handshake on each poll. `ControlPersist` closes
+    // it only once nothing is using it (see oven-ssh-multiplex.ts).
+    if (multiplexSupported()) {
+      this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
+      await this.multiplexReady
+      args.push(
+        ...multiplexOptions(
+          multiplexControlPath(this.registry.storage, {
+            id,
+            host: connection.host,
+            port: connection.port,
+            ...(connection.user ? { user: connection.user } : {})
+          })
+        )
+      )
+    }
     if (connection.user) args.push('-l', connection.user)
     let scratch: string | undefined
     const configureAskpass = async (directory: string, reference: string): Promise<void> => {
@@ -529,7 +673,7 @@ export class OvenSsh {
             sshIssue = 'The SSH hostname or config alias could not be resolved.'
           } else if (/Operation timed out|Connection timed out/u.test(text)) {
             sshIssue = 'The SSH connection timed out.'
-          } else if (/Node.js is required/u.test(text)) {
+          } else if (/Node\.js(?: 22 or later)? is required/u.test(text)) {
             sshIssue = 'Install Node.js 22 or later on this Oven before setting up its service.'
           }
         })
@@ -545,11 +689,14 @@ export class OvenSsh {
             reject(new Error('The Oven did not respond before the connection timeout.'))
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
-          else if (code !== 0)
+          else if (code !== 0) {
+            const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
             reject(
-              new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`)
+              isMissingService(remoteStderr)
+                ? new OvenServiceMissingError(message)
+                : new Error(message)
             )
-          else resolve(output)
+          } else resolve(output)
         })
         if (!channel) child.stdin.end(input)
       })

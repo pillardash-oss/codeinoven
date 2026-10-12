@@ -19,6 +19,7 @@ import {
   publicMarketEntry
 } from '../../utilities/skill-market'
 import { idleSkillUpdateStatus } from '../../utilities/skill-updates'
+import { AgentPluginService } from '../../utilities/agent-plugins'
 import { Logger } from '../../system/logger'
 import { isNetworkError } from '../../util/network-error'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
@@ -134,6 +135,14 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
       `Cloud deployment container ${index} provider kind`
     ),
     status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(value.runtimeStatus === undefined
+      ? {}
+      : {
+          runtimeStatus: validateCloudDeploymentStatus(
+            value.runtimeStatus,
+            `Cloud deployment container ${index} runtime`
+          )
+        }),
     ...(typeof value.accountId === 'string'
       ? {
           accountId: requireString(
@@ -313,7 +322,7 @@ function mergeCloudDeploymentContainers(
     if (mapping.providerKind !== kind) continue
     const live = byId.get(mapping.id)
     if (!live) {
-      merged.push({ ...mapping, status: 'unknown' })
+      merged.push({ ...mapping, status: 'unknown', runtimeStatus: 'unknown' })
       continue
     }
     merged.push({
@@ -325,6 +334,7 @@ function mergeCloudDeploymentContainers(
       // also reports the same container id.
       ...(mapping.accountId === undefined ? {} : { accountId: mapping.accountId }),
       status: live.status,
+      ...(live.runtimeStatus === undefined ? {} : { runtimeStatus: live.runtimeStatus }),
       ...(live.url === undefined ? {} : { url: live.url }),
       ...(live.project === undefined ? {} : { project: live.project }),
       ...(live.createdAt === undefined
@@ -550,6 +560,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     providerForProject,
     pullRequestTarget
   } = ctx
+  const agentPlugins = new AgentPluginService(storage)
 
   // ─── Cloud deployment config & credentials ────────────────────────────
   // The provider token is vaulted by main via `safeStorage` and never crosses
@@ -812,6 +823,55 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       return { ...account, secretRef: '' }
     }
   )
+
+  /**
+   * Verify a provider account's credentials without saving anything. Tests a
+   * saved account by id (vaulted token) or inline kind + baseUrl + token from
+   * an unsaved form. A light `listContainers` read is the probe: it exercises
+   * auth, host reachability, and token scope in one call.
+   */
+  ipcMain.handle('cloudDeploy:testAccount', async (_, input: unknown) => {
+    if (!isRecord(input)) throw new TypeError('Connection test input must be an object')
+    let kind: CloudDeploymentProviderKind
+    let baseUrl: string | undefined
+    let token: string
+    if (typeof input.accountId === 'string' && input.accountId.trim() !== '') {
+      const safeAccountId = requireString(input.accountId, 'Account ID', true)
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      if (!account.enabled) {
+        throw new TypeError(`Cloud deployment account "${account.label}" is disabled`)
+      }
+      kind = account.providerKind
+      baseUrl = account.baseUrl
+      // An explicit token in the form replaces the vaulted one for the test so
+      // edits can be verified before they are saved.
+      token =
+        typeof input.token === 'string' && input.token.trim() !== ''
+          ? validateProviderToken(input.token)
+          : await vault.resolveProviderToken(account.id)
+      if (typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '') {
+        baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
+      }
+    } else {
+      kind = validateCloudDeploymentProviderKind(input.providerKind)
+      if (typeof input.baseUrl !== 'string' || input.baseUrl.trim() === '') {
+        throw new TypeError(`Enter the ${kind} base URL before testing.`)
+      }
+      baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
+      if (typeof input.token !== 'string' || input.token.trim() === '') {
+        throw new TypeError('Enter an API token before testing.')
+      }
+      token = validateProviderToken(input.token)
+    }
+    const provider = resolveDeploymentProvider(kind, {
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+      token
+    })
+    const containers = await provider.listContainers()
+    return { containerCount: containers.length }
+  })
 
   /**
    * Remove every trace of a provider account from one project's cloud
@@ -1292,7 +1352,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       // what it addresses. Optional like the threads, for the same reason   a
       // comment list is worth showing even when its reactions could not be read.
       const reactions = await provider
-        .listPullRequestReactions(reactionSubjects(detail, comments, reviews, reviewComments))
+        .listReactions(reactionSubjects(detail, comments, reviews, reviewComments))
         .catch((): PrReactionMap => ({}))
       return {
         detail,
@@ -1529,7 +1589,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       const reaction = validatePrReactionContent(content)
       const adding = validateBoolean(add, 'Add reaction')
       return runGitHubMutation(target.owner, target.repo, () =>
-        provider.setPullRequestReaction({ nodeId, content: reaction, add: adding })
+        provider.setReaction({ nodeId, content: reaction, add: adding })
       )
     }
   )
@@ -1664,6 +1724,68 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     return { taskId, summary, installed }
   })
 
+  ipcMain.handle('plugins:listMarketplaces', () => agentPlugins.listMarketplaces())
+  ipcMain.handle('plugins:addMarketplace', (_, rawRequest: unknown) => {
+    if (!isRecord(rawRequest)) throw new TypeError('Marketplace request must be an object')
+    const platform = rawRequest['platform']
+    if (platform !== 'codex' && platform !== 'claude')
+      throw new TypeError('Plugin platform is invalid')
+    return agentPlugins.addMarketplace({
+      url: validateBoundedString(rawRequest['url'], 'Marketplace URL', 3, 2_000),
+      platform
+    })
+  })
+  ipcMain.handle('plugins:removeMarketplace', (_, rawId: unknown) =>
+    agentPlugins.removeMarketplace(validateBoundedString(rawId, 'Marketplace ID', 1, 300))
+  )
+  ipcMain.handle(
+    'plugins:list',
+    (_, rawQuery: unknown, rawOffset: unknown, rawLimit: unknown, rawView: unknown) => {
+      const query =
+        rawQuery === undefined ? '' : validateBoundedString(rawQuery, 'Plugin search', 0, 200)
+      const offset = rawOffset === undefined ? 0 : rawOffset
+      const limit = rawLimit === undefined ? 40 : rawLimit
+      const view = rawView === undefined ? 'discover' : rawView
+      if (
+        typeof offset !== 'number' ||
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        offset > 100_000
+      ) {
+        throw new TypeError('Plugin result offset is invalid')
+      }
+      if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
+        throw new TypeError('Plugin result limit is invalid')
+      }
+      if (view !== 'discover' && view !== 'bookmarks' && view !== 'installed') {
+        throw new TypeError('Plugin marketplace view is invalid')
+      }
+      return agentPlugins.listEntries(query, offset, limit, view)
+    }
+  )
+  ipcMain.handle('plugins:getIcon', (_, rawId: unknown) =>
+    agentPlugins.getIcon(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
+  ipcMain.handle('plugins:getDetail', (_, rawId: unknown) =>
+    agentPlugins.getDetail(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
+  ipcMain.handle('plugins:setBookmarked', (_, rawId: unknown, rawBookmarked: unknown) =>
+    agentPlugins.setBookmarked(
+      validateBoundedString(rawId, 'Plugin ID', 1, 300),
+      validateBoolean(rawBookmarked, 'Bookmarked')
+    )
+  )
+  ipcMain.handle('plugins:listInstalled', () => agentPlugins.listInstalled())
+  ipcMain.handle('plugins:install', (_, rawId: unknown) =>
+    agentPlugins.install(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
+  ipcMain.handle('plugins:update', (_, rawId: unknown) =>
+    agentPlugins.update(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
+  ipcMain.handle('plugins:uninstall', (_, rawId: unknown) =>
+    agentPlugins.uninstall(validateBoundedString(rawId, 'Plugin ID', 1, 300))
+  )
+
   ipcMain.handle('utilities:searchSkillMarket', async (_, rawQuery: unknown) => {
     const query = validateBoundedString(rawQuery, 'Skill search query', 2, 200)
     const url = new URL('https://www.skills.sh/api/search')
@@ -1782,10 +1904,17 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle('utilities:uninstallMarketSkill', async (_, rawSkillId: unknown) => {
-    const skillId = validateEntityId(rawSkillId, 'Skill ID', 200)
+    const marketId = validateBoundedString(rawSkillId, 'Skill market ID', 3, 500)
+    const segments = marketId.split('/')
+    const skillId = validateEntityId(segments.pop(), 'Skill ID', 200)
+    const source = segments.join('/')
+    if (!isGithubSkillSource(source) && !isWellKnownSkillSource(source)) {
+      throw new TypeError('Skill source is invalid')
+    }
     return uninstallMarketSkill(
       storage,
       skillId,
+      source,
       await skillScanProjects(),
       app.getPath('home'),
       utilityFootprint
@@ -1807,6 +1936,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
   ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
     githubAuthService.pollAccessToken(validateBoundedString(deviceCode, 'Device code', 1, 256))
+  )
+  ipcMain.handle('github:switchAccount', async (_, accountId: unknown) =>
+    githubAuthService.switchAccount(validateEntityId(accountId, 'GitHub account ID'))
   )
   ipcMain.handle('github:logout', async () => {
     await githubAuthService.logout()
@@ -1843,7 +1975,11 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'checkpoint:rollback',
     async (_, projectId: string, threadId: string, checkpointId: string) => {
-      await checkpointManager.rollback(projectId, threadId, checkpointId)
+      const checkpoint = await checkpointManager.rollback(projectId, threadId, checkpointId)
+      // Undoing a turn's changes is the user rejecting that model's work: score
+      // it 0 without a judge instead of leaving the queue to grade a reverted
+      // answer (see markTurnRankingUndone).
+      chatEngine?.markTurnRankingUndone(threadId, checkpoint.sourceMessageId)
       return checkpointManager.listSummaries(projectId, threadId)
     }
   )
@@ -1852,12 +1988,13 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await checkpointManager.rollbackPaths(
+      const checkpoint = await checkpointManager.rollbackPaths(
         safeProjectId,
         safeThreadId,
         validateEntityId(checkpointId, 'Checkpoint ID'),
         validateStringArray(paths, 'Checkpoint paths')
       )
+      chatEngine?.markTurnRankingUndone(safeThreadId, checkpoint.sourceMessageId)
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )
@@ -1866,12 +2003,17 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await checkpointManager.redoPaths(
+      const checkpoint = await checkpointManager.redoPaths(
         safeProjectId,
         safeThreadId,
         validateEntityId(checkpointId, 'Checkpoint ID'),
         validateStringArray(paths, 'Checkpoint paths')
       )
+      // A redo that restores the whole turn undoes the rejection, so the
+      // window is graded normally again; a partial redo keeps the 0.
+      if (checkpoint.status !== 'rolled_back') {
+        chatEngine?.clearTurnRankingUndone(safeThreadId, checkpoint.sourceMessageId)
+      }
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )

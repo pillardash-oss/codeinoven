@@ -198,6 +198,8 @@
             currentTab.url !== '' &&
             browserBookmarks.isBookmarked(currentTab.url, currentTab.boxId),
           pinned: currentTab.pinned,
+          hibernated: currentTab.hibernated,
+          active: currentTab.id === globalBrowser.activeTabId,
           groupId: currentTab.groupId,
           boxId: currentTab.boxId,
           canReopenClosedTab: globalBrowser.canReopenClosedTab,
@@ -215,6 +217,9 @@
               return
             case 'togglePin':
               globalBrowser.toggleTabPin(tab.id)
+              return
+            case 'sleep':
+              globalBrowser.hibernate(tab.id)
               return
             case 'toggleBookmark':
               if (currentTab.url !== '') {

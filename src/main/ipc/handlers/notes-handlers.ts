@@ -13,13 +13,14 @@ import {
   validateThreadStatus
 } from '../ipc-validation'
 import { requireString, requireVersion, validateStringArray } from './shared'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import type { IpcHandlerContext } from './context'
 
 /** Upper bound on one persisted composer draft payload. */
 const MAX_DRAFT_JSON_LENGTH = 256 * 1024
 
 export function registerNotesHandlers(ctx: IpcHandlerContext): void {
-  const { threadCreation, threadManager, specEngine, repositoryService, noteRepo } = ctx
+  const { threadCreation, threadManager, specEngine, repositoryService, noteRepo, chatEngine } = ctx
 
   const NOTE_BODY_MAX = 100_000
   const STICKY_NOTE_TITLE_MAX = 120
@@ -51,7 +52,9 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     const customSvg =
       record['customSvg'] === null
         ? null
-        : validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
+        : sanitizeCustomSvg(
+            validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
+          )
     const imagePath =
       record['imagePath'] === null
         ? null
@@ -229,11 +232,13 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {
-      // Composer activity no longer anchors any grading deadline: ranking
-      // conversations close on thread deletion or the inactivity deadline.
+      // Composer typing is the user working in the app, so it holds every
+      // pending card's countdown just as answering a card does. Grading deadlines
+      // are untouched: they close on thread deletion or the inactivity deadline.
       validateEntityId(projectId, 'Project ID')
       validateEntityId(threadId, 'Thread ID')
       validateBoolean(drafting, 'Drafting')
+      if (drafting) chatEngine?.noteUserActivity()
     }
   )
   ipcMain.handle(

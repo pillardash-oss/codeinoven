@@ -1,5 +1,9 @@
 import type {
+  DesignHistoryRestoreFileResult,
+  DesignHistoryState,
   DesignOpenResult,
+  DesignPageHistoryState,
+  DesignRevisionCause,
   DesignScreenShot,
   DesignThumbnail,
   ScreenCanvasState,
@@ -67,5 +71,46 @@ export const invokeDesignContract = {
    * moved. Read straight after a save, because both surfaces that change a root
    * have to report what the move did with the work already on disk.
    */
-  'design:workRootState': {} as Contract<[], WorkRootState>
+  'design:workRootState': {} as Contract<[], WorkRootState>,
+  /**
+   * One design or composition folder's history, captured up to the present.
+   *
+   * Reading captures first: a change the app has not seen yet becomes a revision
+   * before the timeline is answered, so opening History is enough to make the
+   * current state a point the user can return to. `cause` says who is asking, so a
+   * revision the app takes after an agent turn is not labelled as a user edit.
+   */
+  'design:history': {} as Contract<
+    [projectId: string, threadId: string, directory: string, cause: DesignRevisionCause],
+    DesignHistoryState
+  >,
+  /**
+   * Move a folder to one point in its history, which is what Undo, Redo, and
+   * clicking a revision all do. Returns the history as it stands after the move, so
+   * the board never has to guess where the cursor landed.
+   */
+  'design:historyRestore': {} as Contract<
+    [projectId: string, threadId: string, directory: string, revisionId: string],
+    DesignHistoryState
+  >,
+  /**
+   * One page's own line through the history, so the user can undo just that page.
+   *
+   * The states are the distinct contents the file held, read from the folder's
+   * revisions, so stepping between two neighbours rewrites one file and leaves the
+   * rest of the design alone.
+   */
+  'design:historyPage': {} as Contract<
+    [projectId: string, threadId: string, directory: string, path: string],
+    DesignPageHistoryState
+  >,
+  /**
+   * Move one page to one point in its own history, which is what a page-scoped
+   * Undo and Redo do. Answers with the folder's history and the page's line after
+   * the move, so the board redraws the design and the timeline in one round trip.
+   */
+  'design:historyRestoreFile': {} as Contract<
+    [projectId: string, threadId: string, directory: string, path: string, revisionId: string],
+    DesignHistoryRestoreFileResult
+  >
 }

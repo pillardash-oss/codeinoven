@@ -23,6 +23,12 @@
     {#each items as item (item.label)}
       {#if item.divider}
         <div class="mx-2 my-1.5 h-px bg-border"></div>
+      {:else if item.header}
+        <div
+          class="truncate px-3 pt-1.5 pb-0.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+        >
+          {item.label}
+        </div>
       {:else}
         <button
           type="button"

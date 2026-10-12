@@ -353,7 +353,7 @@ export type TemporaryChatMode = 'elaborate' | 'quick'
  *  explain a selection. Displayed in the conversation as the short action
  *  label ("Explain") while the full instruction travels as the transport text. */
 export const EXPLAIN_SELECTION_PROMPT =
-  'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only \u2014 do not make changes or run commands.'
+  'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only do not make changes or run commands. and your response should not be more than one paragraph unless explicitly asked for more. Be very terse and avoid words salad, prioritize human understanding!'
 
 export interface TemporaryChatContextTab {
   id: string
@@ -378,6 +378,10 @@ export interface TemporaryChatContextTab {
    *  explain a specific selection (e.g. an agent question) rather than the
    *  generic "explain this selection" elaboration. */
   autoPrompt?: string
+  /** The pending question request this side chat was opened from, when a card's
+   *  Explain or Quick chat opened it. While the tab is in use the card's
+   *  countdown is held, because the user is working to understand the request. */
+  sourceRequestId?: string
   sessionStarted: boolean
   expired: boolean
   expiresAt: number

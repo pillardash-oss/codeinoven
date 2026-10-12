@@ -21,6 +21,11 @@ import type { DirectoryPreviewService } from './directory-preview-service'
 export interface DesignPreviewExecutorOptions {
   previews: DirectoryPreviewService
   database: Database
+  checkpoint: (
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ) => Promise<unknown>
   browser: () => BrowserService | null
   record: (input: {
     projectId: string
@@ -50,9 +55,11 @@ export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
 ): DesignCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation === 'checkpoint')
+      return options.checkpoint(context.projectId, context.threadId, input)
     if (operation !== 'preview') {
       throw new Error(
-        `The design capability exposes one operation, "preview", and no operation named "${operation}".`
+        `The design preview executor handles preview and checkpoint, and no operation named "${operation}".`
       )
     }
     const project = requireLocalProject(options.database, context.projectId)

@@ -231,7 +231,7 @@ export function buildMemoryDecisionQuestions(input: {
     scope: {
       type: 'choice',
       instructions:
-        'Where should that rule apply? Choose the narrowest scope that still covers where the user said it should hold. A rule a user states while working on one project belongs to that project unless they say it should apply more widely.',
+        'Where should that rule apply? Choose the narrowest scope that still covers where the user said it should hold. A rule about this project or its codebase belongs to this project (scope project) unless the user’s own words say it applies to every project or repository. When in doubt, choose the narrower scope.',
       criteria: scopeCriteria
     }
   }
@@ -341,4 +341,36 @@ function isScope(value: string | undefined): value is MemoryScope {
  */
 export function memoryDecisionDefaultScope(input: { isStandaloneChat: boolean }): MemoryScope {
   return input.isStandaloneChat ? 'thread' : 'project'
+}
+
+/**
+ * The user's own words that widen a project rule past the project it was stated
+ * in: "all projects", "every repository", "across codebases", "regardless of the
+ * project", "everywhere", "globally".
+ *
+ * A codebase rule only belongs to every project when the user said so, never on
+ * the decision model's initiative.
+ */
+const PROJECT_WIDE_RULE_PATTERN =
+  /\b(?:all|every|any|each)(?:\s+of)?(?:\s+(?:my|our|the))?\s+(?:projects?|repos?|repositor(?:y|ies)|codebases?)\b|\bacross\s+(?:(?:all|every|any)\s+)?(?:projects?|repos?|repositor(?:y|ies)|codebases?)\b|\b(?:regardless|irrespective)\s+of\s+(?:the\s+|which\s+)?(?:projects?|repos?|repositor(?:y|ies)|codebases?)\b|\beverywhere\b|\bglobally\b/iu
+
+/**
+ * The scope a project-thread decision is actually stored with.
+ *
+ * The decision model may return the audience-wide `projects` scope for a rule
+ * that is really about the project it was stated in, which would silently apply
+ * one project's convention to every other project. A codebase rule
+ * (`project-rule`) keeps that audience-wide scope only when the user's own words
+ * say the rule outlives this project; otherwise it is narrowed to this project.
+ *
+ * Rules that are not about the codebase (behavior, identity, preferences,
+ * models) may legitimately span projects, so they are left exactly as decided.
+ */
+export function narrowMemoryDecisionScope(
+  decision: Pick<StructuredMemoryProposal, 'scope' | 'category' | 'content'>
+): MemoryScope {
+  if (decision.scope !== 'projects') return decision.scope
+  if (decision.category !== 'project-rule') return decision.scope
+  if (PROJECT_WIDE_RULE_PATTERN.test(decision.content)) return decision.scope
+  return 'project'
 }

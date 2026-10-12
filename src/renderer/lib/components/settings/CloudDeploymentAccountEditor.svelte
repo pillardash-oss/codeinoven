@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Loader2 } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
+  import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -51,6 +52,45 @@
   let token = $state('')
   let saving = $state(false)
   let error = $state('')
+  /** Inline connection-test feedback (never saved). */
+  let testing = $state(false)
+  let testResult = $state('')
+
+  /** Probe the saved account (plus any unsaved URL/token edits) without saving. */
+  async function testConnection(): Promise<void> {
+    testing = true
+    testResult = ''
+    error = ''
+    try {
+      if (account) {
+        const result = await invoke('cloudDeploy:testAccount', {
+          accountId: account.id,
+          ...(draft.baseUrl.trim() !== '' ? { baseUrl: draft.baseUrl.trim() } : {}),
+          ...(token.trim() !== '' ? { token: token.trim() } : {})
+        })
+        testResult = `Connected   ${result.containerCount} container${result.containerCount === 1 ? '' : 's'} reachable.`
+      } else {
+        if (draft.baseUrl.trim() === '') {
+          error = 'Enter the base URL before testing.'
+          return
+        }
+        if (token.trim() === '') {
+          error = 'Enter an API token before testing.'
+          return
+        }
+        const result = await invoke('cloudDeploy:testAccount', {
+          providerKind: draft.kind,
+          baseUrl: draft.baseUrl.trim(),
+          token: token.trim()
+        })
+        testResult = `Connected   ${result.containerCount} container${result.containerCount === 1 ? '' : 's'} reachable.`
+      }
+    } catch (testError) {
+      error = testError instanceof Error ? testError.message : 'The connection test failed.'
+    } finally {
+      testing = false
+    }
+  }
 
   async function save(event: SubmitEvent): Promise<void> {
     event.preventDefault()
@@ -112,6 +152,17 @@
           onclick={onClose}
         >
           Cancel
+        </button>
+        <button
+          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          type="button"
+          disabled={testing || saving}
+          title="Verify these credentials without saving"
+          aria-label="Test connection without saving"
+          onclick={() => void testConnection()}
+        >
+          {#if testing}<Loader2 size={13} class="animate-spin" />{/if}
+          Test connection
         </button>
         <button
           class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
@@ -203,6 +254,11 @@
       </p>
     {/if}
 
+    {#if testResult !== ''}
+      <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+        {testResult}
+      </p>
+    {/if}
     {#if error !== ''}
       <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
     {/if}

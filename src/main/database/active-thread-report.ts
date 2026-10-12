@@ -9,6 +9,7 @@
  */
 
 import type { CloseConfirmationProject } from '../../lib/ipc-contract'
+import { isRemoteOvenId } from '../../lib/ovens'
 import { Logger } from '../system/logger'
 import type { Database } from './database'
 import { ProjectRepo } from './repositories/project-repo'
@@ -19,7 +20,12 @@ export function getActiveThreadProjects(database: Database): CloseConfirmationPr
   try {
     const threadRepo = new ThreadRepo(database)
     const projectRepo = new ProjectRepo(database)
-    const active = threadRepo.listActive()
+    // A remote Oven turn keeps running on that Oven while this app closes, so
+    // it is not work a close or an install would interrupt: only work that dies
+    // with this process belongs in the report.
+    const active = threadRepo
+      .listActive()
+      .filter((thread) => !isRemoteOvenId(thread.settings?.ovenId))
     if (active.length === 0) return []
     const byProject = new Map<string, CloseConfirmationProject>()
     for (const thread of active) {

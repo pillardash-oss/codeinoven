@@ -16,10 +16,9 @@
     VolumeX,
     X
   } from '@lucide/svelte'
-  import {
-    TOAST_OVERLAY_TOP,
-    type BrowserStripOverlayAction,
-    type BrowserStripOverlayRequest
+  import type {
+    BrowserStripOverlayAction,
+    BrowserStripOverlayRequest
   } from '$shared/browser-overlay'
 
   interface Props {
@@ -46,12 +45,10 @@
    * is left in the docked panel; the rows and the controls a user reaches for
    * while the page is live are all here.
    *
-   * The panel's own geometry is the app layout's, not this document's: the window
-   * starts at the application header's bottom edge, and the panel's viewport top
-   * follows the user's font size, so its top inside this document is the
-   * difference between the two.
+   * The panel's own geometry is the app layout's, and this document now shares
+   * the app window's content coordinates, so its top is `strip.top` unchanged.
    */
-  const top = $derived(strip.top - TOAST_OVERLAY_TOP)
+  const top = $derived(strip.top)
   const chrome = $derived(strip.chrome)
 
   /** A control that opens a native popup hands over the point under itself, in

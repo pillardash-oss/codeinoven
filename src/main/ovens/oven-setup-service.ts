@@ -42,6 +42,12 @@ export interface OvenSetupPorts {
   ssh: OvenSsh
   /** Read-only observation of the oven. */
   preflight: (ovenId: string) => Promise<OvenPreflightReport>
+  /**
+   * The most recent completed check for one Oven, when it is still young enough
+   * to authorize a setup. Present when the unified Oven check has run, so Start
+   * reuses the answer the user just watched instead of re-reading the Oven.
+   */
+  recentReport?: (ovenId: string) => OvenPreflightReport | null
   /** Install the current CodeInOven oven service. */
   installService: (ovenId: string) => Promise<void>
   /** Copy selected accounts and portable configuration. Returns readiness issues. */
@@ -182,16 +188,31 @@ export class OvenSetupService {
     }
     Logger.info('Oven setup preflight started', { ovenId })
     let assessment: OvenPreflightAssessment
-    try {
-      assessment = (await this.preflight(ovenId)).assessment
-      Logger.info('Oven setup preflight finished', {
+    // The Ovens page has just checked this Oven; reuse that answer rather than
+    // opening a second read the user would wait on. A stale or absent answer
+    // falls back to a fresh read, so the verdict is never older than the reuse
+    // window the check service enforces.
+    const recent = this.ports.recentReport?.(ovenId) ?? null
+    if (recent) {
+      this.reports.set(ovenId, recent)
+      assessment = assessPreflight(recent)
+      Logger.info('Oven setup reused the recent check', {
         ovenId,
         platform: assessment.platform,
         packageManager: assessment.packageManager
       })
-    } catch (error) {
-      Logger.error('Oven setup preflight failed', { ovenId, error: messageOf(error) })
-      throw error
+    } else {
+      try {
+        assessment = (await this.preflight(ovenId)).assessment
+        Logger.info('Oven setup preflight finished', {
+          ovenId,
+          platform: assessment.platform,
+          packageManager: assessment.packageManager
+        })
+      } catch (error) {
+        Logger.error('Oven setup preflight failed', { ovenId, error: messageOf(error) })
+        throw error
+      }
     }
     const blockers = assessment.issues.filter((issue) => issue.blocking)
     if (blockers.length > 0)
@@ -442,7 +463,9 @@ export class OvenSetupService {
     const step = operation.steps.find((entry) => entry.id === planned.id)
     switch (planned.id) {
       case 'preflight': {
-        const report = await this.ports.preflight(ovenId)
+        // Start already recorded the report it authorized against, so this
+        // confirms that same observation instead of paying for a second read.
+        const report = this.reports.get(ovenId) ?? (await this.ports.preflight(ovenId))
         this.reports.set(ovenId, report)
         const assessment = assessPreflight(report)
         if (!assessment.supported) {

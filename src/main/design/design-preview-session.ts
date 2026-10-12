@@ -79,13 +79,6 @@ export interface DesignPreviewResult {
   tabId: string | null
 }
 
-/** The tab id an in-app browser operation reported, or null when it reported none. */
-function tabIdOf(result: unknown): string | null {
-  if (typeof result !== 'object' || result === null) return null
-  const tabId = (result as Record<string, unknown>)['tabId']
-  return typeof tabId === 'string' && tabId.length > 0 ? tabId : null
-}
-
 /**
  * Serve one design folder and show it in a browser tab.
  *
@@ -130,19 +123,18 @@ export async function openDesignPreview(
       tabId = opened.tabId
       tab = opened.tab
     } else {
-      const target = { projectId: request.projectId, threadId: request.threadId }
-      if (browser.agentTabFor(request.projectId, request.threadId)) {
-        tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target))
-        tab = 'reused'
-      } else {
-        tabId = tabIdOf(
-          await browser.executeUtility('open', { url, attention: request.attention }, target)
-        )
-        tab = 'opened'
-      }
-      // The capability's own open reveals; a reused tab does not, so a design the
-      // user asked for again is brought forward explicitly.
-      if (tabId && request.reveal) browser.revealTab(tabId)
+      // The thread's tab is the app's own preview surface, and a capture moves it
+      // while the app is idle: it goes through the app-owned path rather than the
+      // agent's gated `navigate` operation, which needs a live conversation.
+      const shown = await browser.showThreadWorkTab({
+        projectId: request.projectId,
+        threadId: request.threadId,
+        url,
+        attention: request.attention,
+        reveal: request.reveal
+      })
+      tabId = shown.tabId
+      tab = shown.tab
     }
     if (tabId) {
       // Marking the tab is what arms the element inspector: the panel offers

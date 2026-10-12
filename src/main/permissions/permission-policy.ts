@@ -65,7 +65,8 @@ export interface PermissionPolicyOptions {
   /** Absolute directories pre-authorized for this session (e.g. the chat's own
    *  `chats-cwd/<threadId>` workspace directory). Any non-destructive,
    *  path-scoped permission inside one of them is auto-approved in every mode,
-   *  File-System-OFF chats included. Shell commands and destructive actions
+   *  File-System-OFF chats included. Simple shell listings of the workspace
+   *  root are also permitted; other shell commands and destructive actions
    *  are never auto-approved through this carve-out. */
   scratchPaths?: readonly string[]
   now?: () => number
@@ -250,10 +251,30 @@ export class PermissionPolicy {
       )
     }
 
+    const listingPaths =
+      !unclassifiedTool && ['shell', 'bash', 'shell-exec'].includes(permission)
+        ? commands.map((command) => scratchListingPaths(command, this.projectRoot))
+        : []
+    if (
+      listingPaths.length > 0 &&
+      listingPaths.every((targets) =>
+        targets?.every((target) => this.scratchPaths.includes(target))
+      ) &&
+      paths.every((path) => this.scratchPaths.includes(resolve(this.projectRoot, path)))
+    ) {
+      return this.createDecision(
+        'auto_review',
+        true,
+        'Auto-approved: listing the workspace directory owned by this chat.',
+        'low',
+        this.createScope(listingPaths.flatMap((targets) => targets ?? []))
+      )
+    }
+
     // The chat's own artifact directory is pre-authorized: non-destructive,
     // path-scoped operations inside it never prompt, File-System-OFF chats
-    // included. Shell commands stay gated because a command cannot be scoped
-    // to a path by this policy.
+    // included. Other shell commands stay gated; only the literal workspace
+    // listing recognized above can be confined by this policy.
     if (this.isScratchScope(permission, paths, commands)) {
       return this.createDecision(
         'auto_review',
@@ -465,6 +486,38 @@ export function normalizeNativePath(path: string): string {
 
 function containsTerm(terms: readonly string[], candidates: readonly string[]): boolean {
   return terms.some((term) => candidates.includes(term))
+}
+
+/** Recognize only a literal ls of workspace roots. Descendants are excluded
+ * because a directory symlink could lead outside the authorized workspace.
+ * Never infer confinement for an arbitrary shell command from its cwd. */
+function scratchListingPaths(command: string, cwd: string): string[] | undefined {
+  if (command.length > 8192 || /[\\$`\n\r;&|<>*?[\]{}()]/u.test(command)) return undefined
+  const tokens: string[] = []
+  const tokenPattern = /"([^"\n]*)"|'([^'\n]*)'|([^\s"']+)/gu
+  let end = 0
+  for (const match of command.matchAll(tokenPattern)) {
+    if (command.slice(end, match.index).trim() || (end > 0 && match.index === end)) return undefined
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? '')
+    end = match.index + match[0].length
+  }
+  if (command.slice(end).trim() || tokens.shift() !== 'ls') return undefined
+  const targets: string[] = []
+  let options = true
+  for (const token of tokens) {
+    if (options && token === '--') {
+      options = false
+      continue
+    }
+    if (options && token.startsWith('-')) {
+      // No recursion, dereferencing, or flags that take additional arguments.
+      if (!/^-[alhdFprtS1n]+$/u.test(token)) return undefined
+      continue
+    }
+    if (!token || hasTraversal(token) || token.startsWith('~')) return undefined
+    targets.push(resolve(cwd, normalizeNativePath(token)))
+  }
+  return targets.length > 0 ? targets : [cwd]
 }
 
 function isSafeAutoPermission(permission: string): boolean {

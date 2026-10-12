@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { serviceBundleRevision } from '../../../src/main/ovens/oven-service-bundle'
+import { disableWindowsTask } from '../../../src/main/ovens/remote/oven-windows-task'
 import { OVEN_PROTOCOL_VERSION } from '../../../src/lib/ovens'
 import type { OvenLayout } from './paths'
 
@@ -222,9 +223,17 @@ export async function serviceState(layout: OvenLayout): Promise<ServiceState> {
  *
  * The request path is preferred because it lets the service refuse while runs
  * are active. A leftover lock with no live process is cleaned up so the next
- * `start` is not blocked by a stale pid.
+ * `start` is not blocked by a stale pid. Stopping also parks the Windows logon
+ * task, so an Oven the user stopped stays stopped until they start it again; the
+ * next `start` re-enables it.
  */
 export async function stopService(layout: OvenLayout): Promise<'stopped' | 'not-running'> {
+  const result = await stopServiceProcess(layout)
+  await disableWindowsTask()
+  return result
+}
+
+async function stopServiceProcess(layout: OvenLayout): Promise<'stopped' | 'not-running'> {
   const installed = await readFile(layout.serviceFile, 'utf8').then(
     () => true,
     () => false

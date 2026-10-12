@@ -94,7 +94,7 @@
 >
   <div
     role="presentation"
-    class="relative flex flex-1 items-center justify-center"
+    class="relative flex min-h-0 flex-1 items-center justify-center"
     onclick={onClose}
     onkeydown={(e: KeyboardEvent) => {
       if (keymapState.matches('ui-activate', e)) onClose()
@@ -102,7 +102,7 @@
   >
     <div
       role="presentation"
-      class="relative flex max-h-[90vh] max-w-[90vw] flex-col items-center"
+      class="relative flex h-full min-h-0 w-full flex-col items-center"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
       {#if kind === 'video'}
@@ -110,7 +110,7 @@
           {src}
           controls
           preload="metadata"
-          class="max-h-[80vh] max-w-[85vw] rounded-lg shadow-2xl"
+          class="min-h-0 w-full flex-1 object-contain"
           onerror={mediaError}
         >
           <track kind="captions" />
@@ -129,7 +129,7 @@
           role="group"
           aria-label={`Zoomable preview of ${filename}`}
           class={[
-            'flex touch-none items-center justify-center overflow-hidden',
+            'flex min-h-0 w-full flex-1 touch-none items-center justify-center overflow-hidden',
             panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
           ]}
           onwheel={panZoom.onWheel}
@@ -144,12 +144,12 @@
             {src}
             alt={filename}
             draggable="false"
-            class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
+            class="max-h-full max-w-full object-contain"
             style={panZoom.transform}
           />
         </div>
       {/if}
-      <div class="mt-3 flex items-center gap-3">
+      <div class="mt-3 flex shrink-0 items-center gap-3">
         <span class="text-xs text-white/70">{filename}</span>
       </div>
     </div>

@@ -11,7 +11,7 @@
  * paint, in the exact order the bootstrap established.
  */
 
-import { app, type BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
@@ -46,6 +46,10 @@ import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
+import { SearchService } from '../search/search-service'
+import { registerSearchSettingsIpc } from '../ipc/search-settings-ipc'
+import { getLlamaServerBinary } from '../speech/backends/llama-backend'
+import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
 import type { BootstrapState } from './bootstrap-state'
 
 /** Boot-scoped collaborators a per-window browser attach needs. */
@@ -101,6 +105,10 @@ async function attachBrowserService(
   // there: there is no second chance to restore it once it has loaded.
   await service.hydrateTabHistory()
   service.register()
+  // Load the overlay document now that the primary window is up, so the first
+  // modal, switcher or toast of the session draws into an already-loaded
+  // document instead of paying its load on the gesture that asks for it.
+  service.warmOverlay()
   // The browser's native context menu is built in main, so it needs the address
   // bar's search engine. The config is read once at attach; the renderer pushes
   // later changes.
@@ -258,7 +266,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
       Promise.resolve(false),
     onProgress: broadcastCioCleanupProgress,
-    onStateChanged: broadcastCioCleanupState
+    onStateChanged: broadcastCioCleanupState,
+    onSweepComplete: () => state.designService?.reconcileHistory() ?? Promise.resolve()
   })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
@@ -553,6 +562,21 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.speechService,
     () => state.mainWindow?.webContents ?? null
   )
+  // Intent search shares the one local llama.cpp runtime with speech, so both
+  // draw from the same discovered/downloaded binary and the same process journal.
+  state.searchService = new SearchService(database, {
+    summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
+    llamaServerPath: () => getLlamaServerBinary(),
+    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
+    registerProcess: (pid, command, cwd) =>
+      sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
+    unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
+  })
+  await state.searchService.initialize()
+  state.unregisterSearchIpc = registerSearchSettingsIpc(
+    state.searchService,
+    () => state.mainWindow?.webContents ?? null
+  )
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -615,10 +639,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const { DesignService } = await import('../design/design-service')
   const designService = new DesignService({
     database,
+    onHistoryChanged: (projectId, directory) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
+    },
     previews: state.directoryPreviewService,
     browser: () => state.browserService
   })
+  state.designService = designService
   designService.registerIpc()
+  void designService.reconcileHistory()
   // What each thread decided about the experts its design or video session may
   // delegate to. One service answers it, because the playbook that names the
   // experts and the `delegate` operation that would run one have to agree: a
@@ -648,6 +678,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
+      checkpoint: (projectId, threadId, input) =>
+        designService.checkpoint(projectId, threadId, input, 'design'),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
@@ -689,6 +721,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createVideoPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
+      checkpoint: (projectId, threadId, input) =>
+        designService.checkpoint(projectId, threadId, input, 'video'),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
@@ -736,6 +770,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.error('Orphaned harness process reaping failed at startup:', error)
   }
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
+    searchService: state.searchService ?? undefined,
     projectManager,
     projectFilesService,
     browser: () => state.browserService,
@@ -813,7 +848,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
-    const { ovenTerminalLaunch } = await import('../ovens/oven-terminal')
+    const { ovenTerminalLaunch, ovenShellLaunch } = await import('../ovens/oven-terminal')
     state.ptyService = new PtyService(
       storage,
       database,
@@ -833,7 +868,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // their shell-driven edits are excluded from concurrent agent turns.
         state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
       },
-      ovenTerminalLaunch(storage, vault, database)
+      ovenTerminalLaunch(storage, vault, database),
+      ovenShellLaunch(storage, vault)
     )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects

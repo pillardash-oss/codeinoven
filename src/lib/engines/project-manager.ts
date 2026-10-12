@@ -1,13 +1,9 @@
-import { join, extname, relative } from 'path'
+import { join, relative } from 'path'
 import { readdir, realpath } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
-import {
-  isSupportedIconExtension,
-  readIconDataUrl,
-  removeIconFile,
-  storeIconFile
-} from '../icon-file'
+import { readIconDataUrl, removeIconFile, storeCustomIconFile, storeIconFile } from '../icon-file'
+import type { CustomIconImage } from '../custom-icon'
 import type { Project, CreateProjectInput } from '../types'
 import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../ipc/browser'
@@ -165,7 +161,13 @@ export class ProjectManager {
 
   async createProject(input: CreateProjectInput): Promise<Project> {
     if (!input.hidden && input.path) {
-      const duplicate = await this.findByPath(input.path)
+      // A remote path only identifies a project together with its host: two
+      // Ovens can legitimately serve the same absolute directory. A local path
+      // is unique on its own, so it keeps the exact-path check.
+      const duplicate =
+        input.source === 'ssh' && input.host
+          ? await this.projectRepo.findByHostPath(input.host, input.path)
+          : await this.findByPath(input.path)
       if (duplicate) {
         throw new Error(`A project for "${input.path}" already exists (${duplicate.name})`)
       }
@@ -180,6 +182,7 @@ export class ProjectManager {
       path: input.path,
       source: input.source ?? 'local',
       host: input.host,
+      ovenId: input.ovenId,
       providerId: input.providerId ?? '',
       workflowId: input.workflowId ?? 'default',
       threadLimit: input.threadLimit ?? 70,
@@ -429,6 +432,7 @@ export class ProjectManager {
       path: input.path ?? existing.path,
       source: input.source ?? existing.source,
       host: input.host ?? existing.host,
+      ovenId: input.ovenId ?? existing.ovenId,
       providerId: input.providerId ?? existing.providerId,
       workflowId: input.workflowId ?? existing.workflowId,
       threadLimit: input.threadLimit ?? existing.threadLimit,
@@ -671,20 +675,15 @@ export class ProjectManager {
     return candidates[0].path
   }
 
-  async setIcon(projectId: string, sourcePath: string): Promise<Project> {
+  async setIcon(projectId: string, image: CustomIconImage): Promise<Project> {
     const existing = this.projectRepo.get(projectId)
     if (!existing) {
       throw new Error(`Project not found: ${projectId}`)
     }
 
-    const ext = extname(sourcePath).toLowerCase() || '.png'
-    if (!isSupportedIconExtension(ext)) {
-      throw new Error(`Unsupported icon format: ${ext}`)
-    }
-
-    const iconFile = await storeIconFile(
+    const iconFile = await storeCustomIconFile(
       join(getConfigRoot(), 'projects', projectId),
-      sourcePath,
+      image,
       existing.icon
     )
 

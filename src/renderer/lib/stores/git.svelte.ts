@@ -18,9 +18,13 @@ import {
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
+import { GitIssueCache, type CachedIssueRead } from './git-store-issues.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
+import { GitIssueOperations } from './git-store-issue-operations.svelte'
 import type { PrBatchStepListener } from './git-store-pr-operations.svelte'
+import type { GitIssueOperationAccess } from './git-store-issue-operations.svelte'
+import { issueBundleKey, issuePageKey } from './git-store-helpers'
 import { GitGitHubAuth } from './git-store-github.svelte'
 import { GitLocalOperations } from './git-store-local-operations.svelte'
 import type {
@@ -33,11 +37,19 @@ import type {
   GitRemoteIssue,
   GitCredentialStatus,
   GitStashEntry,
+  GitHubAuthStatus,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  IssueBundle,
+  IssuePage,
+  IssueReference,
+  IssueRelationships,
+  IssueSummary,
+  IssueTimelineEvent,
+  NewIssueInput,
   PrAgentAssignmentInput,
   PrAgentAssignmentSummary,
   PrAgentAssignmentWorkspace,
@@ -280,12 +292,21 @@ export class GitState {
     scopeFor: (projectId) => this.scopeFor(projectId),
     refreshConflictIndicators: (projectId, force) =>
       void this.refreshPrConflictIndicators(projectId, force),
-    patchPullRequest: (owner, repo, pullNumber, patch) =>
-      this.prs.patchPullRequest(owner, repo, pullNumber, patch),
+    patchPullRequest: (owner, repo, pullNumber, patch) => {
+      this.prs.patchPullRequest(owner, repo, pullNumber, patch)
+      // A draft transition is drawn as a row of the conversation's history, so the
+      // cached read is dropped along with the field that changed.
+      this.issues.timelines.invalidate(owner, repo, pullNumber)
+    },
     patchBundleReactions: (owner, repo, pullNumber, nodeId, groups) =>
       this.prs.patchBundleReactions(owner, repo, pullNumber, nodeId, groups),
-    applyPullRequestState: (owner, repo, pullNumber, state) =>
+    applyPullRequestState: (owner, repo, pullNumber, state) => {
       this.prs.applyPullRequestState(owner, repo, pullNumber, state)
+      // A close, a reopen and a merge are each a row of the history, and they reach
+      // here from the reader and from a listing batch alike, so the drop belongs on
+      // this hook rather than on every caller.
+      this.issues.timelines.invalidate(owner, repo, pullNumber)
+    }
   })
 
   /** GitHub account auth calls. */
@@ -293,6 +314,29 @@ export class GitState {
     (message) => (this.error = message),
     (login) => (this.githubViewerLogin = login)
   )
+
+  /** Cached issue listings and detail bundles. */
+  private readonly issues = new GitIssueCache(
+    (operation, busy) => this.markBusy(operation, busy),
+    (message) => (this.error = message)
+  )
+
+  /** Online issue mutations, backed by this store's shared state. */
+  private readonly issueOps = new GitIssueOperations({
+    markBusy: (operation, busy) => this.markBusy(operation, busy),
+    setError: (message) => (this.error = message),
+    setGitHubPermission: (permission) => (this.githubPermission = permission),
+    patchIssue: (owner, repo, issueNumber, patch) =>
+      this.issues.patchIssue(owner, repo, issueNumber, patch),
+    patchBundleReactions: (owner, repo, issueNumber, nodeId, groups) =>
+      this.issues.patchBundleReactions(owner, repo, issueNumber, nodeId, groups),
+    refreshIssueLinks: (projectId, owner, repo, issueNumber) => {
+      this.issues.relationships.invalidate(owner, repo, issueNumber)
+      this.issues.timelines.invalidate(owner, repo, issueNumber)
+      void this.issues.relationships.ensure(projectId, owner, repo, issueNumber, true)
+      void this.issues.timelines.ensure(projectId, owner, repo, issueNumber, true)
+    }
+  } satisfies GitIssueOperationAccess)
 
   get status(): GitStatus | null {
     return this.local.status
@@ -412,6 +456,31 @@ export class GitState {
 
   get prBundles(): Record<string, PullRequestBundle> {
     return this.prs.bundles
+  }
+
+  get issuePages(): Record<string, { page: IssuePage; fetchedAt: number }> {
+    return this.issues.pages
+  }
+
+  get issueBundles(): Record<string, IssueBundle> {
+    return this.issues.bundles
+  }
+
+  /**
+   * One conversation's history, whoever is reading it.
+   *
+   * GitHub's timeline is one endpoint for both readers, because a pull request is
+   * an issue to that API and a repository's numbers are one space: `#42` is an
+   * issue or a pull request and never both. One read and one cache therefore serve
+   * the issue reader and the pull request conversation, and neither reader has to
+   * know which key the other looked under.
+   */
+  conversationTimeline(owner: string, repo: string, number: number): IssueTimelineEvent[] {
+    return this.issues.timelines.values[issueBundleKey(owner, repo, number)]?.value ?? []
+  }
+
+  get issueRelationships(): Record<string, CachedIssueRead<IssueRelationships>> {
+    return this.issues.relationships.values
   }
 
   get prAgentReports(): Record<string, PrAgentReport[]> {
@@ -1492,6 +1561,299 @@ export class GitState {
     return this.prs.mentionUsersFor(projectId, owner, repo)
   }
 
+  // Issue operations, delegated to the online mutation service.
+  createIssue(projectId: string, input: NewIssueInput): Promise<IssueReference | null> {
+    return this.issueOps.createIssue(projectId, input)
+  }
+
+  updateIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    title: string | undefined,
+    body: string | undefined
+  ): Promise<IssueReference | null> {
+    return this.issueOps.updateIssue(projectId, owner, repo, issueNumber, title, body)
+  }
+
+  setIssueState(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    state: 'open' | 'closed',
+    stateReason?: 'completed' | 'not_planned'
+  ): Promise<IssueReference | null> {
+    return this.issueOps.setIssueState(projectId, owner, repo, issueNumber, state, stateReason)
+  }
+
+  createIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    body: string
+  ): Promise<boolean> {
+    return this.issueOps.createIssueComment(projectId, owner, repo, issueNumber, body)
+  }
+
+  updateIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    return this.issueOps.updateIssueComment(projectId, owner, repo, commentId, body)
+  }
+
+  deleteIssueComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    commentId: number
+  ): Promise<boolean> {
+    return this.issueOps.deleteIssueComment(projectId, owner, repo, commentId)
+  }
+
+  /** Replace the labels an issue carries, from the label picker. */
+  setIssueLabels(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    labels: string[]
+  ) {
+    return this.issueOps.setIssueLabels(projectId, owner, repo, issueNumber, labels)
+  }
+
+  /** Replace an issue's assignees, from the assignee picker. */
+  setIssueAssignees(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    logins: string[]
+  ) {
+    return this.issueOps.setIssueAssignees(projectId, owner, repo, issueNumber, logins)
+  }
+
+  /** Attach or clear an issue's milestone. */
+  setIssueMilestone(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    milestone: number | null
+  ) {
+    return this.issueOps.setIssueMilestone(projectId, owner, repo, issueNumber, milestone)
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on an issue or one of its
+   * comments.
+   *
+   * Addressed by the subject's GraphQL node id, which is the handle the issue and
+   * its comments share with every other reactable thing. The store corrects the
+   * cached bundle from the write's own answer, so a chip changes without the
+   * conversation refetching.
+   */
+  setIssueReaction(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    nodeId: string,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<boolean> {
+    return this.issueOps.setIssueReaction(projectId, owner, repo, issueNumber, nodeId, content, add)
+  }
+
+  // Cached issue listings and detail bundles.
+  ensureIssuePage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: Parameters<GitIssueCache['ensureIssuePage']>[3],
+    page: number,
+    query: Parameters<GitIssueCache['ensureIssuePage']>[5],
+    force = false
+  ): Promise<void> {
+    return this.issues.ensureIssuePage(projectId, owner, repo, state, page, query, force)
+  }
+
+  ensureIssueBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.ensureIssueBundle(projectId, owner, repo, issueNumber, force)
+  }
+
+  /**
+   * Read one conversation's history, which the reader draws after the conversation's
+   * own content: the issue's description and comments, or the pull request's.
+   *
+   * Kept apart from `ensureIssueBundle` so a slow history never delays the content
+   * the reader came for. Silent on failure, like the warm-ups: the conversation
+   * reads the same without it. A pull request passes its number here the same way an
+   * issue does, because one endpoint answers for both.
+   */
+  ensureConversationTimeline(
+    projectId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.timelines.ensure(projectId, owner, repo, number, force)
+  }
+
+  /**
+   * Read one issue's relationships: its parent, its sub-issues and its dependencies.
+   *
+   * Deferred for the same reason as the history: it is four more requests, and the
+   * issue is readable without any of them.
+   */
+  ensureIssueRelationships(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    force = false
+  ): Promise<void> {
+    return this.issues.relationships.ensure(projectId, owner, repo, issueNumber, force)
+  }
+
+  /**
+   * Forget one conversation's cached history, so the event a write just added is
+   * read back rather than aged out.
+   *
+   * A close, a reopen, a merge and a draft transition are each a row of that
+   * history, and a reader looking at the conversation would otherwise be missing the
+   * row its own click caused.
+   */
+  invalidateConversationTimeline(owner: string, repo: string, number: number): void {
+    this.issues.timelines.invalidate(owner, repo, number)
+  }
+
+  /** Forget an issue's cached relationships, so a link change is read back. */
+  invalidateIssueRelationships(owner: string, repo: string, issueNumber: number): void {
+    this.issues.relationships.invalidate(owner, repo, issueNumber)
+  }
+
+  /** Search the repository's issues, for the relationship picker. */
+  searchIssueCandidates(
+    projectId: string,
+    owner: string,
+    repo: string,
+    text: string
+  ): Promise<IssueSummary[]> {
+    return this.issueOps.searchIssueCandidates(projectId, owner, repo, text)
+  }
+
+  /** Make one issue a sub-issue of another. Both sides are node ids. */
+  addIssueSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.addSubIssue(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Detach a sub-issue from its parent. */
+  removeIssueSubIssue(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.removeSubIssue(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Record that one issue blocks another. */
+  addIssueBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.addBlockedBy(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Remove a blocking relationship between two issues. */
+  removeIssueBlockedBy(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    issueNodeId: string,
+    relatedNodeId: string
+  ): Promise<boolean> {
+    return this.issueOps.removeBlockedBy(
+      projectId,
+      owner,
+      repo,
+      issueNumber,
+      issueNodeId,
+      relatedNodeId
+    )
+  }
+
+  /** Warm the issue under the pointer, so the click that follows renders from cache. */
+  preloadIssueBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    issueNumber: number
+  ): Promise<void> {
+    return this.issues.preloadIssueBundle(projectId, owner, repo, issueNumber)
+  }
+
+  /** Warm the page behind Next, from the current page's cursor alone. */
+  preloadIssueNextPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: Parameters<GitIssueCache['preloadIssueNextPage']>[3],
+    page: number,
+    query: Parameters<GitIssueCache['preloadIssueNextPage']>[5]
+  ): Promise<void> {
+    return this.issues.preloadIssueNextPage(projectId, owner, repo, state, page, query)
+  }
+
   getCommitFiles(projectId: string, owner: string, repo: string, sha: string) {
     return this.prs.getCommitFiles(projectId, owner, repo, sha)
   }
@@ -1582,6 +1944,21 @@ export class GitState {
 
   startGitHubDeviceFlow() {
     return this.github.startGitHubDeviceFlow()
+  }
+
+  /**
+   * Make one signed-in account the one every GitHub call runs as.
+   *
+   * The viewer login follows the switch here, because it decides which comments
+   * and reactions the panel offers to edit; the panel reloads the view it is
+   * showing afterwards, since everything it had was read with the other account's
+   * token.
+   */
+  switchGitHubAccount(accountId: string): Promise<GitHubAuthStatus> {
+    return this.github.switchGitHubAccount(accountId).then((status) => {
+      this.githubViewerLogin = status.connected ? (status.user?.login ?? null) : null
+      return status
+    })
   }
 
   pollGitHubDeviceCode(deviceCode: string) {
@@ -1714,6 +2091,23 @@ export class GitState {
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {
     return prBundleKey(owner, repo, pullNumber)
+  }
+
+  /** Cache key for one page of the issue listing, mirroring `pageKey`. */
+  static issuePageKey(
+    owner: string,
+    repo: string,
+    state: string,
+    filter: string,
+    sort: string,
+    page: number
+  ): string {
+    return issuePageKey(owner, repo, state, filter, sort, page)
+  }
+
+  /** Cache key for one issue's detail bundle. */
+  static issueBundleKey(owner: string, repo: string, issueNumber: number): string {
+    return issueBundleKey(owner, repo, issueNumber)
   }
 
   static deploymentKey(owner: string, repo: string): string {

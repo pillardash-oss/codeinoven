@@ -93,6 +93,9 @@
   let containerOwners = $state<CloudDeploymentContainerOwner[]>([])
   let saving = $state(false)
   let error = $state('')
+  /** Inline connection-test feedback for the provider form (never saved). */
+  let testing = $state(false)
+  let testResult = $state('')
   /** The project's current config, loaded on open. */
   let config = $state<CloudDeploymentConfig | null>(null)
   /** Container ids selected in the picker for a batch add. */
@@ -253,6 +256,8 @@
     selectedContainerIds.clear()
     config = null
     error = ''
+    testing = false
+    testResult = ''
     saving = false
   }
 
@@ -271,6 +276,7 @@
 
   function selectProvider(kind: CloudDeploymentProviderKind): void {
     error = ''
+    testResult = ''
     if (CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(kind)) {
       const name = PROVIDER_DISPLAY_NAMES[kind]
       toast.message(`${name} isn't available yet`, {
@@ -331,6 +337,46 @@
       error = saveError instanceof Error ? saveError.message : 'The account could not be switched.'
     } finally {
       saving = false
+    }
+  }
+
+  /** Probe the entered (or selected) credentials without saving anything. */
+  async function testConnection(): Promise<void> {
+    if (selectedKind === null) return
+    testing = true
+    testResult = ''
+    error = ''
+    try {
+      if (createMode === 'reuse') {
+        if (selectedExistingAccountId === '') {
+          error = 'Choose an existing provider account to test.'
+          return
+        }
+        const result = await invoke('cloudDeploy:testAccount', {
+          accountId: selectedExistingAccountId
+        })
+        testResult = `Connected   ${result.containerCount} container${result.containerCount === 1 ? '' : 's'} reachable.`
+      } else {
+        const validation = validateBaseUrl(baseUrl)
+        if (!validation.ok) {
+          error = validation.reason ?? 'Enter a valid Coolify base URL.'
+          return
+        }
+        if (token.trim() === '') {
+          error = 'Enter an API token before testing.'
+          return
+        }
+        const result = await invoke('cloudDeploy:testAccount', {
+          providerKind: selectedKind,
+          baseUrl: validation.baseUrl ?? baseUrl.trim(),
+          token: token.trim()
+        })
+        testResult = `Connected   ${result.containerCount} container${result.containerCount === 1 ? '' : 's'} reachable.`
+      }
+    } catch (testError) {
+      error = testError instanceof Error ? testError.message : 'The connection test failed.'
+    } finally {
+      testing = false
     }
   }
 
@@ -736,6 +782,21 @@
         >
           Cancel
         </button>
+        {#if mode === 'provider' && selectedKind === WORKING_KIND}
+          <button
+            type="button"
+            class="flex h-9 items-center justify-center gap-1.5 rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            disabled={testing || saving}
+            title="Verify the entered credentials without saving"
+            aria-label="Test connection without saving"
+            onclick={() => void testConnection()}
+          >
+            {#if testing}
+              <Loader2 size={13} class="animate-spin" />
+            {/if}
+            Test connection
+          </button>
+        {/if}
         <button
           type="button"
           class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
@@ -1165,6 +1226,11 @@
     </div>
   {/if}
 
+  {#if testResult !== ''}
+    <p class="mt-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+      {testResult}
+    </p>
+  {/if}
   {#if error !== ''}
     <p class="mt-4 text-xs text-error">{error}</p>
   {/if}

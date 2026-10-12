@@ -1,3 +1,5 @@
+import { skillInstallDocument } from '../../lib/skill-frontmatter'
+import { marketSkillName } from '../../lib/skill-market-identity'
 import { BrowserWindow } from 'electron'
 import type {
   SkillInstallRecord,
@@ -283,11 +285,23 @@ export class SkillUpdateService {
     record: SkillInstallRecord
   ): Promise<{ result: SkillUpdateResult; unreachable: boolean }> {
     const registry = new UtilityRegistryService(this.deps.install.storage)
+    const matchingRecords = (await this.store.list()).filter(
+      (candidate) =>
+        candidate.manager === 'cio' &&
+        candidate.skillId === record.skillId &&
+        candidate.scope === record.scope &&
+        candidate.projectId === record.projectId
+    )
+    const legacyAttributed =
+      new Set(matchingRecords.map((candidate) => candidate.source.toLowerCase())).size === 1
     const managed = (await registry.list()).find(
       (utility): utility is UtilityDefinitionFor<'skill'> =>
         utility.kind === 'skill' &&
         utility.harnessBindings.some(
-          (binding) => binding.strategy === 'skill' && binding.transportName === record.skillId
+          (binding) =>
+            binding.strategy === 'skill' &&
+            (binding.transportName === marketSkillName(record.source, record.skillId) ||
+              (legacyAttributed && binding.transportName === record.skillId))
         ) &&
         registryScopeMatches(utility.scope, record)
     )
@@ -306,6 +320,17 @@ export class SkillUpdateService {
     try {
       const detail = await loadSkillMarketDetail(`${record.source}/${record.skillId}`)
       markdown = detail.skillMarkdown.trim()
+      if (
+        markdown &&
+        managed.harnessBindings.some(
+          (binding) => binding.transportName === marketSkillName(record.source, record.skillId)
+        )
+      ) {
+        markdown = skillInstallDocument({
+          markdown,
+          name: marketSkillName(record.source, record.skillId)
+        })
+      }
       description = detail.description
     } catch (error: unknown) {
       return {

@@ -100,8 +100,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const thread = config.getThread()
     if (!thread) return
     try {
-      await copyText(thread.id)
-      toast.success('Thread ID copied.')
+      await copyText(thread.id, 'Thread ID copied.')
     } catch {
       toast.error('The thread ID could not be copied.')
     }

@@ -4,7 +4,7 @@ import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 import type { RoutineSchedule } from './schedule'
-import { ASSISTANT_SPACE_ID } from './project'
+import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
 export const DEFAULT_THREAD_TITLE = 'New Thread'
@@ -196,6 +196,20 @@ export function isAssistantThread(thread: Thread): boolean {
 }
 
 /**
+ * A browser tab's assistant conversation, which lives in the hidden global
+ * browser container.
+ *
+ * These rows are real threads so a per-tab conversation persists, but they are
+ * never user threads: their surface is the browser's own rail, not any
+ * workspace list. Every ingestion into a workspace list or search has to drop
+ * them, because a `thread:updated` broadcast is not a list and would otherwise
+ * push one phantom row into the Threads timeline.
+ */
+export function isBrowserAssistantThread(thread: Pick<Thread, 'projectId'>): boolean {
+  return thread.projectId === GLOBAL_BROWSER_PROJECT_ID
+}
+
+/**
  * Whether a thread is a routine's "Getting started" authoring thread. Auxiliary
  * work   prompt-derived titles and memory extraction   is suppressed on it.
  */
@@ -373,9 +387,9 @@ export interface CreateThreadInput {
 }
 
 /** Where a thread search match was found. */
-export type ThreadSearchMatchKind = 'title' | 'message'
+export type ThreadSearchMatchKind = 'title' | 'message' | 'intent'
 
-/** One thread surfaced by full-text search, with the strongest match context. */
+/** One thread surfaced by thread search, with the strongest match context. */
 export interface ThreadSearchResult {
   thread: Thread
   kind: ThreadSearchMatchKind
@@ -385,6 +399,11 @@ export interface ThreadSearchResult {
   snippet?: string
   /** Timestamp of the best matching message. */
   timestamp?: number
+  /**
+   * Cosine similarity for an intent match. Present only when `kind` is
+   * `'intent'`; the exact value is internal to ranking and never shown.
+   */
+  score?: number
 }
 
 /**

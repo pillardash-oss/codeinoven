@@ -69,6 +69,8 @@ import { registerGitHandlers } from './handlers/git-handlers'
 import { registerGitRemoteHandlers } from './handlers/git-remote-handlers'
 import { registerMergeHandlers } from './handlers/merge-handlers'
 import { registerPrHandlers } from './handlers/pr-handlers'
+import { registerGitHubNotificationHandlers } from './handlers/github-notification-handlers'
+import { registerIssueHandlers } from './handlers/issue-handlers'
 import { registerCloudHandlers } from './handlers/cloud-handlers'
 import { registerEditorsHandlers } from './handlers/editors-handlers'
 import { registerThreadHandlers } from './handlers/thread-handlers'
@@ -155,6 +157,17 @@ export function registerIpcHandlers(
       }
     },
     scopeRoots
+  )
+  // Intent (semantic) search rides the same thread search: the provider
+  // returns semantic matches that the search service merges with keyword hits.
+  threadManager.setIntentSearchProvider(
+    options.searchService
+      ? (query, searchOptions) =>
+          options.searchService!.searchIntent(
+            query,
+            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200))
+          )
+      : null
   )
   // A routine's threads (its hidden how-to thread included) are deleted through
   // this same canonical path when the routine is removed.
@@ -510,6 +523,8 @@ export function registerIpcHandlers(
   registerGitRemoteHandlers(ctx)
   registerMergeHandlers(ctx)
   registerPrHandlers(ctx)
+  registerGitHubNotificationHandlers(ctx)
+  registerIssueHandlers(ctx)
   registerCloudHandlers(ctx)
   registerEditorsHandlers(ctx)
   registerThreadHandlers(ctx)

@@ -130,6 +130,32 @@ async function servingSshPort(preferred: number | null): Promise<number | null> 
   return resolveServingSshPort(preferred, sshServing)
 }
 
+export interface SettledSshPort {
+  port: number
+  /** The port that was asked for, when SSH answered somewhere else instead. */
+  correctedFrom?: number
+}
+
+/**
+ * Settle the port a registration code will publish, honouring an explicit choice.
+ *
+ * A port the user named is a decision, not a guess, so it is kept when SSH
+ * answers on it and refused when it does not. Silently switching to another port
+ * saves an Oven on an endpoint the user never chose, which is worse than saying
+ * the port is not serving. A detected port is not a decision, so a wrong one is
+ * corrected to the port that answers, or refused when nothing answers.
+ */
+export async function settleSshPort(
+  port: number,
+  explicit: boolean,
+  serving: (port: number) => Promise<boolean>
+): Promise<SettledSshPort | null> {
+  if (explicit) return (await serving(port)) ? { port } : null
+  const resolved = await resolveServingSshPort(port, serving)
+  if (resolved === null) return null
+  return resolved === port ? { port } : { port: resolved, correctedFrom: port }
+}
+
 /** What to do when the machine is not serving SSH on the port that was chosen. */
 function sshUnavailable(port: number): string {
   const config =
@@ -146,6 +172,8 @@ function sshUnavailable(port: number): string {
 interface ResolvedInputs {
   name: string
   port: number
+  /** True when the user named this port instead of accepting a detected one. */
+  portExplicit: boolean
   identity: boolean
 }
 
@@ -158,6 +186,7 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
   const name =
     options.name ?? (attachable ? await askText('Oven name', defaultName()) : defaultName())
   let port = options.port
+  let portExplicit = options.port !== undefined
   if (port === undefined) {
     const configured = await detectSshPort()
     // Offer the port something is really serving on. The sshd configuration is
@@ -168,7 +197,9 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
         note(
           'No SSH server or configuration was found, so port 22 is offered. Change it if needed.'
         )
-      port = await askPort('SSH port the app should connect on', offered)
+      const answer = await askPort('SSH port the app should connect on', offered)
+      port = answer.port
+      portExplicit = answer.explicit
     } else port = offered
   }
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
@@ -176,7 +207,7 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
   const identity =
     options.identity ??
     (attachable ? await askConfirm('Provision a dedicated SSH key for this Oven?', true) : true)
-  return { name, port, identity }
+  return { name, port, portExplicit, identity }
 }
 
 /**
@@ -241,16 +272,15 @@ export async function start(options: StartOptions): Promise<void> {
   const inputs = await resolveInputs(options)
 
   // Settle the port against what the machine actually serves before anything is
-  // installed or published. A code for a port nothing answers on is worse than
-  // no code: it registers an Oven that can only time out.
-  const serving = await servingSshPort(inputs.port)
-  if (serving === null) fail(sshUnavailable(inputs.port))
-  if (serving !== inputs.port) {
+  // installed or published. A code for a port that was not honoured is worse
+  // than no code: it registers an Oven that can only time out.
+  const settled = await settleSshPort(inputs.port, inputs.portExplicit, sshServing)
+  if (settled === null) fail(sshUnavailable(inputs.port))
+  if (settled.correctedFrom !== undefined)
     warn(
-      `Nothing is serving SSH on port ${inputs.port}, but port ${serving} answers. Using ${serving}.`
+      `Nothing is serving SSH on port ${settled.correctedFrom}, but port ${settled.port} answers. Using ${settled.port}.`
     )
-    inputs.port = serving
-  }
+  inputs.port = settled.port
 
   const before = await serviceState(layout)
 

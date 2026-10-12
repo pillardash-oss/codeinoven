@@ -48,6 +48,11 @@
      *  here while the shared confirmation asks, so the question is asked with the
      *  app's own dialog instead of a native browser one. */
     pendingRestoreId = $state<string | null>(null)
+    /** The single file an Undo confirmation is open for, or null. */
+    pendingUndoPath = $state<{ checkpointId: string; path: string } | null>(null)
+    /** The one path a per-file undo or redo is running for, so its own row
+     *  reports the work instead of the whole panel. */
+    busyPath = $state<string | null>(null)
     selections = $state<Record<string, string[]>>({})
     mode = $state<ChangesMode>('diffs')
     fileDiffs = $state<TurnCheckpointFileDiff[]>([])
@@ -99,6 +104,8 @@
           this.loading = false
           this.error = ''
           this.restoringId = null
+          this.pendingUndoPath = null
+          this.busyPath = null
           this.selections = {}
           this.mode = 'diffs'
           this.loadingDiffs = false
@@ -283,27 +290,88 @@
     async restoreSelected(checkpointId: string): Promise<void> {
       const paths = this.selections[checkpointId] ?? []
       if (paths.length === 0) return
+      await this.applyPaths(checkpointId, paths, 'undo')
+    }
+
+    /**
+     * One file, undone on its own. A turn is rarely all right or all wrong, so
+     * a file that should not stay is restored without touching the rest of the
+     * run. It discards the agent's edit, so the shared confirmation asks first.
+     */
+    requestUndoPath(checkpointId: string, path: string): void {
+      this.pendingUndoPath = { checkpointId, path }
+    }
+
+    cancelUndoPath(): void {
+      this.pendingUndoPath = null
+    }
+
+    async confirmUndoPath(): Promise<void> {
+      const pending = this.pendingUndoPath
+      if (!pending) return
+      this.pendingUndoPath = null
+      await this.applyPaths(pending.checkpointId, [pending.path], 'undo')
+    }
+
+    /** Re-applies one undone file from its snapshot. Nothing is lost, so it runs straight away. */
+    async redoPath(checkpointId: string, path: string): Promise<void> {
+      await this.applyPaths(checkpointId, [path], 'redo')
+    }
+
+    /** The one place undo and redo call the checkpoint IPC, so both share the
+     *  generation guard, the busy flags, and the selection cleanup. */
+    private async applyPaths(
+      checkpointId: string,
+      paths: string[],
+      direction: 'undo' | 'redo'
+    ): Promise<void> {
+      if (paths.length === 0) return
       const generation = this.generation
       this.restoringId = checkpointId
+      this.busyPath = paths.length === 1 ? paths[0] : null
       this.error = ''
       try {
-        const next = await invoke(
-          'checkpoint:rollbackPaths',
-          this.projectId,
-          this.threadId,
-          checkpointId,
-          paths
-        )
+        const next =
+          direction === 'undo'
+            ? await invoke(
+                'checkpoint:rollbackPaths',
+                this.projectId,
+                this.threadId,
+                checkpointId,
+                paths
+              )
+            : await invoke(
+                'checkpoint:redoPaths',
+                this.projectId,
+                this.threadId,
+                checkpointId,
+                paths
+              )
         if (generation !== this.generation) return
         this.checkpoints = next
-        this.selections = { ...this.selections, [checkpointId]: [] }
+        const restored = new Set(paths)
+        this.selections = {
+          ...this.selections,
+          [checkpointId]: (this.selections[checkpointId] ?? []).filter(
+            (path) => !restored.has(path)
+          )
+        }
         this.writeback()
       } catch (reason) {
         if (generation !== this.generation) return
-        this.error =
-          reason instanceof Error ? reason.message : 'Selected files could not be restored.'
+        if (reason instanceof Error) {
+          this.error = reason.message
+        } else {
+          this.error =
+            direction === 'undo'
+              ? 'Selected files could not be restored.'
+              : 'The file could not be re-applied.'
+        }
       } finally {
-        if (generation === this.generation) this.restoringId = null
+        if (generation === this.generation) {
+          this.restoringId = null
+          this.busyPath = null
+        }
       }
     }
 
@@ -403,7 +471,9 @@
     Eye,
     FileDiff,
     Loader2,
-    RefreshCw
+    RefreshCw,
+    RotateCcw,
+    RotateCw
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -595,6 +665,7 @@
                   : diffDetails(fileDiff.before, fileDiff.after)}
                 {@const stats = details}
                 {@const expanded = controller.expandedDiffs[fileDiff.path] ?? true}
+                {@const undone = checkpoint.rolledBackPaths?.includes(fileDiff.path) ?? false}
                 <section
                   data-reveal-path={fileDiff.path}
                   class={[
@@ -628,6 +699,9 @@
                           −{stats.deletions}
                         </span>
                       {/if}
+                      {#if undone}
+                        <span class="shrink-0 text-[0.5625rem] text-dimmed">undone</span>
+                      {/if}
                       {#if expanded}
                         <ChevronDown size={12} class="shrink-0 text-dimmed" />
                       {:else}
@@ -643,6 +717,29 @@
                         onclick={() => void controller.openChange(checkpoint.id, fileDiff.path)}
                       >
                         <Eye size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={controller.restoringId !== null}
+                        aria-label={undone
+                          ? `Redo the changes to ${fileDiff.path}`
+                          : `Undo the changes to ${fileDiff.path}`}
+                        title={undone
+                          ? `Redo the changes to ${fileDiff.path}`
+                          : `Undo the changes to ${fileDiff.path}`}
+                        onclick={() =>
+                          undone
+                            ? void controller.redoPath(checkpoint.id, fileDiff.path)
+                            : controller.requestUndoPath(checkpoint.id, fileDiff.path)}
+                      >
+                        {#if controller.busyPath === fileDiff.path}
+                          <Loader2 size={13} class="animate-spin" />
+                        {:else if undone}
+                          <RotateCw size={13} />
+                        {:else}
+                          <RotateCcw size={13} />
+                        {/if}
                       </button>
                     {/if}
                   </div>
@@ -698,6 +795,7 @@
                   <p class="px-3 py-2 text-[0.625rem] text-dimmed">No file changes detected.</p>
                 {:else}
                   {#each checkpoint.changes as change (`${change.kind}:${change.path}`)}
+                    {@const undone = checkpoint.rolledBackPaths?.includes(change.path) ?? false}
                     <div
                       class="flex h-8 items-center gap-2 px-3 transition-colors hover:bg-elevated"
                     >
@@ -732,6 +830,7 @@
                         <button
                           type="button"
                           class="min-w-0 flex-1 truncate text-left font-mono text-[0.625rem] text-muted hover:text-foreground"
+                          class:line-through={undone}
                           title={`Open ${change.path}`}
                           onclick={() => void controller.openChange(checkpoint.id, change.path)}
                         >
@@ -740,6 +839,31 @@
                       {/if}
                       {#if change.binary}
                         <span class="text-[0.5625rem] text-dimmed">binary</span>
+                      {/if}
+                      {#if checkpoint.status !== 'active'}
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={controller.restoringId !== null}
+                          aria-label={undone
+                            ? `Redo the changes to ${change.path}`
+                            : `Undo the changes to ${change.path}`}
+                          title={undone
+                            ? `Redo the changes to ${change.path}`
+                            : `Undo the changes to ${change.path}`}
+                          onclick={() =>
+                            undone
+                              ? void controller.redoPath(checkpoint.id, change.path)
+                              : controller.requestUndoPath(checkpoint.id, change.path)}
+                        >
+                          {#if controller.busyPath === change.path}
+                            <Loader2 size={13} class="animate-spin" />
+                          {:else if undone}
+                            <RotateCw size={13} />
+                          {:else}
+                            <RotateCcw size={13} />
+                          {/if}
+                        </button>
                       {/if}
                     </div>
                   {/each}
@@ -782,5 +906,20 @@
     busy={controller.restoringId !== null}
   >
     <p>The files this run changed go back to the content they had before it started.</p>
+  </ConfirmDialog>
+
+  <ConfirmDialog
+    open={controller.pendingUndoPath !== null}
+    title="Undo the changes to this file?"
+    onCancel={() => controller.cancelUndoPath()}
+    onConfirm={() => void controller.confirmUndoPath()}
+    confirmLabel="Undo file"
+    busy={controller.restoringId !== null}
+  >
+    <p>
+      <span class="font-mono text-foreground">{controller.pendingUndoPath?.path}</span> goes back to the
+      content it had before this turn started. Every other file this turn changed stays exactly as it
+      is.
+    </p>
   </ConfirmDialog>
 </div>

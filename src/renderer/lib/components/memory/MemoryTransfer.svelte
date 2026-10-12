@@ -32,7 +32,7 @@
     { value: 'projects', label: 'Projects' },
     { value: 'chats', label: 'Chats' },
     { value: 'assistant', label: 'Assistant' },
-    { value: 'both', label: 'Both' }
+    { value: 'both', label: 'All' }
   ]
 
   /** The export kind for the sidebar: a project export, or chats for the inbox. */
@@ -104,7 +104,7 @@
       case 'assistant':
         return 'assistant'
       case 'both':
-        return 'both'
+        return 'all'
       case 'project':
         return 'this project'
     }

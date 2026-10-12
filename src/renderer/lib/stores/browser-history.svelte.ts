@@ -220,6 +220,65 @@ export class BrowserHistoryState {
   }
 
   /**
+   * Every durable visit, across the global browser and every named box.
+   *
+   * The history manager has to show one list even though the browser keeps one
+   * per profile: the same settings surface already treats "clear browsing
+   * history" as a statement about all of them, so reading them back mirrors
+   * that. A page visited in two scopes is one row, keeping the more recent visit
+   * and the higher visit count. Plain records are returned rather than the
+   * store's own reactive entries, so a derived read never hands a caller a
+   * handle it could mutate.
+   */
+  durableEntries(): BrowserHistoryEntry[] {
+    // A local dedupe index built and discarded inside this read, not reactive
+    // state, so it is a plain Map the way the visit guard above is.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const byUrl = new Map<string, BrowserHistoryEntry>()
+    for (const [scope, entries] of Object.entries(this.lists)) {
+      if (!this.isPersistentScope(scope)) continue
+      for (const entry of entries) {
+        const existing = byUrl.get(entry.url)
+        if (!existing) {
+          byUrl.set(entry.url, {
+            url: entry.url,
+            title: entry.title,
+            visitedAt: entry.visitedAt,
+            visitCount: entry.visitCount
+          })
+          continue
+        }
+        existing.visitCount = Math.max(existing.visitCount, entry.visitCount)
+        if (entry.visitedAt > existing.visitedAt) {
+          existing.visitedAt = entry.visitedAt
+          existing.title = entry.title
+        }
+      }
+    }
+    return [...byUrl.values()].sort((a, b) => b.visitedAt - a.visitedAt)
+  }
+
+  /**
+   * Forget one address wherever it was visited.
+   *
+   * The rail panel deletes within one surface; the history manager lists every
+   * durable surface at once, so its per-row delete removes the address from all
+   * of them rather than leaving a copy behind in a box the user cannot see from
+   * there. Writes once at the end, not once per scope.
+   */
+  forgetEverywhere(url: string): void {
+    let changed = false
+    for (const scope of Object.keys(this.lists)) {
+      if (!this.isPersistentScope(scope)) continue
+      const entries = this.lists[scope]
+      if (!entries.some((entry) => entry.url === url)) continue
+      this.lists[scope] = entries.filter((entry) => entry.url !== url)
+      changed = true
+    }
+    if (changed) this.persist()
+  }
+
+  /**
    * Forget everything, in every surface.
    *
    * The durable half is cleared in the main process, and the pending write is

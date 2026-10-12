@@ -257,7 +257,8 @@
                         Official
                       </span>
                     {/if}
-                    {#if installedSkillState.isInstalled(entry.skillId)}<SkillInstalledBadge />{/if}
+                    {#if installedSkillState.isInstalled(entry.skillId, entry.source)}<SkillInstalledBadge
+                      />{/if}
                   </span>
                   <span class="mt-0.5 block truncate text-xs text-muted">{entry.source}</span>
                 </span>

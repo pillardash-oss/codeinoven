@@ -4,7 +4,7 @@
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import type { ThinkingLevel } from '$shared/types'
   import type { OvenAppearance } from '$shared/ovens'
   import {

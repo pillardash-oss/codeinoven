@@ -118,7 +118,7 @@ export function findPanelPrimaryAction(panel: HTMLElement): HTMLElement | undefi
  * must not double-fire it.
  */
 export function focusOwnsEnter(panel: HTMLElement): boolean {
-  const active = document.activeElement
+  const active = panel.ownerDocument.activeElement
   if (!(active instanceof HTMLElement)) return false
   if (!panel.contains(active)) return false
   return active.matches('button[type="submit"]')
@@ -131,7 +131,7 @@ export function focusOwnsEnter(panel: HTMLElement): boolean {
  * Enter never leaks.
  */
 export function isTextFieldFocused(panel: HTMLElement): boolean {
-  const active = document.activeElement
+  const active = panel.ownerDocument.activeElement
   if (!(active instanceof HTMLElement)) return false
   if (!panel.contains(active)) return false
   return active.matches(INPUT_FIELD_SELECTOR)

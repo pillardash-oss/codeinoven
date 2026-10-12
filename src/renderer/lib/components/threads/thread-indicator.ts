@@ -1,11 +1,16 @@
 /**
- * The single indicator slot a thread row can show. Speech and computer use
- * compete for it, and exactly one of them wins.
+ * The single indicator slot a thread row can show. Speech, browser sound and
+ * computer use compete for it, and exactly one of them wins.
  *
  * `transcribing-send` and `transcribing-steer` are the armed refinements of a
  * transcription in flight: the user has told the app how the transcript should
  * be delivered once it lands, so the row shows that intent rather than plain
  * processing.
+ *
+ * `browser-audio` is a browser tab of this thread playing sound. It is not a
+ * speech action of the app's own, but it is still sound the user can hear coming
+ * from a thread, so it takes the same slot and competes the same way: the mark
+ * must say which thread is making the noise the user is hearing.
  */
 export type ThreadIndicator =
   | 'recording'
@@ -14,6 +19,7 @@ export type ThreadIndicator =
   | 'transcribing-send'
   | 'transcribing-steer'
   | 'computer-use'
+  | 'browser-audio'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator

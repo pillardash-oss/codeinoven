@@ -26,6 +26,25 @@ export interface PrDraft {
   createdAt: number
   /** Live dock descriptor reported by the sheet; rendered by the host dock. */
   dock: PrDockDescriptor
+  /**
+   * What the sheet is prefilled with when it is opened from somewhere else, such
+   * as a GitHub issue it should close. Replaced on every open that carries a seed,
+   * so reusing the same draft for a different issue refills it rather than leaving
+   * the previous issue's text behind.
+   */
+  seed?: PrDraftSeed
+}
+
+/**
+ * Prefill for a PR draft opened from another surface.
+ *
+ * Only the title and description travel: the branches stay the sheet's own
+ * question, because which head carries the work is the one thing the sheet cannot
+ * guess from the context it was opened from.
+ */
+export interface PrDraftSeed {
+  title?: string
+  body?: string
 }
 
 /**
@@ -50,7 +69,17 @@ class PrLifecycleStore {
    * Open (or focus) a PR draft for one project scope. Sibling scopes own
    * separate drafts because they may point at different worktrees and branches.
    */
-  open(projectId: string, threadId: string, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID): string {
+  open(
+    projectId: string,
+    threadId: string,
+    scopeBucketId = DEFAULT_SCOPE_BUCKET_ID,
+    seed?: PrDraftSeed
+  ): string {
+    // A seeded open always creates its own draft, so the sheet is mounted with the
+    // prefill already known and never has to re-apply it to a form the user may
+    // have started editing. Two issues opened in a row are two pull requests in
+    // progress, which is exactly the multi-draft behaviour `openNew` exists for.
+    if (seed) return this.openNew(projectId, threadId, scopeBucketId, seed)
     const existing = this.drafts.find(
       (draft) => draft.projectId === projectId && draft.scopeBucketId === scopeBucketId
     )
@@ -82,7 +111,12 @@ class PrLifecycleStore {
   }
 
   /** Always create a new draft, even if one already exists for the project. */
-  openNew(projectId: string, threadId: string, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID): string {
+  openNew(
+    projectId: string,
+    threadId: string,
+    scopeBucketId = DEFAULT_SCOPE_BUCKET_ID,
+    seed?: PrDraftSeed
+  ): string {
     const draft: PrDraft = {
       id: crypto.randomUUID(),
       projectId,
@@ -96,7 +130,8 @@ class PrLifecycleStore {
         status: 'draft',
         title: 'New pull request',
         detail: ''
-      }
+      },
+      ...(seed ? { seed } : {})
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id

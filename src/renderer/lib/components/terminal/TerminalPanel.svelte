@@ -18,9 +18,13 @@
     /** Project-relative folder the shell starts in, set when the terminal was
      *  opened at a specific path from the file tree. */
     directory?: string
+    /** An Oven's own home shell, with no chat behind it (Settings' "Open
+     *  Oven"). When set the session spawns through `pty:createOven` and the
+     *  project/thread props carry no meaning. */
+    ovenId?: string
   }
 
-  let { terminalId, projectId, threadId, scopeBucketId, directory }: Props = $props()
+  let { terminalId, projectId, threadId, scopeBucketId, directory, ovenId }: Props = $props()
 
   /**
    * Every scope owns its own shell. Qualifying the session id by the scope
@@ -39,6 +43,9 @@
    * shell instead of leaving one session shared across unrelated hardware.
    */
   let scopedTerminalId = $derived.by(() => {
+    // An Oven shell has no thread or scope: it is one session per Oven, so the
+    // id names the Oven and nothing else.
+    if (ovenId) return `oven-shell:${ovenId}`
     const ovenThread = ovenRootThread(projectId)
     const ovenKey = ovenThread ? `${ovenThread.id}:${ovenThread.settings?.ovenId ?? ''}` : 'local'
     return `${terminalId}::${scopeKey}::${ovenKey}`
@@ -57,19 +64,22 @@
     scopedId: string,
     scope: string,
     thread: string,
-    startingDirectory?: string
+    startingDirectory?: string,
+    shellOvenId?: string
   ): TerminalSpawnBinding {
     const existing = scopeBindings.get(scopedId)
     if (existing) {
       existing.scopeBucketId = scope
       existing.threadId = thread
       existing.directory = startingDirectory
+      existing.ovenId = shellOvenId
       return existing
     }
     const binding: TerminalSpawnBinding = {
       threadId: thread,
       scopeBucketId: scope,
-      directory: startingDirectory
+      directory: startingDirectory,
+      ovenId: shellOvenId
     }
     scopeBindings.set(scopedId, binding)
     return binding
@@ -93,6 +103,7 @@
     currentScopeKey: string,
     currentThreadId: string,
     currentDirectory: string | undefined,
+    currentOvenId: string | undefined,
     retry: number
   ): Attachment<HTMLDivElement> {
     // Focus only when the attach is user-initiated: the first mount (the user
@@ -102,7 +113,13 @@
     const focus = firstAttach || isRetry
     firstAttach = false
     lastRetrySequence = retry
-    const binding = bindingFor(currentScopedId, currentScopeKey, currentThreadId, currentDirectory)
+    const binding = bindingFor(
+      currentScopedId,
+      currentScopeKey,
+      currentThreadId,
+      currentDirectory,
+      currentOvenId
+    )
     return (container) => {
       // A thread switch inside one scope re-runs this attachment with the very
       // same scoped session already in place. Leave it completely untouched:
@@ -114,6 +131,7 @@
         live.threadId = currentThreadId
         live.scopeBucketId = currentScopeKey
         live.directory = currentDirectory ?? null
+        live.ovenShellId = currentOvenId ?? null
         return
       }
       let cancelled = false
@@ -167,6 +185,7 @@
           scopeKey,
           threadId,
           directory,
+          ovenId,
           retrySequence
         )}
       ></div>

@@ -12,6 +12,13 @@
     disabled?: boolean
     /** When true, ActionSheet renders a check so the item reads as the current selection. */
     selected?: boolean
+    /** When true the entry is a non-interactive caption rather than an action.
+     *
+     *  A menu uses it to name what it acts on before listing the actions, so the
+     *  caller does not have to repeat that fact in every entry. The Oven harness
+     *  menu leads with the installed version for exactly that reason. `onClick`
+     *  is ignored, and the entry stays out of the menu's keyboard navigation. */
+    header?: boolean
   }
 
   interface Props {
@@ -72,6 +79,12 @@
       {#each items as item (item.label)}
         {#if item.divider}
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
+        {:else if item.header}
+          <div
+            class="truncate px-2.5 pt-1 pb-0.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+          >
+            {item.label}
+          </div>
         {:else}
           <DropdownMenu.Item
             disabled={item.disabled}

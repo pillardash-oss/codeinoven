@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Volume2 } from '@lucide/svelte'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -18,6 +19,10 @@
     tone?: 'default' | 'primary' | 'danger' | 'accent'
     /** Spins the icon, for in-flight states such as a download. */
     spin?: boolean
+    /** Determinate progress, replacing the icon with a ring and integer. */
+    progress?: number
+    /** Corner mark saying a browser behind this item is playing sound. */
+    playing?: boolean
     onSelect: () => void
     onHover?: () => void
     /** Corner content, e.g. an activity badge. */
@@ -32,10 +37,20 @@
     shortcut = [],
     tone = 'default',
     spin = false,
+    progress,
+    playing = false,
     onSelect,
     onHover,
     badge
   }: Props = $props()
+
+  const progressPercent = $derived(
+    progress === undefined
+      ? undefined
+      : Number.isFinite(progress)
+        ? Math.min(100, Math.max(0, Math.round(progress)))
+        : 0
+  )
 
   /** Tonal items keep their colour in every state; the rest use the neutral
    *  idle/active palette shared by the view rail and the context dock. */
@@ -68,6 +83,48 @@
   onpointerenter={onHover}
   onclick={onSelect}
 >
-  <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
+  {#if progressPercent !== undefined}
+    <span class="relative flex h-6 w-6 items-center justify-center" aria-hidden="true">
+      <svg class="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 24 24" fill="none">
+        <circle
+          cx="12"
+          cy="12"
+          r="10.5"
+          stroke="currentColor"
+          stroke-width="1.8"
+          class="text-border"
+        />
+        <circle
+          cx="12"
+          cy="12"
+          r="10.5"
+          pathLength="100"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-dasharray={`${progressPercent} 100`}
+          class="text-primary"
+        />
+      </svg>
+      <span class="text-[0.5rem] font-medium leading-none tabular-nums text-foreground">
+        {progressPercent}
+      </span>
+    </span>
+  {:else}
+    <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
+  {/if}
+  {#if playing}
+    <!-- The speaker rides the opposite corner from the badge stack, so a view can
+         say "working" and "playing sound" at the same time without either mark
+         hiding the other. It is a status, not a control: the mute toggle lives
+         on the tab row the sound actually belongs to. -->
+    <span
+      class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border bg-elevated text-info shadow-sm"
+      role="status"
+      aria-label={`${label} is playing audio`}
+      title={`${label} is playing audio`}
+    >
+      <Volume2 size={9} strokeWidth={2.6} aria-hidden="true" />
+    </span>
+  {/if}
   {@render badge?.()}
 </button>

@@ -28,7 +28,7 @@
 
   async function copy(): Promise<void> {
     try {
-      await copyText(text)
+      await copyText(text, null)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)

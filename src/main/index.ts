@@ -11,6 +11,7 @@ import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
 import { registerGlobalBrowserIpcHandlers } from './ipc/global-browser-ipc'
+import { NativeFloatingPanelWindow } from './browser/native-floating-panel-window'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
@@ -23,10 +24,12 @@ import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
+import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
+import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
@@ -116,6 +119,11 @@ const state = createBootstrapState()
 
 installOpenWithHandling(state)
 
+// The renderer's answer to a parked app-control call. Registered as early as the
+// close-confirmation surface, because a `@cio-hey` turn can park a call the
+// moment the app is usable, before the lazy feature graph is up.
+registerAppControlHandlers()
+
 ipcMain.handle('app:confirmClose', async () => {
   // The user approved the forced close while threads are working. When another
   // live instance exists it can continue those threads, so this instance just
@@ -199,6 +207,20 @@ async function completeStartupIfReady(): Promise<void> {
     state.startupTelemetryReported = true
     startupTelemetry.stopEventLoopMonitor()
     startupTelemetry.report()
+    // The first paint has its own budget, so a startup regression is visible in
+    // the durable log on every launch instead of only being caught by a release
+    // smoke. It is recorded, never fatal: a slow machine, a cold cache and a
+    // concurrently-running agent build all legitimately boot slowly, and the
+    // app must still open. The hard failure lives in the packaged smoke gate.
+    const violation = startupBudgetViolation(startupTelemetry.snapshot())
+    if (violation) {
+      Logger.error('Startup exceeded the first-paint budget', {
+        phase: violation.phase,
+        atMs: Math.round(violation.atMs),
+        overByMs: Math.round(violation.overByMs),
+        budgetMs: violation.budgetMs
+      })
+    }
   }
 
   if (!output || state.packagedSmokeProofStarted) return
@@ -428,6 +450,7 @@ function createWindow(): BrowserWindow {
     }
   })
   state.mainWindow = window
+  const floatingPanels = new NativeFloatingPanelWindow(window)
 
   if (isProduction) {
     lockDownProductionWindow(window)
@@ -516,6 +539,8 @@ function createWindow(): BrowserWindow {
   // back to the system browser when no project thread can own the tab, so
   // sending the request is never a dead end.
   window.webContents.setWindowOpenHandler((details) => {
+    const floatingPanel = floatingPanels.handleWindowOpen(details)
+    if (floatingPanel) return floatingPanel
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
       const local = isLocalDevelopmentUrl(safeUrl)

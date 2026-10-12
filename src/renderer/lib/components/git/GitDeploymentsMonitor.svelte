@@ -11,9 +11,7 @@
     Rocket
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { relativeTime } from '$lib/format/relative-time'
-  import { githubAppInstallUrl } from '$lib/github-references'
-  import { openInBrowser } from '$lib/open-in-browser'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
   import GitWorkflowRunDetail from './GitWorkflowRunDetail.svelte'
@@ -219,8 +217,8 @@
           </p>
           <p class="mt-1 max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {#if permissionMissing}
-              Install CodeInOven on this repository and grant Actions, Deployments, and Environments
-              read access.
+              GitHub refused this sign-in access to the repository's Actions, Deployments, and
+              Environments.
             {:else}
               {error}
             {/if}
@@ -230,10 +228,9 @@
           <button
             type="button"
             class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            data-external-url={githubAppInstallUrl()}
-            onclick={() => void openInBrowser(githubAppInstallUrl())}
+            onclick={onSignIn}
           >
-            Install GitHub App
+            Sign in to GitHub
           </button>
         {:else}
           <button
@@ -307,7 +304,7 @@
                         <span class="max-w-28 truncate font-mono">{run.branch}</span>
                       {/if}
                       <span>·</span>
-                      <span class="shrink-0">{relativeTime(run.updatedAt)}</span>
+                      <span class="shrink-0">{formatCompactAge(run.updatedAt)}</span>
                     </div>
                   </div>
                 </button>
@@ -360,7 +357,7 @@
                       <span>·</span>
                       <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
                       <span>·</span>
-                      <span>{relativeTime(deployment.updatedAt)}</span>
+                      <span>{formatCompactAge(deployment.updatedAt)}</span>
                     </div>
                     {#if deployment.latestStatus?.description}
                       <p class="mt-1 truncate text-[0.5625rem] text-muted">

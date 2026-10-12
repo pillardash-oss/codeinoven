@@ -72,6 +72,13 @@
   let { entry, backLabel, onBack }: Props = $props()
   const cioIconUrl = publicAssetUrl('icon.svg')
   let detail = $state<SkillMarketDetail | null>(null)
+  let skillPreview = $derived.by(() => {
+    const markdown = detail?.skillMarkdown ?? ''
+    const frontmatter = markdown.match(/^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u)
+    return frontmatter
+      ? `\`\`\`yaml\n${frontmatter[1]}\n\`\`\`\n\n${markdown.slice(frontmatter[0].length)}`
+      : markdown
+  })
   let loading = $state(true)
   let installing = $state(false)
   let uninstalling = $state(false)
@@ -158,7 +165,7 @@
   })
 
   /** Every place this skill is already installed, newest read first. */
-  let installedLocations = $derived(installedSkillState.locationsFor(entry.skillId))
+  let installedLocations = $derived(installedSkillState.locationsFor(entry.skillId, entry.source))
 
   /**
    * True when the owner and scope on screen is already covered by an installed
@@ -283,15 +290,15 @@
 
   /**
    * Removes the skill from every place it was installed: main drops all the
-   * CodeInOven entries that manage it and hands the native copies to the Skills
-   * CLI, so one action clears global, harness, and project copies alike.
+   * CodeInOven entries and exact native folders attributed to this publisher,
+   * across global, harness, and project scopes.
    */
   async function uninstallSkill(): Promise<void> {
     uninstalling = true
     error = ''
     installedMessage = ''
     try {
-      await invoke('utilities:uninstallMarketSkill', entry.skillId)
+      await invoke('utilities:uninstallMarketSkill', entry.id)
       await installedSkillState.refresh()
       void skillUpdateState.refresh()
       installedMessage = `${entry.name} uninstalled.`
@@ -416,7 +423,7 @@
           {#if loading}<Loader2 size={12} class="animate-spin text-dimmed" />{/if}
         </div>
         {#if detail?.skillMarkdown}
-          <MarkdownView text={detail.skillMarkdown} class="mt-4" />
+          <MarkdownView text={skillPreview} class="mt-4" />
         {:else if loading}
           <div class="mt-5 space-y-3" aria-label="Loading skill instructions">
             <div class="h-4 w-3/5 animate-pulse rounded bg-raised"></div>

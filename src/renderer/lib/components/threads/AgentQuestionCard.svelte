@@ -128,7 +128,11 @@
   // The send key resolved through the user's keymap overrides, so the Next
   // button advertises whichever combination actually advances the question.
   let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
-  let timerPaused = $derived(interactedIndexes.has(currentIndex) || request.expiresAt === undefined)
+  // Paused is read from the server's own deadline, never from local interaction:
+  // the main process holds the countdown while the user is active anywhere in the
+  // app and only hands back a fresh window once they stop. Saying "Paused" off a
+  // local set is what let the card look frozen while it was still counting down.
+  let timerPaused = $derived(request.expiresAt === undefined)
   // Time is an external system, so the countdown subscribes to it instead of
   // tracking it in an effect; the interval only runs while the timer is live.
   const subscribeToClock = createSubscriber((update) => {

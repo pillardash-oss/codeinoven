@@ -7,6 +7,7 @@ import {
   type BrowserDownloadOutstanding
 } from '$lib/stores/browser-downloads.svelte'
 import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
+import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -66,7 +67,24 @@ export interface ViewRailBadges {
   unread: ViewBadge | null
   /** The family has active work, regardless of the visible status label. */
   hasWorkingThreads: boolean
+  /** A browser surface behind this item is playing sound right now. */
+  playing: boolean
 }
+
+/**
+ * Which browser surfaces are playing sound, as one snapshot the rail reads per
+ * option. The thread browser reports per family; the global profile reports on
+ * its own, because the Browser item owns no thread family.
+ */
+export interface ViewAudioActivity {
+  /** Families whose thread browser is playing sound. */
+  families: ReadonlySet<ContentThreadFamily>
+  /** Whether the global browser profile is playing sound. */
+  global: boolean
+}
+
+/** Nothing playing: the shape a caller falls back to when no audio is wired. */
+const NO_AUDIO_ACTIVITY: ViewAudioActivity = { families: new Set(), global: false }
 
 /** The three families the rail's badges and labels are keyed by. */
 const FAMILY_ICONS: Record<ContentThreadFamily, Component> = {
@@ -258,7 +276,21 @@ export class ViewRailActivity {
   browserTransfers: BrowserDownloadOutstanding = $derived(
     browserDownloads.outstandingCounts(GLOBAL_BROWSER_PROJECT_ID)
   )
+
+  /**
+   * Browser surfaces playing sound right now, for the rail's speaker mark.
+   *
+   * A thread browser tab belongs to the conversation that opened it, so the sound
+   * rides that conversation's family: a project thread's tab marks the project
+   * family, a chat's marks Chats, an assistant task's marks Assistant. The global
+   * profile belongs to no thread, so it marks the Browser item on its own.
+   */
+  audio: ViewAudioActivity = $derived.by(() => ({
+    families: browserAudio.familiesPlaying(),
+    global: browserAudio.globalIsPlaying()
+  }))
 }
+
 /**
  * The single activity pill a rail view shows, chosen by priority: working
  * outranks attention, which outranks a parked retry. The returned label always
@@ -273,6 +305,10 @@ export class ViewRailActivity {
  * Browser owns no listed thread family of its own, so its item reports the tab
  * assistant conversations behind it (see {@link browserAgentBadge}) and falls
  * back to the profile's downloads (see {@link browserTransferBadge}).
+ *
+ * The speaker mark ({@link ViewRailBadges.playing}) is separate from that pill:
+ * it rides the same option the family's badge does, so a view that is working and
+ * playing sound shows both without either hiding the other.
  */
 export function viewBadgesFor(
   optionId: HeaderViewOptionId,
@@ -280,20 +316,25 @@ export function viewBadgesFor(
   counts: ViewActivityCounts,
   unreadCounts: Record<ContentThreadFamily, number>,
   browserTransfers: BrowserDownloadOutstanding,
-  browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity()
+  browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity(),
+  audio: ViewAudioActivity = NO_AUDIO_ACTIVITY
 ): ViewRailBadges {
   if (optionId === 'browser') {
     return {
       activity:
         browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
       unread: null,
-      hasWorkingThreads: browserAssistantActivity.working > 0
+      hasWorkingThreads: browserAssistantActivity.working > 0,
+      playing: audio.global
     }
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) {
-    return { activity: null, unread: null, hasWorkingThreads: false }
+    return { activity: null, unread: null, hasWorkingThreads: false, playing: false }
   }
+  // The project family shares one badge option, so its sound mark rides the same
+  // option its activity badge does; Chats and Assistant own their single view.
+  const playing = audio.families.has(family)
   const unread = notificationPanelState.unreadRailSummary(family)
   const threadUnreadCount = unreadCounts[family]
   const unreadCount = Math.max(unread?.count ?? 0, threadUnreadCount)
@@ -322,7 +363,8 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: true
+      hasWorkingThreads: true,
+      playing
     }
   }
   if (activity.attention > 0) {
@@ -334,7 +376,8 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false
+      hasWorkingThreads: false,
+      playing
     }
   }
   if (activity.retry > 0) {
@@ -346,10 +389,11 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false
+      hasWorkingThreads: false,
+      playing
     }
   }
-  return { activity: null, unread: unreadBadge, hasWorkingThreads: false }
+  return { activity: null, unread: unreadBadge, hasWorkingThreads: false, playing }
 }
 
 /**

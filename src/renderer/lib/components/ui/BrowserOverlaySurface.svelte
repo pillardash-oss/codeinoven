@@ -1,23 +1,18 @@
 <script lang="ts">
-  import { toast } from 'svelte-sonner'
-  import type { ExternalToast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount, tick } from 'svelte'
-  import { SvelteMap } from 'svelte/reactivity'
   import { logRendererDev } from '$lib/system/renderer-logger'
   import {
-    TOAST_OVERLAY_INNER_TOP,
+    type BrowserStatusOverlay,
     type BrowserStripOverlayInteraction,
-    type BrowserStripOverlayRequest,
-    type ToastOverlayInteraction,
-    type ToastOverlayRequestStack,
-    type ToastOverlayToast
+    type BrowserStripOverlayRequest
   } from '$shared/browser-overlay'
   import type { NativeDockRequest } from '$shared/native-dock'
   import BrowserOverlayDock from './BrowserOverlayDock.svelte'
   import TooltipHost from './TooltipHost.svelte'
-  import ToastStack from './ToastStack.svelte'
+  import { syncTitleTooltipPointer } from './tooltip-manager.svelte'
   import BrowserOverlayStrip from './BrowserOverlayStrip.svelte'
+  import BrowserOverlayStatus from './BrowserOverlayStatus.svelte'
 
   /**
    * The browser overlay's document: the app's toaster, and the browser's floating
@@ -49,20 +44,21 @@
     )
     const theme = next.at(-1)?.theme
     if (theme) document.documentElement.classList.toggle('dark', theme === 'dark')
+    const typography = next.at(-1)?.typography
+    if (typography) {
+      const root = document.documentElement
+      root.style.setProperty('--font-app', typography.fontFamily)
+      root.style.fontSize = `${typography.fontSize}px`
+      root.style.fontWeight = String(typography.fontWeight)
+    }
     void tick().then(afterDraw)
   }
-
-  let theme = $state<'light' | 'dark'>('light')
-
-  /** The stack on display, kept so its revision is confirmed beside the strip's. */
-  let stack = $state<ToastOverlayRequestStack | null>(null)
 
   /** The floating tab strip on display, or null while none is. */
   let strip = $state<BrowserStripOverlayRequest | null>(null)
 
-  /** What this document is drawing: the toast's own id, and a signature of the
-   *  card as it was drawn, so an unchanged card is never re-applied. */
-  const drawn = new SvelteMap<string, { id: number | string; signature: string }>()
+  /** The link preview on display, or null while none is. */
+  let status = $state<BrowserStatusOverlay | null>(null)
 
   /** Whether the pointer is inside anything this window draws, which is what
    *  decides whether it swallows a click or passes it to the page below. */
@@ -83,36 +79,6 @@
    */
   let pointerEpoch = 0
 
-  function keyOf(id: number | string): string {
-    return String(id)
-  }
-
-  function signatureOf(entry: ToastOverlayToast): string {
-    return [
-      entry.kind,
-      entry.title,
-      entry.description ?? '',
-      entry.duration ?? '',
-      entry.style ?? '',
-      entry.closeButton === true ? '1' : '0',
-      entry.dismissible === false ? '0' : '1',
-      entry.action?.label ?? '',
-      entry.cancel?.label ?? ''
-    ].join('\u0000')
-  }
-
-  function report(id: number | string, interaction: ToastOverlayInteraction): void {
-    // A press is logged on its way out, and only a press: whether it reached this
-    // document at all is the one fact nothing else here can answer, and a card
-    // whose button seems to do nothing is exactly the case where that matters.
-    // Dismissals and auto-closes stay silent, because they are not user
-    // intentions and there is one of them per toast either way.
-    if (interaction === 'action' || interaction === 'cancel') {
-      logRendererDev(`The toast overlay reported a ${interaction} press on card ${String(id)}`)
-    }
-    void invoke('browser:overlayInteract', { id, interaction }).catch(() => {})
-  }
-
   /** Report one thing the user did to the strip, or where the pointer is in it. */
   function reportStrip(interaction: BrowserStripOverlayInteraction): void {
     // Presses are logged for the same reason the cards' presses are: a row or a
@@ -127,98 +93,8 @@
     void invoke('browser:overlayStripInteract', interaction).catch(() => {})
   }
 
-  /**
-   * Confirm that what this document was given is drawn, naming the revisions.
-   *
-   * A card or a tab row here has no handler of its own: pressing one only works
-   * while this window can reach the app renderer that owns it. This is that
-   * proof, and the app renderer holds each region in its own window until the
-   * confirmation for its revision arrives, so it is sent after the draw rather
-   * than with the request. One message covers both regions because one document
-   * draws both: a window that can draw one can draw the other.
-   */
-  function reportDrawn(): void {
-    const revision = stack !== null && drawn.size > 0 ? stack.revision : undefined
-    const stripRevision = strip?.revision
-    if (revision === undefined && stripRevision === undefined) return
-    void invoke('browser:overlayDrawn', {
-      revision,
-      drawn: revision === undefined ? undefined : [...drawn.values()].map((entry) => entry.id),
-      stripRevision
-    }).catch(() => {})
-  }
-
-  function optionsFor(entry: ToastOverlayToast): ExternalToast {
-    return {
-      id: entry.id,
-      description: entry.description,
-      duration: entry.duration,
-      style: entry.style,
-      closeButton: entry.closeButton,
-      dismissible: entry.dismissible,
-      action: entry.action
-        ? { label: entry.action.label, onClick: () => report(entry.id, 'action') }
-        : undefined,
-      cancel: entry.cancel
-        ? { label: entry.cancel.label, onClick: () => report(entry.id, 'cancel') }
-        : undefined,
-      onDismiss: () => report(entry.id, 'dismiss'),
-      onAutoClose: () => report(entry.id, 'autoclose')
-    }
-  }
-
-  /** Raise (or update) one card in this document's own toaster. */
-  function draw(entry: ToastOverlayToast): void {
-    const options = optionsFor(entry)
-    switch (entry.kind) {
-      case 'success':
-        toast.success(entry.title, options)
-        break
-      case 'error':
-        toast.error(entry.title, options)
-        break
-      case 'warning':
-        toast.warning(entry.title, options)
-        break
-      case 'info':
-        toast.info(entry.title, options)
-        break
-      case 'loading':
-        toast.loading(entry.title, options)
-        break
-      default:
-        toast.message(entry.title, options)
-    }
-    drawn.set(keyOf(entry.id), { id: entry.id, signature: signatureOf(entry) })
-  }
-
-  function applyStack(next: ToastOverlayRequestStack | null): void {
-    stack = next
-    if (next === null) {
-      for (const [key, entry] of drawn) {
-        drawn.delete(key)
-        toast.dismiss(entry.id)
-      }
-      void tick().then(afterDraw)
-      return
-    }
-    theme = next.theme
-    document.documentElement.classList.toggle('dark', next.theme === 'dark')
-    const incoming = new Set(next.toasts.map((entry) => keyOf(entry.id)))
-    for (const [key, entry] of drawn) {
-      if (incoming.has(key)) continue
-      drawn.delete(key)
-      toast.dismiss(entry.id)
-    }
-    // Oldest first: svelte-sonner unshifts every new toast to the front, so
-    // replaying the stack backwards lands the newest card on top of the stack,
-    // in the order the app window has it.
-    for (const entry of [...next.toasts].reverse()) {
-      const existing = drawn.get(keyOf(entry.id))
-      if (existing?.signature === signatureOf(entry)) continue
-      draw(entry)
-    }
-    void tick().then(afterDraw)
+  function applyStatus(next: BrowserStatusOverlay | null): void {
+    status = next
   }
 
   function applyStrip(next: BrowserStripOverlayRequest | null): void {
@@ -227,7 +103,6 @@
     if (next !== null && strip !== null && strip.revision === next.revision) return
     strip = next
     if (next !== null) {
-      theme = next.theme
       document.documentElement.classList.toggle('dark', next.theme === 'dark')
     }
     void tick().then(afterDraw)
@@ -245,20 +120,8 @@
    */
   function afterDraw(): void {
     pointerOverContent = false
-    setPointerWatch(drawn.size > 0 || strip !== null || docks.some((dock) => !dock.passive))
+    setPointerWatch(strip !== null || docks.some((dock) => !dock.passive))
     syncPointerFromCursor(true)
-    reportDrawn()
-  }
-
-  /** Whether a point is inside a card, measured rather than hit-tested: the
-   *  toaster's own box does not take pointer events, so `elementFromPoint` would
-   *  report the page beneath a card. */
-  function overCard(x: number, y: number): boolean {
-    for (const card of document.querySelectorAll('[data-sonner-toast]')) {
-      const rect = card.getBoundingClientRect()
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true
-    }
-    return false
   }
 
   /** Whether a point is inside the strip's own rectangle. The strip is one opaque
@@ -270,21 +133,36 @@
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
   }
 
+  /**
+   * Whether the pointer is resting on a dock this window has drawn.
+   *
+   * Read from the rectangles the docks published rather than from their
+   * elements. A dock is positioned by its own bounds, and the surfaces that
+   * place themselves absolutely   the floating rail, a dockable panel   are out
+   * of flow, so the element that carries the dock measures zero and a pointer
+   * resting on the panel would read as a departure. That answer hands the app
+   * window's clicks back to the page underneath, which makes the panel inert.
+   */
+  function overDock(): boolean {
+    for (const dock of docks) {
+      if (dock.passive) continue
+      // A modal dock's backdrop covers the window, so anywhere is on it. Its
+      // press is claimed by the modal itself either way.
+      if (dock.modal) return true
+      const bounds = dock.bounds
+      if (
+        pointer.x >= bounds.x &&
+        pointer.x <= bounds.x + bounds.width &&
+        pointer.y >= bounds.y &&
+        pointer.y <= bounds.y + bounds.height
+      )
+        return true
+    }
+    return false
+  }
   function reportPointer(force = false): void {
     if (!pointer.known) return
-    const overDock = [
-      ...document.querySelectorAll('[data-native-overlay-dock]:not([data-native-overlay-passive])')
-    ].some((element) => {
-      const rect = element.getBoundingClientRect()
-      return (
-        pointer.x >= rect.left &&
-        pointer.x <= rect.right &&
-        pointer.y >= rect.top &&
-        pointer.y <= rect.bottom
-      )
-    })
-    const over =
-      dockDragging || overDock || overCard(pointer.x, pointer.y) || overStrip(pointer.x, pointer.y)
+    const over = dockDragging || overDock() || overStrip(pointer.x, pointer.y)
     if (!force && over === pointerOverContent) return
     pointerOverContent = over
     void invoke('browser:overlayPointer', over).catch(() => {})
@@ -327,6 +205,9 @@
     }
     if (pointerWatch !== undefined) clearInterval(pointerWatch)
     pointerWatch = undefined
+    // No interactive content remains. Clear a tooltip whose projected anchor
+    // was removed even when the cursor never moved.
+    syncTitleTooltipPointer(-1, -1)
   }
 
   /**
@@ -345,8 +226,8 @@
    * resets its own copies of both answers whenever it shows or hides this window:
    * a state that did not change from this document's point of view still has to
    * be asserted, or the two sides stay disagreeing and the control stays
-   * unpressable. The watch that runs while content is on screen reports only a
-   * change, which is all it can ever have to say.
+   * unpressable. The watch also reasserts aggregate hover so main can distinguish
+   * a dock departure from moving into another interactive overlay region.
    */
   function syncPointerFromCursor(force = false): void {
     const epoch = pointerEpoch
@@ -354,8 +235,12 @@
       .then((cursor) => {
         if (!cursor || epoch !== pointerEpoch) return
         pointer = { x: cursor.x, y: cursor.y, known: true }
-        reportPointer(force)
+        // Reassert on each window-server sample. Moving from a dock to the
+        // strip keeps the aggregate `over` true, but must release dock focus.
+        // Main guards the native click-through toggle against redundant calls.
+        reportPointer(true)
         reportStripPointer(force)
+        syncTitleTooltipPointer(cursor.x, cursor.y)
       })
       .catch(() => {})
   }
@@ -384,15 +269,15 @@
 
   onMount(() => {
     const unsubscribeDocks = subscribe('browser:overlay:docks', applyDocks)
-    const unsubscribeStack = subscribe('browser:overlay:stack', (next) => applyStack(next))
     const unsubscribeStrip = subscribe('browser:overlay:strip', (next) => applyStrip(next))
+    const unsubscribeStatus = subscribe('browser:overlay:status', (next) => applyStatus(next))
     // First delivery is a pull, exactly as the permission popup does it: a push
     // straight after `loadURL` loses the race against these subscriptions.
     void invoke('browser:overlayReady')
       .then((snapshot) => {
         applyDocks(snapshot.docks)
-        if (snapshot.stack) applyStack(snapshot.stack)
         if (snapshot.strip) applyStrip(snapshot.strip)
+        applyStatus(snapshot.status)
       })
       .catch(() => {})
     window.addEventListener('mousemove', trackPointer)
@@ -400,15 +285,17 @@
     return () => {
       setPointerWatch(false)
       unsubscribeDocks()
-      unsubscribeStack()
       unsubscribeStrip()
+      unsubscribeStatus()
       window.removeEventListener('mousemove', trackPointer)
       document.removeEventListener('mouseout', leaveDocument)
     }
   })
 </script>
 
-<ToastStack {theme} offsetTop={TOAST_OVERLAY_INNER_TOP} />
+{#if status}
+  <BrowserOverlayStatus {status} />
+{/if}
 
 {#if strip}
   <BrowserOverlayStrip

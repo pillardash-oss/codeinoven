@@ -248,6 +248,26 @@
     element?.focus()
   }
 
+  /**
+   * The editing host a right-click landed in: the outermost contenteditable
+   * ancestor, not the clicked node. `element.isContentEditable` is true for
+   * every descendant of an editor   a paragraph, an inline code span, a code
+   * block's own `<code>`   so resolving the target from the clicked element
+   * made Select All select that one fragment: a paragraph out of a whole note,
+   * a single code block out of the document. Select All means the field.
+   */
+  function editingHostOf(element: HTMLElement): HTMLElement {
+    let host = element
+    let parent = element.parentElement
+    while (parent) {
+      const editable = parent.closest('[contenteditable="true"], [contenteditable=""]')
+      if (!(editable instanceof HTMLElement)) break
+      host = editable
+      parent = editable.parentElement
+    }
+    return host
+  }
+
   async function copy(value: string, label: string): Promise<void> {
     try {
       await copyText(value)
@@ -313,7 +333,7 @@
       element.select()
     } else {
       const range = document.createRange()
-      range.selectNodeContents(element)
+      range.selectNodeContents(editingHostOf(element))
       const selection = window.getSelection()
       selection?.removeAllRanges()
       selection?.addRange(range)

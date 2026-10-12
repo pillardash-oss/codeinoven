@@ -44,6 +44,27 @@ export function viewShowsProject(
 }
 
 /**
+ * True while the workspace shell is the surface on screen: the views that show
+ * the workspace's own threads (Projects, Scoped, Chats, Threads, Assistant).
+ *
+ * The thread browser and the sidebar that hosts it belong to the workspace, so
+ * this is also what decides whether a link clicked now belongs to a project
+ * thread or to the app itself. The takeover pages (Scope, Settings) and the
+ * app-wide browser replace the shell wholesale: the workspace is hidden behind
+ * them, so no thread is showing the page the reader just clicked and the link
+ * has to land somewhere the reader can actually see it.
+ */
+export function viewShowsWorkspaceShell(view: MainView): boolean {
+  return (
+    view === 'projects' ||
+    view === 'projects-scope' ||
+    view === 'chats' ||
+    view === 'threads' ||
+    view === 'assistant'
+  )
+}
+
+/**
  * True while the shell shows the scoped-threads view: its own registered view,
  * or the plain projects view carrying a live scope sidebar (a restore can land
  * there).

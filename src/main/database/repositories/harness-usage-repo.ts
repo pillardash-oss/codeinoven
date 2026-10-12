@@ -231,8 +231,49 @@ export class HarnessUsageRepo {
   /** Persist one immutable usage attempt. Replaying its stable identity is a no-op. */
   recordEvent(event: UsageEvent): void {
     try {
-      this.db.run(
-        `INSERT OR IGNORE INTO usage_events(
+      this.insertEvent(event)
+    } catch (error) {
+      Logger.dev('Failed to record usage event; dropping telemetry', {
+        feature: event.feature,
+        parentTurnId: event.parentTurnId,
+        error
+      })
+    }
+  }
+
+  /**
+   * Replace one turn's ledger row in place.
+   *
+   * A user turn can finalize more than once (a resumed or continued turn, or a
+   * driver that reports idle per response). Each finalization folds the turn's
+   * responses into one aggregate row, so that row must be rewritten from the
+   * newest aggregate instead of appended: appending would count the same
+   * responses again. `(parent_turn_id, feature)` is what makes a turn's row
+   * unique, and only turn-scoped features use this path.
+   */
+  recordReplacingEvent(event: UsageEvent): void {
+    try {
+      this.db.transaction(() => {
+        this.db.run(
+          'DELETE FROM usage_events WHERE parent_turn_id = ? AND feature = ?',
+          event.parentTurnId,
+          event.feature
+        )
+        this.insertEvent(event)
+      })
+    } catch (error) {
+      Logger.dev('Failed to replace usage event; dropping telemetry', {
+        feature: event.feature,
+        parentTurnId: event.parentTurnId,
+        error
+      })
+    }
+  }
+
+  /** Insert one event row; the SQL body shared by the append and replace paths. */
+  private insertEvent(event: UsageEvent): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO usage_events(
           id, thread_id, parent_turn_id, project_id, project_name,
           feature_call_id, attempt, feature,
           harness_id, account_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
@@ -251,47 +292,40 @@ export class HarnessUsageRepo {
           ?,?,?,?,
           ?,?,?,?
         )`,
-        event.id,
-        event.threadId,
-        event.parentTurnId,
-        event.projectId ?? null,
-        event.threadId,
-        event.projectId ?? null,
-        event.threadId,
-        event.featureCallId,
-        event.attempt,
-        event.feature,
-        event.harnessId,
-        event.accountId ?? null,
-        event.providerId,
-        event.modelId,
-        event.thinkingLevel,
-        event.utilityId,
-        JSON.stringify(event.rawProviderUsage),
-        event.tokens.uncachedInput,
-        event.tokens.cachedInput,
-        event.tokens.cacheWrite,
-        event.tokens.output,
-        event.tokens.reasoning,
-        accountedTokenTotal(event),
-        event.rawTotal,
-        event.totalSemantics,
-        event.costUsd,
-        event.costStatus,
-        event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
-        event.toolFeeUsd,
-        event.success ? 1 : 0,
-        event.retryCause,
-        Math.max(0, Math.floor(event.durationMs ?? 0)),
-        event.createdAt
-      )
-    } catch (error) {
-      Logger.dev('Failed to record usage event; dropping telemetry', {
-        feature: event.feature,
-        parentTurnId: event.parentTurnId,
-        error
-      })
-    }
+      event.id,
+      event.threadId,
+      event.parentTurnId,
+      event.projectId ?? null,
+      event.threadId,
+      event.projectId ?? null,
+      event.threadId,
+      event.featureCallId,
+      event.attempt,
+      event.feature,
+      event.harnessId,
+      event.accountId ?? null,
+      event.providerId,
+      event.modelId,
+      event.thinkingLevel,
+      event.utilityId,
+      JSON.stringify(event.rawProviderUsage),
+      event.tokens.uncachedInput,
+      event.tokens.cachedInput,
+      event.tokens.cacheWrite,
+      event.tokens.output,
+      event.tokens.reasoning,
+      accountedTokenTotal(event),
+      event.rawTotal,
+      event.totalSemantics,
+      event.costUsd,
+      event.costStatus,
+      event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
+      event.toolFeeUsd,
+      event.success ? 1 : 0,
+      event.retryCause,
+      Math.max(0, Math.floor(event.durationMs ?? 0)),
+      event.createdAt
+    )
   }
 
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */

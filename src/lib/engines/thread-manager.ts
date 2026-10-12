@@ -16,7 +16,8 @@ import {
 } from '../../main/database/repositories/agent-message-repo'
 import {
   RECENT_THREADS_PER_PROJECT,
-  ThreadRepo
+  ThreadRepo,
+  type ThreadSearchOptions
 } from '../../main/database/repositories/thread-repo'
 import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
@@ -51,8 +52,11 @@ import {
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
 import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
-import { ThreadSearchService } from './thread-manager-search'
+import { ThreadSearchService, type IntentSearchProvider } from './thread-manager-search'
 import { ThreadTranscriptStore } from './thread-manager-transcripts'
+import { recoverBrowserTranscript } from '../../main/chat/browser-transcript-recovery'
+import { StorageEngine } from '../../main/storage/storage-engine'
+import { turnStreamPath } from '../../main/chat/turn-stream'
 
 export { remapCopiedMessages } from './thread-manager-fork'
 export type { ThreadCapacity, ThreadListOptions } from './thread-manager-capacity'
@@ -130,6 +134,11 @@ export class ThreadManager {
   private harnessUsageRepo: HarnessUsageRepo
   private engineeringLifecycleEngine: EngineeringLifecycleEngine
   private readonly transcripts: ThreadTranscriptStore
+  private browserTranscriptStorage: StorageEngine | null = null
+  private readonly browserTranscriptRecoveries = new Map<
+    string,
+    { size: number; stamp: string; task: Promise<void> }
+  >()
   private readonly forks: ThreadForkService
   private readonly searchService: ThreadSearchService
 
@@ -1411,7 +1420,9 @@ export class ThreadManager {
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
-    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
+    const thread = await this.getOwnedThreadViaWorker(projectId, threadId)
+    if (!thread) return []
+    await this.recoverBrowserMessages(thread)
     return this.transcripts.loadMessages(threadId)
   }
 
@@ -1422,10 +1433,48 @@ export class ThreadManager {
     before: ThreadMessageCursor | undefined,
     limit: number
   ): Promise<ThreadMessagePage> {
-    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) {
+    const thread = await this.getOwnedThreadViaWorker(projectId, threadId)
+    if (!thread) {
       return { messages: [], hasOlder: false }
     }
+    await this.recoverBrowserMessages(thread)
     return this.transcripts.loadMessagePage(threadId, before, limit)
+  }
+
+  /** Repair interrupted browser history from the app-owned log, never by
+   * starting a provider during a bounded conversation read. */
+  private async recoverBrowserMessages(thread: Thread): Promise<void> {
+    if (thread.projectId !== GLOBAL_BROWSER_PROJECT_ID || isThreadBusyStatus(thread.status)) return
+    const storage = (this.browserTranscriptStorage ??= new StorageEngine())
+    const size = await storage.rawSize(turnStreamPath(thread.projectId, thread.id))
+    if (!size) return
+    const stamp = `${thread.sessionId ?? ''}:${thread.updatedAt}`
+    const previous = this.browserTranscriptRecoveries.get(thread.id)
+    if (previous?.size === size && previous.stamp === stamp) return previous.task
+    if (previous) await previous.task
+    const task = recoverBrowserTranscript(storage, thread, {
+      read: (messageId) => this.transcripts.loadMessageRecord(thread.id, messageId),
+      write: async (message) => {
+        const current = await this.getThreadViaWorker(thread.projectId, thread.id)
+        if (
+          !current ||
+          current.sessionId !== thread.sessionId ||
+          current.updatedAt !== thread.updatedAt
+        )
+          throw new Error('The browser conversation changed during transcript recovery.')
+        await this.upsertMessages(thread.projectId, thread.id, [message])
+      }
+    }).catch((error: unknown) => {
+      this.browserTranscriptRecoveries.delete(thread.id)
+      Logger.error('Browser transcript recovery failed', { threadId: thread.id, error })
+    })
+    this.browserTranscriptRecoveries.set(thread.id, { size, stamp, task })
+    while (this.browserTranscriptRecoveries.size > 100) {
+      const oldest = this.browserTranscriptRecoveries.keys().next().value
+      if (!oldest || oldest === thread.id) break
+      this.browserTranscriptRecoveries.delete(oldest)
+    }
+    await task
   }
 
   /** Load a contiguous mirrored window centered on an arbitrary message id. */
@@ -1506,6 +1555,17 @@ export class ThreadManager {
   }
 
   /**
+   * Real project threads only, across every project, for the Threads view.
+   *
+   * The Threads view is the projects surface, so its bounded window, its paged
+   * history and its guarantee set all read through here: none of them can bring
+   * back a chats, assistant, or browser row for the view to filter out.
+   */
+  async listProjectThreadsForSidebar(options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listProjectThreadsViaWorker(options)
+  }
+
+  /**
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
    * (Chats) project gets its configured `thread_limit` quota; every other
    * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
@@ -1553,9 +1613,17 @@ export class ThreadManager {
    */
   async searchThreads(
     query: string,
-    options: { projectId?: string; limit?: number } = {}
+    options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
+  }
+
+  /**
+   * Attach the semantic (intent) search provider. Set once during service
+   * wiring; passing null restores keyword-only search.
+   */
+  setIntentSearchProvider(provider: IntentSearchProvider | null): void {
+    this.searchService.setIntentProvider(provider)
   }
 
   /**

@@ -49,42 +49,59 @@ const ALLOWED_ATTRIBUTES = new Set([
   'stroke-opacity',
   'opacity'
 ])
-const NEUTRAL_NAMES = new Set([
-  'black',
-  'white',
-  'gray',
-  'grey',
-  'silver',
-  'dimgray',
-  'dimgrey',
-  'lightgray',
-  'lightgrey',
-  'darkgray',
-  'darkgrey',
-  'gainsboro',
-  'whitesmoke'
+
+/**
+ * Paint that draws nothing.
+ *
+ * Everything else becomes `currentColor`: the icon is a glyph in a slot, and it
+ * has to follow the accent the entity wears, just like the built-in set does.
+ * That is why a pasted black-on-transparent outline stops being a fixed black
+ * and starts switching with the colour the user picks. Neutrals are deliberately
+ * not exempt any more   leaving them literal was what froze an outline to black.
+ */
+function isUnpainted(value: string): boolean {
+  const color = value.trim().toLowerCase()
+  return color === 'none' || color === 'transparent'
+}
+
+const SVG_NUMBER = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi
+
+/** Round every number in a geometry string, so an icon keeps icon precision. */
+function roundNumbers(value: string, precision = 2): string {
+  return value.replace(SVG_NUMBER, (match) => {
+    const number = Number(match)
+    if (!Number.isFinite(number)) return match
+    return String(Number(number.toFixed(precision)))
+  })
+}
+
+/** Geometry attributes whose numbers are safe to round and whose spaces we trim. */
+const NUMERIC_ATTRIBUTES = new Set([
+  'viewBox',
+  'd',
+  'x',
+  'y',
+  'x1',
+  'y1',
+  'x2',
+  'y2',
+  'cx',
+  'cy',
+  'r',
+  'rx',
+  'ry',
+  'points',
+  'transform',
+  'stroke-width',
+  'stroke-dasharray',
+  'stroke-dashoffset'
 ])
 
-function isNeutralColor(value: string): boolean {
-  const color = value.trim().toLowerCase()
-  if (color === 'none' || color === 'currentcolor' || color === 'transparent') return true
-  if (NEUTRAL_NAMES.has(color)) return true
-  const hex = color.match(/^#([\da-f]{3,8})$/i)?.[1]
-  if (hex && (hex.length === 3 || hex.length === 4 || hex.length === 6 || hex.length === 8)) {
-    const rgb =
-      hex.length < 5
-        ? [...hex.slice(0, 3)].map((channel) => channel.repeat(2))
-        : hex.slice(0, 6).match(/../g)
-    return Boolean(
-      rgb &&
-      rgb[0]?.toLowerCase() === rgb[1]?.toLowerCase() &&
-      rgb[1]?.toLowerCase() === rgb[2]?.toLowerCase()
-    )
+function hasElementChild(node: Element): boolean {
+  for (let index = 0; index < node.childNodes.length; index += 1) {
+    if (node.childNodes.item(index)?.nodeType === 1) return true
   }
-  const rgb = color.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/)
-  if (rgb) return rgb[1] === rgb[2] && rgb[2] === rgb[3]
-  const hsl = color.match(/^hsla?\(\s*[-\d.]+(?:deg)?[,\s]+([\d.]+)%/)
-  return Boolean(hsl && Number(hsl[1]) === 0)
+  return false
 }
 
 function cleanTree(node: Element): void {
@@ -95,8 +112,7 @@ function cleanTree(node: Element): void {
       if (!match) continue
       const property = match[1].toLowerCase()
       const value = match[2].replace(/\s*!important\s*$/i, '').trim()
-      if (/url\s*\(/i.test(value)) continue
-      node.setAttribute(property, isNeutralColor(value) ? value : 'currentColor')
+      node.setAttribute(property, isUnpainted(value) ? 'none' : 'currentColor')
     }
   }
 
@@ -110,9 +126,9 @@ function cleanTree(node: Element): void {
       continue
     }
     if (name === 'fill' || name === 'stroke') {
-      const value = attribute.value.trim()
-      if (/url\s*\(/i.test(value)) node.removeAttribute(name)
-      else if (!isNeutralColor(value)) node.setAttribute(name, 'currentColor')
+      node.setAttribute(name, isUnpainted(attribute.value) ? 'none' : 'currentColor')
+    } else if (NUMERIC_ATTRIBUTES.has(name)) {
+      node.setAttribute(name, roundNumbers(attribute.value))
     }
   }
 
@@ -123,12 +139,17 @@ function cleanTree(node: Element): void {
       continue
     }
     const element = child as Element
-    if (!ALLOWED_ELEMENTS.has(element.tagName)) node.removeChild(element)
-    else cleanTree(element)
+    if (!ALLOWED_ELEMENTS.has(element.tagName)) {
+      node.removeChild(element)
+      continue
+    }
+    cleanTree(element)
+    // A group that holds nothing draws nothing, so it is dead weight in an icon.
+    if (element.tagName === 'g' && !hasElementChild(element)) node.removeChild(element)
   }
 }
 
-/** Parse a user SVG into a small safe subset and mark chromatic paint for tinting. */
+/** Parse a user SVG into a small safe subset, optimize it, and mark its paint for tinting. */
 export function sanitizeCustomSvg(input: string): string {
   const source = input.trim()
   if (!source || new TextEncoder().encode(source).byteLength > MAX_CUSTOM_SVG_LENGTH) {
@@ -145,5 +166,14 @@ export function sanitizeCustomSvg(input: string): string {
   }
   cleanTree(root)
   root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  return new XMLSerializer().serializeToString(root)
+  // The icon slot is 16 px, so the intrinsic size is pinned to it. The viewBox
+  // keeps the original geometry; only the box it maps into is standardized, so
+  // one icon never asks to be drawn larger than another.
+  root.setAttribute('width', '16')
+  root.setAttribute('height', '16')
+  const optimized = new XMLSerializer().serializeToString(root)
+  if (new TextEncoder().encode(optimized).byteLength > MAX_CUSTOM_SVG_LENGTH) {
+    throw new TypeError('This SVG is too detailed for an icon')
+  }
+  return optimized
 }

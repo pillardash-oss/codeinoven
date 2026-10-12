@@ -27,9 +27,10 @@ export function skillInstallRecordId(
   manager: SkillInstallRecord['manager'],
   skillId: string,
   scope: SkillInstallRecord['scope'],
-  projectId: string | undefined
+  projectId: string | undefined,
+  source: string
 ): string {
-  return `${manager}:${skillId}:${scope}:${projectId ?? 'all'}`
+  return `${manager}:${source.toLowerCase()}/${skillId}:${scope}:${projectId ?? 'all'}`
 }
 
 function parseRecord(value: unknown): SkillInstallRecord | null {
@@ -61,7 +62,13 @@ function parseRecord(value: unknown): SkillInstallRecord | null {
   const upstreamHash = record['upstreamHash']
   const skillPath = record['skillPath']
   return {
-    id,
+    id: skillInstallRecordId(
+      manager,
+      skillId,
+      scope,
+      typeof projectId === 'string' ? projectId : undefined,
+      source
+    ),
     skillId,
     manager,
     source,
@@ -111,7 +118,13 @@ export class SkillInstallRecordStore {
     await this.mutate((records) => {
       const now = Date.now()
       for (const input of inputs) {
-        const id = skillInstallRecordId(input.manager, input.skillId, input.scope, input.projectId)
+        const id = skillInstallRecordId(
+          input.manager,
+          input.skillId,
+          input.scope,
+          input.projectId,
+          input.source
+        )
         const existing = records.find((record) => record.id === id)
         const next: SkillInstallRecord = {
           id,
@@ -174,10 +187,14 @@ export class SkillInstallRecordStore {
   }
 
   /** Forget every install of one skill, whatever scope created it. */
-  async removeSkill(skillId: string): Promise<void> {
+  async removeSkill(skillId: string, source: string): Promise<void> {
     await this.mutate((records) => {
       for (let index = records.length - 1; index >= 0; index -= 1) {
-        if (records[index]?.skillId === skillId) records.splice(index, 1)
+        if (
+          records[index]?.skillId === skillId &&
+          records[index]?.source.toLowerCase() === source.toLowerCase()
+        )
+          records.splice(index, 1)
       }
     })
   }

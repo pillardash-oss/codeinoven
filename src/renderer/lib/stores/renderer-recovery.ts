@@ -25,6 +25,7 @@ export type SettingsSection =
   | 'gateways'
   | 'computer-use'
   | 'sound'
+  | 'search'
   | 'keymap'
   | 'cloud-deployments'
   | 'ovens'
@@ -51,6 +52,7 @@ export type MainView =
   | 'settings-gateways'
   | 'settings-computer-use'
   | 'settings-sound'
+  | 'settings-search'
   | 'settings-keymap'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
@@ -178,6 +180,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-harnesses',
   'settings-utilities',
   'settings-sound',
+  'settings-search',
   'settings-keymap',
   'settings-about'
 ]
@@ -196,6 +199,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'gateways',
   'computer-use',
   'sound',
+  'search',
   'keymap',
   'cloud-deployments',
   'about'
@@ -343,6 +347,13 @@ function normalizeMainView(value: unknown): MainView | null {
   return typeof value === 'string' && MAIN_VIEWS.some((view) => view === value)
     ? (value as MainView)
     : null
+}
+
+/** The view a string names, or null when the app has no such view. Reuses the
+ *  same membership test the recovery parser applies, so an agent-named view is
+ *  validated exactly like a restored one. */
+export function mainViewFor(value: string): MainView | null {
+  return normalizeMainView(value)
 }
 
 function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' | 'assistant' {

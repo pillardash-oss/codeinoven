@@ -14,6 +14,7 @@
  * observer until the target location has been fully restored.
  */
 import type { MainView, SelectedThreadReference } from './renderer-recovery'
+import { sameUtilitiesRoute, type UtilitiesRoute } from './settings-route.svelte'
 
 const MAX_HISTORY_DEPTH = 50
 /** After a view change, thread churn within this window is treated as settling. */
@@ -26,6 +27,8 @@ export type ProjectViewMode = 'projects' | 'scope' | 'threads'
 export interface NavigationLocation {
   view: MainView
   thread: SelectedThreadReference | null
+  /** The Utilities page on screen, or null outside the Utilities section. */
+  utilities: UtilitiesRoute | null
 }
 
 function isProjectView(view: MainView): view is ProjectViewMode {
@@ -40,7 +43,16 @@ function sameThread(a: SelectedThreadReference | null, b: SelectedThreadReferenc
 }
 
 function sameLocation(a: NavigationLocation, b: NavigationLocation): boolean {
-  return a.view === b.view && sameThread(a.thread, b.thread)
+  return (
+    a.view === b.view &&
+    sameThread(a.thread, b.thread) &&
+    sameUtilitiesRoute(a.utilities, b.utilities)
+  )
+}
+
+/** Switching catalog tabs replaces the page rather than adding a history entry. */
+function isCatalogTabChange(a: UtilitiesRoute | null, b: UtilitiesRoute | null): boolean {
+  return a?.page === 'catalog' && b?.page === 'catalog'
 }
 
 class NavigationHistoryState {
@@ -49,7 +61,7 @@ class NavigationHistoryState {
   /** Locations the user backed away from, nearest first. */
   forwardStack: NavigationLocation[] = $state([])
   /** The location currently on screen, mirroring the app's active state. */
-  current: NavigationLocation = $state({ view: 'projects', thread: null })
+  current: NavigationLocation = $state({ view: 'projects', thread: null, utilities: null })
   /** The last project view visited — what the header button shows away from it. */
   lastProjectView: ProjectViewMode = $state('projects')
   /** Non-zero while a back/forward traversal is applying its target location. */
@@ -58,9 +70,9 @@ class NavigationHistoryState {
   private settlingUntil = 0
 
   /** Seed the history with the recovered location. */
-  init(initialView: MainView, initialThread: SelectedThreadReference | null): void {
-    this.current = { view: initialView, thread: initialThread }
-    if (isProjectView(initialView)) this.lastProjectView = initialView
+  init(location: NavigationLocation): void {
+    this.current = location
+    if (isProjectView(location.view)) this.lastProjectView = location.view
     this.backStack = []
     this.forwardStack = []
     this.settlingUntil = Date.now() + SETTLE_WINDOW_MS
@@ -80,8 +92,14 @@ class NavigationHistoryState {
     if (sameLocation(location, this.current)) return
 
     const viewChanged = location.view !== this.current.view
-    if (!viewChanged && Date.now() < this.settlingUntil) {
-      // Thread settling in right after a view change — merge, don't record.
+    const utilitiesChanged = !sameUtilitiesRoute(location.utilities, this.current.utilities)
+    const settling = Date.now() < this.settlingUntil
+    if (
+      !viewChanged &&
+      ((settling && !utilitiesChanged) ||
+        isCatalogTabChange(this.current.utilities, location.utilities))
+    ) {
+      // Thread settling in right after a view change, or a catalog tab switch: merge, don't record.
       this.current = location
       return
     }

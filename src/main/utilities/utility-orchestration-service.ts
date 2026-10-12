@@ -40,6 +40,17 @@ import {
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_SUGGEST_TOOL_NAME
 } from '../../lib/gateway-tools'
+import {
+  isOrchestrationTool,
+  ORCHESTRATION_DISPATCH_TOOL_NAME,
+  ORCHESTRATION_STATUS_TOOL_NAME,
+  ORCHESTRATION_TARGETS_TOOL_NAME
+} from '../../lib/orchestration-tools'
+import {
+  APP_CONTROL_CALL_TOOL_NAME,
+  APP_CONTROL_CATALOG_TOOL_NAME,
+  isAppControlTool
+} from '../../lib/app-control-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
@@ -192,6 +203,13 @@ export interface UtilityTurnRequest {
    * the edit pass is in context and `preview` and `capture` are callable at once.
    */
   videoSession?: VideoSessionMode
+  /**
+   * Whether this turn belongs to an orchestration session the user opened with
+   * `@cio-hey`. It is the gate for the workstation tools: only a turn
+   * that carries this contract is offered the targets, dispatch and status
+   * operations, so an ordinary chat can never start a run on a machine.
+   */
+  orchestrationSession?: OrchestrationSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
@@ -414,6 +432,52 @@ export interface UtilitySuggestionContext {
   harnessId: string
 }
 
+/** Whether a turn is inside an orchestration session opened by `@cio-hey`. */
+export type OrchestrationSessionMode = 'off' | 'start' | 'continue'
+
+/**
+ * Runs one orchestration tool for the turn that asked for it: it reads the
+ * workstation or dispatches real work onto a chosen machine. The chat engine
+ * supplies it because it owns thread creation, prompt sending and the turn
+ * lifecycle the tools act on.
+ */
+export type OrchestrationExecutor = (
+  operation: OrchestrationToolOperation,
+  input: Record<string, unknown>,
+  context: OrchestrationToolContext
+) => Promise<unknown>
+
+/** The turn an orchestration call came from. */
+export interface OrchestrationToolContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
+export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
+
+/** The two app-control operations, mirrored from the tool catalog. */
+export type AppControlOperation = 'catalog' | 'call'
+
+/** The turn an app-control call came from. */
+export interface AppControlContext {
+  projectId: string
+  projectPath: string | null
+  threadId: string
+}
+
+/**
+ * Runs one app-control tool for the turn that asked for it: it lists the app
+ * surface or performs one app call through the renderer. The chat engine
+ * supplies it because the app-control bridge lives beside the turn lifecycle.
+ */
+export interface AppControlExecutor {
+  catalog: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+  call: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+}
+
 interface TurnState {
   id: string
   request: UtilityTurnRequest
@@ -516,6 +580,8 @@ export class UtilityOrchestrationService {
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   private utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
+  private orchestrationExecutor: OrchestrationExecutor | null = null
+  private appControlExecutor: AppControlExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -601,6 +667,16 @@ export class UtilityOrchestrationService {
         return (state, input) => this.askSecret(state, input)
       case UTILITY_SUGGEST_TOOL_NAME:
         return (state, input) => this.suggestUtility(state, input)
+      case ORCHESTRATION_TARGETS_TOOL_NAME:
+        return (state, input) => this.orchestrate(state, input, 'targets')
+      case ORCHESTRATION_DISPATCH_TOOL_NAME:
+        return (state, input) => this.orchestrate(state, input, 'dispatch')
+      case ORCHESTRATION_STATUS_TOOL_NAME:
+        return (state, input) => this.orchestrate(state, input, 'status')
+      case APP_CONTROL_CATALOG_TOOL_NAME:
+        return (state, input) => this.appControl(state, input, 'catalog')
+      case APP_CONTROL_CALL_TOOL_NAME:
+        return (state, input) => this.appControl(state, input, 'call')
       default:
         return null
     }
@@ -728,6 +804,75 @@ export class UtilityOrchestrationService {
    */
   setUtilitySuggestionExecutor(executor: UtilitySuggestionExecutor | null): void {
     this.utilitySuggestionExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned orchestration tools. Reading the
+   * workstation and dispatching real work on a chosen machine are app
+   * capabilities: the executor owns the Oven registry, the account registry and
+   * the thread a dispatch creates. The chat engine supplies it because it owns
+   * all three.
+   */
+  setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
+    this.orchestrationExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-control tools. Driving the app's own
+   * rails, panels and settings is an app capability: the executor owns the IPC
+   * surface and the renderer bridge. The chat engine supplies it.
+   */
+  setAppControlExecutor(executor: AppControlExecutor | null): void {
+    this.appControlExecutor = executor
+  }
+
+  /**
+   * Run one app-control operation for the turn that asked for it.
+   *
+   * The executor owns the channel list and the guardrails, so this handler only
+   * forwards the operation with the turn it belongs to. A missing executor means
+   * the app was built without app control, reported plainly rather than as an
+   * empty result.
+   */
+  private async appControl(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: AppControlOperation
+  ): Promise<unknown> {
+    const executor = this.appControlExecutor
+    if (!executor) throw new Error('App control is unavailable in this deployment')
+    const context = {
+      projectId: state.request.projectId,
+      projectPath: state.request.projectPath,
+      threadId: state.request.threadId
+    }
+    return operation === 'catalog'
+      ? executor.catalog(input, context)
+      : executor.call(input, context)
+  }
+
+  /**
+   * Run one orchestration operation for the turn that asked for it.
+   *
+   * The executor owns the ids and the guardrails, so this handler only forwards
+   * the operation with the turn it belongs to. A missing executor means the app
+   * was built without orchestration, which is a deployment fault rather than a
+   * model error, so it says so plainly instead of returning an empty result.
+   */
+  private async orchestrate(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: OrchestrationToolOperation
+  ): Promise<unknown> {
+    const executor = this.orchestrationExecutor
+    if (!executor) throw new Error('Orchestration is unavailable in this deployment')
+    return executor(operation, input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
   }
 
   /**
@@ -901,6 +1046,18 @@ export class UtilityOrchestrationService {
       // does not have must be able to offer it instead of dead-ending on a
       // harness-native suggestion the app cannot render.
       if (name === UTILITY_SUGGEST_TOOL_NAME) return hasOnDemand || request.allowManagement === true
+      // The workstation tools are granted by the session tag alone: they exist
+      // to start real work on a machine, so an ordinary turn is offered none of
+      // them, and the gateway refuses a route the turn never received.
+      if (isOrchestrationTool(name)) {
+        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+      }
+      // The app-control tools are granted by the same session tag: they let a
+      // `@cio-hey` turn drive the app itself, so an ordinary turn is offered
+      // none of them and the gateway refuses a route it never received.
+      if (isAppControlTool(name)) {
+        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+      }
       return hasOnDemand
     })
     if (gatewayTools.length === 0) {
@@ -972,12 +1129,12 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus five operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasVideoCapability
         ? [
-            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus two operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
+            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed edit step, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -2053,12 +2210,13 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // One capability, four operation groups with different owners: `preview`
-      // serves the design folder, `delegate` runs the model the user assigned to
-      // text work, `generate` produces media with the model assigned to a media
+      // One capability, five operation groups with different owners: `preview`
+      // serves the design folder, `checkpoint` saves a named step, `delegate` runs
+      // the model the user assigned to text work, `generate` produces media with the model assigned to a media
       // craft, and `save-media` brings a generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.designPreviewExecutor],
+        ['checkpoint', this.designPreviewExecutor],
         ['delegate', this.designAssignmentExecutor],
         ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
@@ -2076,10 +2234,11 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
-      // Two operations with different owners: `preview` serves and shows the
-      // composition folder, `capture` renders one frame and screenshots it.
+      // Preview serves the composition, checkpoint saves an edit step, generate
+      // makes media, and capture renders and pictures one frame.
       const executors = new Map<string, VideoCapabilityExecutor | null>([
         ['preview', this.videoPreviewExecutor],
+        ['checkpoint', this.videoPreviewExecutor],
         ['generate', this.mediaGenerationExecutor],
         ['capture', this.videoCaptureExecutor]
       ])

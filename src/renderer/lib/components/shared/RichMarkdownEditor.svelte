@@ -20,6 +20,7 @@
   } from './rich-markdown'
   import type { MarkdownRuleKind, RichInlineBadge } from './rich-markdown'
   import {
+    codeBlocksCrossedByRange,
     demoteSmartPunctuation,
     flattenWithNewlines,
     hasRealAdjacentContent,
@@ -121,6 +122,88 @@
    *  the conversion, typing on in that same paragraph must not convert again.
    *  Dropped as soon as the caret works in another block. */
   let revertedRuleHold: { block: HTMLElement; kind: MarkdownRuleKind } | null = null
+
+  /** Set by `beforeinput` when the delete about to run spans this editor's
+   *  entire contents. A code block is a `contenteditable="false"` wrapper whose
+   *  inner `<code>` is its own editing host, so the browser's delete stops at a
+   *  trailing one and leaves it behind   select-all + delete wiped every other
+   *  block and kept the code block, and because a code block is only removable
+   *  through its own close button the note could never be cleared. A
+   *  whole-document delete clears the editor by hand instead. */
+  let pendingWholeDocumentDelete = false
+
+  /** True when the live selection covers every character of this editor. */
+  function selectionSpansWholeDocument(): boolean {
+    if (!editor) return false
+    const length = nodeLength(editor)
+    if (length === 0) return false
+    const selection = window.getSelection()
+    if (
+      !selection?.anchorNode ||
+      !selection.focusNode ||
+      !editor.contains(selection.anchorNode) ||
+      !editor.contains(selection.focusNode)
+    ) {
+      return false
+    }
+    const anchor = pointOffset(editor, selection.anchorNode, selection.anchorOffset)
+    const focus = pointOffset(editor, selection.focusNode, selection.focusOffset)
+    if (anchor === null || focus === null) return false
+    return Math.min(anchor, focus) === 0 && Math.max(anchor, focus) === length
+  }
+
+  /** True when a document reads as empty: nothing at all, or nothing but code
+   *  blocks the browser emptied without being able to remove their
+   *  `contenteditable="false"` wrappers (a fence marker, a blank line, a
+   *  closing fence). A note that ends in a code block serializes to exactly
+   *  that after a select-all delete, which is why it never read as cleared. */
+  function isEmptyCodeBlockOnly(markdown: string): boolean {
+    if (markdown.trim() === '') return true
+    return markdown.replace(/```[^\n]*\n[\s]*```/g, '').trim() === ''
+  }
+
+  /** Deletes a selection that crosses one or more code blocks, wrapper and all,
+   *  and returns true when it handled the delete.
+   *
+   *  A code block is a `contenteditable="false"` wrapper whose inner `<code>` is
+   *  its own editing host, so the native delete edits the text inside it and
+   *  leaves the wrapper behind: Shift+Arrow down over a block, then Backspace,
+   *  wiped the blocks around it and kept the code block. A selection that only
+   *  sits inside a block's code stays on the native path   there the text the
+   *  user selected is what they are deleting, not the block. */
+  function deleteSelectionCrossingCodeBlocks(inputType: string): boolean {
+    if (!editor) return false
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false
+    const range = selection.getRangeAt(0)
+    if (!editor.contains(range.commonAncestorContainer)) return false
+    const crossed = codeBlocksCrossedByRange(editor, range)
+    if (crossed.length === 0) return false
+
+    const historyEntry = history.captureEntry()
+    // Where the caret lands when the range itself collapses into a block that is
+    // about to be removed wholesale.
+    const anchor = (crossed[0].previousElementSibling ??
+      crossed[0].nextElementSibling) as HTMLElement | null
+    // Delete the range by hand so the wrapper goes with it; the native command
+    // cannot unwrap a `contenteditable="false"` block.
+    range.deleteContents()
+    for (const block of crossed) {
+      if (block.isConnected) block.remove()
+    }
+    if (editor.contains(range.startContainer)) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    } else if (anchor?.isConnected) {
+      placeCaretInside(anchor)
+    } else {
+      placeCaretAtEnd(editor)
+    }
+    emitEditorValue(true)
+    history.commit(historyEntry, inputType)
+    publishCaretText()
+    return true
+  }
 
   function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
     const hold = revertedRuleHold
@@ -352,9 +435,23 @@
     // undo restores when a rule fired.
     const pending = history.consumePending()
     const typed = history.captureEntry()
+    const deletable = inputEvent.inputType.startsWith('delete')
+    const wholeDocumentDelete = deletable && pendingWholeDocumentDelete
+    pendingWholeDocumentDelete = false
     const revertedRule = applyMarkdownInputRule(editor, { isRuleSuppressed })
     syncCodeBlockLanguages(editor)
-    emitEditorValue(inputEvent.inputType.startsWith('delete'))
+    if (wholeDocumentDelete || (deletable && isEmptyCodeBlockOnly(serializeRichMarkdown(editor)))) {
+      // A trailing code block is an atom the browser's delete cannot remove: it
+      // empties the block and keeps its wrapper. Nothing may survive a delete
+      // that spanned the document, and a document left holding only emptied
+      // code blocks is empty. Both are cleared by hand here.
+      // eslint-disable-next-line svelte/no-dom-manipulating
+      editor.innerHTML = renderRichMarkdown('')
+      placeCaretAtEnd(editor)
+      emitEditorValue()
+    } else {
+      emitEditorValue(deletable)
+    }
     if (revertedRule) {
       if (typed) typed.revertedRule = revertedRule
       history.commit(typed, inputEvent.inputType, true)
@@ -366,6 +463,9 @@
 
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
+    // Recomputed for every input so a delete that never reaches `input` cannot
+    // leave the flag armed for the next keystroke.
+    pendingWholeDocumentDelete = false
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
       inputEvent.preventDefault()
       if (inputEvent.inputType === 'historyUndo') history.undo()
@@ -391,6 +491,17 @@
         return
       }
     }
+    // A delete whose selection crosses a code block removes the block by hand,
+    // wrapper and all   the native command leaves a `contenteditable="false"`
+    // wrapper behind after emptying its text.
+    if (
+      inputEvent.inputType.startsWith('delete') &&
+      deleteSelectionCrossingCodeBlocks(inputEvent.inputType)
+    ) {
+      inputEvent.preventDefault()
+      return
+    }
+    pendingWholeDocumentDelete = selectionSpansWholeDocument()
     history.setPending(history.captureEntry())
   }
 

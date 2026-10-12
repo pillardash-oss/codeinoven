@@ -277,6 +277,13 @@ export interface AgentMessage {
   /** Provenance of `cost` when it was derived from a pricing table rather than
    *  reported verbatim by the provider (kept transient; not persisted). */
   costProvenance?: UsagePricingProvenance
+  /** Cumulative spend of the whole harness session, when the harness reports it
+   *  (pi's session stats). Kept separate from `cost`, which stays the cost of
+   *  this one response: mixing the two made every reader that sums per-message
+   *  cost double-count, and made pi's mirrored-cost fallback re-add its own
+   *  running total on every refresh (it doubled each request until it overflowed
+   *  the ledger). Display-only; never summed with `cost`. */
+  sessionCostUsd?: number
   tokens?: AgentTokenUsage
   /** Canonical accounting payload; raw provider evidence and semantics are preserved. */
   normalizedUsage?: NormalizedUsage

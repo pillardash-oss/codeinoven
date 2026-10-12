@@ -94,6 +94,7 @@ async function openNotificationThread(
 
 function showAgentNotification(
   payload: AgentNotificationPayload,
+  appFocused: boolean,
   deps: AppIpcSubscriptionDeps
 ): void {
   const onSelectedThread =
@@ -115,8 +116,11 @@ function showAgentNotification(
   }
   // The toast is shown from here, so this is the only place the in-app alert is
   // played: the cue exists exactly when the card does, and a suppressed toast
-  // (the user is already on this thread) stays silent.
-  playInAppAlert(notificationSoundKind(payload.kind, payload.projectId))
+  // (the user is already on this thread) stays silent. Focus is main's verdict,
+  // carried with the payload: this window never reads focus for itself, because
+  // its own `document.hasFocus()` is false whenever an embedded view or an
+  // auxiliary window holds the keyboard.
+  playInAppAlert(notificationSoundKind(payload.kind, payload.projectId), appFocused)
   notificationPanelState.add(payload)
   // No `onDismiss`: a toast is a transient announcement that expires on its own,
   // so letting its expiry retire the panel entry would drop exactly the
@@ -135,10 +139,11 @@ function showAgentNotification(
     }
   }
 
-  const chatResponseToastStyle =
-    '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
-    ' --success-border: var(--color-chat-success);' +
-    ' --success-text: var(--color-chat-success);'
+  // A temporary (side) chat completion wears the side chat's own indicator
+  // colour, not the chat teal: `chat-completed` is raised only by a side chat,
+  // and the branded toast stylesheet derives its border, wash, title and icon
+  // from `--status`, so overriding it here recolours the whole card.
+  const temporaryChatToastStyle = '--status: var(--color-temporary-chat);'
   // The assistant surface carries its own accent colour (the assistant space's
   // colour, on every assistant payload), so a completed run brands its toast
   // with that colour instead of reading as a generic success. The branded toast
@@ -151,7 +156,7 @@ function showAgentNotification(
   } else if (payload.kind === 'completed') {
     toast.success(payload.title, options)
   } else if (payload.kind === 'chat-completed') {
-    toast.success(payload.title, { ...options, style: chatResponseToastStyle })
+    toast.success(payload.title, { ...options, style: temporaryChatToastStyle })
   } else if (payload.kind === 'attention') {
     // A thread waiting for input is a status notice owned by the panel's
     // Attention tab, never an app error/warning entry.
@@ -179,8 +184,8 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeClick = subscribeGuarded('notification:threadClicked', (payload) => {
     void openNotificationThread(payload, deps)
   })
-  const unsubscribeShow = subscribeGuarded('notification:show', (payload) =>
-    showAgentNotification(payload, deps)
+  const unsubscribeShow = subscribeGuarded('notification:show', (payload, appFocused) =>
+    showAgentNotification(payload, appFocused, deps)
   )
   const unsubscribeConfirmClose = subscribeGuarded('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the

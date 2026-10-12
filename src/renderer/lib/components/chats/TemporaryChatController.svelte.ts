@@ -42,6 +42,8 @@ export class TemporaryChatController implements ConversationController {
   #unsubscribeEvent: (() => void) | null = null
   #unsubscribeExpiry: (() => void) | null = null
   #mounted = false
+  /** Keep-alive for a card's countdown while this side chat is in use. */
+  #activityTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(tab: TemporaryChatContextTab) {
     this.#tab = tab
@@ -161,6 +163,12 @@ export class TemporaryChatController implements ConversationController {
     if (this.#mounted) return
     this.#mounted = true
 
+    // A side chat opened from a question or secret card is the user working to
+    // understand that card, so it holds the card's countdown for as long as the
+    // chat is in use. Activity is re-pinged under the app's activity grace
+    // period; when the chat closes the pings stop and the card resumes.
+    if (this.#tab.sourceRequestId) this.#startActivityPing()
+
     this.#unsubscribeExpiry = subscribe('agent:temporaryChatExpired', (temporaryChatId) => {
       if (temporaryChatId === this.#tab.temporaryChatId) {
         contextSidebarState.expireTemporaryChat(this.#tab, false)
@@ -224,10 +232,33 @@ export class TemporaryChatController implements ConversationController {
 
   unmount(): void {
     this.#mounted = false
+    this.#stopActivityPing()
     this.#unsubscribeExpiry?.()
     this.#unsubscribeEvent?.()
     this.#unsubscribeExpiry = null
     this.#unsubscribeEvent = null
+  }
+
+  /** Hold the originating card's countdown while this side chat is in use. */
+  #startActivityPing(): void {
+    if (this.#activityTimer !== null) return
+    const ping = (): void => {
+      if (this.#tab.expired) {
+        this.#stopActivityPing()
+        return
+      }
+      void invoke('agent:userActivity').catch(() => {
+        // Best-effort: the next ping retries while the chat stays open.
+      })
+    }
+    ping()
+    this.#activityTimer = setInterval(ping, 20_000)
+  }
+
+  #stopActivityPing(): void {
+    if (this.#activityTimer === null) return
+    clearInterval(this.#activityTimer)
+    this.#activityTimer = null
   }
 
   clearError(): void {

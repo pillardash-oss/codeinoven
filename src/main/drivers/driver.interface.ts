@@ -222,6 +222,13 @@ export interface HarnessAuthCapabilities {
    * connected headlessly without the harness's interactive flow.
    */
   apiKeyEntry: boolean
+  /**
+   * CodeInOven can run the harness's own sign-in flow in-app (Pi, through
+   * pi-ai's `login()`), so a harness with no CLI to hand to a terminal   a
+   * bundled runtime like Pi   is still signable. Surfaces must prefer this
+   * over `loginHandoff`, which cannot produce a command for a bundled runtime.
+   */
+  inAppLogin: boolean
 }
 
 export interface HarnessAuthAccount {

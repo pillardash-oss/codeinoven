@@ -120,7 +120,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
         : validateEntityId(options.projectId, 'Project ID')
     const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
     const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
-    const threads = await threadManager.listThreadsForSidebar({
+    const threads = await threadManager.listProjectThreadsForSidebar({
       includeArchived: false,
       limit,
       offset,

@@ -57,6 +57,61 @@ export function missedRunReasonText(reason: MissedRunReason | undefined): string
 /** Group key for missed runs whose task belongs to no routine. */
 export const UNGROUPED_MISSED_RUNS = '__ungrouped__'
 
+/** Group key for background runs whose task belongs to no routine. */
+export const UNGROUPED_BACKGROUND_RUNS = '__ungrouped_background_runs__'
+
+/** The neutral label every routine-less bucket wears. */
+const UNGROUPED_ACTIVITY_LABEL = 'Tasks without a routine'
+
+/** One routine's activity, whatever mix of notices, missed fires and runs. */
+export interface RoutineActivityGroup<T> {
+  /** Routine id, or the ungrouped key for activity owned by no routine. */
+  key: string
+  /** Routine name, or the neutral label used for routine-less activity. */
+  label: string
+  /** The routine's entries, newest first. */
+  items: T[]
+  /** Newest activity time in the group; drives the top-of-list ordering. */
+  latestAt: number
+}
+
+/**
+ * Group per-routine activity, newest first at both levels.
+ *
+ * Each entry names the routine it belongs to and the moment it reports (`at`).
+ * One group is produced per routine, plus one for everything owned by no
+ * routine. Inside a group the newest entry leads, and the groups themselves are
+ * ordered by their newest entry, so a routine that just updated jumps to the top
+ * and its fresh update reads as the first message under it. The sort is stable,
+ * so entries reporting the same moment keep the order their source handed them.
+ */
+export function groupActivityByRoutine<T extends { routineId?: string | null; at: number }>(
+  items: readonly T[],
+  routineNameById: ReadonlyMap<string, string>,
+  ungrouped: { key: string; label?: string }
+): RoutineActivityGroup<T>[] {
+  const groups = new Map<string, RoutineActivityGroup<T>>()
+  for (const item of items) {
+    const key = item.routineId ?? ungrouped.key
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: item.routineId
+          ? (routineNameById.get(item.routineId) ?? 'Routine')
+          : (ungrouped.label ?? UNGROUPED_ACTIVITY_LABEL),
+        items: [],
+        latestAt: item.at
+      }
+      groups.set(key, group)
+    }
+    group.items.push(item)
+    if (item.at > group.latestAt) group.latestAt = item.at
+  }
+  for (const group of groups.values()) group.items.sort((a, b) => b.at - a.at)
+  return [...groups.values()].sort((a, b) => b.latestAt - a.latestAt)
+}
+
 /** One routine's pending missed runs. */
 export interface MissedRunGroup {
   /** Routine id, or `UNGROUPED_MISSED_RUNS` for routine-less tasks. */
@@ -68,34 +123,23 @@ export interface MissedRunGroup {
 
 /**
  * Missed runs are surfaced per routine: one group per owning routine, plus a
- * single group for routine-less tasks. Group order follows first appearance,
- * which is the store's due-time order.
+ * single group for routine-less tasks. Newest fire first, and groups ordered by
+ * their newest fire.
  */
 export function groupMissedRunsByRoutine(
   runs: readonly MissedRun[],
   routineNameById: ReadonlyMap<string, string>
 ): MissedRunGroup[] {
-  const groups = new Map<string, MissedRunGroup>()
-  for (const run of runs) {
-    const key = run.routineId ?? UNGROUPED_MISSED_RUNS
-    let group = groups.get(key)
-    if (!group) {
-      group = {
-        key,
-        label: run.routineId
-          ? (routineNameById.get(run.routineId) ?? 'Routine')
-          : 'Tasks without a routine',
-        runs: []
-      }
-      groups.set(key, group)
-    }
-    group.runs.push(run)
-  }
-  return [...groups.values()]
+  return groupActivityByRoutine(
+    runs.map((run) => ({ routineId: run.routineId, at: run.dueAt, run })),
+    routineNameById,
+    { key: UNGROUPED_MISSED_RUNS }
+  ).map((group) => ({
+    key: group.key,
+    label: group.label,
+    runs: group.items.map((item) => item.run)
+  }))
 }
-
-/** Group key for background runs whose task belongs to no routine. */
-export const UNGROUPED_BACKGROUND_RUNS = '__ungrouped_background_runs__'
 
 /** One routine's unattended (background) runs. */
 export interface BackgroundRunGroup {
@@ -108,30 +152,21 @@ export interface BackgroundRunGroup {
 
 /**
  * Unattended runs are surfaced per routine, mirroring missed runs: one group per
- * owning routine, plus a single group for routine-less tasks. The store already
- * lists runs newest first, so group order and intra-group order both follow it.
+ * owning routine, plus a single group for routine-less tasks, newest run first.
  */
 export function groupBackgroundRunsByRoutine(
   runs: readonly BackgroundRun[],
   routineNameById: ReadonlyMap<string, string>
 ): BackgroundRunGroup[] {
-  const groups = new Map<string, BackgroundRunGroup>()
-  for (const run of runs) {
-    const key = run.routineId ?? UNGROUPED_BACKGROUND_RUNS
-    let group = groups.get(key)
-    if (!group) {
-      group = {
-        key,
-        label: run.routineId
-          ? (routineNameById.get(run.routineId) ?? 'Routine')
-          : 'Tasks without a routine',
-        runs: []
-      }
-      groups.set(key, group)
-    }
-    group.runs.push(run)
-  }
-  return [...groups.values()]
+  return groupActivityByRoutine(
+    runs.map((run) => ({ routineId: run.routineId, at: run.settledAt ?? run.startedAt, run })),
+    routineNameById,
+    { key: UNGROUPED_BACKGROUND_RUNS }
+  ).map((group) => ({
+    key: group.key,
+    label: group.label,
+    runs: group.items.map((item) => item.run)
+  }))
 }
 
 /** Human label for why an unattended run started. */

@@ -12,7 +12,7 @@
   import type { Snippet } from 'svelte'
   import { Check, ChevronDown, Loader2, MoreHorizontal } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import {
     githubAbuseReportUrl,
@@ -50,6 +50,12 @@
     authorLogin: string
     /** Draw this row's own card frame. False when the unit around it is framed. */
     framed?: boolean
+    /**
+     * True when the surface around this row already drew the author's picture, which
+     * is what the timeline rail does. The row then keeps its name, its badges and its
+     * time and drops only the picture, rather than showing the same face twice.
+     */
+    onRail?: boolean
     /**
      * Rendered inside the frame, under the body, on the row that carries this
      * comment's own actions. It is handed the reaction control so a caller can
@@ -96,6 +102,7 @@
     number,
     authorLogin,
     framed = true,
+    onRail = false,
     footer,
     onQuote,
     onCommentChat,
@@ -159,12 +166,12 @@
 
   async function copyEntryLink(): Promise<void> {
     if (!entry.url) return
-    await copyText(entry.url)
+    await copyText(entry.url, null)
     onNotice('Comment link copied')
   }
 
   async function copyEntryMarkdown(): Promise<void> {
-    await copyText(entry.body.trim())
+    await copyText(entry.body.trim(), null)
     onNotice('Comment Markdown copied')
   }
 
@@ -187,7 +194,7 @@
    */
   async function referenceInNewIssue(): Promise<void> {
     const reference = commentReference()
-    await copyText(reference)
+    await copyText(reference, null)
     await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
     onNotice('Reference copied, new issue opened on GitHub')
   }
@@ -268,7 +275,7 @@
    * copied first: the user pastes it there instead of hunting for it again.
    */
   async function reportEntry(): Promise<void> {
-    if (entry.url) await copyText(entry.url)
+    if (entry.url) await copyText(entry.url, null)
     await openInBrowser(githubAbuseReportUrl())
     onNotice(
       entry.url
@@ -297,7 +304,9 @@
       framed ? 'border-b border-border/60 bg-elevated/50' : 'bg-elevated/40'
     ]}
   >
-    <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
+    {#if !onRail}
+      <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
+    {/if}
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-1.5">
         <!--
@@ -330,13 +339,13 @@
           data-external-url={entry.url}
           onclick={openEntryOnGitHub}
         >
-          {relativeTime(entry.at)}
+          {formatCompactAge(entry.at)}
         </button>
         {#if entry.updatedAt && entry.updatedAt !== entry.at}
           <!-- GitHub marks an edited comment here rather than only changing the
                timestamp, so a reader can tell that what they are looking at is
                not what was first posted. -->
-          <span title="Edited {relativeTime(entry.updatedAt)}">· edited</span>
+          <span title="Edited {formatCompactAge(entry.updatedAt)}">· edited</span>
         {/if}
         {#if repliesTo}
           <!-- A thread is linear, so the row says which comment it answers: the

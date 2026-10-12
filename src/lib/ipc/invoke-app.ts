@@ -9,7 +9,9 @@ import type {
   InstanceRole,
   ProjectTextFile
 } from '../types'
+import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
+import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
 
 /** One file the user explicitly chooses to save from the renderer. */
@@ -41,7 +43,10 @@ export const invokeAppContract = {
    *  sticky note icon) as an app-owned copy and answer with that copy's path and
    *  its data URL. A picked path is authorized for one process only, so it is
    *  never what an appearance record keeps. */
-  'appearance:storeImage': {} as Contract<[sourcePath: string], { path: string; dataUrl: string }>,
+  'appearance:storeImage': {} as Contract<
+    [image: CustomIconImage],
+    { path: string; dataUrl: string }
+  >,
   'diagnostics:export': {} as Contract<[], string | null>,
   'file:read': {} as Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>,
   'file:readAsDataUrl': {} as Contract<[filePath: string], string | null>,
@@ -102,6 +107,11 @@ export const invokeAppContract = {
     { id: string; pid: number }
   >,
   'pty:destroy': {} as Contract<[id: string], void>,
+  /** A plain shell on one Oven's home directory, with no chat behind it. */
+  'pty:createOven': {} as Contract<
+    [id: string, ovenId: string, columns: number, rows: number],
+    { id: string; pid: number }
+  >,
   'shell:openExternal': {} as Contract<[url: string], void>,
   'shell:revealPath': {} as Contract<[path: string], boolean>,
   /** Reveal an existing absolute path (e.g. an agent-cited file outside the
@@ -110,6 +120,15 @@ export const invokeAppContract = {
   'shell:revealExternalPath': {} as Contract<[path: string], boolean>,
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': {} as Contract<[hostnames: string[]], Record<string, string | null>>,
+  'app:prepareFloatingPanel': {} as Contract<
+    [id: string, bounds: NativeFloatingPanelBounds],
+    string
+  >,
+  'app:updateFloatingPanel': {} as Contract<
+    [id: string, bounds: NativeFloatingPanelBounds, visible: boolean],
+    boolean
+  >,
+  'app:releaseFloatingPanel': {} as Contract<[id: string], void>,
   'app:confirmClose': {} as Contract<[], void>,
   /**
    * The renderer approved parking the window: it is torn down and the backend

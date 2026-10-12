@@ -33,6 +33,10 @@ export interface TerminalSpawnBinding {
   /** Project-relative folder the shell must start in, when the terminal was
    *  explicitly opened at a path (the file tree's "Open in terminal"). */
   directory?: string
+  /** An Oven whose own home shell this session runs, with no chat behind it
+   *  (Settings' "Open Oven"). When set, the spawn goes through `pty:createOven`
+   *  and `threadId`/`projectId` carry no meaning. */
+  ovenId?: string
 }
 
 export interface TerminalSession {
@@ -48,6 +52,8 @@ export interface TerminalSession {
   threadId: string | null
   /** Scope bucket captured with the thread binding, or null for the project root. */
   scopeBucketId: string | null
+  /** Oven whose own home shell this session runs, or null for a thread terminal. */
+  ovenShellId: string | null
   /** Project-relative folder this terminal was opened at, or null for the
    *  scope root. Read at respawn time so a shell always returns to where the
    *  user opened it. */
@@ -193,6 +199,7 @@ class TerminalSessionManager {
     session.threadId = binding.threadId
     session.scopeBucketId = binding.scopeBucketId ?? null
     session.directory = binding.directory ?? null
+    session.ovenShellId = binding.ovenId ?? null
     // Navigation never kills a shell. Each scope owns its own session (the
     // panel qualifies the session id by the scope bucket), so a thread switch
     // inside a scope only refreshes this binding while a scope switch mounts a
@@ -203,7 +210,8 @@ class TerminalSessionManager {
       projectId,
       binding.threadId,
       binding.scopeBucketId,
-      binding.directory
+      binding.directory,
+      binding.ovenId
     )
     this.repaintShell(session)
     this.focusIfRequested(session, options)
@@ -233,7 +241,8 @@ class TerminalSessionManager {
     return {
       threadId: session.binding?.threadId ?? session.threadId ?? '',
       scopeBucketId: session.binding?.scopeBucketId ?? session.scopeBucketId ?? undefined,
-      directory: session.binding?.directory ?? session.directory ?? undefined
+      directory: session.binding?.directory ?? session.directory ?? undefined,
+      ovenId: session.binding?.ovenId ?? session.ovenShellId ?? undefined
     }
   }
 
@@ -311,22 +320,27 @@ class TerminalSessionManager {
     projectId: string,
     threadId: string,
     scopeBucketId?: string,
-    directory?: string
+    directory?: string,
+    ovenId?: string
   ): Promise<void> {
     if (session.ptySpawned) return
     session.projectId = projectId
+    session.ovenShellId = ovenId ?? null
     session.ptySpawned = true
     try {
-      await invoke(
-        'pty:create',
-        session.id,
-        projectId,
-        threadId,
-        session.term.cols,
-        session.term.rows,
-        scopeBucketId,
-        directory
-      )
+      if (ovenId)
+        await invoke('pty:createOven', session.id, ovenId, session.term.cols, session.term.rows)
+      else
+        await invoke(
+          'pty:create',
+          session.id,
+          projectId,
+          threadId,
+          session.term.cols,
+          session.term.rows,
+          scopeBucketId,
+          directory
+        )
     } catch (error) {
       session.ptySpawned = false
       throw error
@@ -387,6 +401,7 @@ class TerminalSessionManager {
       threadId: null,
       scopeBucketId: null,
       directory: null,
+      ovenShellId: null,
       respawnCount: 0,
       kind: 'shell'
     }
@@ -440,7 +455,7 @@ class TerminalSessionManager {
     // backoff-guarded so we don't respawn forever.
     let respawnTimer: ReturnType<typeof setTimeout> | undefined
     const respawn = async (): Promise<void> => {
-      if (!session.projectId) {
+      if (!session.projectId && !session.ovenShellId) {
         session.exited = true
         return
       }
@@ -454,10 +469,11 @@ class TerminalSessionManager {
         const target = this.spawnTargetOf(session)
         await this.ensurePty(
           session,
-          session.projectId,
+          session.projectId ?? '',
           target.threadId,
           target.scopeBucketId,
-          target.directory
+          target.directory,
+          target.ovenId
         )
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.

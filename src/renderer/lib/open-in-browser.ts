@@ -1,3 +1,4 @@
+import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
 import { invoke } from '$lib/ipc.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import { withBrowser } from '$lib/stores/browser-access.svelte'
@@ -128,8 +129,45 @@ export function prefersCioBrowser(url: string): boolean {
 }
 
 /**
+ * Which browser a link belongs to.
+ *
+ * - `auto` (the default): the surface on screen decides. The thread browser is
+ *   only a home while the workspace shell is showing a thread, which is
+ *   {@link resolveLinkDestination}.
+ * - `context`: the thread browser of the project the workspace is working in,
+ *   for a surface that already knows it is the workspace.
+ * - `global`: the app-wide browser, for a caller that knows the link is the
+ *   app's own (a sign-in page, a settings control) whatever is on screen.
+ */
+export type LinkDestination = 'auto' | 'context' | 'global'
+
+/**
+ * Where a link belongs when its caller does not say.
+ *
+ * The thread browser is the workspace's own: it puts the page in the tab of a
+ * project thread. That is the right home only while the workspace shell is what
+ * the user is looking at, and the takeover pages break that assumption   Scope,
+ * Settings and the app-wide browser each replace the shell, yet the workspace
+ * still holds an active project and thread behind them. Without this, a link
+ * clicked in Settings lands in a thread's browser the reader never asked for and
+ * cannot connect to the page in front of them.
+ *
+ * So the surface decides: the workspace shell keeps links in context, every
+ * other surface sends them to the app-wide browser, which needs no thread.
+ */
+function resolveLinkDestination(destination: LinkDestination): 'context' | 'global' {
+  if (destination !== 'auto') return destination
+  return viewShowsWorkspaceShell(rendererRecovery.activeView) ? 'context' : 'global'
+}
+
+/**
  * Route a link the user activated normally (a click, an agent's suggested URL,
  * an "open the docs" control) to whichever browser belongs to it.
+ *
+ * The destination is the surface's, not the caller's to remember: leaving it at
+ * `auto` routes by what is on screen, so an app-chrome control cannot send a
+ * page into a project thread's browser by omission. A caller that genuinely
+ * knows better passes `context` or `global`.
  *
  * When the preference says an app browser and a project thread can own the tab,
  * the page stays in the workspace; otherwise the operating system browser is the
@@ -137,10 +175,10 @@ export function prefersCioBrowser(url: string): boolean {
  */
 export async function openInBrowser(
   url: string,
-  destination: 'context' | 'global' = 'context'
+  destination: LinkDestination = 'auto'
 ): Promise<void> {
   if (prefersCioBrowser(url)) {
-    if (destination === 'global') {
+    if (resolveLinkDestination(destination) === 'global') {
       if (await openInGlobalCioBrowserWhenReady(url)) return
       await invoke('shell:openExternal', url)
       return

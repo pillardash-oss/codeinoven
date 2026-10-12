@@ -15,23 +15,6 @@ import { flushSync, mount, tick, unmount } from 'svelte'
  */
 
 const invokeMock = vi.hoisted(() => vi.fn(async () => undefined))
-// jsdom has no `matchMedia`; the sidebar's reduced-motion query needs it before
-// the module graph loads (imports run after the hoisted block).
-vi.hoisted(() => {
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false
-    })
-  })
-})
 vi.mock('$lib/ipc.svelte', () => ({
   invoke: invokeMock,
   subscribe: vi.fn(() => () => {})

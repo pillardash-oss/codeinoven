@@ -419,8 +419,8 @@
           {#if notificationPanelState.hasCompleted}
             <StatusBadge color="var(--color-success)" title="Project messages" />
           {/if}
-          {#if notificationPanelState.hasChatCompleted}
-            <StatusBadge color="var(--color-chat-success)" title="Chat messages" />
+          {#if notificationPanelState.hasTemporaryChat}
+            <StatusBadge color="var(--color-temporary-chat)" title="Temporary chat responses" />
           {/if}
           {#if notificationPanelState.hasAttention}
             <StatusBadge color="var(--color-warning)" title="Notifications needing attention" />

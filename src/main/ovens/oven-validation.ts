@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeCustomSvg } from '../../lib/custom-svg'
+import { validateCustomIconImage } from '../../lib/custom-icon'
 import {
   ovenHarnessIdForCommand,
   OVEN_HARNESS_COMMANDS,
@@ -118,8 +119,8 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
     color,
     connection
   }
-  if (input.imagePath !== undefined)
-    result.imagePath = text(input.imagePath, 'Icon image path', 4096)
+  if (input.image !== undefined)
+    result.image = validateCustomIconImage(input.image, 'Oven icon image')
   if (input.clearImage !== undefined) {
     if (typeof input.clearImage !== 'boolean') throw new TypeError('Invalid image selection.')
     result.clearImage = input.clearImage

@@ -1,4 +1,5 @@
 import { invokeAccountContract } from './ipc/invoke-account'
+import { invokeAppControlContract } from './ipc/invoke-app-control'
 import { invokeAgentContract } from './ipc/invoke-agent'
 import { invokeThreadContract } from './ipc/invoke-thread'
 import { invokeProviderContract } from './ipc/invoke-provider'
@@ -17,6 +18,7 @@ import { invokeExpertContract } from './ipc/invoke-expert'
 import { invokeMediaContract } from './ipc/invoke-media'
 import { invokeOvenContract } from './ipc/invoke-oven'
 import { invokeCioCleanupContract } from './ipc/invoke-cio-cleanup'
+import { invokeSearchContract } from './ipc/invoke-search'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from './types'
 
@@ -29,9 +31,11 @@ export * from './ipc/logging'
 export * from './ipc/notifications'
 export * from './ipc/events'
 export * from './ipc/invoke-cio-cleanup'
+export * from './ipc/invoke-search'
 
 export const IPC_INVOKE_CONTRACT = {
   ...invokeAccountContract,
+  ...invokeAppControlContract,
   ...invokeAgentContract,
   ...invokeThreadContract,
   ...invokeProviderContract,
@@ -49,7 +53,8 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeExpertContract,
   ...invokeMediaContract,
   ...invokeOvenContract,
-  ...invokeCioCleanupContract
+  ...invokeCioCleanupContract,
+  ...invokeSearchContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT

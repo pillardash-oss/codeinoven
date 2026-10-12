@@ -6,6 +6,7 @@ import type {
   EditorId,
   ManagedWorktreeDescriptor,
   Project,
+  ProjectDirectorySize,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -29,6 +30,7 @@ import type {
   ScopeWorktreeSourceInfo
 } from '../types'
 import type { Contract } from './contract-helpers'
+import type { CustomIconImage } from '../custom-icon'
 
 export const invokeProjectContract = {
   'icon-library:list': {} as Contract<[], CustomIcon[]>,
@@ -155,7 +157,7 @@ export const invokeProjectContract = {
   'project:openInEditor': {} as Contract<[projectId: string], void>,
   'project:reorder': {} as Contract<[orderedIds: string[]], Project[]>,
   'project:setPinned': {} as Contract<[projectId: string, pinned: boolean], Project>,
-  'project:setIcon': {} as Contract<[projectId: string, sourcePath: string], Project>,
+  'project:setIcon': {} as Contract<[projectId: string, image: CustomIconImage], Project>,
   'project:clearIcon': {} as Contract<[projectId: string], Project>,
   'project:update': {} as Contract<
     [projectId: string, input: Partial<CreateProjectInput>],
@@ -210,6 +212,13 @@ export const invokeProjectContract = {
   'projectFiles:info': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
+  >,
+  /** Measure what a directory holds (total bytes, file and folder counts).
+   *  Asked for only by surfaces that display a folder's size, since it walks
+   *  the tree instead of reading one inode. */
+  'projectFiles:directorySize': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
+    ProjectDirectorySize
   >,
   /** Serve one project directory (or the directory holding one HTML file) on a
    *  loopback origin and return the URL to open in the in-app browser. */
@@ -309,6 +318,10 @@ export const invokeProjectContract = {
     import('../project-actions').ProjectAction
   >,
   'projectActions:delete': {} as Contract<[projectId: string, actionId: string], boolean>,
+  'projectActions:markRun': {} as Contract<
+    [projectId: string, actionId: string],
+    import('../project-actions').ProjectAction | null
+  >,
   'projectActions:reorder': {} as Contract<
     [projectId: string, orderedIds: string[]],
     import('../project-actions').ProjectAction[]

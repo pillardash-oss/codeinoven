@@ -113,6 +113,17 @@ export class ThreadTranscriptStore {
     return result
   }
 
+  /** Look up one recovery record without loading a conversation page. */
+  async loadMessageRecord(threadId: string, messageId: string): Promise<AgentMessage | undefined> {
+    const result = await this.db.queryMessagesViaWorker(
+      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
+      [threadId, messageId],
+      1
+    )
+    if (!result.ok) throw new Error('The transcript worker is unavailable during recovery.')
+    return result.messages[0]
+  }
+
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(threadId: string): Promise<AgentMessage[]> {
     const page = await this.pagedAgentMessages((after) => buildLoadByThreadPageSql(threadId, after))

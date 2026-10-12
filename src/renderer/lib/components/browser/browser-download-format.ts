@@ -1,4 +1,6 @@
 import type { BrowserDownload } from '$shared/ipc-contract'
+import { formatCompactAge } from '$shared/date-time-format'
+import { formatBytes } from '$lib/format/bytes'
 
 export function browserDownloadHost(url: string): string {
   try {
@@ -10,10 +12,7 @@ export function browserDownloadHost(url: string): string {
 
 export function browserDownloadBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  return formatBytes(bytes)
 }
 
 /**
@@ -23,13 +22,7 @@ export function browserDownloadBytes(bytes: number): string {
  */
 export function browserDownloadAge(startedAt: number, now: number = Date.now()): string {
   if (!Number.isFinite(startedAt) || startedAt <= 0) return ''
-  const seconds = Math.max(0, Math.round((now - startedAt) / 1000))
-  if (seconds < 60) return 'just now'
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
+  return formatCompactAge(startedAt, now)
 }
 
 /** Whether this download has bytes on disk to continue from, which is what makes

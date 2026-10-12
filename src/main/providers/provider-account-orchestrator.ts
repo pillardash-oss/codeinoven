@@ -106,6 +106,12 @@ interface AuthDefinition {
   setCredential?(providerId: string, apiKey: string): Promise<void>
   /** Remove one provider's stored credential (used for disconnect). */
   removeStoredCredential?(providerId: string): Promise<void>
+  /**
+   * CodeInOven can run this harness's own sign-in flow in-app (Pi, through
+   * pi-ai's `login()`). Advertised to the UI as `inAppLogin`, and preferred
+   * over a terminal handoff, which no bundled runtime can produce.
+   */
+  inAppLogin?: boolean
 }
 
 interface CommandResult {
@@ -124,7 +130,8 @@ const READ_AND_HANDOFF_ONLY: HarnessAuthCapabilities = {
   accountActivation: false,
   multipleAccounts: false,
   pickerLogin: false,
-  apiKeyEntry: false
+  apiKeyEntry: false,
+  inAppLogin: false
 }
 
 function stripAnsi(value: string): string {
@@ -945,9 +952,12 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     name: 'Pi',
     command: 'pi',
     readStatus: readPiStatus,
-    // No terminal handoff: connecting happens in-app (API key) so a beginner
-    // never meets Pi's full TUI. OAuth flows stay available in pi itself.
+    // No terminal handoff: connecting happens in-app   the provider's own
+    // sign-in flow (OAuth or guided key entry) run through pi-ai, or a pasted
+    // API key   so a bundled Pi with no CLI to spawn still connects, and a
+    // beginner never meets Pi's full TUI.
     loginArgs: () => [],
+    inAppLogin: true,
     apiKeyEntry: true,
     setCredential: (providerId, apiKey) => fileBackedAuth.setApiKey(providerId, apiKey),
     removeStoredCredential: (providerId) => fileBackedAuth.removeCredential(providerId)
@@ -1017,7 +1027,8 @@ export class ProviderAccountOrchestrator {
       multipleAccounts,
       accountActivation: multipleAccounts && definition.activateArgs !== undefined,
       pickerLogin: definition.pickerLogin === true,
-      apiKeyEntry: definition.apiKeyEntry === true
+      apiKeyEntry: definition.apiKeyEntry === true,
+      inAppLogin: definition.inAppLogin === true
     }
   }
 

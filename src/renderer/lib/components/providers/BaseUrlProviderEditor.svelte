@@ -3,7 +3,7 @@
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { copyText as copyTextToClipboard } from '$lib/copy-text'
+  import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -473,7 +473,9 @@
   }
 
   function copyModelDraft(model: ModelDraft): void {
-    void copyText(serializeModelClipboard(model), `Copied “${model.name || model.id}”.`)
+    void copyText(serializeModelClipboard(model), `Copied “${model.name || model.id}”.`).catch(
+      (copyError) => reportError(copyError, 'Clipboard copy failed.')
+    )
   }
 
   async function pasteModelFromClipboard(): Promise<void> {
@@ -505,7 +507,7 @@
         enabled: draft.enabled
       }
       await invoke('baseUrlProviders:copyProviderToClipboard', request)
-      toast.success(`Copied “${draft.name || 'provider'}”.`)
+      notifyClipboard(`Copied “${draft.name || 'provider'}”.`)
     } catch (copyError) {
       reportError(copyError, 'Clipboard copy failed.')
     }
@@ -552,15 +554,6 @@
       reasoning: model.reasoning,
       defaultThinkingLevel: model.defaultThinkingLevel,
       vision: model.vision
-    }
-  }
-
-  async function copyText(text: string, successMessage: string): Promise<void> {
-    try {
-      await copyTextToClipboard(text)
-      toast.success(successMessage)
-    } catch (copyError) {
-      reportError(copyError, 'Clipboard copy failed.')
     }
   }
 </script>

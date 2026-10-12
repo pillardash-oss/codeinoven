@@ -1,4 +1,10 @@
-import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
+import type {
+  NativeDockAck,
+  NativeDockCommit,
+  NativeDockKey,
+  NativeDockInteraction,
+  NativeDockRequest
+} from '../native-dock'
 import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
@@ -23,6 +29,8 @@ import type {
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserPopupWindow,
+  BrowserScreenSharePrompt,
+  BrowserSitePermissionsPrompt,
   BrowserSwitcherKey,
   BrowserShortcutChord
 } from './browser'
@@ -37,16 +45,24 @@ import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
+  BrowserStatusOverlay,
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   ToastOverlayInteractionReport,
   ToastOverlayRequestStack
 } from '../browser-overlay'
+import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  'design:historyChanged': [] as unknown as [projectId: string, directory: string],
+  /** One app call for the renderer to perform on the agent's behalf. The
+   *  renderer answers on the `appControl:respond` invoke with the request id. */
+  'appControl:request': [] as unknown as [request: AppControlRequest],
   'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
   'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
+  'browser:overlay:dockCommit': [] as unknown as [request: NativeDockCommit],
+  'browser:overlay:dockKey': [] as unknown as [input: NativeDockKey],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
@@ -117,7 +133,13 @@ export const IPC_EVENT_CONTRACT = {
    *  alert for a focused toast is played by the renderer itself, at the moment
    *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
-  'notification:show': [] as unknown as [payload: AgentNotificationPayload],
+  /** The payload for the notification card, plus the main process's verdict on
+   *  whether the app is in focus. The renderer illustrates the card and plays
+   *  its in-app alert, and it decides that alert solely from `appFocused`: main
+   *  is the one authority on focus, because only it can see focus held by an
+   *  embedded view or an auxiliary window that the top-level document's own
+   *  `document.hasFocus()` cannot. */
+  'notification:show': [] as unknown as [payload: AgentNotificationPayload, appFocused: boolean],
   /** Transient in-app toast (error/info, optional navigation action). An error
    *  toast keeps `details` behind its Copy action and is also filed in the App
    *  Errors panel. */
@@ -292,6 +314,12 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
   /**
+   * The link preview the native overlay should draw at the page's bottom-left,
+   * delivered to the overlay document. Null takes it down. It is paint-only, so
+   * unlike the stack and the strip it never carries a handler or a revision.
+   */
+  'browser:overlay:status': [] as unknown as [status: BrowserStatusOverlay | null],
+  /**
    * One interaction with a toast the overlay drew, delivered back to the app
    * renderer, which runs the handler that toast holds (open the thread, copy the
    * details, and so on) and then drops the toast from its own state.
@@ -312,6 +340,12 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /** Open the Site Permissions modal for one origin, with every permission's
+   *  remembered state so the modal draws without a round trip. */
+  'browser:sitePermissions': [] as unknown as [prompt: BrowserSitePermissionsPrompt],
+  /** A page asked to share the screen and no system picker is available, so the
+   *  in-app source picker should be shown. */
+  'browser:screenShareSources': [] as unknown as [prompt: BrowserScreenSharePrompt],
   /**
    * The browser's installed extensions, whole, after any change to them: one
    * installed, removed, or its enablement edited. The list is short, so it is
@@ -336,6 +370,11 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
+  /**
+   * Intent-search model download and index status. The Search settings page
+   * mirrors this so a long download and a background reindex both report live.
+   */
+  'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer
    * keeps its docked job panel on these so the user sees real progress while

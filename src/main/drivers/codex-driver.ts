@@ -110,6 +110,19 @@ import { namespacedMessage, parseCodexJsonLine, parseItem } from './codex/codex-
 
 export { mapCodexRateLimits, mapCodexUsage }
 
+/**
+ * How long CodeInOven waits after an unexpected Codex app-server exit before the
+ * scheduled auto-resume dispatches the continuation. The wait only has to cover
+ * dropping the dead host; the replacement app-server is spawned by the resumed
+ * turn itself, and the retry scheduler adds its own fire grace on top. */
+const CODEX_APP_SERVER_RESTART_DELAY_MS = 5_000
+/**
+ * Consecutive unexpected app-server exits CodeInOven auto-recovers for one
+ * session before it stops resuming and reports the terminal failure. A harness
+ * that cannot stay up must surface for manual recovery instead of retry-looping.
+ */
+const CODEX_APP_SERVER_RECOVERY_LIMIT = 3
+
 /** Multiplexed bridge for one resident Codex app-server and many native threads. */
 export class CodexDriver extends PersistentCliDriver {
   readonly id = 'codex'
@@ -148,6 +161,11 @@ export class CodexDriver extends PersistentCliDriver {
   private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
+  /** Consecutive automatic recoveries already attempted for a session after the
+   *  shared app-server died under it, cleared the moment one of its turns
+   *  completes. Bounds the auto-resume of a harness that cannot stay up, so a
+   *  broken installation surfaces a terminal failure instead of retry-looping. */
+  private appServerRecoveriesBySessionId = new Map<string, number>()
 
   protected async ensureCliReady(): Promise<void> {
     try {
@@ -915,6 +933,7 @@ export class CodexDriver extends PersistentCliDriver {
     this.hostsStartingByProjectPath.clear()
     this.authenticationRestartsByProjectPath.clear()
     this.serverRequests.clear()
+    this.appServerRecoveriesBySessionId.clear()
     super.dispose()
   }
 
@@ -1115,13 +1134,14 @@ export class CodexDriver extends PersistentCliDriver {
     host.child.stderr?.on('data', (chunk: Buffer) => {
       host.stderrBuffer = `${host.stderrBuffer}${chunk.toString()}`.slice(-4_000)
     })
-    host.child.on('error', (error) => void this.failAppServerHost(host, error.message))
+    host.child.on('error', (error) => void this.failAppServerHost(host, error.message, true))
     host.child.on('exit', (code, signal) => {
       if (host.stopped) return
       const detail = host.stderrBuffer.trim()
       void this.failAppServerHost(
         host,
-        `Codex app-server exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`
+        `Codex app-server exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`,
+        true
       )
     })
   }
@@ -1805,6 +1825,7 @@ export class CodexDriver extends PersistentCliDriver {
     error?: string,
     issue?: AgentProviderIssue
   ): Promise<void> {
+    if (!error) this.appServerRecoveriesBySessionId.delete(active.session.id)
     if (active.finished) return
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
@@ -1827,21 +1848,55 @@ export class CodexDriver extends PersistentCliDriver {
     this.emit({ type: 'session.idle', sessionId: active.session.id })
   }
 
-  /** A graceful harness failure for a dead Codex app-server: the user-facing
-   *  message is a retryable harness error, and the raw detail stays scoped to
-   *  the raw-error modal instead of splashing on the status card. */
-  private gracefulAppServerIssue(error: string): AgentProviderIssue {
+  /**
+   * The issue for a dead Codex app-server. The app-server is a shared, app-scoped
+   * process, so its exit is a harness/transport interruption rather than a
+   * provider verdict on the work itself: the native thread survives on disk and
+   * a freshly spawned app-server resumes it.
+   *
+   * While the session still has recovery budget the issue is a retryable
+   * `provider_unavailable` wait carrying a concrete `retryAt`, which is what
+   * makes `ChatEngine.enterRetryWait` persist the thread as paused and the retry
+   * scheduler resume it automatically. Without that deadline the failure is
+   * classified `unknown` by {@link classifyProviderIssue} and is never admitted
+   * for automatic resume, so the turn was thrown away and the user had to retype
+   * it (observed on thread cf987dbf: five lost turns, three inside 15 minutes).
+   *
+   * Once the budget is spent the issue keeps its classified kind and no deadline,
+   * which renders the terminal failure for manual recovery instead of looping.
+   */
+  private gracefulAppServerIssue(error: string, sessionId: string): AgentProviderIssue {
+    const attempted = this.appServerRecoveriesBySessionId.get(sessionId) ?? 0
+    if (attempted >= CODEX_APP_SERVER_RECOVERY_LIMIT) {
+      return {
+        kind: classifyProviderIssue(error),
+        message:
+          attempted === CODEX_APP_SERVER_RECOVERY_LIMIT
+            ? 'The Codex app-server keeps stopping unexpectedly. CodeInOven stopped retrying this turn automatically; retry the message to continue your work.'
+            : 'The Codex app-server stopped unexpectedly. Retry the message to continue your work.',
+        rawError: error,
+        harnessId: this.id,
+        retryable: true,
+        ...(attempted === CODEX_APP_SERVER_RECOVERY_LIMIT ? { attempt: attempted } : {})
+      }
+    }
+    this.appServerRecoveriesBySessionId.set(sessionId, attempted + 1)
     return {
-      kind: classifyProviderIssue(error),
+      kind: 'provider_unavailable',
       message:
-        'The Codex app-server stopped unexpectedly. Retry the message to continue your work.',
+        'The Codex app-server stopped unexpectedly. CodeInOven is restarting it and will resume this turn.',
       rawError: error,
       harnessId: this.id,
-      retryable: true
+      retryable: true,
+      retryAt: Date.now() + CODEX_APP_SERVER_RESTART_DELAY_MS
     }
   }
 
-  private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
+  private async failAppServerHost(
+    host: CodexAppServerHost,
+    error: string,
+    recoverable = false
+  ): Promise<void> {
     if (host.stopped) return
     host.stopped = true
     this.appServerHosts.delete(host)
@@ -1868,8 +1923,31 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
-    const issue = this.gracefulAppServerIssue(error)
-    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error, issue)))
+    await Promise.all(
+      affected.map((active) =>
+        // The recovery budget is per session, so each affected turn gets its own
+        // issue; a deliberate restart keeps its own terminal reason.
+        this.finishAppServerTurn(
+          active,
+          error,
+          recoverable
+            ? this.gracefulAppServerIssue(error, active.session.id)
+            : this.deliberateAppServerIssue(error)
+        )
+      )
+    )
+  }
+
+  /** The issue for an app-server the app itself is replacing (harness update,
+   *  provider sign-in): an intentional stop, so it is never auto-resumed. */
+  private deliberateAppServerIssue(error: string): AgentProviderIssue {
+    return {
+      kind: classifyProviderIssue(error),
+      message: 'The Codex app-server was restarted. Retry the message to continue your work.',
+      rawError: error,
+      harnessId: this.id,
+      retryable: true
+    }
   }
 
   private async codexInput(

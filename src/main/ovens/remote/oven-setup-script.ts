@@ -338,12 +338,18 @@ function harnessStep(
 }
 
 /**
- * Put the Oven's clock on this computer's zone.
+ * Match the Oven's clock to this computer: its absolute time and its zone.
  *
  * The step is app-owned rather than a shell command because the zone has to be
  * read back from the Oven to be trusted, and because a platform that cannot
  * express the zone must be skipped with its reason rather than failing a setup
  * that is otherwise complete.
+ *
+ * A matching zone never skips this step: `apt` compares mirror release
+ * timestamps against the Oven's absolute clock, so an Oven already on the right
+ * zone can still be hours behind and reject every repository. The step reads the
+ * clock and corrects it only when it is genuinely off, so running it always is
+ * cheap and is the only thing that catches a clock that drifted under the zone.
  */
 function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | null): PlannedStep {
   const base = {
@@ -368,16 +374,13 @@ function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | 
       detail: 'The Oven reports no supported way to change its clock zone.',
       skippedReason: 'The Oven reports no supported way to change its clock zone.'
     }
-  const alreadyMatches =
-    assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
-  const detail = alreadyMatches
-    ? `The Oven already runs on ${deviceZone}.`
-    : `Sets the Oven clock to ${deviceZone}, this computer's time zone.`
+  const zoneMatches = assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
   return {
     ...base,
     timezoneZone: deviceZone,
-    detail,
-    ...(alreadyMatches ? { skippedReason: detail } : {})
+    detail: zoneMatches
+      ? `The Oven already runs on ${deviceZone}; checks its absolute clock against this computer.`
+      : `Sets the Oven clock to ${deviceZone}, this computer's time zone.`
   }
 }
 
@@ -414,7 +417,7 @@ export function buildSetupPlan(
     requiresElevation: false,
     commands: [],
     detail:
-      'Re-reads the Oven right before setup changes it, so a check that has gone stale cannot authorize an install.',
+      'Confirms the Oven state this setup was authorized against, re-reading it only when the check is no longer fresh.',
     handledByApp: true
   })
 
@@ -457,6 +460,11 @@ export function buildSetupPlan(
     })
   }
 
+  /* Phase: prerequisites. The clock is matched before any package work:
+     `apt` compares mirror release timestamps against the Oven's absolute clock,
+     so a clock running behind rejects the very repositories a refresh needs. */
+  steps.push(timezoneStep(assessment, deviceTimezone))
+
   /* Phase: prerequisites. Package upgrades are authorized only by Start setup. */
   const packages = packageCommands(assessment.packageManager, privilege)
   if (configuration.packageUpgrades) {
@@ -488,8 +496,8 @@ export function buildSetupPlan(
   }
   if (packages.notice) notices.push(packages.notice)
 
-  // Package registry refresh and package upgrades are the first mutations after
-  // preflight. Bootstrap Node only after that authorized package pass.
+  // Package registry refresh and package upgrades run after the clock is matched,
+  // so a skewed Oven clock cannot reject the repositories they depend on.
   for (const tool of ['git', 'curl'] as const) {
     const missing = assessment.issues.some((issue) => issue.code === `missing-${tool}`)
     const commands = missing
@@ -529,9 +537,6 @@ export function buildSetupPlan(
     if (commands.length === 0)
       blockers.push('npm is missing and cannot be installed with the detected package manager.')
   }
-
-  /* Phase: prerequisites. The Oven's clock follows this computer's zone. */
-  steps.push(timezoneStep(assessment, deviceTimezone))
 
   /* Phase: harnesses. One step per selection so a retry resumes exactly. */
   for (const selection of configuration.selectedHarnesses) {

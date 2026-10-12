@@ -26,9 +26,15 @@
     canGoBack?: boolean
     onRetry: () => void
     onGoBack?: () => void
+    /**
+     * Edit the failed address. When provided the address pill becomes a button
+     * that opens the surface's own address entry; surfaces without one (the
+     * peek window, whose spotlight would edit the wrong tab) leave it static.
+     */
+    onEditAddress?: () => void
   }
 
-  let { error, url, loading, canGoBack = false, onRetry, onGoBack }: Props = $props()
+  let { error, url, loading, canGoBack = false, onRetry, onGoBack, onEditAddress }: Props = $props()
 
   const copy = $derived(browserLoadErrorCopy(error, browserLoadErrorHost(url)))
   const detail = $derived(browserLoadErrorDetail(error))
@@ -48,12 +54,24 @@
       <p class="text-xs leading-relaxed text-muted">{copy.description}</p>
     </div>
     {#if url}
-      <p
-        class="max-w-full truncate rounded-lg border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
-        title={url}
-      >
-        {url}
-      </p>
+      {#if onEditAddress}
+        <button
+          type="button"
+          class="max-w-full cursor-pointer truncate rounded-lg border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:bg-overlay"
+          title={url}
+          aria-label={`Edit address ${url}`}
+          onclick={onEditAddress}
+        >
+          {url}
+        </button>
+      {:else}
+        <p
+          class="max-w-full truncate rounded-lg border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+          title={url}
+        >
+          {url}
+        </p>
+      {/if}
     {/if}
     <p class="font-mono text-xs text-dimmed" title={detail}>{detail}</p>
     <div class="mt-1 flex items-center gap-2">

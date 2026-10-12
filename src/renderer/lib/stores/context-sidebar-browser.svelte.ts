@@ -11,6 +11,7 @@ import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
 import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
+import { browserAudio } from './browser-audio.svelte'
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
 
@@ -479,6 +480,15 @@ export class SidebarBrowserTabs {
       // A document with no committed URL yet (a fresh tab, an about:blank
       // popup) reports an empty URL and must not erase the address on screen.
       this.updateTab(state.tabId, state.url || tab.url, state.title, state.favicon)
+      // Publish the tab's sound so the rail and its thread row can mark it. A
+      // state report for a tab this store does not own (a global profile tab)
+      // has no thread to attribute it to, so it is left to the global store.
+      browserAudio.reportThreadTab(
+        state.tabId,
+        tab.threadId,
+        tab.projectId,
+        state.audible && !state.muted
+      )
     }
     const current = this.runtime.get(state.tabId)
     if (
@@ -511,6 +521,11 @@ export class SidebarBrowserTabs {
     const current = this.runtimeFor(tabId)
     const muted = !current.muted
     this.runtime.set(tabId, { ...current, muted })
+    // Mirror the optimistic mute here too, so a thread row stops saying the tab
+    // is playing the moment the user silences it, without waiting for main.
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (tab)
+      browserAudio.reportThreadTab(tabId, tab.threadId, tab.projectId, current.audible && !muted)
     void invoke('browser:setMuted', tabId, muted).catch((error: unknown) => {
       const latest = this.runtime.get(tabId)
       // Undo only our own optimistic write; a state event may already have
@@ -668,6 +683,7 @@ export class SidebarBrowserTabs {
   private forgetRuntime(tabIds: readonly string[]): void {
     for (const tabId of tabIds) {
       this.runtime.delete(tabId)
+      browserAudio.forget(tabId)
       this.tabFavicons.forget(tabId)
       threadBrowserTabs.forget(tabId)
     }

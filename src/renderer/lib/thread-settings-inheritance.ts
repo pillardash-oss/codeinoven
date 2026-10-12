@@ -1,4 +1,5 @@
-import type { Thread, ThreadSettings } from '$shared/types'
+import type { Project, Thread, ThreadSettings } from '$shared/types'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { invoke } from '$lib/ipc.svelte'
 import {
   assistantEffectiveSettings,
@@ -30,6 +31,31 @@ export function settingsForNewThread(
   // default. Idempotent when the fallback is already the saved value.
   threadSettings.commit(cloned)
   return cloned
+}
+
+/**
+ * Seed a new thread's Oven binding from its project's remote location.
+ *
+ * A project created from the Add Project flow records the Oven and workspace it
+ * runs in, so a chat started in it runs where the user pointed the project.
+ * When the new chat inherits its settings from a sibling thread in the same
+ * project, that sibling's own Oven choice is deliberate and kept; otherwise the
+ * project's Oven applies, so a stale last-used Oven from another project can
+ * never drag a chat into the wrong machine.
+ */
+export function withProjectOven(
+  settings: ThreadSettings,
+  project: Project,
+  inheritedFromSameProject: boolean
+): ThreadSettings {
+  const ovenId = project.ovenId
+  if (!ovenId || ovenId === LOCAL_OVEN_ID) return settings
+  if (inheritedFromSameProject) return settings
+  return {
+    ...settings,
+    ovenId,
+    ...(project.path ? { ovenPath: project.path } : {})
+  }
 }
 
 /**

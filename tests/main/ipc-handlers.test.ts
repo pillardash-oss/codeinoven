@@ -805,6 +805,28 @@ describe('git IPC', () => {
     expect(handlers.has('git:checkout')).toBe(true)
   })
 
+  /*
+   * The issue side panel's channels, which a rename or a dropped registration would
+   * otherwise only show as a dead control at runtime.
+   */
+  it('exposes the issue detail, history and relationship channels', async () => {
+    const storage = new StorageEngine()
+    registerIpcHandlers(storage, database)
+    for (const channel of [
+      'issue:page',
+      'issue:bundle',
+      'issue:timeline',
+      'issue:relationships',
+      'issue:candidates',
+      'issue:addSubIssue',
+      'issue:removeSubIssue',
+      'issue:addBlockedBy',
+      'issue:removeBlockedBy'
+    ]) {
+      expect(handlers.has(channel)).toBe(true)
+    }
+  })
+
   it('vaults a git token and returns presence-only over IPC', async () => {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-git-cred-'))
     const storage = new StorageEngine(storageRoot)
@@ -1111,7 +1133,10 @@ describe('cloudDeploy IPC', () => {
       expect(result.containers).not.toContainEqual(expect.objectContaining({ id: 'unrelated-app' }))
       const live = result.containers.find((container) => container.id === 'app-1')
       expect(live?.label).toBe('My Custom API')
-      expect(live?.status).toBe('success')
+      // The overview's application read carries runtime state only; the last
+      // deployment outcome is read per-container later.
+      expect(live?.status).toBe('unknown')
+      expect(live?.runtimeStatus).toBe('success')
       expect(live?.project).toBe('Milogs')
       const pending = result.containers.find((container) => container.id === 'app-not-yet')
       expect(pending?.label).toBe('Pending App')

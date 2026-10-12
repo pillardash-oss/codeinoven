@@ -52,8 +52,10 @@ export function workspaceRoot(value: unknown): string {
   if (typeof value !== 'string' || value.length > 4096 || /[\0\r\n]/u.test(value))
     throw new Error('Invalid workspace path.')
   const path = value.startsWith('~/') ? join(homedir(), value.slice(2)) : value
-  if (!isAbsolute(path) || path === sep)
-    throw new Error('Choose an absolute workspace directory, or ~/directory.')
+  // The filesystem root is a legitimate root: a project may live anywhere the
+  // Oven user owns, such as `/var/www`, and a folder picker has to be able to
+  // list `/` to reach it. Only a non-absolute path is rejected.
+  if (!isAbsolute(path)) throw new Error('Choose an absolute workspace directory, or ~/directory.')
   return resolve(path)
 }
 

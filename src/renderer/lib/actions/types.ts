@@ -15,6 +15,8 @@ export type ActionCategory =
   | 'file'
   | 'thread'
   | 'project'
+  | 'routine'
+  | 'browser'
   | 'other'
 
 export type ActionSourceKind = 'app' | 'harness' | 'plugin'

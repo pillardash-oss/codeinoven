@@ -3,7 +3,12 @@ import type {
   BrowserNewTabMenuChoice
 } from '../browser/browser-new-tab-menu'
 import type { DarkReaderTabAction, DarkReaderTabState } from '../browser/browser-darkreader-control'
-import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
+import type {
+  NativeDockAck,
+  NativeDockCommit,
+  NativeDockInteraction,
+  NativeDockRequest
+} from '../native-dock'
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
@@ -19,11 +24,13 @@ import type {
   BrowserPermissionPromptContext,
   BrowserPopupWindow,
   BrowserShortcutBindings,
+  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
   BrowserTabDestroyReason,
   BrowserTransportCommand,
+  BrowserSitePermissionState,
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
@@ -68,6 +75,8 @@ export const invokeBrowserContract = {
   >,
   'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
   'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
+  'browser:commitDockOverlay': {} as Contract<[request: NativeDockCommit], boolean>,
+  'browser:focusDockOverlay': {} as Contract<[id: string], boolean>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's
@@ -226,6 +235,7 @@ export const invokeBrowserContract = {
    * invisible behind it.
    */
   'browser:setToastOverlay': {} as Contract<[request: ToastOverlayRequest], boolean>,
+  'browser:toastOverlayHeight': {} as Contract<[height: number], void>,
   /**
    * Point the native overlay at the browser's floating tab strip, or take it
    * down with null because the panel closed or no page covers its band.
@@ -235,6 +245,26 @@ export const invokeBrowserContract = {
    * the page, exactly as it did before the overlay existed.
    */
   'browser:setStripOverlay': {} as Contract<[request: BrowserStripOverlayRequest | null], boolean>,
+  /**
+   * Load or release the bounded host that draws the floating browser sidebar.
+   *
+   * The panel is revealed by a pointer reaching the window edge, so its renderer
+   * is loaded while a browser view is on screen instead of on that hover: a host
+   * created by the gesture spends its first frames loading, which reads as the
+   * panel arriving late. `false` releases it for the idle reclaim it would get
+   * after a hide.
+   */
+  'browser:warmStripOverlay': {} as Contract<[warm: boolean], boolean>,
+  /**
+   * Load or release the shared overlay window that draws native modals.
+   *
+   * A native modal is opened and closed repeatedly in one browsing session, and
+   * its document costs a few hundred milliseconds to load. Loading it while the
+   * browser view is on screen is what lets an address palette or a tab editor
+   * appear in a frame instead of after an empty window. `false` leaves it to the
+   * idle reclaim it would get once nothing is drawing in it.
+   */
+  'browser:warmOverlayWindow': {} as Contract<[warm: boolean], boolean>,
   /**
    * Everything on display in the overlay, asked for by the overlay document
    * itself once its listener is bound. First delivery is a pull here because a
@@ -322,6 +352,12 @@ export const invokeBrowserContract = {
    * gesture; the chords come from the renderer's keymap, which main cannot read.
    */
   'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
+  /**
+   * Every chord the app's own keymap answers, so a key pressed in a page can be
+   * claimed there and handed back to the renderer. A chord the browser answers
+   * itself is checked first and never appears here.
+   */
+  'browser:setAppShortcutChords': {} as Contract<[chords: BrowserShortcutChord[]], void>,
   /**
    * Report the address bar's active search engine. Main builds the browser's
    * native context menu and its "Search <engine> for ..." item, and holds no
@@ -463,9 +499,8 @@ export const invokeBrowserContract = {
    * says, because only the renderer knows a box's name and the copy has to say
    * which jar is about to lose its cookies. `origin` is the normalized
    * `https://host` origin of the page on screen (empty when the address is not
-   * a site) and drives the manual permission section: camera, microphone,
-   * location and notifications can be allowed, blocked, or reset to ask every
-   * time without waiting for the page to request them.
+   * a site); the menu's single "Site permissions…" entry opens the modal that
+   * sets any of the browser's permissions for that origin.
    */
   'browser:siteMenu': {} as Contract<
     [
@@ -552,5 +587,21 @@ export const invokeBrowserContract = {
   /** Drop a finished, interrupted or cancelled download record from the list. */
   'browser:removeDownload': {} as Contract<[id: string], void>,
   'browser:openDownload': {} as Contract<[id: string], void>,
-  'browser:revealDownload': {} as Contract<[id: string], boolean>
+  'browser:revealDownload': {} as Contract<[id: string], boolean>,
+  /** Set one site permission from the Site Permissions modal. `permissionId` is a
+   *  catalog id and `action` is the state the user chose; main writes the same
+   *  ledger keys the page-initiated prompt writes, so the two agree. */
+  'browser:setSitePermission': {} as Contract<
+    [
+      projectId: string,
+      boxId: string | null,
+      origin: string,
+      permissionId: string,
+      action: BrowserSitePermissionState
+    ],
+    void
+  >,
+  /** Answer the in-app screen-share picker: a chosen source id, or null to
+   *  cancel. Main resolves the pending `getDisplayMedia` from it. */
+  'browser:resolveScreenShare': {} as Contract<[requestId: string, sourceId: string | null], void>
 }

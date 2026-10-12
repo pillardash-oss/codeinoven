@@ -17,6 +17,11 @@ import { openVideoPreview } from './video-preview-session'
 export interface VideoPreviewExecutorOptions {
   previews: DirectoryPreviewService
   database: Database
+  checkpoint: (
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ) => Promise<unknown>
   browser: () => BrowserService | null
   /**
    * How the preview becomes durable: the composition folder the agent chose is
@@ -47,6 +52,8 @@ export function createVideoPreviewExecutor(
   options: VideoPreviewExecutorOptions
 ): VideoCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation === 'checkpoint')
+      return options.checkpoint(context.projectId, context.threadId, input)
     if (operation !== 'preview') {
       throw new Error(
         `The video capability's "preview" executor received the operation "${operation}".`

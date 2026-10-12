@@ -8,6 +8,7 @@
  */
 
 import type { BrowserWindow } from 'electron'
+import type { DesignService } from '../design/design-service'
 import type { BrowserService } from '../browser/browser-service'
 import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -36,6 +37,7 @@ import type { HarnessInstallService } from '../agents/harness-install-service'
 import type { NotificationService } from '../notifications/notification-service'
 import type { ModelPricingService } from '../providers/model-pricing-service'
 import type { SpeechService } from '../speech/speech-service'
+import type { SearchService } from '../search/search-service'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import type { PrototypePreviewService } from '../prototypes/prototype-preview-service'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
@@ -99,6 +101,8 @@ export interface BootstrapState {
   heartbeatScheduler: HeartbeatSchedulerService | null
   /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
   cioCleanup: CioCleanupService | null
+  /** Authored-work service, so a sweep can reconcile the histories it orphaned. */
+  designService: DesignService | null
   routineManager: RoutineManager | null
   routineScheduler: RoutineSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
@@ -120,6 +124,9 @@ export interface BootstrapState {
   modelPricingService: ModelPricingService | null
   speechService: SpeechService | null
   unregisterSpeechIpc: (() => void) | null
+  /** Intent (semantic) search: model catalog, downloads, and the thread index. */
+  searchService: SearchService | null
+  unregisterSearchIpc: (() => void) | null
   prototypePreviewService: PrototypePreviewService | null
   /** Loopback static servers behind the file tree's "Open in browser" action. */
   directoryPreviewService: DirectoryPreviewService | null
@@ -185,6 +192,7 @@ export function createBootstrapState(): BootstrapState {
     retryScheduler: null,
     heartbeatScheduler: null,
     cioCleanup: null,
+    designService: null,
     routineManager: null,
     routineScheduler: null,
     backgroundRunLedger: null,
@@ -196,6 +204,8 @@ export function createBootstrapState(): BootstrapState {
     modelPricingService: null,
     speechService: null,
     unregisterSpeechIpc: null,
+    searchService: null,
+    unregisterSearchIpc: null,
     prototypePreviewService: null,
     directoryPreviewService: null,
     backgroundLifecycle: null,

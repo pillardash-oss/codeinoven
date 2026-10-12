@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Clock } from '@lucide/svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
 
   interface Props {
     /** Stable listbox id, so the field that drives the list can point at it. */
@@ -56,7 +56,7 @@
         role="option"
         aria-selected={index === highlight}
         class={[
-          'flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none transition-colors',
+          'cursor-pointer flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none transition-colors',
           compact ? 'py-1' : 'py-1.5',
           index === highlight ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated'
         ]}
@@ -69,10 +69,7 @@
         <span class="min-w-0 flex-1">
           <span class={['block truncate', compact ? 'text-xs' : 'text-sm']}>{entry.title}</span>
           <span
-            class={[
-              'block truncate text-dimmed',
-              compact ? 'text-[0.625rem]' : 'text-[0.6875rem]'
-            ]}
+            class={['block truncate text-dimmed', compact ? 'text-[0.625rem]' : 'text-[0.6875rem]']}
           >
             {browserLibraryHost(entry.url)}
           </span>
@@ -83,7 +80,7 @@
             compact ? 'text-[0.625rem]' : 'text-[0.6875rem]'
           ]}
         >
-          {relativeTime(entry.visitedAt)}
+          {formatCompactAge(entry.visitedAt)}
         </span>
       </button>
     {/each}

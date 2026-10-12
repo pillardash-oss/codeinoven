@@ -39,6 +39,33 @@ class SettingsUiState {
   focusOven(id: string): void {
     this.ovenFocus = { id, sequence: (this.ovenFocus?.sequence ?? 0) + 1 }
   }
+
+  /**
+   * A request for the Ovens page to open the New Oven editor.
+   *
+   * The Add Project flow sends this before navigating here, so a user with no
+   * Ovens lands straight in the creation form instead of an empty list. A
+   * monotonic counter lets a second request run again once the first is taken.
+   */
+  newOvenRequest = $state(0)
+  #newOvenRequestTaken = 0
+
+  /** Ask the Ovens page to open the New Oven editor. */
+  requestNewOven(): void {
+    this.newOvenRequest += 1
+  }
+
+  /**
+   * Claim a pending New Oven request.
+   *
+   * Returns true exactly once per request, so the page survives a remount
+   * without reopening the editor the user already dismissed.
+   */
+  takeNewOvenRequest(): boolean {
+    if (this.newOvenRequest <= this.#newOvenRequestTaken) return false
+    this.#newOvenRequestTaken = this.newOvenRequest
+    return true
+  }
 }
 
 export const settingsUiState = new SettingsUiState()

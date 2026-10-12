@@ -246,6 +246,10 @@ const SILENT_CONTINUE_MAX_ATTEMPTS = 10
 /** Compact-and-continue recoveries per turn for oversized request bodies. */
 const OVERSIZED_COMPACT_MAX_ATTEMPTS = 3
 
+/** Minimum spacing between mid-turn session-stats refreshes, so a turn that
+ *  completes many requests cannot stack `get_session_stats` calls. */
+const PI_LIVE_USAGE_REFRESH_INTERVAL_MS = 3_000
+
 /** pi rejects `set_model` for models outside its availability snapshot; the
  *  only recovery is a fresh process with a regenerated providers extension. */
 function isPiModelNotFoundError(error: unknown): boolean {
@@ -352,6 +356,18 @@ export class PiDriver extends PersistentCliDriver {
    * mirrored from per-message usage events.
    */
   private sessionStatsBroken = new Set<string>()
+  /**
+   * Throttle stamps for the mid-turn session-stats refresh, keyed by session.
+   * Pi reports a request's token totals while a turn streams, but its context
+   * occupancy, cumulative cost, and rate-limit windows only arrive through the
+   * session-stats RPC, which the driver otherwise calls once when the turn
+   * settles   leaving the context meter without a provider reading for the
+   * whole run.
+   */
+  private readonly liveUsageRefreshAt = new Map<string, number>()
+  /** Sessions with a mid-turn stats refresh in flight, so a burst of completed
+   *  requests cannot stack concurrent `get_session_stats` requests. */
+  private readonly liveUsageRefreshing = new Set<string>()
   /**
    * Model/thinking-level last applied to each session's live pi RPC process.
    * Pi's own interactive mode only sends `set_model`/`set_thinking_level`
@@ -2060,6 +2076,10 @@ export class PiDriver extends PersistentCliDriver {
             // The provider accepted a request again   stand the oversized
             // recovery context stripping down so future turns send full media.
             void this.publishOversizedRecovery(session.id, false)
+            // The request's own token totals just landed; pull the session
+            // stats too so the context meter keeps a provider reading (window,
+            // occupancy, cost, quota) while the turn continues.
+            this.scheduleLiveUsageRefresh(session)
           }
           // A continuable finish-reason flake is claimed by the driver: strip
           // the marker and never let the errored completion reach the engine,
@@ -3080,6 +3100,32 @@ export class PiDriver extends PersistentCliDriver {
     this.pendingUiRequests.delete(requestId)
   }
 
+  /**
+   * Refresh provider usage while a turn is still running.
+   *
+   * The session-stats refresh used to run only at turn end, so a long turn
+   * showed the last completed request's tokens as its only live signal and no
+   * provider context reading   no context window, no cumulative cost, no quota
+   * windows   until it settled. Refreshing after each completed request, at
+   * most once per interval and with one request in flight per session, keeps
+   * those readings live while pi works. Pi serves the call from its own stats
+   * walk, which is a single linear pass it caches on (session, leaf, entry
+   * count), so the added load is one cheap request per interval.
+   */
+  private scheduleLiveUsageRefresh(session: PersistentCliSession): void {
+    if (!this.activeTurns.has(session.id)) return
+    if (this.liveUsageRefreshing.has(session.id)) return
+    const now = Date.now()
+    if (now - (this.liveUsageRefreshAt.get(session.id) ?? 0) < PI_LIVE_USAGE_REFRESH_INTERVAL_MS) {
+      return
+    }
+    this.liveUsageRefreshAt.set(session.id, now)
+    this.liveUsageRefreshing.add(session.id)
+    void this.refreshSessionUsage(session)
+      .catch((error) => Logger.dev('Pi live usage refresh failed:', error))
+      .finally(() => this.liveUsageRefreshing.delete(session.id))
+  }
+
   /** Attach the final session-stats context usage to the last assistant message. */
   private async refreshSessionUsage(session: PersistentCliSession): Promise<void> {
     await refreshSessionUsageFromStats(session, {
@@ -3108,6 +3154,10 @@ export class PiDriver extends PersistentCliDriver {
     } catch (error) {
       Logger.error('Pi session persistence failed:', error)
     }
+    // The turn is over: clear the live-refresh throttle so the next turn's
+    // first completed request refreshes its usage immediately.
+    this.liveUsageRefreshAt.delete(session.id)
+    this.liveUsageRefreshing.delete(session.id)
     this.emit({ type: 'session.idle', sessionId: session.id })
   }
 

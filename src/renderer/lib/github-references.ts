@@ -59,13 +59,19 @@ export function githubBlockUserUrl(login?: string): string {
 }
 
 /**
- * GitHub's install flow for this app.
+ * GitHub's notification settings.
  *
- * Where a missing installation is explained (the pull request list, the
- * deployments monitor), the control that fixes it sends the reader here.
+ * The panel offers this so a reader who needs more than the inbox filter   per
+ * organization, per repository, watching and custom routing   can go deeper on
+ * github.com instead of the app growing a settings surface of its own.
  */
-export function githubAppInstallUrl(): string {
-  return 'https://github.com/apps/codeinoven/installations/new'
+export function githubNotificationSettingsUrl(): string {
+  return 'https://github.com/settings/notifications'
+}
+
+/** GitHub's inbox, the page the panel mirrors. */
+export function githubNotificationsUrl(): string {
+  return 'https://github.com/notifications'
 }
 
 // ─── Reference extension ────────────────────────────────────────────────────

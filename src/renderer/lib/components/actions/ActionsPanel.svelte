@@ -12,6 +12,7 @@
     Variable,
     X
   } from '@lucide/svelte'
+  import { createSubscriber } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
@@ -25,6 +26,7 @@
     ProjectActionInput,
     ProjectActionVariable
   } from '$shared/project-actions'
+  import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
 
   interface Props {
     projectId: string
@@ -51,6 +53,21 @@
     void projectActionsState.load(projectId)
   })
   let actions = $derived(projectActionsState.actions(projectId))
+
+  /** Coarse one-minute clock so a run's age keeps counting while the panel stays
+   *  open, instead of freezing at the value it held when the entry last
+   *  re-rendered. Time is an external system, so it is subscribed to rather than
+   *  tracked in an effect. */
+  const subscribeMinute = createSubscriber((update) => {
+    const timer = window.setInterval(update, 60_000)
+    return () => window.clearInterval(timer)
+  })
+  /** The entry's last-run stamp: compact while recent (`Now`, `5m`, `23h`,
+   *  `6d`), the real day once it stops being precise, matching thread rows. */
+  function lastRunLabel(at: number): string {
+    subscribeMinute()
+    return formatCompactAge(at)
+  }
 
   /** Action whose run is shown over the whole window instead of its inline box.
    *  Component-local: the full screen surface covers the app, so no context tab
@@ -170,7 +187,7 @@
   }
   function requestRun(action: ProjectAction): void {
     if (action.variables.length === 0) {
-      projectActionsState.start(action, {}, scopeBucketId)
+      projectActionsState.start(projectId, action, {}, scopeBucketId)
       return
     }
     runValues = Object.fromEntries(action.variables.map((variable) => [variable.name, '']))
@@ -178,7 +195,7 @@
   }
   function startRun(): void {
     if (!runTarget) return
-    projectActionsState.start(runTarget, runValues, scopeBucketId)
+    projectActionsState.start(projectId, runTarget, runValues, scopeBucketId)
     runTarget = null
   }
   function duplicate(action: ProjectAction): void {
@@ -351,9 +368,22 @@
                 <p class="truncate text-xs font-semibold text-foreground">
                   {action.name || action.script}
                 </p>
-                {#if action.name}<p class="truncate font-mono text-[0.625rem] text-muted">
-                    {action.script}
-                  </p>{/if}
+                {#if action.name || action.lastRunAt !== undefined}
+                  <div class="flex min-w-0 items-center gap-2">
+                    {#if action.name}<p
+                        class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
+                      >
+                        {action.script}
+                      </p>{/if}
+                    {#if action.lastRunAt !== undefined}
+                      <span
+                        class="ml-auto shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed"
+                        title={`Last run ${formatDateTime(action.lastRunAt)}`}
+                        >{lastRunLabel(action.lastRunAt)}</span
+                      >
+                    {/if}
+                  </div>
+                {/if}
               </div>
               <div
                 class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"

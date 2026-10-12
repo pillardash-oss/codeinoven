@@ -25,6 +25,9 @@ import type {
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPopupWindow,
+  BrowserScreenSharePrompt,
+  BrowserSitePermissionState,
+  BrowserSitePermissionsPrompt,
   BrowserViewBounds
 } from '$shared/ipc-contract'
 import {
@@ -44,6 +47,7 @@ import { browserExtensionSidePanels } from './browser-extension-side-panels.svel
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { browserVisibility } from './browser-visibility.svelte'
+import { browserAudio } from './browser-audio.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
@@ -69,11 +73,13 @@ import {
   MAX_REOPENED_BROWSER_TABS,
   browserTabLabel,
   browserTabTitleForUrl,
+  canHibernateTab,
   isBlankBrowserAddress,
   isSameBrowserLoadError,
   DEFAULT_BOX_ID,
   boxIdForJar,
   defaultBrowserBox,
+  jarIdForBox,
   isTabIdlePastWindow,
   type BrowserBoxAppearance,
   type BrowserGroupAppearance,
@@ -109,6 +115,11 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
+  /** The Site Permissions modal's opening payload, or null while it is closed. */
+  sitePermissionsPrompt = $state<BrowserSitePermissionsPrompt | null>(null)
+  /** The in-app screen-share picker's payload, for a page that asked to share and
+   *  found no native picker on this platform. Null while no picker is up. */
+  screenSharePrompt = $state<BrowserScreenSharePrompt | null>(null)
   private peeks = new SvelteMap<
     string,
     {
@@ -161,6 +172,47 @@ export class GlobalBrowserState {
 
   hasPeek(sourceTabId: string): boolean {
     return this.peeks.has(sourceTabId)
+  }
+
+  /**
+   * Set one site permission from the Site Permissions modal.
+   *
+   * The choice is shown immediately and main is told behind it; main writes the
+   * same ledger keys the page-initiated prompt writes and reloads the origin's
+   * tabs, so a decision here and a decision in the prompt are the same decision.
+   */
+  async setSitePermission(permissionId: string, action: BrowserSitePermissionState): Promise<void> {
+    const prompt = this.sitePermissionsPrompt
+    if (!prompt) return
+    this.sitePermissionsPrompt = {
+      ...prompt,
+      states: { ...prompt.states, [permissionId]: action }
+    }
+    try {
+      await invoke(
+        'browser:setSitePermission',
+        prompt.projectId,
+        prompt.boxId,
+        prompt.origin,
+        permissionId,
+        action
+      )
+    } catch (error: unknown) {
+      reportError(error, 'The site permission could not be saved.')
+    }
+  }
+
+  /** Close the Site Permissions modal. */
+  dismissSitePermissions(): void {
+    this.sitePermissionsPrompt = null
+  }
+
+  /** Answer the in-app screen-share picker: a source id, or null to cancel. */
+  async resolveScreenShare(sourceId: string | null): Promise<void> {
+    const prompt = this.screenSharePrompt
+    if (!prompt) return
+    this.screenSharePrompt = null
+    await invoke('browser:resolveScreenShare', prompt.requestId, sourceId).catch(() => {})
   }
 
   hasThreadPeek(projectId: string, threadId: string): boolean {
@@ -294,6 +346,7 @@ export class GlobalBrowserState {
   private destroyPeekTab(tab: GlobalBrowserTab): void {
     this.forgetPeek()
     this.runtime.delete(tab.id)
+    browserAudio.forget(tab.id)
     void invoke('browser:destroy', tab.id, 'closed').catch((error: unknown) =>
       reportError(error, 'Peek Window could not be closed.')
     )
@@ -312,6 +365,7 @@ export class GlobalBrowserState {
     if (!peek) return
     this.peeks.delete(sourceId)
     this.runtime.delete(peek.tab.id)
+    browserAudio.forget(peek.tab.id)
     void invoke('browser:destroy', peek.tab.id, 'closed').catch(() => {})
   }
   /**
@@ -328,6 +382,13 @@ export class GlobalBrowserState {
    *  no tab; the tabs that name it do, and a box nobody uses is a row here and a
    *  profile directory on disk, nothing more. */
   boxes: GlobalBrowserBox[] = $state([])
+  /** The box a brand-new global-browser tab starts in when it has no tab to
+   *  inherit a box from, or {@link DEFAULT_BOX_ID} for the profile's own jar.
+   *
+   *  It is deliberately the global browser's own setting. A thread browser reads
+   *  its own jar instead, so a profile-wide preference can never move a thread tab
+   *  out of the conversation that owns it. */
+  defaultBoxId: string = $state(DEFAULT_BOX_ID)
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
   groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
@@ -409,6 +470,10 @@ export class GlobalBrowserState {
    *  than replaced by what was read. */
   private mutatedSinceBoot = false
 
+  /** Whether this session chose a default box, so a stored one never overwrites an
+   *  earlier choice of the user's when the two lists are merged. */
+  private defaultBoxChosen = false
+
   /**
    * Whether {@link start} has wired the runtime.
    *
@@ -445,6 +510,11 @@ export class GlobalBrowserState {
     // and the other direction of the same rule closes the panel when the last one
     // ends.
     subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
+    // A page asking to share its screen, on a platform with no native picker, is
+    // offered the app's own source picker; a padlock's Site permissions entry
+    // opens the modal that lists every permission this browser exposes.
+    subscribe('browser:screenShareSources', (prompt) => (this.screenSharePrompt = prompt))
+    subscribe('browser:sitePermissions', (prompt) => (this.sitePermissionsPrompt = prompt))
     // An extension that asks to show its own side panel is asking for a place
     // beside the page, so the first panel for the tab on screen reveals the rail's
     // side panel tool, exactly as a popup window does, and the last one leaving
@@ -559,6 +629,7 @@ export class GlobalBrowserState {
     this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
     this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
     this.boxes = withDefaultBox((snapshot.boxes ?? []).map(runtimeBoxFromPersisted))
+    this.adoptDefaultBox(snapshot.defaultBoxId)
     // Through `setActiveTab`, not a direct assignment: the restored tab is the one
     // the browser view is about to show, and it has to count as a visit for the
     // Ctrl+Tab switcher exactly as an activation does. `markOpened` runs before
@@ -594,6 +665,18 @@ export class GlobalBrowserState {
     // loop zero times and never mint it, which is exactly what happened when this
     // first shipped: a profile with one box showed one box and no default.
     this.boxes = withDefaultBox(this.boxes)
+    // A session that has not chosen a default of its own takes the stored one, so a
+    // change that landed before the read still shows the box the user last picked.
+    // A session that already chose keeps its choice: that is the newer intent.
+    if (!this.defaultBoxChosen) this.adoptDefaultBox(snapshot.defaultBoxId)
+  }
+
+  /** Take a stored default box, narrowed to one this profile actually offers. A
+   *  value that names no box, or one this strip does not hold, is the profile's
+   *  own box, so the fallback can never point at a jar nothing owns. */
+  private adoptDefaultBox(boxId: string | null | undefined): void {
+    const known = boxId === DEFAULT_BOX_ID || this.boxes.some((box) => box.id === boxId)
+    this.defaultBoxId = known && typeof boxId === 'string' ? boxId : DEFAULT_BOX_ID
   }
 
   /**
@@ -1386,7 +1469,10 @@ export class GlobalBrowserState {
       if (!sourceTabId) return
       const previous = this.peeks.get(sourceTabId)
       if (previous?.tab.id === tabId) return
-      if (previous) this.runtime.delete(previous.tab.id)
+      if (previous) {
+        this.runtime.delete(previous.tab.id)
+        browserAudio.forget(previous.tab.id)
+      }
       const peek = $state({
         tab: newTab,
         projectId: context.projectId,
@@ -1421,14 +1507,22 @@ export class GlobalBrowserState {
   /** Open an address: focus the tab already showing it, otherwise create one.
    *  A named box scopes the match, so the same address in another jar opens its
    *  own tab rather than stealing the one already logged in elsewhere; with no
-   *  box named, an open copy of the address is focused wherever it lives. */
-  open(url: string, groupId: string | null = null, boxId: string | null = null): string {
+   *  box named, an open copy of the address is focused wherever it lives.
+   *
+   *  A page arriving with no box named is a link or an external open, not a tab
+   *  opened beside another, so it starts in the profile's chosen default box
+   *  instead of inheriting the box of whatever tab happens to be on screen. */
+  open(
+    url: string,
+    groupId: string | null = null,
+    boxId: string | null | undefined = undefined
+  ): string {
     const existing = this.findTabByUrl(url, boxId ?? undefined)
     if (existing) {
       this.activate(existing.id)
       return existing.id
     }
-    return this.createTab(url, groupId, boxId)
+    return this.createTab(url, groupId, boxId === undefined ? this.newTabBoxId() : boxId)
   }
 
   /**
@@ -1462,10 +1556,15 @@ export class GlobalBrowserState {
   /**
    * Create a tab for an address (blank allowed) and make it active.
    *
-   * `boxId` names the jar the tab runs in, or null for the default one. `anchor`
+   * `boxId` names the jar the tab runs in, or null for the profile's own. `anchor`
    * places the new row before or after an existing tab and, when no group or box
    * is named, inherits both from that tab, which keeps "new tab here" a one-click
    * gesture that lands beside the page it came from.
+   *
+   * With no box named and no tab to inherit from at all   the browser's first tab,
+   * an external open   the tab starts in the profile's chosen default box. That
+   * fallback is the global browser's alone: a thread browser never reaches this
+   * store, so a thread tab with nothing to inherit stays in the thread's own jar.
    */
   createTab(
     url: string,
@@ -1476,7 +1575,8 @@ export class GlobalBrowserState {
     this.enforceTabCap()
     const anchorTab = anchor ? this.tabById(anchor.tabId) : this.activeTab
     const targetGroupId = groupId === undefined ? (anchorTab?.groupId ?? null) : groupId
-    const targetBoxId = boxId === undefined ? (anchorTab?.boxId ?? null) : boxId
+    const targetBoxId =
+      boxId !== undefined ? boxId : anchorTab ? anchorTab.boxId : this.newTabBoxId()
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -1571,6 +1671,7 @@ export class GlobalBrowserState {
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
+    browserAudio.forget(tabId)
     this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
@@ -1944,6 +2045,34 @@ export class GlobalBrowserState {
     }
   }
 
+  /**
+   * Choose the box a brand-new global-browser tab starts in.
+   *
+   * This is the box a tab with nothing to inherit lands in   the first tab, an
+   * external open, a link   so it is the profile's answer to "where do my new
+   * tabs go", not a thread's. A box the profile does not offer is ignored rather
+   * than stored, because a default that names nothing would silently start tabs in
+   * the wrong jar.
+   */
+  setDefaultBox(boxId: string): void {
+    if (boxId !== DEFAULT_BOX_ID && !this.boxById(boxId)) return
+    if (this.defaultBoxId === boxId) return
+    this.defaultBoxId = boxId
+    this.defaultBoxChosen = true
+    this.persist()
+  }
+
+  /**
+   * The jar a new global-browser tab starts in when it has no tab to inherit.
+   *
+   * The profile's own box is its own jar, which main names as no box, so the
+   * chosen default goes through `jarIdForBox` before it reaches a tab. Only the
+   * global browser reads this; a thread browser falls back to the thread's jar.
+   */
+  private newTabBoxId(): string | null {
+    return jarIdForBox(this.defaultBoxId)
+  }
+
   /** How many tabs currently run in a jar. The argument is a jar id, not a box id:
    *  the default box's jar is the absent id, so pass it through `jarIdForBox`. */
   tabCountInBox(jarId: string | null): number {
@@ -1983,6 +2112,9 @@ export class GlobalBrowserState {
     }
     this.boxes = this.boxes.filter((box) => box.id !== id)
     this.boxIconUrls.delete(id)
+    // A default box that no longer exists would start new tabs in a jar nothing
+    // owns, so the profile's own box takes it back.
+    if (this.defaultBoxId === id) this.defaultBoxId = DEFAULT_BOX_ID
     this.persist()
   }
 
@@ -2074,6 +2206,7 @@ export class GlobalBrowserState {
     const peek = [...this.peeks.values()].find((entry) => entry.tab.id === state.tabId)
     if (peek && (state.loading || state.url !== '')) peek.documentSeen = true
     if (changed && !peek) this.persist()
+    browserAudio.reportGlobalTab(state.tabId, state.audible && !state.muted)
     const current = this.runtime.get(state.tabId)
     if (
       current &&
@@ -2104,6 +2237,10 @@ export class GlobalBrowserState {
     const current = this.runtimeFor(tabId)
     const muted = !current.muted
     this.runtime.set(tabId, { ...current, muted })
+    // Mirror the optimistic mute here too, so the Browser rail item stops saying
+    // the profile is playing the moment the user silences the tab, without
+    // waiting for main to publish the same state back.
+    browserAudio.reportGlobalTab(tabId, current.audible && !muted)
     void invoke('browser:setMuted', tabId, muted).catch((error: unknown) => {
       const latest = this.runtime.get(tabId)
       if (latest?.muted === muted) this.runtime.set(tabId, { ...latest, muted: current.muted })
@@ -2122,6 +2259,34 @@ export class GlobalBrowserState {
   }
 
   /**
+   * Release one tab's page now, keeping its row in the strip.
+   *
+   * The idle sweep's own move, available on demand from the tab's menu. Which
+   * tabs may be released is `canHibernateTab`'s answer and nobody else's, so the
+   * menu, this method and the sweep can never disagree about it.
+   */
+  hibernate(tabId: string): boolean {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || !canHibernateTab(tab, this.activeTabId)) return false
+    this.releasePage(tab)
+    return true
+  }
+
+  /**
+   * Drop a tab's live page and write the change down.
+   *
+   * Only the page is released: the row stays in the strip, so main writes the
+   * tab's stack down before the view goes and the next visit restores it.
+   */
+  private releasePage(tab: GlobalBrowserTab): void {
+    tab.hibernated = true
+    this.runtime.delete(tab.id)
+    browserAudio.forget(tab.id)
+    void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
+    this.persist()
+  }
+
+  /**
    * Release the page of every tab idle past the window.
    *
    * The active tab, a tab playing audio, and a tab holding a capture are never
@@ -2132,24 +2297,17 @@ export class GlobalBrowserState {
    */
   sweepIdleTabs(now: number = Date.now()): void {
     const windowMs = this.hibernationWindowMs
-    let changed = false
+    // A sweep that released nothing touches nothing: the write lives inside
+    // `releasePage`, so the minute-long clock never rewrites the file for its own
+    // sake and a run of releases coalesces into one write.
     for (const tab of this.tabs) {
       if (tab.id === this.activeTabId) continue
-      if (tab.url === '') continue
       const runtime = this.runtimeFor(tab.id)
       if (runtime.audible && !runtime.muted) continue
       if (runtime.capturing) continue
       if (!isTabIdlePastWindow(tab, now, windowMs)) continue
-      tab.hibernated = true
-      changed = true
-      this.runtime.delete(tab.id)
-      // Only the page is released: the row stays in the strip, so main writes the
-      // tab's stack down before the view goes and the next visit restores it.
-      void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
+      this.releasePage(tab)
     }
-    // A sweep that released nothing leaves the stored list untouched, so the
-    // minute-long clock never rewrites the file for its own sake.
-    if (changed) this.persist()
   }
 
   /** Close the oldest idle tabs when the strip is at its cap. A pinned tab is
@@ -2172,7 +2330,13 @@ export class GlobalBrowserState {
 
   /** The strip in its stored shape. */
   private snapshot(): GlobalBrowserTabsSnapshot {
-    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.boxes, this.activeTabId)
+    return globalBrowserTabsSnapshot(
+      this.tabs,
+      this.groups,
+      this.boxes,
+      this.activeTabId,
+      this.defaultBoxId
+    )
   }
 
   /**

@@ -16,9 +16,6 @@ const bundleFile = join(repoRoot, 'out', 'main', 'oven-service.mjs')
 const dist = join(packageRoot, 'dist')
 
 async function build(): Promise<void> {
-  const app = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')) as {
-    version: string
-  }
   let bundle: string
   try {
     bundle = await readFile(bundleFile, 'utf8')
@@ -45,12 +42,15 @@ async function build(): Promise<void> {
     throw new Error('The cio-oven CLI failed to build.')
   }
 
-  const manifestFile = join(packageRoot, 'package.json')
-  const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as Record<string, unknown>
-  manifest['version'] = app.version
-  await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`)
+  // The CLI is released on its own cadence, so its version lives in its own
+  // manifest and never moves with the desktop app's. Bump it alone with
+  // `bun run oven:version:bump` before publishing; the app version is managed by
+  // the release pipeline and must not be touched here.
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as {
+    version: string
+  }
 
-  process.stdout.write(`cio-oven ${app.version}: service bundle and CLI built in ${dist}\n`)
+  process.stdout.write(`cio-oven ${manifest.version}: service bundle and CLI built in ${dist}\n`)
 }
 
 await build()

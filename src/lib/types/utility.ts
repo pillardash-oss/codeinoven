@@ -185,7 +185,7 @@ export interface UtilityCatalog {
 export interface SkillInstallRecord {
   /** `manager:skillId:scope:projectId|all`   stable identity of one install. */
   id: string
-  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  /** Short upstream marketplace skill id; source supplies its namespace. */
   skillId: string
   /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
   manager: 'cio' | 'native'
@@ -326,7 +326,9 @@ export interface SkillMarketEntry {
  * without trusting a renderer-only flag that would not survive a restart.
  */
 export interface InstalledSkillLocation {
-  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  /** Exact native folder name, retained when the marketplace id is attributed. */
+  folderName?: string
+  /** Short upstream marketplace skill id; source supplies its namespace. */
   skillId: string
   /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
   manager: 'cio' | 'native'
@@ -353,7 +355,7 @@ export interface InstalledSkillLocation {
 
 /**
  * What one marketplace skill uninstall removed, so the caller can report it.
- * Native copies are removed by the Skills CLI, which owns that on-disk layout.
+ * Native copies are removed by their exact attributed folder name.
  */
 export interface SkillUninstallReport {
   /** Registry entries removed, across every scope the skill was installed in. */
@@ -397,6 +399,65 @@ export interface SkillMarketInstallRequest {
     | { kind: 'projects'; projectIds: string[] }
     | { kind: 'harnesses'; harnessIds: string[] }
   activation?: UtilityActivation
+}
+
+/** Agent plugins surfaced in the shared Codex and Claude Code marketplace. */
+export interface AgentPluginMarketEntry {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  publisher: string | null
+  iconUrl: string | null
+  homepage: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  components: Array<'skills' | 'mcp' | 'hooks' | 'agents' | 'commands' | 'apps' | 'lspServers'>
+  installed: boolean
+  updateAvailable: boolean
+  bookmarked: boolean
+  supported: boolean
+  unsupportedReason?: string
+}
+
+export interface AgentPluginMarketplace {
+  id: string
+  name: string
+  url: string
+  platform: 'codex' | 'claude'
+  pluginCount: number
+  refreshedAt: number | null
+}
+
+export interface InstalledAgentPlugin {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version: string | null
+  platform: 'codex' | 'claude'
+  marketplaceId: string
+  source: { repository: string; ref: string; path: string }
+  installPath: string
+  utilityIds: string[]
+  requiredCredentialVariables: string[]
+  installedAt: number
+  updatedAt: number | null
+  availableVersion: string | null
+  unsupportedComponents: string[]
+}
+
+/** What a plugin page shows before and after install: the listing plus its package contents. */
+export interface AgentPluginDetail {
+  entry: AgentPluginMarketEntry
+  /** The plugin's README, or null when its repository has none. */
+  readme: string | null
+  /** Skills the package teaches agents, by directory name. */
+  skills: string[]
+  /** MCP servers the package connects agents to, by configured name. */
+  mcpServers: string[]
 }
 
 /** Where a discovered MCP server or skill came from. */

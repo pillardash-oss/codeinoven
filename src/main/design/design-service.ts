@@ -8,7 +8,12 @@ import {
 import type {
   AuthoredWorkKind,
   DesignEntry,
+  DesignCheckpointResult,
+  DesignHistoryRestoreFileResult,
+  DesignHistoryState,
   DesignOpenResult,
+  DesignPageHistoryState,
+  DesignRevisionCause,
   DesignScreen,
   DesignScreenShot,
   DesignThumbnail,
@@ -33,6 +38,7 @@ import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState } from './screen-canvas-state'
+import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
 import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
 
@@ -116,6 +122,21 @@ function requireId(value: unknown, label: string): string {
 }
 
 /**
+ * Validation for a file path inside an authored-work folder.
+ *
+ * Longer than an id because a nested page is a real path, and NUL-free because the
+ * filesystem layer must never see one. Containment is checked where the path is
+ * resolved against the folder, not here.
+ */
+function requirePath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1024) {
+    throw new TypeError('Page path is invalid')
+  }
+  if (value.includes('\u0000')) throw new TypeError('Page path is invalid')
+  return value
+}
+
+/**
  * A screen the app has no picture of, reported by name rather than left out.
  *
  * A design gains a screen the moment its file is written, and the file exists
@@ -146,6 +167,7 @@ function screenShotKey(
 
 export interface DesignServiceOptions {
   database: Database
+  onHistoryChanged?: (projectId: string, directory: string) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -164,6 +186,8 @@ interface ServedWork {
 export class DesignService {
   private readonly designs: DesignRepo
   private readonly threads: ThreadRepo
+  /** The change history behind the board's Undo and Redo, one line per folder. */
+  private readonly history: DesignHistoryService
   /** Canonical spelling of a project's path per stored spelling, filled on first use. */
   private readonly canonicalProjects = new Map<string, string>()
   /** Picture per screen, keyed by project, folder, entry, the file's stamp and width. */
@@ -176,6 +200,7 @@ export class DesignService {
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
     this.threads = new ThreadRepo(options.database)
+    this.history = new DesignHistoryService(options.database)
   }
 
   registerIpc(): void {
@@ -231,6 +256,167 @@ export class DesignService {
       defaults: { ...DEFAULT_WORK_ROOTS },
       reports: currentWorkRootReports()
     }))
+    // The history behind Undo and Redo. Reading captures the present first, so a
+    // change the app has not seen yet becomes a point the user can return to; the
+    // restore is what Undo, Redo and clicking a revision all run.
+    ipcMain.handle(
+      'design:history',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawCause) =>
+        this.historyState(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          rawCause === 'agent' || rawCause === 'initial' ? rawCause : 'user'
+        )
+    )
+    ipcMain.handle(
+      'design:historyRestore',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawRevisionId) =>
+        this.historyRestore(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requireId(rawRevisionId, 'revision id')
+        )
+    )
+    // The page-scoped history: one file's own line, and moving that one file to a
+    // point on it. The whole-folder cursor is not involved, so a page can be taken
+    // back without disturbing the rest of the design.
+    ipcMain.handle(
+      'design:historyPage',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawPath) =>
+        this.historyPage(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requirePath(rawPath)
+        )
+    )
+    ipcMain.handle(
+      'design:historyRestoreFile',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawPath, rawRevisionId) =>
+        this.historyRestoreFile(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requirePath(rawPath),
+          requireId(rawRevisionId, 'revision id')
+        )
+    )
+  }
+
+  /**
+   * The history of the folder a directory argument names.
+   *
+   * The folder is resolved the same way every other design call resolves one, so a
+   * history answer always belongs to a folder the app would also serve and capture.
+   */
+  async historyState(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    cause: DesignRevisionCause
+  ): Promise<DesignHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.state(target, cause)
+  }
+
+  /** Move a folder to one point in its history, which is what Undo and Redo do. */
+  async historyRestore(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    revisionId: string
+  ): Promise<DesignHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    const result = await this.history.restore(target, revisionId)
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return result
+  }
+
+  /** Agent checkpointing uses the same durable timeline as the board. */
+  async checkpoint(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>,
+    kind: AuthoredWorkKind
+  ): Promise<DesignCheckpointResult> {
+    const entry = requirePath(input['entry'])
+    const label = requireId(input['label'], 'checkpoint label')
+    const directory = requirePath(input['directory'])
+    const target = await this.historyTarget(projectId, threadId, directory)
+    const state = await this.history.checkpoint(target, entry, label)
+    this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return {
+      directory: target.directory,
+      entry,
+      label,
+      revisionId: state.cursorId,
+      checkpointed: !state.gitBacked,
+      gitBacked: state.gitBacked
+    }
+  }
+
+  /** One page's own line through a folder's history. */
+  async historyPage(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    path: string
+  ): Promise<DesignPageHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.pageState(target, path)
+  }
+
+  /** Move one page to one point in its own history. */
+  async historyRestoreFile(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    path: string,
+    revisionId: string
+  ): Promise<DesignHistoryRestoreFileResult> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    const result = await this.history.restoreFile(target, revisionId, path)
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return result
+  }
+
+  /**
+   * Drop the history of authored-work folders that are no longer on disk.
+   *
+   * Called after a CIO Cleanup run and once at boot, so a design the sweep or the
+   * user removed does not leave its timeline and bytes behind in the database.
+   * Best-effort: a reconciliation that cannot read a project must not fail the
+   * caller that triggered it.
+   */
+  async reconcileHistory(): Promise<void> {
+    try {
+      await this.history.reconcile()
+    } catch (error) {
+      Logger.dev('Design history reconciliation was skipped:', error)
+    }
+  }
+
+  /** One history request resolved against the project and the thread's session kind. */
+  private async historyTarget(
+    projectId: string,
+    threadId: string,
+    directory: unknown
+  ): Promise<DesignHistoryTarget> {
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const kind = await this.resolveKind(threadId)
+    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind))
+    return {
+      projectId,
+      projectPath: project.path,
+      directory: folder.display,
+      absolute: folder.absolute,
+      // Only a project whose change tracking is Git can have the folder tracked by
+      // a repository; a manual-tracking project is the app's to version, always.
+      gitMode: project.changeTrackingMode === 'git'
+    }
   }
 
   /** Forget a thread's authored-work record when the thread itself is gone. */
@@ -361,6 +547,7 @@ export class DesignService {
 
   forgetProject(projectId: string): void {
     this.designs.deleteProject(projectId)
+    this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
       if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)
     }

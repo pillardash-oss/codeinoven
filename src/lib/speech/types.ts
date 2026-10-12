@@ -367,6 +367,8 @@ export interface SpeechLlamaRuntimeStatus {
   available: boolean
   version?: string
   selectedPath?: string
+  /** llama.cpp build number of the selected runtime, when it could be read. */
+  selectedBuild?: number
   installations: SpeechLlamaRuntimeInstallation[]
   managedDir: string
   releaseTag: string

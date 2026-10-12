@@ -6,19 +6,14 @@
 
 import { waitBrowserSessionCookies, flushBrowserSessionCookiesFor } from './browser-session-cookies'
 import { Menu, MenuItem, dialog, type BrowserWindow, type Session } from 'electron'
-import type { BrowserSiteDataScope } from '../../../lib/ipc-contract'
+import type { BrowserSiteDataScope, BrowserSitePermissionState } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { SCOPE_STORAGE_TYPES, browserPartitionFor } from './browser-validation'
 import { SITE_MENU_ACTIONS, type BrowserTab, type SiteMenuAction } from './browser-types'
-import {
-  SITE_PERMISSION_DESCRIPTORS,
-  type SitePermissionState
-} from './browser-permissions'
+import { SITE_PERMISSION_CATALOG, type SitePermissionState } from './browser-permissions'
 
-/** A manual site-permission decision from the padlock menu. */
-export type SitePermissionAction = 'allow' | 'block' | 'reset'
-
+/** What the site-data service reads from and reports to the browser service. */
 export interface BrowserSiteDataDeps {
   window: BrowserWindow
   /** The session for one jar: the context's own jar when `boxId` is null, and
@@ -38,12 +33,6 @@ export interface BrowserSiteDataDeps {
   partitionFor: (projectId: string, boxId: string | null) => string
   /** Read one origin's manual-decision state for one ledger key set. */
   sitePermissionState: (partition: string, keys: readonly string[]) => SitePermissionState
-  /** Apply one origin's manual decision and persist it. */
-  applySitePermission: (
-    partition: string,
-    keys: readonly string[],
-    action: SitePermissionAction
-  ) => void
   /** Reload the tabs in one jar currently on one origin, so a manual decision
    *  takes effect without the user hunting for the reload button. */
   reloadOriginTabs: (partition: string, origin: string) => void
@@ -71,7 +60,7 @@ export class BrowserSiteDataService {
     const menu = new Menu()
     if (host) menu.append(new MenuItem({ label: host, enabled: false }))
     menu.append(new MenuItem({ type: 'separator' }))
-    if (origin) this.appendSitePermissions(menu, projectId, boxId, origin)
+    if (origin) this.appendSitePermissionsEntry(menu, projectId, boxId, host, origin)
     for (const action of SITE_MENU_ACTIONS) {
       menu.append(
         new MenuItem({
@@ -92,44 +81,39 @@ export class BrowserSiteDataService {
     })
   }
 
-  /** The manual permission section: one submenu per capability, each offering
-   *  Allow, Block, and Ask every time with the current decision checked. A
-   *  manual decision writes the same ledger keys the prompt writes, so the
-   *  next request from the page is answered silently and consistently. */
-  private appendSitePermissions(
+  /** The manual permission section is one entry that opens the Site Permissions
+   *  modal. That modal lists every Chromium permission the browser exposes   not
+   *  the four the old submenus knew   so a permission this app has no other UI
+   *  for is still one the user can inspect and reset. The modal is a DOM surface
+   *  over the page's native view, which the app's Modal already suppresses the
+   *  view for, so the page stays parked exactly as it does for a Peek Window. */
+  private appendSitePermissionsEntry(
     menu: Menu,
     projectId: string,
     boxId: string | null,
+    host: string,
     origin: string
   ): void {
     const partition = this.deps.partitionFor(projectId, boxId)
-    for (const descriptor of SITE_PERMISSION_DESCRIPTORS) {
-      const keys = descriptor.keysFor(origin)
-      const state = this.deps.sitePermissionState(partition, keys)
-      const submenu = new Menu()
-      for (const [action, label] of [
-        ['allow', 'Allow'],
-        ['block', 'Block'],
-        ['reset', 'Ask every time']
-      ] as const) {
-        const checked =
-          (action === 'allow' && state === 'allowed') ||
-          (action === 'block' && state === 'blocked') ||
-          (action === 'reset' && state === 'ask')
-        submenu.append(
-          new MenuItem({
-            label,
-            type: 'checkbox',
-            checked,
-            click: () => {
-              this.deps.applySitePermission(partition, keys, action)
-              this.deps.reloadOriginTabs(partition, origin)
-            }
-          })
-        )
-      }
-      menu.append(new MenuItem({ label: descriptor.label, submenu }))
+    const states: Record<string, BrowserSitePermissionState> = {}
+    for (const descriptor of SITE_PERMISSION_CATALOG) {
+      states[descriptor.id] = this.deps.sitePermissionState(partition, descriptor.keysFor(origin))
     }
+    menu.append(
+      new MenuItem({
+        label: 'Site permissions…',
+        click: () => {
+          if (this.deps.window.isDestroyed()) return
+          sendToRenderer(this.deps.window.webContents, 'browser:sitePermissions', {
+            projectId,
+            boxId,
+            host,
+            origin,
+            states
+          })
+        }
+      })
+    )
     menu.append(new MenuItem({ type: 'separator' }))
   }
 

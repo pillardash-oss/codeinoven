@@ -1,6 +1,6 @@
 <script lang="ts">
   import { FileDiff, GitCommitHorizontal, Loader2 } from '@lucide/svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'
 
@@ -101,7 +101,7 @@
           <p class="truncate text-[0.6875rem] text-foreground">{commit.message}</p>
           <p class="truncate text-[0.5625rem] text-dimmed">
             <span class="font-mono">{commit.shortSha}</span>
-            · {commit.authorName} · {relativeTime(commit.date)}
+            · {commit.authorName} · {formatCompactAge(commit.date)}
           </p>
         </div>
         {#if loadingCommit === commit.sha}
