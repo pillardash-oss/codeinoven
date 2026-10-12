@@ -15,6 +15,7 @@
   import {
     SEARCH_CONTEXT_TOKENS_MAX,
     SEARCH_CONTEXT_TOKENS_MIN,
+    SEARCH_MIN_RUNTIME_BUILD,
     clampSearchContextTokens,
     type SearchDownloadState,
     type SearchModelArtifact
@@ -45,7 +46,13 @@
   let pendingDelete: { id: string; label: string } | null = $state(null)
   let deleting = $state(false)
 
-  const canEnable = $derived(Boolean(status?.runtimeAvailable) && models.length > 0)
+  const runtimeReady = $derived(
+    Boolean(status?.runtimeAvailable) && Boolean(status?.runtimeSupported)
+  )
+  const canEnable = $derived(runtimeReady && models.length > 0)
+  const runtimeTooOld = $derived(
+    status?.runtimeBuild != null && status.runtimeBuild < SEARCH_MIN_RUNTIME_BUILD
+  )
 
   function downloadState(artifactId: string): SearchDownloadState | undefined {
     return downloads[artifactId]
@@ -62,6 +69,9 @@
 
   async function installRuntime(): Promise<void> {
     if (installingRuntime) return
+    // An index built (or attempted) under the previous runtime is meaningless,
+    // so a runtime install re-embeds instead of waiting for the periodic sweep.
+    const shouldIndex = enabled && models.length > 0
     installingRuntime = true
     try {
       await invoke('speech:downloadLlamaRuntime')
@@ -71,6 +81,7 @@
       installingRuntime = false
       await loadRuntime()
       await search.load()
+      if (shouldIndex && search.state?.status.runtimeSupported) await search.rebuildIndex()
     }
   }
 
@@ -108,7 +119,11 @@
         first, semantic matches follow, keyword-only finds come last.
       </p>
       {#if !canEnable}
-        <p class="mt-1.5 text-xs text-dimmed">Install an embedding model below to turn this on.</p>
+        <p class="mt-1.5 text-xs text-dimmed">
+          {models.length === 0
+            ? 'Install an embedding model below to turn this on.'
+            : 'Update the local runtime below to turn this on.'}
+        </p>
       {/if}
     </div>
     <div class="flex shrink-0 items-center gap-2">
@@ -139,14 +154,24 @@
   {/if}
 
   <div class="space-y-4">
-    {#if status && !status.runtimeAvailable}
+    {#if status && (!status.runtimeAvailable || runtimeTooOld)}
       <div class="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
         <CircleAlert size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-medium">A local llama.cpp runtime is required</p>
+          <p class="text-sm font-medium">
+            {runtimeTooOld
+              ? 'Update the local llama.cpp runtime'
+              : 'A local llama.cpp runtime is required'}
+          </p>
           <p class="mt-0.5 text-xs leading-relaxed text-muted">
-            Embedding models run through the same runtime the app uses for speech cleanup. Install
-            it once and both features share it.
+            {#if runtimeTooOld}
+              Your llama.cpp build ({status.runtimeBuild}) is too old to load the embedding models
+              above. Intent search needs build {SEARCH_MIN_RUNTIME_BUILD} or newer. Installing the app
+              runtime replaces the discovered one.
+            {:else}
+              Embedding models run through the same runtime the app uses for speech cleanup. Install
+              it once and both features share it.
+            {/if}
             {#if llamaRuntime?.downloadByteSize}
               ({llamaRuntime.downloadName} · {formatBytes(llamaRuntime.downloadByteSize)})
             {/if}
@@ -163,7 +188,7 @@
             Installing
           {:else}
             <Download size={12} aria-hidden="true" />
-            Install
+            {runtimeTooOld ? 'Update' : 'Install'}
           {/if}
         </button>
       </div>

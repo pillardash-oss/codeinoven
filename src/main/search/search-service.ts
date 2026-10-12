@@ -5,6 +5,7 @@ import { SEARCH_MODEL_CATALOG, searchModelsForRuntime } from '../../lib/search/m
 import {
   clampSearchContextTokens,
   DEFAULT_SEARCH_SETTINGS,
+  SEARCH_MIN_RUNTIME_BUILD,
   type IntentThreadMatch,
   type InstalledSearchModel,
   type SearchArchitecture,
@@ -34,6 +35,13 @@ interface PersistedModelIndex {
 
 export interface SearchServiceHost {
   llamaServerPath: () => string | null
+  /**
+   * llama.cpp build of the selected runtime, or null when it cannot be read.
+   * The catalogued models need a build that understands `gemma-embedding2`; a
+   * runtime that predates it is reported as unsupported instead of failing the
+   * sweep with an opaque model-load error.
+   */
+  runtimeBuild: () => number | null
   registerProcess: (pid: number, command: string, cwd: string) => void
   unregisterProcess: (pid: number) => void
 }
@@ -85,11 +93,13 @@ export class SearchService {
     await this.loadSettings()
     await this.loadModelIndex()
     await this.index.load()
-    if (this.settings.enabled && this.activeModel()) {
+    if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       void this.runSweep('startup')
     }
     this.periodicTimer = setInterval(() => {
-      if (this.settings.enabled && this.activeModel()) void this.runSweep('periodic')
+      if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
+        void this.runSweep('periodic')
+      }
     }, PERIODIC_SWEEP_MS)
     // Never keep the process alive solely for the sweep timer.
     this.periodicTimer.unref?.()
@@ -172,7 +182,7 @@ export class SearchService {
         if (first) this.settings.activeModelId = first.id
         await this.saveSettings()
       }
-      await this.runSweep('enabled')
+      if (this.canEmbed()) await this.runSweep('enabled')
     }
     this.emitStatus()
   }
@@ -190,7 +200,7 @@ export class SearchService {
     await this.disposeRuntime()
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
-    if (this.settings.enabled && modelId) await this.runSweep('model-changed')
+    if (this.settings.enabled && modelId && this.canEmbed()) await this.runSweep('model-changed')
     this.emitStatus()
   }
 
@@ -207,14 +217,16 @@ export class SearchService {
     await this.disposeRuntime()
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
-    if (this.settings.enabled && this.activeModel()) await this.runSweep('context-changed')
+    if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
+      await this.runSweep('context-changed')
+    }
     this.emitStatus()
   }
 
   async rebuildIndex(): Promise<void> {
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
-    if (this.settings.enabled && this.activeModel()) {
+    if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       await this.runSweep('rebuild')
     }
     this.emitStatus()
@@ -228,7 +240,7 @@ export class SearchService {
   async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
     if (!this.settings.enabled || !model) return []
-    if (!this.host.llamaServerPath()) return []
+    if (!this.canEmbed()) return []
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
     const controller = new AbortController()
@@ -265,10 +277,17 @@ export class SearchService {
   private status(): SearchIndexStatus {
     const model = this.activeModel()
     const runtimeAvailable = this.host.llamaServerPath() !== null
+    const runtimeBuild = this.host.runtimeBuild()
+    // An unreadable build is given the benefit of the doubt: a custom build can
+    // legitimately have no version string, and the model load itself still
+    // fails loudly if it cannot handle the architecture.
+    const runtimeSupported = runtimeBuild === null || runtimeBuild >= SEARCH_MIN_RUNTIME_BUILD
     return {
-      active: this.settings.enabled && Boolean(model) && runtimeAvailable,
+      active: this.settings.enabled && Boolean(model) && runtimeAvailable && runtimeSupported,
       runtimeAvailable,
-      modelReady: Boolean(model) && runtimeAvailable,
+      runtimeSupported,
+      runtimeBuild,
+      modelReady: Boolean(model) && runtimeAvailable && runtimeSupported,
       activeModelId: model?.id ?? null,
       indexedThreads: this.index.size,
       pendingThreads: this.sweepTotals.pending,
@@ -331,7 +350,7 @@ export class SearchService {
    * actually embed, which is the same bar the page uses to allow the toggle.
    */
   private async enableAfterFirstActivation(becameActive: boolean): Promise<void> {
-    if (!becameActive || this.settings.enabled || !this.host.llamaServerPath()) {
+    if (!becameActive || this.settings.enabled || !this.canEmbed()) {
       this.emitStatus()
       return
     }
@@ -346,6 +365,11 @@ export class SearchService {
   private async probeModel(directory: string): Promise<ImportProbe> {
     if (!this.host.llamaServerPath()) {
       throw new Error('A local llama.cpp runtime is required to use an imported model.')
+    }
+    if (!this.canEmbed()) {
+      throw new Error(
+        `The local llama.cpp runtime is too old to load this model. Install the app runtime (build ${SEARCH_MIN_RUNTIME_BUILD} or newer).`
+      )
     }
     const runtime = new LlamaEmbeddingRuntime(directory, 0, this.host)
     try {
@@ -393,6 +417,18 @@ export class SearchService {
     return vector
   }
 
+  /**
+   * Whether the selected runtime can actually embed the installed model. The
+   * path alone is not enough: an old llama.cpp binary starts the server and then
+   * refuses the model with `unknown model architecture`, so a sweep would only
+   * ever produce an opaque load error.
+   */
+  private canEmbed(): boolean {
+    if (!this.host.llamaServerPath()) return false
+    const build = this.host.runtimeBuild()
+    return build === null || build >= SEARCH_MIN_RUNTIME_BUILD
+  }
+
   private runSweep(reason: string): Promise<void> {
     if (this.sweep) return this.sweep
     this.sweep = this.performSweep(reason).finally(() => {
@@ -404,7 +440,7 @@ export class SearchService {
   private async performSweep(reason: string): Promise<void> {
     const model = this.activeModel()
     if (!model) return
-    if (!this.host.llamaServerPath()) return
+    if (!this.canEmbed()) return
     this.indexing = true
     this.emitStatus()
     const controller = new AbortController()

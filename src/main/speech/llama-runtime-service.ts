@@ -53,7 +53,7 @@ interface RuntimeCandidate {
  * GitHub release asset metadata for the exact tag; downloads verify the full
  * archive SHA-256 before extraction and never run a partially extracted build.
  */
-const LLAMA_RELEASE_TAG = 'b10644'
+const LLAMA_RELEASE_TAG = 'b11554'
 const LLAMA_RELEASE_BASE_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_RELEASE_TAG}`
 
 interface LlamaRuntimeAsset {
@@ -64,34 +64,34 @@ interface LlamaRuntimeAsset {
 
 const LLAMA_RUNTIME_ASSETS: Readonly<Record<string, LlamaRuntimeAsset>> = {
   'darwin-arm64': {
-    archiveName: 'llama-b10644-bin-macos-arm64.tar.gz',
-    byteSize: 10973723,
-    sha256: '3bf52a55f3cfdb2a6a33e59667f143fb70d5d731225783a145a97faba13498dd'
+    archiveName: 'llama-b11554-bin-macos-arm64.tar.gz',
+    byteSize: 12086243,
+    sha256: '3be061e6edd3eea2661412da5c706103cc252c963b8df4b70897b04f0e44c6a0'
   },
   'darwin-x64': {
-    archiveName: 'llama-b10644-bin-macos-x64.tar.gz',
-    byteSize: 11043476,
-    sha256: '5f3576bce78e0f64fbea1ec932c1f23ceb2f7793a6406f0c0707fad3cf29edf0'
+    archiveName: 'llama-b11554-bin-macos-x64.tar.gz',
+    byteSize: 11614833,
+    sha256: 'fad95ebb9c82b96bcfcc324ebd7f96ad358e7646c615203098a0d77a5d0d27eb'
   },
   'linux-arm64': {
-    archiveName: 'llama-b10644-bin-ubuntu-arm64.tar.gz',
-    byteSize: 13063648,
-    sha256: '52c0fc49778f8ac6adca07573784ffac0ea06601e7fd25b6a68fbb531e163c05'
+    archiveName: 'llama-b11554-bin-ubuntu-arm64.tar.gz',
+    byteSize: 13812270,
+    sha256: 'bbb91aae06a338d0a417f7ba6ec6b3a89e04d1c22300958b22b5886f86c70d4b'
   },
   'linux-x64': {
-    archiveName: 'llama-b10644-bin-ubuntu-x64.tar.gz',
-    byteSize: 16307543,
-    sha256: 'a086a0d9ebf1a67a3d492a4f4afb2092c669d0f1ba75a70c5a4922fb19339823'
+    archiveName: 'llama-b11554-bin-ubuntu-x64.tar.gz',
+    byteSize: 17823791,
+    sha256: 'd3d7b8d63f419afdcaf6103b41a2c51f51371ef5c2ecf8d7fb4058a4f0316f1c'
   },
   'win32-arm64': {
-    archiveName: 'llama-b10644-bin-win-cpu-arm64.zip',
-    byteSize: 11853940,
-    sha256: 'a90ecd4feb28478aaf8e5d94f7defdaa8d799498d5264cf7fb7b3a56350e875b'
+    archiveName: 'llama-b11554-bin-win-cpu-arm64.zip',
+    byteSize: 12353374,
+    sha256: '3d73d12c3a8ea886930e1ccde7b58e5c7a415ca781d480e4a0a7d5fdea9bb147'
   },
   'win32-x64': {
-    archiveName: 'llama-b10644-bin-win-cpu-x64.zip',
-    byteSize: 18076263,
-    sha256: 'dec540d4d691de376bc95bad2b6eefad4cb3b4baf99a0671095bead3dc1f2625'
+    archiveName: 'llama-b11554-bin-win-cpu-x64.zip',
+    byteSize: 19528028,
+    sha256: '927850725a5fb8a6b453891b324c4f2d4be17905f7c5b9a265f8f73daa3bd39d'
   }
 }
 
@@ -110,6 +110,9 @@ function serverBinaryName(): string {
  */
 export class LlamaRuntimeService {
   private statusCache: LlamaRuntimeStatus | null = null
+  /** Build numbers reported by `llama-server --version`, keyed by real path. */
+  private readonly buildCache = new Map<string, number | null>()
+  private lastSelectedBuild: number | null = null
 
   private readonly journal = new OwnedProcessJournal(
     join(getConfigRoot(), 'speech', 'owned-processes.json')
@@ -119,6 +122,16 @@ export class LlamaRuntimeService {
 
   managedDirectory(): string {
     return join(this.root, `llama-${LLAMA_RELEASE_TAG}`)
+  }
+
+  /**
+   * llama.cpp build number of the selected runtime, or null when it could not
+   * be read. A feature that needs a specific model architecture has to know
+   * this: an old runtime reports `unknown model architecture` and refuses a
+   * model that a newer build loads happily.
+   */
+  selectedBuild(): number | null {
+    return this.lastSelectedBuild
   }
 
   /**
@@ -193,10 +206,13 @@ export class LlamaRuntimeService {
     const managedBinary = await this.findManagedBinary()
     const discovered = await this.discoverInstallations(managedBinary)
     const selected = discovered[0]
+    const selectedBuild = selected ? await this.detectBuild(selected.realPath) : null
+    this.lastSelectedBuild = selectedBuild
     this.statusCache = {
       available: Boolean(selected),
       ...(selected?.version ? { version: selected.version } : {}),
       ...(selected ? { selectedPath: selected.realPath } : {}),
+      ...(selectedBuild !== null ? { selectedBuild } : {}),
       installations: discovered,
       managedDir: this.managedDirectory(),
       releaseTag: LLAMA_RELEASE_TAG,
@@ -296,6 +312,25 @@ export class LlamaRuntimeService {
           reject(new Error(failure.trim() || `Extraction exited with code ${code ?? 'unknown'}.`))
       })
     })
+  }
+
+  /**
+   * Read the llama.cpp build number a runtime reports. Cached per binary: the
+   * probe spawns a process, so it runs once per selected path per launch.
+   */
+  private async detectBuild(realPath: string): Promise<number | null> {
+    const cached = this.buildCache.get(realPath)
+    if (cached !== undefined) return cached
+    let build: number | null = null
+    try {
+      const { stdout, stderr } = await execFileAsync(realPath, ['--version'], { timeout: 5_000 })
+      const match = /build\s+(\d+)/u.exec(`${stdout}\n${stderr}`)
+      if (match?.[1]) build = Number(match[1])
+    } catch {
+      build = null
+    }
+    this.buildCache.set(realPath, build)
+    return build
   }
 
   private async findManagedBinary(): Promise<string | null> {
@@ -401,8 +436,11 @@ export class LlamaRuntimeService {
     return interim
       .sort((left, right) => {
         // Pinned-release builds first so behavior matches what we test against.
-        const leftPinned = left.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
-        const rightPinned = right.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
+        // `version` is the full release tag (e.g. "b11554"), so it must be
+        // compared whole: an earlier `startsWith(tag.slice(1))` never matched and
+        // silently demoted the app's own runtime below any shorter system path.
+        const leftPinned = left.version === LLAMA_RELEASE_TAG ? 0 : 1
+        const rightPinned = right.version === LLAMA_RELEASE_TAG ? 0 : 1
         if (leftPinned !== rightPinned) return leftPinned - rightPinned
         return left.path.length - right.path.length
       })

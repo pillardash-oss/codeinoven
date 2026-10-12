@@ -10,6 +10,15 @@
 /** Local runtime that executes an embedding model. `gguf` is llama.cpp. */
 export type EmbeddingRuntimeId = 'gguf' | 'mlx' | 'coreml'
 
+/**
+ * The llama.cpp build that first understands the `gemma-embedding2`
+ * architecture the catalogued EmbeddingGemma 2 models are converted to. An
+ * older runtime loads the file and then refuses it with
+ * `unknown model architecture: 'gemma-embedding2'`, so intent search has to
+ * insist on at least this build rather than accept any llama-server on PATH.
+ */
+export const SEARCH_MIN_RUNTIME_BUILD = 11454
+
 export type SearchPlatform = 'darwin' | 'win32' | 'linux'
 export type SearchArchitecture = 'arm64' | 'x64'
 
@@ -114,6 +123,14 @@ export interface SearchIndexStatus {
   active: boolean
   /** The llama.cpp (or other) runtime the active model needs is available. */
   runtimeAvailable: boolean
+  /**
+   * The selected runtime is new enough to load the installed model. Null build
+   * (an unreadable version) is treated as supported, so a custom build is never
+   * blocked on a version string we cannot parse.
+   */
+  runtimeSupported: boolean
+  /** llama.cpp build number of the selected runtime, when it could be read. */
+  runtimeBuild: number | null
   /** An installed model is selected and resident. */
   modelReady: boolean
   activeModelId: string | null

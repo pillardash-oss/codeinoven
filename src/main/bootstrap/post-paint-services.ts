@@ -565,6 +565,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // draw from the same discovered/downloaded binary and the same process journal.
   state.searchService = new SearchService(database, {
     llamaServerPath: () => getLlamaServerBinary(),
+    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
     registerProcess: (pid, command, cwd) =>
       sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
     unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
