@@ -140,6 +140,7 @@ export type IpcChatEngine = Pick<
   | 'recordUserFileSave'
   | 'sendPrompt'
   | 'readRoutineCheckpoint'
+  | 'noteUserActivity'
 > &
   Partial<
     Pick<

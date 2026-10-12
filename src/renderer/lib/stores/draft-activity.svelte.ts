@@ -5,9 +5,11 @@ import { invoke } from '$lib/ipc.svelte'
  * Global composer-draft activity pub/sub plus the DB draft-commit coordinator.
  *
  * Surfaces subscribe to know when any thread enters or leaves the draft state,
- * and every transition is forwarded to the main process so the turn-grading
- * timers can pause while the user is composing. Publishing is edge-triggered
- * (only empty ↔ non-empty toggles notify) so keystrokes stay local.
+ * and every transition is forwarded to the main process so pending
+ * human-decision countdowns stay paused while the user is typing. A non-empty
+ * draft re-pings at a throttled pace (one call per {@link ACTIVITY_PING_INTERVAL_MS}
+ * of active typing) so a long stretch of keystrokes keeps the pause alive
+ * without one IPC call per keystroke; going empty forwards once and stops.
  *
  * Draft persistence is debounced: the draft content is committed to the DB
  * only after 10s of draft inactivity, and cleared drafts flush immediately so
@@ -16,6 +18,9 @@ import { invoke } from '$lib/ipc.svelte'
 
 /** Delay between the last draft activity and its DB content commit. */
 const DRAFT_COMMIT_DEBOUNCE_MS = 10_000
+
+/** Minimum gap between composer activity pings for one thread while drafting. */
+const ACTIVITY_PING_INTERVAL_MS = 10_000
 
 interface PendingDraftCommit {
   timer: ReturnType<typeof setTimeout>
@@ -31,8 +36,8 @@ type DraftActivityListener = (projectId: string, threadId: string, drafting: boo
 
 const listeners = new SvelteSet<DraftActivityListener>()
 
-/** Last state forwarded to main per thread, so toggles are only sent once. */
-const forwardedDrafting = new SvelteMap<string, boolean>()
+/** Last time each thread forwarded a composer activity ping, so pings throttle. */
+const lastActivityPingAt = new SvelteMap<string, number>()
 
 /** Subscribe to draft activity transitions across every thread. */
 export function onDraftActivity(listener: DraftActivityListener): () => void {
@@ -44,10 +49,15 @@ export function onDraftActivity(listener: DraftActivityListener): () => void {
 export function publishDraftActivity(projectId: string, threadId: string, drafting: boolean): void {
   for (const listener of listeners) listener(projectId, threadId, drafting)
   const key = `${projectId}:${threadId}`
-  if (forwardedDrafting.get(key) === drafting) return
-  forwardedDrafting.set(key, drafting)
+  if (drafting) {
+    const now = Date.now()
+    if (now - (lastActivityPingAt.get(key) ?? 0) < ACTIVITY_PING_INTERVAL_MS) return
+    lastActivityPingAt.set(key, now)
+  } else {
+    lastActivityPingAt.delete(key)
+  }
   void invoke('thread:draftActivity', projectId, threadId, drafting).catch(() => {
-    forwardedDrafting.set(key, !drafting)
+    lastActivityPingAt.delete(key)
   })
 }
 
