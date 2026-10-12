@@ -154,11 +154,12 @@ export class SearchService {
     }
     this.models = [...this.models.filter((candidate) => candidate.id !== model.id), model]
     await this.saveModelIndex()
-    if (!this.settings.activeModelId) {
+    const becameActive = !this.settings.activeModelId
+    if (becameActive) {
       this.settings.activeModelId = model.id
       await this.saveSettings()
     }
-    this.emitStatus()
+    await this.enableAfterFirstActivation(becameActive)
     return model
   }
 
@@ -313,12 +314,33 @@ export class SearchService {
       source: 'catalog'
     }
     this.models = [...this.models.filter((candidate) => candidate.id !== model.id), model]
-    if (!this.settings.activeModelId) {
+    const becameActive = !this.settings.activeModelId
+    if (becameActive) {
       this.settings.activeModelId = model.id
       await this.saveSettings()
     }
     await this.saveModelIndex()
+    await this.enableAfterFirstActivation(becameActive)
+  }
+
+  /**
+   * Turn intent search on the moment the first model becomes active, so a fresh
+   * install starts indexing without the user flipping a switch they never saw.
+   * A model that the user already turned off stays off: this only fires on the
+   * transition from no active model to one, and only when the local runtime can
+   * actually embed, which is the same bar the page uses to allow the toggle.
+   */
+  private async enableAfterFirstActivation(becameActive: boolean): Promise<void> {
+    if (!becameActive || this.settings.enabled || !this.host.llamaServerPath()) {
+      this.emitStatus()
+      return
+    }
+    this.settings.enabled = true
+    await this.saveSettings()
     this.emitStatus()
+    // Fire and forget: the install or import that triggered this must not wait
+    // for a full backfill to finish before it answers the renderer.
+    void this.runSweep('first-model')
   }
 
   private async probeModel(directory: string): Promise<ImportProbe> {
