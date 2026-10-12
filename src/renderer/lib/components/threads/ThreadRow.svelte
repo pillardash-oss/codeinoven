@@ -826,8 +826,11 @@
 
 {#snippet scopeChip(classes: string)}
   {#if scopeBucket}
+    <!-- The chip is allowed to shrink: its track is the flexible one, so a
+         crowded footer narrows the scope (name truncates with an ellipsis)
+         rather than letting the chip run under the neighbouring marks. -->
     <span
-      class="relative flex min-w-0 items-center gap-1 border-b px-1 text-[0.5625rem] text-muted {classes}"
+      class="relative flex min-w-0 max-w-full items-center gap-1 overflow-hidden border-b px-1 text-[0.5625rem] text-muted {classes}"
       title={scopeBucket.name}
       style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
     >
@@ -842,7 +845,7 @@
       {#if scopeBucket.pinned}
         <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
       {/if}
-      <span class="truncate">{scopeBucket.name}</span>
+      <span class="min-w-0 truncate">{scopeBucket.name}</span>
     </span>
   {/if}
 {/snippet}
@@ -982,8 +985,11 @@
     </span>
 
     {#if showBottomRow}
+      <!-- Scope is the track that gives way: the harness track keeps its icons
+           (`max-content` minimum) and the marks track keeps its own content, so
+           a crowded row narrows the scope instead of overlapping it. -->
       <span
-        class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_auto_minmax(0,1fr)] items-center gap-1.5"
+        class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-1.5"
       >
         {#if harnessIds.length > 0}
           <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
@@ -1176,8 +1182,8 @@
         <!-- Bottom line: harnesses (left), scope (center), time (right) -->
         <span
           class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
-            ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
-            : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+            ? 'grid-cols-[minmax(3.2rem,1fr)_minmax(0,max-content)_minmax(max-content,1fr)]'
+            : 'grid-cols-[minmax(0,1fr)_minmax(0,max-content)_minmax(max-content,1fr)]'}"
         >
           {#if harnessIds.length > 0}
             <span
@@ -1335,12 +1341,13 @@
       {#if hasRowExtras}
         <!-- Footer line: what the thread runs with on the left, the scope in
              the middle, then where it runs, its branch, its markers and its
-             last-edited time on the right. The harness track reserves its own
-             content width (`max-content`), so a wide scope chip can never
-             squeeze it down and clip an icon; the scope stays centred whenever
-             the two side tracks have room to stay equal. -->
+             last-edited time on the right. Both side tracks reserve their own
+             content width (`max-content` minimum), so neither the harness icons
+             nor the marks can be squeezed or overlapped; the scope is the track
+             that gives way, and it stays centred whenever the two side tracks
+             have room to stay equal. -->
         <span
-          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden"
+          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
         >
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
