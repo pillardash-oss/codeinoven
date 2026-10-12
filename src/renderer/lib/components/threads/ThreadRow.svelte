@@ -718,8 +718,18 @@
   /** A busy row's own pulse is the fallback animation for a state whose badge
    *  cannot animate itself: a queued thread shows a static clock, so the row
    *  pulses. When the badge already spins (the local working spinner) the pulse
-   *  adds nothing, and animating a whole row subtree is the expensive part. */
-  let rowPulses = $derived(badgeProps?.variant !== 'spinner')
+   *  adds nothing, and animating a whole row subtree is the expensive part.
+   *
+   *  A busy row never paints a working/warning background tint. The badge is the
+   *  authority on the thread's state (spinner, clock, or another instance's
+   *  icon), and selecting the thread is the only thing that changes a row's
+   *  background. A tinted working row reads as "this is the open thread" at a
+   *  glance when it is not, so the tint was removed on purpose. A retry-paused
+   *  or foreign run stays static for the same reason: its badge already carries
+   *  the state. */
+  let rowPulses = $derived(
+    isBusyIndicator && !isRetryPaused && !isForeignRun && badgeProps?.variant !== 'spinner'
+  )
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
@@ -907,11 +917,7 @@
   <div
     class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
       ? 'bg-selected'
-      : isBusyIndicator
-        ? isRetryPaused
-          ? 'bg-warning/5'
-          : 'bg-thread-working/5'
-        : ''}"
+      : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
@@ -1083,13 +1089,7 @@
   <button
     class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
-      : isBusyIndicator
-        ? isRetryPaused
-          ? 'bg-warning/5 hover:bg-elevated'
-          : isForeignRun
-            ? 'bg-thread-working/5 hover:bg-elevated'
-            : `${rowPulses ? 'animate-pulse ' : ''}bg-thread-working/5 hover:bg-elevated`
-        : 'hover:bg-elevated'}"
+      : `${rowPulses ? 'animate-pulse ' : ''}hover:bg-elevated`}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
