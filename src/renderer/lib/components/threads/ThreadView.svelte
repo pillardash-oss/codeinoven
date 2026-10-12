@@ -6087,6 +6087,52 @@
     threadMessages.setSessionId(projectId, id, readySessionId)
   }
 
+  /**
+   * Park a composer send in the thread's FIFO queue instead of dispatching it
+   * now: the idle dispatcher drains one message per idle turn.
+   *
+   * The queue, the persisted recovery snapshot and the dispatch path all key on
+   * `thread.projectId:thread.id`, so this is exactly the parking the primary
+   * surface uses   and it is why a controller-driven conversation backed by a
+   * real thread (a browser tab's assistant) can queue too.
+   */
+  function parkComposerSend(send: {
+    text: string
+    attachments: PromptAttachment[]
+    promptContext?: string
+    promptReferences: ResponseReferenceAnchor[]
+    projectReferences: PromptProjectReference[]
+    presentation?: UserMessagePresentation
+    taskReferences: PromptAssignmentTaskReference[]
+    startAfterThreads: StartAfterThreadReference[]
+  }): void {
+    queuedMessage = send.text
+    queuedAttachments = send.attachments
+    queuedPromptContext = send.promptContext
+    queuedPromptReferences = send.promptReferences
+    queuedProjectReferences = send.projectReferences
+    queuedPresentation = send.presentation
+    queuedTaskReferences = send.taskReferences
+    queuedStartAfterThreads = send.startAfterThreads
+    queuedHasContent = true
+    // Append to the thread's FIFO queue   a later queued message sends after
+    // earlier ones, one per idle turn. The in-memory mirror then follows the
+    // store head so the queue card always shows the next message to send.
+    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      text: send.text,
+      attachments: send.attachments,
+      promptContext: send.promptContext,
+      promptReferences: send.promptReferences,
+      projectReferences: send.projectReferences,
+      presentation: send.presentation,
+      taskReferences: send.taskReferences,
+      startAfterThreads: send.startAfterThreads
+    })
+    syncQueuedFromStore()
+    idleAttentionHandled = false
+    void handleIdleAttention()
+  }
+
   async function sendMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -6112,6 +6158,30 @@
       // change it   identical to the thread path, so mid-turn composer edits
       // never re-label the running trace.
       captureLiveWorkingSelection()
+      // A controller-driven conversation backed by a real thread (a browser
+      // tab's assistant) queues exactly like the primary surface: while the
+      // agent is busy a plain send parks behind the running turn instead of
+      // steering it, and a direct send still reaches the live turn. A temporary
+      // side chat owns no durable thread to park in, so it always dispatches
+      // straight through its controller.
+      if (controller.kind === 'thread') {
+        const dependencyThreads = startAfterThreads.filter(
+          (reference) => reference.id !== thread.id && reference.id.length > 0
+        )
+        if (dependencyThreads.length > 0 || (busy && !direct)) {
+          parkComposerSend({
+            text: normalizeComposerMessage(text, projectReferences),
+            attachments,
+            promptContext,
+            promptReferences,
+            projectReferences,
+            presentation,
+            taskReferences,
+            startAfterThreads: dependencyThreads
+          })
+          return
+        }
+      }
       const payload: SendPayload = {
         text,
         attachments,
@@ -6164,19 +6234,7 @@
     const pendingScopeSwitch =
       !hasController && scopeJobs.hasPendingScopeJob(thread.projectId, thread.id)
     if (dependencyThreads.length > 0 || (busy && !direct) || pendingScopeSwitch) {
-      queuedMessage = msg
-      queuedAttachments = attachments
-      queuedPromptContext = promptContext
-      queuedPromptReferences = promptReferences
-      queuedProjectReferences = projectReferences
-      queuedPresentation = presentation
-      queuedTaskReferences = taskReferences
-      queuedStartAfterThreads = dependencyThreads
-      queuedHasContent = true
-      // Append to the thread's FIFO queue   a later queued message sends after
-      // earlier ones, one per idle turn. The in-memory mirror then follows the
-      // store head so the queue card always shows the next message to send.
-      rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      parkComposerSend({
         text: msg,
         attachments,
         promptContext,
@@ -6186,9 +6244,6 @@
         taskReferences,
         startAfterThreads: dependencyThreads
       })
-      syncQueuedFromStore()
-      idleAttentionHandled = false
-      void handleIdleAttention()
       return
     }
 
