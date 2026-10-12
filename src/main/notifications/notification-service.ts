@@ -213,8 +213,22 @@ export class NotificationService {
 
   /** Resolves once the durable inbox has been read, at most once per service. */
   private inboxReady(): Promise<void> {
-    this.inboxLoad ??= this.inbox.load()
+    this.inboxLoad ??= this.loadInbox()
     return this.inboxLoad
+  }
+
+  /**
+   * Read the durable inbox, then heal the assistant entries written before the
+   * payload carried a routine. The run thread is the only place left that knows
+   * which routine those entries belong to, so the store reads it back from
+   * there; the pass is a no-op once the file has been rewritten.
+   */
+  private async loadInbox(): Promise<void> {
+    await this.inbox.load()
+    await this.inbox.resolveMissingRoutineIds(async (threadId) => {
+      const thread = await this.threadRepo.getViaWorker(threadId)
+      return thread?.routineId ?? null
+    })
   }
 
   start(): void {
