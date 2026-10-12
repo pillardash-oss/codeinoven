@@ -1133,7 +1133,10 @@ describe('cloudDeploy IPC', () => {
       expect(result.containers).not.toContainEqual(expect.objectContaining({ id: 'unrelated-app' }))
       const live = result.containers.find((container) => container.id === 'app-1')
       expect(live?.label).toBe('My Custom API')
-      expect(live?.status).toBe('success')
+      // The overview's application read carries runtime state only; the last
+      // deployment outcome is read per-container later.
+      expect(live?.status).toBe('unknown')
+      expect(live?.runtimeStatus).toBe('success')
       expect(live?.project).toBe('Milogs')
       const pending = result.containers.find((container) => container.id === 'app-not-yet')
       expect(pending?.label).toBe('Pending App')

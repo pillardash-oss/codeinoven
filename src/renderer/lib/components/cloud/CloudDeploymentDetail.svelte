@@ -21,7 +21,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { toast } from 'svelte-sonner'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
-  import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
+  import StatusPill from '../ui/StatusPill.svelte'
   import type { CloudDeploymentContainer, CloudDeploymentDeployment } from '$shared/types'
   import {
     parseDeploymentLog,
@@ -29,6 +29,12 @@
     type DeploymentLogLine
   } from '$lib/cloud/deployment-log'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
+  import {
+    deploymentStatusLabel,
+    deploymentStatusTone,
+    runtimeStatusLabel,
+    runtimeStatusTone
+  } from '$lib/cloud/deployment-status'
 
   interface Props {
     projectId: string
@@ -316,17 +322,6 @@
     void loadDeployments()
   })
 
-  function tone(statusValue: CloudDeploymentContainer['status']): StatusTone {
-    if (statusValue === 'success') return 'success'
-    if (statusValue === 'failed') return 'danger'
-    if (statusValue === 'building') return 'warning'
-    return 'neutral'
-  }
-
-  function label(statusValue: CloudDeploymentContainer['status']): string {
-    return statusValue === 'unknown' ? 'unknown' : statusValue
-  }
-
   /** Deduped, non-empty URLs for a container, preferring the provider's list. */
   function containerUrls(container: CloudDeploymentContainer): string[] {
     const result: string[] = []
@@ -369,19 +364,23 @@
           <ArrowLeft size={13} />
         </button>
       {/if}
-      {#if status.status === 'building'}
-        <Clock3 size={12} class="shrink-0 text-warning" />
-      {:else if status.status === 'success'}
-        <CircleCheck size={12} class="shrink-0 text-success" />
-      {:else if status.status === 'failed'}
-        <CircleX size={12} class="shrink-0 text-danger" />
-      {:else}
-        <Cloud size={12} class="shrink-0 text-muted" />
-      {/if}
       <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
         {container.label}
       </span>
-      <StatusPill tone={tone(status.status)}>{label(status.status)}</StatusPill>
+      <StatusPill
+        tone={runtimeStatusTone(status.runtimeStatus)}
+        title="Container runtime: {runtimeStatusLabel(status.runtimeStatus)}"
+      >
+        {runtimeStatusLabel(status.runtimeStatus)}
+      </StatusPill>
+      {#if status.status !== 'unknown'}
+        <StatusPill
+          tone={deploymentStatusTone(status.status)}
+          title="Last deployment: {deploymentStatusLabel(status.status)}"
+        >
+          {deploymentStatusLabel(status.status)}
+        </StatusPill>
+      {/if}
       {#if selectedDeployment?.status === 'failed'}
         <button
           type="button"
@@ -451,8 +450,8 @@
         </span>
         {#if selectedDeployment.status && selectedDeployment.status !== 'unknown'}
           <span class="ml-1">
-            <StatusPill tone={tone(selectedDeployment.status)}>
-              {label(selectedDeployment.status)}
+            <StatusPill tone={deploymentStatusTone(selectedDeployment.status)}>
+              {deploymentStatusLabel(selectedDeployment.status)}
             </StatusPill>
           </span>
         {/if}
@@ -641,7 +640,9 @@
                 </span>
               </span>
               {#if deployment.status !== 'unknown'}
-                <StatusPill tone={tone(deployment.status)}>{label(deployment.status)}</StatusPill>
+                <StatusPill tone={deploymentStatusTone(deployment.status)}
+                  >{deploymentStatusLabel(deployment.status)}</StatusPill
+                >
               {/if}
             </button>
           {/each}

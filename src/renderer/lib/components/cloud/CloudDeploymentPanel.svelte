@@ -1,8 +1,6 @@
 <script lang="ts">
   import {
-    CircleCheck,
     CircleX,
-    Clock3,
     Cloud,
     Loader2,
     Pencil,
@@ -29,10 +27,17 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
+  import {
+    deploymentStatusLabel,
+    deploymentStatusTone,
+    runtimeStatusLabel,
+    runtimeStatusTone
+  } from '$lib/cloud/deployment-status'
   import Modal from '../ui/Modal.svelte'
   import { DEFAULT_THREAD_TITLE } from '$shared/types'
   import EmptyState from '../ui/EmptyState.svelte'
-  import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
+  import StatusPill from '../ui/StatusPill.svelte'
+  import type { StatusTone } from '../ui/status-tone'
   import Switch from '../ui/Switch.svelte'
   import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
@@ -174,6 +179,7 @@
           byKey[key] = {
             ...container,
             status: statusEntry.value.status,
+            runtimeStatus: statusEntry.value.runtimeStatus,
             updatedAt: statusEntry.value.updatedAt,
             createdAt: statusEntry.value.createdAt,
             log: statusEntry.value.log,
@@ -187,12 +193,17 @@
   })
 
   /**
-   * The containers the panel currently shows as building, as monitoring targets.
-   * Read by the build tracker, which runs outside any tracking scope, so this reacts
+   * The containers the panel currently shows as building (either a deployment
+   * running or the container itself restarting), as monitoring targets. Read by
+   * the build tracker, which runs outside any tracking scope, so this reacts
    * where it is meant to: through {@link hasBuilding}.
    */
   const buildingTargets = $derived(
-    containers.filter((container) => container.status === 'building').map(toMonitorTarget)
+    containers
+      .filter(
+        (container) => container.status === 'building' || container.runtimeStatus === 'building'
+      )
+      .map(toMonitorTarget)
   )
 
   /**
@@ -242,9 +253,9 @@
    */
   const statusChips = $derived.by(() => {
     const buckets: Array<{ value: StatusFilter; label: string; tone: StatusTone }> = [
-      { value: 'failed', label: 'Failed', tone: 'danger' },
-      { value: 'building', label: 'Building', tone: 'warning' },
-      { value: 'success', label: 'Live', tone: 'success' },
+      { value: 'failed', label: 'Deploy failed', tone: 'danger' },
+      { value: 'building', label: 'Deploying', tone: 'warning' },
+      { value: 'success', label: 'Deployed', tone: 'success' },
       { value: 'unknown', label: 'Unknown', tone: 'neutral' }
     ]
     const chips = [
@@ -458,21 +469,6 @@
     } catch (reason) {
       error = message(reason)
     }
-  }
-
-  function statusTone(status: CloudDeploymentContainer['status']): StatusTone {
-    if (status === 'success') return 'success'
-    if (status === 'failed') return 'danger'
-    if (status === 'building') return 'warning'
-    return 'neutral'
-  }
-
-  /** Row pills and the status strip share one vocabulary. */
-  function statusLabel(status: CloudDeploymentContainer['status']): string {
-    if (status === 'success') return 'Live'
-    if (status === 'failed') return 'Failed'
-    if (status === 'building') return 'Building'
-    return 'Unknown'
   }
 
   /** Why the latest status poll for this container failed, if it did. */
@@ -838,27 +834,26 @@ ${fence}`
                         aria-label="View {container.label}"
                         onclick={() => openContainer(container)}
                       >
-                        {#if container.status === 'building'}
-                          <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
-                        {:else if container.status === 'success'}
-                          <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
-                        {:else if container.status === 'failed'}
-                          <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
-                        {:else}
-                          <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
-                        {/if}
                         <div class="min-w-0 flex-1">
                           <div class="flex items-center gap-1.5">
                             <p class="truncate text-[0.6875rem] font-medium text-foreground">
                               {container.label}
                             </p>
                             <StatusPill
-                              tone={statusTone(container.status)}
+                              tone={runtimeStatusTone(container.runtimeStatus)}
                               dot
-                              title="Deployment status: {statusLabel(container.status)}"
+                              title="Container runtime: {runtimeStatusLabel(container.runtimeStatus)}"
                             >
-                              {statusLabel(container.status)}
+                              {runtimeStatusLabel(container.runtimeStatus)}
                             </StatusPill>
+                            {#if container.status !== 'unknown'}
+                              <StatusPill
+                                tone={deploymentStatusTone(container.status)}
+                                title="Last deployment: {deploymentStatusLabel(container.status)}"
+                              >
+                                {deploymentStatusLabel(container.status)}
+                              </StatusPill>
+                            {/if}
                             {#if containerError(container)}
                               {@const pollError = containerError(container)}
                               <TriangleAlert

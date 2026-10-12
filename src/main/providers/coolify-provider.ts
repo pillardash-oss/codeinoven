@@ -89,8 +89,9 @@ export class CoolifyProvider implements DeploymentProvider {
 
   /**
    * Latest snapshot for one container. The application read is authoritative for
-   * identity/timestamps; when a recent deployment record exists its build status
-   * and log win over the coarse runtime state, so a failed build still surfaces.
+   * identity/timestamps and the live runtime state (`runtimeStatus`); the latest
+   * deployment record supplies the last deployment outcome (`status`) and log, so
+   * a failed build surfaces without being mistaken for the container being down.
    */
   async getStatus(containerId: string): Promise<CloudDeploymentContainer | null> {
     const application = await this.request(`/applications/${encodeURIComponent(containerId)}`, {
@@ -200,7 +201,10 @@ export class CoolifyProvider implements DeploymentProvider {
       id: uuid,
       label: this.readString(record, 'name') ?? fqdn ?? uuid,
       providerKind: 'coolify',
-      status: mapApplicationStatus(rawStatus),
+      // The application read carries no deployment record, so the last deployment
+      // outcome is unknown here; getStatus() refines it from the deployment list.
+      status: 'unknown',
+      runtimeStatus: mapApplicationStatus(rawStatus),
       url: fqdn ?? undefined,
       ...(urls.length > 0 ? { urls } : {}),
       ...(project ? { project } : {}),
@@ -470,9 +474,9 @@ const FAILED_DEPLOYMENT_STATUSES = new Set([
 
 /**
  * Map a Coolify application runtime status to the normalized model. Coolify does
- * not expose deployment build state in the application list, so the coarse runtime
- * state stands in here; {@link CoolifyProvider.getStatus} refines it with the
- * latest deployment record when one exists.
+ * not expose deployment build state in the application list, so this only ever
+ * feeds `runtimeStatus` (whether the container is up); {@link CoolifyProvider.getStatus}
+ * refines the deployment outcome separately from the latest deployment record.
  */
 function mapApplicationStatus(raw: string | null): CloudDeploymentStatus {
   const value = (raw ?? '').toLowerCase()

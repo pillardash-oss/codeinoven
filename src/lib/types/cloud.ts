@@ -24,7 +24,8 @@ export const CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS: readonly CloudDeploymentPro
   'dokploy'
 ]
 
-/** Latest build/run state of a cloud deployment container. */
+/** Latest build/run state of a cloud deployment container. Shared vocabulary for
+ *  both a container's runtime state and its last deployment result. */
 export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'unknown'
 
 /**
@@ -59,8 +60,17 @@ export interface CloudDeploymentContainer {
    *  specific account so a second account of the same kind keeps working
    *  independently of the active-account switch. */
   accountId?: string
-  /** Latest known deployment/build status. */
+  /** Latest known deployment/build status (the most recent deployment's
+   *  outcome). This is the *deployment* state, not the container's runtime
+   *  state: a container can be running while its last deployment failed. See
+   *  {@link runtimeStatus} for whether the container itself is up. */
   status: CloudDeploymentStatus
+  /** Live runtime state of the container itself (running, starting, stopped), as
+   *  reported by the provider's application/host read. Kept separate from
+   *  {@link status} so a failed last deployment never reads as the container (or
+   *  the deployed site) being offline. Optional because a persisted container
+   *  mapping has no live runtime data. */
+  runtimeStatus?: CloudDeploymentStatus
   /** Live URL of the deployed application, when known. */
   url?: string
   /** All known live URLs/domains for the deployed application, when the

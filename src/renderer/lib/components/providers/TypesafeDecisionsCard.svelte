@@ -14,7 +14,8 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
+  import StatusPill from '../ui/StatusPill.svelte'
+  import type { StatusTone } from '../ui/status-tone'
 
   /** Where a user creates, rotates, and tops up a TypeSafe key. */
   const TYPESAFE_CONSOLE_URL = 'https://console.typesafe.ai/'
