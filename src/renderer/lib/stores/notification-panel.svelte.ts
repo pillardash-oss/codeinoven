@@ -7,7 +7,7 @@ import type {
   NotificationInboxSnapshot,
   NotificationSource
 } from '$shared/ipc-contract'
-import type { BackgroundRunOutcome } from '$shared/types'
+import type { BackgroundRun, BackgroundRunOutcome, MissedRun } from '$shared/types'
 import {
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
@@ -133,6 +133,11 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
  */
 const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set(['attention', 'spec', 'error'])
 
+/** Newest first: a fresh notification leads its tab and older ones follow it. */
+function newestFirst(items: readonly InAppNotification[]): InAppNotification[] {
+  return [...items].sort((a, b) => b.timestamp - a.timestamp)
+}
+
 class NotificationPanelState {
   private _notifications: InAppNotification[] = $state([])
   /**
@@ -222,15 +227,53 @@ class NotificationPanelState {
     )
   }
 
-  /** Items for the currently active top tab + sub filter. App errors are
-   *  rendered by the panel straight from `appErrorState`, so this returns an
+  /** Pending missed fires the Assistants tab shows under the active filters. A
+   *  missed fire is an Attention state, so it answers only to a filter that
+   *  admits one. */
+  get assistantVisibleMissedRuns(): MissedRun[] {
+    return this.assistantMissedRunsFor(this.subFilter)
+  }
+
+  /** Unattended runs the tab shows under the active filters, minus the run whose
+   *  own failure notice is already on it. Runs read by their outcome. */
+  get assistantVisibleBackgroundRuns(): BackgroundRun[] {
+    return this.assistantBackgroundRunsFor(this.subFilter)
+  }
+
+  private assistantMissedRunsFor(sub: NotificationSubFilter): MissedRun[] {
+    return assistantRoutines.missedRuns.filter(
+      (run) =>
+        notificationMatchesSubFilter('attention', sub) &&
+        this.matchesAssistantSubject(Boolean(run.routineId))
+    )
+  }
+
+  /**
+   * Unattended runs for one filter, dropping the run whose notice is already on
+   * the tab. A failed run is marked unread, so it raises an assistant error
+   * notice *and* leaves a ledger entry; the two are one event, and counting or
+   * rendering both would show the same failure twice.
+   */
+  private assistantBackgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
+    const noticedRunThreads = new Set(this.assistantNotifications.map((n) => n.threadId))
+    return assistantRoutines.recentBackgroundRuns.filter(
+      (run) =>
+        !noticedRunThreads.has(run.runThreadId) &&
+        notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
+        this.matchesAssistantSubject(Boolean(run.routineId))
+    )
+  }
+
+  /** Items for the currently active top tab + sub filter. Project and chat
+   *  listings lead with their newest entry; app errors are rendered by the panel
+   *  straight from `appErrorState` (already newest first), so this returns an
    *  empty list for that tab. */
   get visible(): InAppNotification[] {
     switch (this.topTab) {
       case 'projects':
-        return this.byKind(this.projectNotifications, this.subFilter)
+        return newestFirst(this.byKind(this.projectNotifications, this.subFilter))
       case 'chats':
-        return this.byKind(this.chatNotifications, this.subFilter)
+        return newestFirst(this.byKind(this.chatNotifications, this.subFilter))
       case 'assistants':
         return this.assistantVisibleNotifications
       case 'app-errors':
@@ -263,17 +306,11 @@ class NotificationPanelState {
         notificationMatchesSubFilter(n.kind, sub) &&
         this.matchesAssistantSubject(Boolean(n.routineId))
     ).length
-    const missed = assistantRoutines.missedRuns.filter(
-      (run) =>
-        notificationMatchesSubFilter('attention', sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
-    ).length
-    const runs = assistantRoutines.recentBackgroundRuns.filter(
-      (run) =>
-        notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
-    ).length
-    return notices + missed + runs
+    return (
+      notices +
+      this.assistantMissedRunsFor(sub).length +
+      this.assistantBackgroundRunsFor(sub).length
+    )
   }
 
   /**
