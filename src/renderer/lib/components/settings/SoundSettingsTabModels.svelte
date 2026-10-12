@@ -1,14 +1,11 @@
 <script lang="ts">
   import {
-    Check,
     ClipboardPaste,
     Download,
     ExternalLink,
     LoaderCircle,
-    Star,
     Trash2,
-    Upload,
-    X
+    Upload
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -27,7 +24,6 @@
   import PasteModelPathModal from './PasteModelPathModal.svelte'
   import {
     activeIdFor,
-    bestForBadge,
     downloadPercent,
     formatBytes,
     installedCapability,
@@ -36,7 +32,6 @@
     modelSubTabForCapability,
     modelSubTabs,
     runtimeBadge,
-    runtimeBadgeClass,
     runtimesForSubTab,
     sortedForSubTab,
     type ModelSubTab,
@@ -63,6 +58,9 @@
   let importing = $state(false)
   let pasteOpen = $state(false)
 
+  const activeSubTab = $derived(
+    modelSubTabs.find((tab) => tab.id === activeModelSubTab) ?? modelSubTabs[0]
+  )
   const pasteCapability = $derived<SpeechCapability>(
     activeModelSubTab === 'asr' ? 'asr' : activeModelSubTab === 'tts' ? 'tts' : 'cleanup'
   )
@@ -82,7 +80,7 @@
         capability: installedCapability(installed, catalogArtifacts),
         artifact: catalogArtifacts.find((artifact) => artifact.id === installed.artifactId) ?? null
       }))
-      .filter((row) => row.capability === pasteCapability)
+      .filter((row): row is InstalledRow => row.capability === pasteCapability)
       .filter((row) => runtimeFilter === 'all' || row.installed.runtime === runtimeFilter)
       .sort((a, b) => {
         if (a.installed.artifactId === activeId) return -1
@@ -124,7 +122,7 @@
   async function importAndActivate(path: string): Promise<boolean> {
     const installed = await speech.importModel(path, pasteCapability)
     if (!installed) return false
-    const capability = installedCapability(installed, catalogArtifacts)
+    const capability = installedCapability(installed, catalogArtifacts) ?? pasteCapability
     if (!isActiveCapability(settings, installed.artifactId, capability)) {
       setActive(modelSubTabForCapability(capability), installed.artifactId)
     }
@@ -152,14 +150,10 @@
       targetId: row.installed.artifactId,
       label: isImported
         ? `imported model ${row.installed.importPath ?? row.installed.artifactId}`
-        : (row.artifact?.label ?? row.installed.artifactId),
+        : (row.artifact?.label ??
+          labelForInstalled(catalogArtifacts, installedArtifacts, row.installed.artifactId)),
       isImported
     })
-  }
-
-  function activeLabel(): string {
-    const id = activeIdFor(settings, activeModelSubTab)
-    return id ? labelForInstalled(catalogArtifacts, installedArtifacts, id) : ''
   }
 </script>
 
@@ -190,52 +184,6 @@
     {/each}
   </div>
 
-  <div class="flex items-center justify-end gap-3">
-    {#if activeIdFor(settings, activeModelSubTab)}
-      <button
-        type="button"
-        class="text-xs text-muted hover:text-foreground hover:underline underline-offset-2"
-        title="Scroll to active model"
-        aria-label="Scroll to active model {activeLabel()}"
-        onclick={() => {
-          const id = activeIdFor(settings, activeModelSubTab)
-          if (!id) return
-          const el = document.getElementById(`model-card-${id}`)
-          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        }}
-      >
-        Active: <span class="font-semibold text-foreground">{activeLabel()}</span>
-      </button>
-    {/if}
-    <div class="ml-auto flex shrink-0 items-center gap-1.5">
-      <button
-        type="button"
-        class="inline-flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-        title="Import your own model (.mlx or .gguf)"
-        aria-label="Import model for {activeModelSubTab.toUpperCase()}"
-        disabled={importing}
-        onclick={() => void pickImport()}
-      >
-        {#if importing}
-          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
-        {:else}
-          <Upload size={12} aria-hidden="true" />
-        {/if}
-        Import
-      </button>
-      <button
-        type="button"
-        class="inline-flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
-        title="Paste a filesystem path to a model"
-        aria-label="Paste model path for {activeModelSubTab.toUpperCase()}"
-        onclick={() => (pasteOpen = true)}
-      >
-        <ClipboardPaste size={12} aria-hidden="true" />
-        Paste Path
-      </button>
-    </div>
-  </div>
-
   <!-- Runtime filter -->
   <div class="flex flex-wrap items-center gap-1.5">
     <span class="text-[0.6875rem] font-medium text-muted">Filter:</span>
@@ -257,35 +205,67 @@
     {/each}
   </div>
 
-  <!-- Installed: the active model first, everything the user has on disk -->
-  <section class="space-y-3">
-    <div class="flex items-baseline justify-between gap-3">
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Installed</h3>
-      <span class="text-[0.6875rem] text-dimmed">
-        {installedRows.length} model{installedRows.length === 1 ? '' : 's'}
-      </span>
+  <!-- One card, exactly like the Search models card: installed rows first
+       (active on top), then the catalog models this device has not downloaded. -->
+  <div class="rounded-xl border bg-surface p-4">
+    <div class="mb-1 flex items-center justify-between gap-3">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">
+        {activeSubTab.label} models
+      </h3>
+      <div class="flex items-center gap-1.5">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          title="Paste a filesystem path to a model"
+          aria-label="Paste a {activeSubTab.label} model path"
+          onclick={() => (pasteOpen = true)}
+        >
+          <ClipboardPaste size={12} aria-hidden="true" />
+          Paste path
+        </button>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          title="Import a model from disk (.mlx, .gguf, or ONNX)"
+          aria-label="Import a {activeSubTab.label} model"
+          disabled={importing}
+          onclick={() => void pickImport()}
+        >
+          {#if importing}
+            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+          {:else}
+            <Upload size={12} aria-hidden="true" />
+          {/if}
+          Import
+        </button>
+      </div>
     </div>
+
     {#if installedRows.length === 0}
       <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
-        Nothing installed for {activeModelSubTab.toUpperCase()} yet. Download one below, or import your
-        own.
+        No {activeSubTab.label} model is installed. Download one below, or import your own.
       </p>
     {:else}
-      {#each installedRows as row (row.installed.artifactId)}
-        {@render installedRow(row)}
-      {/each}
+      <ul class="divide-y">
+        {#each installedRows as row (row.installed.artifactId)}
+          {@render installedRow(row)}
+        {/each}
+      </ul>
     {/if}
-  </section>
 
-  <!-- Available: catalog models the user has not downloaded yet -->
-  {#if availableArtifacts.length > 0}
-    <section class="space-y-3">
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Available</h3>
-      {#each availableArtifacts as artifact (artifact.id)}
-        {@render availableRow(artifact)}
-      {/each}
-    </section>
-  {/if}
+    {#if availableArtifacts.length > 0}
+      <div class="mt-4 border-t pt-3">
+        <p class="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+          Available
+        </p>
+        <ul class="divide-y">
+          {#each availableArtifacts as artifact (artifact.id)}
+            {@render artifactRow(artifact)}
+          {/each}
+        </ul>
+      </div>
+    {/if}
+  </div>
 </div>
 
 {#snippet installedRow(row: InstalledRow)}
@@ -295,188 +275,113 @@
       ? parseModelIdentityFromPath(row.installed.importPath, row.installed.runtime)
       : null}
   {@const isActive = isActiveCapability(settings, row.installed.artifactId, row.capability)}
-  <div
-    id="model-card-{row.installed.artifactId}"
-    class="rounded-xl border p-3 {isActive
-      ? 'bg-success/5 border-success/30 ring-1 ring-success/20'
-      : 'bg-elevated'}"
-  >
-    <div class="flex items-start justify-between gap-3">
-      <div class="min-w-0 flex-1">
-        <div class="flex flex-wrap items-center gap-1.5">
-          <p
-            class="truncate text-sm font-semibold"
-            title={parsedImport?.baseWithoutExtension ?? row.installed.artifactId}
-          >
-            {artifact?.label ??
-              parsedImport?.displayName ??
-              row.installed.importPath ??
-              row.installed.artifactId}
-          </p>
-          <span
-            class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
-              row.installed.runtime
-            )}">{runtimeBadge(row.installed.runtime)}</span
-          >
-          {#if artifact}
-            {@const badge = bestForBadge(artifact)}
-            {#if badge}
-              <span
-                class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
-                >{badge.label}</span
-              >
-            {/if}
-          {/if}
-          {#if isActive}
-            <span
-              class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white"
-              ><Check size={10} aria-hidden="true" /> Active</span
-            >
-          {/if}
-          {#if !row.installed.available}
-            <span
-              class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
-              title={row.installed.unavailableReason ?? 'The model path no longer exists.'}
-              ><X size={10} aria-hidden="true" /> Not found</span
-            >
-          {/if}
-        </div>
-        {#if artifact?.description}
-          <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
-        {/if}
-        {#if !artifact && row.installed.importPath}
-          <p
-            class="mt-1 truncate font-mono text-[0.6875rem] text-dimmed"
-            title={row.installed.importPath}
-          >
-            {row.installed.importPath}
-          </p>
-        {/if}
-        {#if artifact}
-          <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
-            <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
-            <span class="opacity-40">·</span>
-            <span>{artifact.license}</span>
-            {#if artifact.languages.length}
-              <span class="opacity-40">·</span>
-              <span>{artifact.languages.join(', ')}</span>
-            {/if}
-          </p>
-        {/if}
-        {#if row.installed.available}
-          {#if artifact}
-            <a
-              href={artifact.sourcePageUrl}
-              target="_blank"
-              rel="noreferrer"
-              class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
-            >
-              Hugging Face <ExternalLink size={10} aria-hidden="true" />
-            </a>
-          {/if}
-        {:else}
-          <p class="mt-1 text-[0.6875rem] text-amber-600">
-            {row.installed.unavailableReason ?? 'The model runtime is unavailable.'}
-          </p>
-        {/if}
-      </div>
-      <div class="flex shrink-0 items-center gap-1.5">
-        {#if !isActive && row.installed.available}
-          <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary hover:bg-primary/15"
-            title="Make {artifact?.label ?? row.installed.artifactId} active"
-            aria-label="Make {artifact?.label ?? row.installed.artifactId} active"
-            onclick={() =>
-              setActive(modelSubTabForCapability(row.capability), row.installed.artifactId)}
-          >
-            <Star size={11} aria-hidden="true" /> Set Active
-          </button>
-        {/if}
-        {#if !isActive || !row.installed.available}
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-            title="Remove {artifact?.label ?? row.installed.artifactId}"
-            aria-label="Remove {artifact?.label ?? row.installed.artifactId}"
-            onclick={() => removeInstalled(row)}
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </button>
-        {/if}
-      </div>
+  {@const label = artifact?.label ?? parsedImport?.displayName ?? row.installed.artifactId}
+  {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
+  <li class="flex items-center gap-3 py-2.5">
+    <span
+      class="size-1.5 shrink-0 rounded-full {isActive
+        ? 'bg-primary'
+        : row.installed.available
+          ? 'bg-border-strong'
+          : 'bg-danger'}"
+      aria-hidden="true"
+    ></span>
+    <div class="min-w-0 flex-1">
+      <p class="truncate text-sm font-medium" title={label}>{label}</p>
+      <p class="truncate text-xs text-dimmed">
+        {runtimeBadge(row.installed.runtime)}{#if byteSize}
+          · {formatBytes(byteSize)}{/if}{#if artifact}
+          · {artifact.license}{/if}{#if artifact?.languages.length}
+          · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
+          · Not found{/if}
+      </p>
+      {#if !artifact && row.installed.importPath}
+        <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
+          {row.installed.importPath}
+        </p>
+      {/if}
     </div>
-  </div>
+    {#if isActive}
+      <span
+        class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-medium text-primary"
+        >Active</span
+      >
+    {:else if row.installed.available}
+      <button
+        type="button"
+        class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+        title="Use this model"
+        aria-label="Use {label} for {activeSubTab.label}"
+        onclick={() =>
+          setActive(modelSubTabForCapability(row.capability), row.installed.artifactId)}
+      >
+        Use
+      </button>
+    {:else}
+      <span class="shrink-0 text-xs text-muted" title={row.installed.unavailableReason}>
+        Unavailable
+      </span>
+    {/if}
+    <button
+      type="button"
+      class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+      title="Remove {label}"
+      aria-label="Remove {label}"
+      onclick={() => removeInstalled(row)}
+    >
+      <Trash2 size={13} aria-hidden="true" />
+    </button>
+  </li>
 {/snippet}
 
-{#snippet availableRow(artifact: SpeechModelArtifact)}
+{#snippet artifactRow(artifact: SpeechModelArtifact)}
   {@const download = speech.downloads[artifact.id]}
-  {@const badge = bestForBadge(artifact)}
   {@const isRetired = artifact.qualification.status === 'retired'}
-  {@const downloadLabel = isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
   {@const busy =
     download?.state === 'downloading' ||
     download?.state === 'verifying' ||
     download?.state === 'queued'}
-  <div id="model-card-{artifact.id}" class="rounded-xl border bg-elevated p-3">
-    <div class="flex items-start justify-between gap-3">
+  {@const canDownload = !busy && download?.state !== 'cancelled'}
+  <li class="py-3">
+    <div class="flex items-start justify-between gap-6">
       <div class="min-w-0 flex-1">
-        <div class="flex flex-wrap items-center gap-1.5">
-          <p class="truncate text-sm font-semibold">{artifact.label}</p>
-          <span
-            class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
-              artifact.runtime
-            )}">{runtimeBadge(artifact.runtime)}</span
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p class="text-sm font-medium">{artifact.label}</p>
+          <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
+            >{runtimeBadge(artifact.runtime)} · {artifact.version}</span
           >
-          {#if badge}
-            <span
-              class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
-              >{badge.label}</span
-            >
-          {/if}
         </div>
         <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
-        <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
-          <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
-          <span class="opacity-40">·</span>
-          <span>{artifact.license}</span>
-          {#if artifact.languages.length}
-            <span class="opacity-40">·</span>
-            <span>{artifact.languages.join(', ')}</span>
-          {/if}
+        <p class="mt-1 text-xs text-dimmed">
+          {formatBytes(artifact.byteSize)} · {artifact.license}{#if artifact.languages.length}
+            · {artifact.languages.join(', ')}{/if}
         </p>
-        <a
-          href={artifact.sourcePageUrl}
-          target="_blank"
-          rel="noreferrer"
-          class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
-        >
-          Hugging Face <ExternalLink size={10} aria-hidden="true" />
-        </a>
-      </div>
-      <div class="flex shrink-0 items-center gap-1.5">
-        {#if busy}
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-muted/20"
-            title={`Cancel ${artifact.label} download`}
-            aria-label={`Cancel ${artifact.label} download`}
-            onclick={() => void speech.cancelDownload(artifact.id)}
-            ><X size={14} aria-hidden="true" /></button
+        {#if artifact.sourcePageUrl}
+          <a
+            href={artifact.sourcePageUrl}
+            target="_blank"
+            rel="noreferrer"
+            class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
           >
-        {:else}
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-            title={downloadLabel}
-            aria-label={downloadLabel}
-            disabled={isRetired}
-            onclick={() => void downloadAndActivate(artifact)}
-            ><Download size={14} aria-hidden="true" /></button
-          >
+            Hugging Face <ExternalLink size={10} aria-hidden="true" />
+          </a>
         {/if}
       </div>
+      {#if canDownload}
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+          title={isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
+          aria-label={isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
+          disabled={isRetired}
+          onclick={() => void downloadAndActivate(artifact)}
+        >
+          <Download size={12} aria-hidden="true" />
+          {download?.state === 'failed' ? 'Retry' : 'Download'}
+        </button>
+      {/if}
     </div>
+
     {#if busy}
       {@const pct =
         download.state === 'queued'
@@ -484,51 +389,39 @@
           : download.state === 'verifying'
             ? 100
             : downloadPercent(download)}
-      {@const isVerifying = download.state === 'verifying'}
-      {@const isQueued = download.state === 'queued'}
-      <div class="mt-3">
+      <div class="mt-2.5">
         <DownloadProgress
           percent={pct}
-          label={isVerifying
+          label={download.state === 'verifying'
             ? 'Verifying…'
-            : isQueued
+            : download.state === 'queued'
               ? 'Queued…   waiting to start'
               : 'Downloading…'}
           detail={download.state === 'downloading'
             ? `${formatBytes(download.bytesReceived)} / ${formatBytes(download.totalBytes)}`
-            : isVerifying
+            : download.state === 'verifying'
               ? `${formatBytes(download.bytesReceived)} · checksum`
               : `Position ${download.position}`}
-          tone={isVerifying ? 'verifying' : 'default'}
-          ariaLabel={`Download progress ${pct}%`}
+          tone={download.state === 'verifying' ? 'verifying' : 'default'}
+          ariaLabel="Downloading {artifact.label}"
           onCancel={() => void speech.cancelDownload(artifact.id)}
           cancelLabel={`Cancel ${artifact.label} download`}
-          hint={download.state === 'downloading'
-            ? 'Large models can take a few minutes   you can keep using the app.'
-            : undefined}
         />
       </div>
-    {/if}
-    {#if download?.state === 'failed'}
+    {:else if download?.state === 'failed'}
       <div
-        class="mt-3 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
+        class="mt-2.5 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
       >
         <p class="text-[0.6875rem] leading-snug text-danger">
           Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
         </p>
-        <button
-          type="button"
-          class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] font-medium text-foreground hover:bg-surface"
-          onclick={() => void downloadAndActivate(artifact)}>Retry</button
-        >
       </div>
-    {/if}
-    {#if download?.state === 'cancelled'}
-      <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
+    {:else if download?.state === 'cancelled'}
+      <p class="mt-2.5 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
         Download cancelled.
       </p>
     {/if}
-  </div>
+  </li>
 {/snippet}
 
 <PasteModelPathModal
