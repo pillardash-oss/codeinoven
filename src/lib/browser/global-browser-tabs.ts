@@ -185,18 +185,29 @@ export interface PersistedBrowserTab extends BrowserAppearance {
   assistantThreadId: string | null
 }
 
-/** The durable tab list: the tabs, their folds, their boxes, and which tab was
- *  on screen. `boxes` is optional so a payload written before boxes existed
- *  still parses, with the missing list read as “no boxes”. */
+/** The durable tab list: the tabs, their folds, their boxes, which tab was on
+ *  screen, and which box the global browser starts a tab in when it inherits
+ *  none. `boxes` is optional so a payload written before boxes existed still
+ *  parses, with the missing list read as “no boxes”. `defaultBoxId` is optional
+ *  for the same reason, read as the profile's own box. */
 export interface GlobalBrowserTabsSnapshot {
   tabs: PersistedBrowserTab[]
   groups: PersistedBrowserGroup[]
   boxes?: PersistedBrowserBox[]
+  /**
+   * The box a brand-new global-browser tab starts in when it has no tab to
+   * inherit a box from, or {@link DEFAULT_BOX_ID} for the profile's own jar.
+   *
+   * It is the global browser's own setting. A thread browser never reads it: a
+   * thread tab with nothing to inherit lives in the thread's own jar, which no
+   * profile-wide preference may move.
+   */
+  defaultBoxId?: string | null
   activeTabId: string | null
 }
 
 function emptySnapshot(): GlobalBrowserTabsSnapshot {
-  return { tabs: [], groups: [], boxes: [], activeTabId: null }
+  return { tabs: [], groups: [], boxes: [], defaultBoxId: DEFAULT_BOX_ID, activeTabId: null }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -396,6 +407,20 @@ function parseTabs(
 }
 
 /**
+ * The stored default box, read as a box that is actually offered.
+ *
+ * The profile's own box is always a legal answer and never appears in the stored
+ * list, so it is accepted by name. Any other value has to name one of the parsed
+ * boxes, because a default box that is not offered would silently start tabs in
+ * the wrong jar; an unknown one falls back to the profile's own box instead.
+ */
+function parseDefaultBoxId(value: unknown, boxes: readonly PersistedBrowserBox[]): string {
+  if (value === DEFAULT_BOX_ID) return DEFAULT_BOX_ID
+  if (typeof value === 'string' && boxes.some((box) => box.id === value)) return value
+  return DEFAULT_BOX_ID
+}
+
+/**
  * A bounded, repaired view of anything that claims to be a stored tab list.
  *
  * This never fails and never returns null: a value that is not a snapshot at all
@@ -411,6 +436,7 @@ export function parseGlobalBrowserTabsSnapshot(value: unknown): GlobalBrowserTab
     tabs,
     groups,
     boxes,
+    defaultBoxId: parseDefaultBoxId(value['defaultBoxId'], boxes),
     activeTabId:
       typeof activeTabId === 'string' && tabs.some((tab) => tab.id === activeTabId)
         ? activeTabId
@@ -432,6 +458,7 @@ export function globalBrowserTabsSnapshotPayload(
     groups: snapshot.groups,
     tabs: snapshot.tabs,
     boxes: snapshot.boxes ?? [],
+    defaultBoxId: snapshot.defaultBoxId ?? DEFAULT_BOX_ID,
     activeTabId: snapshot.activeTabId
   }
 }
