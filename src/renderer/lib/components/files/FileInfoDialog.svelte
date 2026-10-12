@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProjectFileInfo } from '$shared/types'
   import { formatDateTime } from '$shared/date-time-format'
+  import { formatBytes } from '$lib/format/bytes'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -27,8 +28,11 @@
       <dt class="text-dimmed">Type</dt>
       <dd class="capitalize text-foreground">{info.kind}</dd>
       <dt class="text-dimmed">Size</dt>
-      <dd class="text-foreground">
-        {info.size === undefined ? ' ' : `${info.size.toLocaleString()} bytes`}
+      <dd
+        class="text-foreground"
+        title={info.size === undefined ? undefined : `${info.size.toLocaleString()} bytes`}
+      >
+        {info.size === undefined ? ' ' : formatBytes(info.size)}
       </dd>
       <dt class="text-dimmed">Modified</dt>
       <dd class="text-foreground">{formatDateTime(info.modifiedAt ?? 0)}</dd>
