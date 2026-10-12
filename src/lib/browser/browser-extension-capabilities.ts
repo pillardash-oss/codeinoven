@@ -10,11 +10,17 @@
  * declared) and it exists so the app can tell the user which capabilities an
  * extension lost instead of implying the extension is whole.
  *
- * `nativeMessaging` is in the list for a different reason: the namespace and its
- * functions are present, and every call is refused by the runtime with "Access to
- * the native messaging host was disabled by the system administrator". A
- * password manager whose desktop bridge is the point cannot be made to work here,
- * and saying so is the honest thing to do.
+ * `nativeMessaging` is deliberately not in the list. The runtime's own
+ * `connectNative`/`sendNativeMessage` refuse every host, but the app implements
+ * native messaging itself   it finds and validates the host manifest, then owns
+ * the host process   and the compatibility preamble gives the extension the Port
+ * and the `permissions` namespace that goes with enabling it. A password manager's
+ * desktop bridge therefore works here instead of being reported as lost.
+ *
+ * `permissions` is deliberately not in the list either. The runtime has no
+ * namespace of its own, but the compatibility preamble implements it from the
+ * extension's declared manifest, which is what an extension needs to enable an
+ * optional capability such as `nativeMessaging` at runtime.
  *
  * `contextMenus` is deliberately not in the list. The runtime still has no
  * namespace of its own, but the app's install-time bridge records the tree each
@@ -51,11 +57,9 @@ export const BROWSER_EXTENSION_ABSENT_CAPABILITIES: readonly string[] = [
   'gcm',
   'history',
   'identity',
-  'nativeMessaging',
   'notifications',
   'omnibox',
   'pageCapture',
-  'permissions',
   'privacy',
   'search',
   'sessions',

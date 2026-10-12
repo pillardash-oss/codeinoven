@@ -33,8 +33,9 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { isAbsolute, join, resolve, sep } from 'node:path'
-import { dialog, type BrowserWindow, type Session } from 'electron'
+import { app, dialog, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
 import { MAX_PINNED_EXTENSIONS } from '../../../lib/browser/browser-extension-pins'
@@ -52,6 +53,9 @@ import { getNotificationService } from '../../notifications/notification-service
 import { browserJarFor, browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
+import { BrowserExtensionNativeMessaging } from './browser-native-messaging'
+import type { NativeHostLookupOptions } from './browser-native-host-manifest'
+import { nativeMessagingCommand } from './browser-extension-bridge'
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
@@ -1695,10 +1699,23 @@ export class BrowserExtensionService {
         ? loaded.url
         : `chrome-extension://${record.id}/`
     const pageUrl = `${base.endsWith('/') ? base : `${base}/`}${COMPAT_BRIDGE_PAGE_FILE_NAME}`
+    // Electron refuses every `chrome.runtime.connectNative` call, so the app opens
+    // the host itself (see `browser-native-messaging.ts`). The manager delivers a
+    // host's messages back into the worker through this same bridge, and is
+    // disposed with it.
+    const nativeMessaging = new BrowserExtensionNativeMessaging({
+      origin: `chrome-extension://${record.id}/`,
+      lookupOptions: this.nativeHostLookupOptions(),
+      deliver: (delivery) => {
+        const current = state.bridges.get(record.id)
+        if (current) void current.push(nativeMessagingCommand(delivery))
+      }
+    })
     const bridge = new BrowserExtensionBridge({
       session: state.session,
       extensionId: record.id,
       pageUrl,
+      nativeMessaging,
       installed: this.pendingInstalledEvents.get(record.id),
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
@@ -1721,6 +1738,28 @@ export class BrowserExtensionService {
     })
     state.bridges.set(record.id, bridge)
     bridge.start()
+  }
+
+  /**
+   * Where a native messaging host manifest is looked for on this machine.
+   *
+   * Chromium reads a per-product directory and this app's own user-data directory
+   * (see `nativeHostSearchDirectories`); the values are constant for the life of the
+   * process, so they are computed once.
+   */
+  private nativeLookupOptionsCache: NativeHostLookupOptions | null = null
+
+  private nativeHostLookupOptions(): NativeHostLookupOptions {
+    if (this.nativeLookupOptionsCache) return this.nativeLookupOptionsCache
+    let userData = this.configRoot
+    try {
+      userData = app.getPath('userData')
+    } catch {
+      // A path that cannot be read leaves the app's own directory as the config
+      // root, which is still a directory the app owns.
+    }
+    this.nativeLookupOptionsCache = { platform: process.platform, home: homedir(), userData }
+    return this.nativeLookupOptionsCache
   }
 
   /** Release one extension's channel and forget everything read through it. */
