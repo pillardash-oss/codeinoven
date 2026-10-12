@@ -31,8 +31,7 @@
 <div class={['flex gap-2.5', className]}>
   <!--
     The gutter stretches to the row's own height, so the line below a mark reaches
-    the next row without either of them knowing where the other is. `min-h-5` keeps
-    a one-line event as tall as its mark.
+    the next row without either of them knowing where the other is.
   -->
   <div class="flex w-5 shrink-0 flex-col items-center">
     {#if !first}
@@ -45,7 +44,10 @@
       <span class="w-px flex-1 bg-border" aria-hidden="true"></span>
     {/if}
   </div>
-  <div class="flex min-h-5 min-w-0 flex-1 flex-col justify-center pb-3">
-    {@render children()}
+  <!-- Match the gutter's top stub; keep row spacing outside the aligned content. -->
+  <div class={['min-w-0 flex-1 pb-3', !first && 'pt-1']}>
+    <div class="flex min-h-5 min-w-0 flex-col justify-center">
+      {@render children()}
+    </div>
   </div>
 </div>
