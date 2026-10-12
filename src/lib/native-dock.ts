@@ -193,6 +193,19 @@ const MAX_TEXT = 48_000
 export const MAX_NATIVE_DOCK_IMAGE_CHARS = 4_000_000
 const NATIVE_DOCK_IMAGE_ID = /^image-[0-9]{1,8}$/
 
+/**
+ * The largest icon source the dock sends as it stands, before it makes a copy.
+ *
+ * Every projected image is an icon drawn at a dozen pixels, but nothing bounds
+ * the file a user picks as an appearance image, so a source can be megabytes.
+ * One that large would spend the whole frame's image budget and refuse the
+ * panel, which falls back to the app window and hides the browser behind it.
+ * Sources past this are re-encoded at the size they are drawn, and the bound
+ * also keeps a full frame of images under {@link MAX_NATIVE_DOCK_IMAGE_CHARS}:
+ * the frame holds at most 64 images, and 64 x 61,440 is 3,932,160 characters.
+ */
+export const MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS = 60 * 1024
+
 /** Images have their own bounded budget, independent of the markup text. */
 export function validateNativeDockImages(value: unknown): Record<string, string> {
   const images = record(value)
