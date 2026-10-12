@@ -59,8 +59,7 @@
     if (copying) return
     copying = true
     try {
-      await copyText(startCommand)
-      toast.success('Command copied')
+      await copyText(startCommand, 'Command copied')
     } catch (cause) {
       error = message(cause)
     } finally {

@@ -229,6 +229,24 @@ export interface ProjectFileInfo extends ProjectFileEntry {
 }
 
 /**
+ * Measured content of a project directory, walked on demand.
+ *
+ * Counted apart from a file's own size because no `stat` reports what a tree
+ * holds: a directory carries only its own inode size, so this is the sum of
+ * every regular file below it. Symbolic links contribute neither bytes nor a
+ * count, and are never followed, so a link cannot inflate a folder or walk the
+ * measurement out of the project.
+ */
+export interface ProjectDirectorySize {
+  bytes: number
+  files: number
+  directories: number
+  /** Whether an entry or time cap ended the walk before the tree was read in
+   *  full. Every number above then describes the part that was measured. */
+  truncated: boolean
+}
+
+/**
  * A loopback static server serving one project directory, opened in the in-app
  * browser so a page's own scripts, stylesheets, and relative *and* absolute
  * asset URLs all resolve. Returned by `directoryPreview:open`.

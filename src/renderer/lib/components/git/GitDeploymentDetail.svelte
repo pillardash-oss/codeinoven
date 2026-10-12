@@ -10,7 +10,7 @@
     Terminal
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { formatDurationSeconds } from '$lib/format/duration'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -254,7 +254,7 @@
                     {#if index === 0}
                       <span class="font-medium text-muted">Latest</span>
                     {/if}
-                    <span>{relativeTime(status.createdAt)}</span>
+                    <span>{formatCompactAge(status.createdAt)}</span>
                   </div>
                 </div>
               </div>

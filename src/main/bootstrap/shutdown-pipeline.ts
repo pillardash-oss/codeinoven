@@ -209,6 +209,15 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     Logger.error('Speech service cleanup failed during shutdown:', error)
   }
 
+  try {
+    state.unregisterSearchIpc?.()
+    state.unregisterSearchIpc = null
+    await state.searchService?.dispose()
+    state.searchService = null
+  } catch (error) {
+    Logger.error('Search service cleanup failed during shutdown:', error)
+  }
+
   // A take-over pass must never start while the process is shutting down.
   state.stopInstanceTakeOverListener?.()
   state.stopInstanceTakeOverListener = null

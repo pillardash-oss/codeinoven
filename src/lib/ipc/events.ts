@@ -132,7 +132,13 @@ export const IPC_EVENT_CONTRACT = {
    *  alert for a focused toast is played by the renderer itself, at the moment
    *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
-  'notification:show': [] as unknown as [payload: AgentNotificationPayload],
+  /** The payload for the notification card, plus the main process's verdict on
+   *  whether the app is in focus. The renderer illustrates the card and plays
+   *  its in-app alert, and it decides that alert solely from `appFocused`: main
+   *  is the one authority on focus, because only it can see focus held by an
+   *  embedded view or an auxiliary window that the top-level document's own
+   *  `document.hasFocus()` cannot. */
+  'notification:show': [] as unknown as [payload: AgentNotificationPayload, appFocused: boolean],
   /** Transient in-app toast (error/info, optional navigation action). An error
    *  toast keeps `details` behind its Copy action and is also filed in the App
    *  Errors panel. */
@@ -363,6 +369,11 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
+  /**
+   * Intent-search model download and index status. The Search settings page
+   * mirrors this so a long download and a background reindex both report live.
+   */
+  'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer
    * keeps its docked job panel on these so the user sees real progress while

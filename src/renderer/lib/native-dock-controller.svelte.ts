@@ -6,6 +6,8 @@ import {
   NATIVE_DOCK_ATTRIBUTES,
   NATIVE_DOCK_STYLE_PROPERTIES,
   MAX_NATIVE_DOCK_NODES,
+  MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS,
+  MAX_NATIVE_DOCK_IMAGES,
   nativeDockColor,
   nativeDockStyleAllowed,
   validateNativeDockImages,
@@ -59,6 +61,38 @@ function describeRefusal(error: unknown): string {
 }
 
 /**
+ * The square an oversized icon is copied into before the dock carries it.
+ *
+ * Icons are drawn at 12 to 16 pixels, so 64 is generous even on a 2x display,
+ * and it is small enough that the copy is a fraction of the budget. See
+ * `copyNativeDockImage`.
+ */
+const NATIVE_DOCK_IMAGE_EDGE = 64
+
+/**
+ * Re-encode an oversized icon at the size it is drawn.
+ *
+ * Canvas is the only thing in the renderer that re-encodes an image without
+ * asking the main process to, and a PNG of a 64px square is always inside the
+ * dock's per-image budget. Returns null when the image never decoded, which
+ * leaves the icon blank rather than refusing the panel.
+ */
+function copyNativeDockImage(image: HTMLImageElement): string | null {
+  const source = Math.max(image.naturalWidth, image.naturalHeight)
+  if (source <= 0) return null
+  const scale = Math.min(1, NATIVE_DOCK_IMAGE_EDGE / source)
+  const width = Math.max(1, Math.round(image.naturalWidth * scale))
+  const height = Math.max(1, Math.round(image.naturalHeight * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  context.drawImage(image, 0, 0, width, height)
+  return canvas.toDataURL('image/png')
+}
+
+/**
  * A grab affordance, not a control.
  *
  * The dock chip's grip is a button, and a press on it drags the chip. Giving it
@@ -90,6 +124,19 @@ export class NativeDockController {
   private imageSources = new SvelteMap<string, string>()
   private deliveredImages = new SvelteSet<string>()
   private frameImages: Record<string, string> = {}
+  /**
+   * The bounded copy made for each oversized icon, keyed by its full source.
+   *
+   * Kept for the life of the mount so reopening a panel repaints a megabyte
+   * icon from the copy rather than decoding it again.
+   */
+  private imageCopies = new SvelteMap<string, string>()
+  /** Sources whose copy is being decoded, so one icon is only queued once. */
+  private imageCopyPending = new SvelteSet<string>()
+  /** Sources that never decoded, so a broken icon is not retried every frame. */
+  private imageCopyFailed = new SvelteSet<string>()
+  /** Distinct original sources admitted to the frame being built. */
+  private frameImageSources = new SvelteSet<string>()
   private signature = ''
   private active = false
   constructor(
@@ -271,6 +318,8 @@ export class NativeDockController {
       this.scrollTargets.clear()
       this.imageSources.clear()
       this.deliveredImages.clear()
+      this.imageCopies.clear()
+      this.imageCopyPending.clear()
       this.frameImages = {}
       void invoke('browser:setDockOverlay', this.id, null).catch(() => {})
     }
@@ -286,7 +335,12 @@ export class NativeDockController {
       clearTimeout(this.timer)
       return
     }
+    // A panel that was hidden left the native host, which drops the dock and the
+    // image cache that came with it. Re-entering sends every image again rather
+    // than believing the host still holds what it was sent before the hide.
+    const resumed = !this.active
     this.active = true
+    if (resumed) this.deliveredImages.clear()
     this.schedule()
   }
 
@@ -371,12 +425,14 @@ export class NativeDockController {
     const attributes: Record<string, string> = {}
     for (const attribute of node.attributes) {
       if (attribute.name === 'src' && attribute.value.startsWith('data:image/')) {
-        let id = this.imageSources.get(attribute.value)
+        const source = this.projectedImageSource(attribute.value)
+        if (source === null) continue
+        let id = this.imageSources.get(source)
         if (!id) {
           id = `image-${++this.imageCounter}`
-          this.imageSources.set(attribute.value, id)
+          this.imageSources.set(source, id)
         }
-        this.frameImages[id] = attribute.value
+        this.frameImages[id] = source
         attributes['data-native-dock-image'] = id
         continue
       }
@@ -483,6 +539,64 @@ export class NativeDockController {
     }
   }
 
+  /**
+   * The source the dock may carry for one icon, or null while it is being made.
+   *
+   * An icon inside the per-image budget is projected as it stands. A larger one
+   * is replaced by a copy at the size it is drawn, decoded once and kept, and
+   * this frame projects the node without an image: a panel that is missing one
+   * glyph is the panel, while a panel refused over that glyph is the app window
+   * with the browser hidden behind it.
+   *
+   * The frame also holds at most {@link MAX_NATIVE_DOCK_IMAGES} distinct icons.
+   * A panel that references more is drawn with the surplus blank rather than
+   * refused, so a tab strip that grows a hundred favicons can never take the
+   * browser down with it.
+   */
+  private projectedImageSource(source: string): string | null {
+    let resolved: string | null
+    if (source.length <= MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS) {
+      resolved = source
+    } else if (this.imageCopyFailed.has(source)) {
+      resolved = null
+    } else {
+      const copy = this.imageCopies.get(source)
+      if (copy) resolved = copy
+      else {
+        this.enqueueImageCopy(source)
+        resolved = null
+      }
+    }
+    if (resolved === null) return null
+    if (!this.frameImageSources.has(source)) {
+      if (this.frameImageSources.size >= MAX_NATIVE_DOCK_IMAGES) return null
+      this.frameImageSources.add(source)
+    }
+    return resolved
+  }
+
+  /** Decode one oversized icon and re-project the frame when its copy is ready. */
+  private enqueueImageCopy(source: string): void {
+    if (this.imageCopyPending.has(source)) return
+    this.imageCopyPending.add(source)
+    const image = new Image()
+    image.onload = () => {
+      this.imageCopyPending.delete(source)
+      const copy = copyNativeDockImage(image)
+      if (copy === null) {
+        this.imageCopyFailed.add(source)
+        return
+      }
+      this.imageCopies.set(source, copy)
+      this.schedule()
+    }
+    image.onerror = () => {
+      this.imageCopyPending.delete(source)
+      this.imageCopyFailed.add(source)
+    }
+    image.src = source
+  }
+
   private publish(): void {
     if (!this.root || !this.bounds || !this.active) return
     if (this.modalOptions?.requireCompleteProjection) {
@@ -501,6 +615,7 @@ export class NativeDockController {
       this.scrollTargets.clear()
       this.nodeCount = 0
       this.frameImages = {}
+      this.frameImageSources.clear()
       const nodes = (this.modalOptions ? [this.root] : [...this.root.childNodes])
         .map((child) => this.project(child))
         .filter((child) => child !== null)

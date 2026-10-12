@@ -21,6 +21,7 @@
  */
 
 import pageTabsSource from './compat/cio-page-tabs.js?raw'
+import pagePermissionsSource from './compat/cio-page-permissions.js?raw'
 import storageEventsSource from './compat/cio-storage-events.js?raw'
 import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
 
@@ -100,6 +101,7 @@ if (location.protocol === 'chrome-extension:') {
   const source =
     ${JSON.stringify(darkReaderStorageSource)} + '\\n;\\n' +
     ${JSON.stringify(storageEventsSource)} + '\\n;\\n' +
+    ${JSON.stringify(pagePermissionsSource)} + '\\n;\\n' +
     'globalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ' + JSON.stringify(tab) + '\\n' + ${JSON.stringify(pageTabsSource)}
   webFrame.executeJavaScript(source).catch(() => {})
 }

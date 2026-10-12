@@ -135,6 +135,14 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
       `Cloud deployment container ${index} provider kind`
     ),
     status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(value.runtimeStatus === undefined
+      ? {}
+      : {
+          runtimeStatus: validateCloudDeploymentStatus(
+            value.runtimeStatus,
+            `Cloud deployment container ${index} runtime`
+          )
+        }),
     ...(typeof value.accountId === 'string'
       ? {
           accountId: requireString(
@@ -314,7 +322,7 @@ function mergeCloudDeploymentContainers(
     if (mapping.providerKind !== kind) continue
     const live = byId.get(mapping.id)
     if (!live) {
-      merged.push({ ...mapping, status: 'unknown' })
+      merged.push({ ...mapping, status: 'unknown', runtimeStatus: 'unknown' })
       continue
     }
     merged.push({
@@ -326,6 +334,7 @@ function mergeCloudDeploymentContainers(
       // also reports the same container id.
       ...(mapping.accountId === undefined ? {} : { accountId: mapping.accountId }),
       status: live.status,
+      ...(live.runtimeStatus === undefined ? {} : { runtimeStatus: live.runtimeStatus }),
       ...(live.url === undefined ? {} : { url: live.url }),
       ...(live.project === undefined ? {} : { project: live.project }),
       ...(live.createdAt === undefined

@@ -74,7 +74,8 @@ describe('CoolifyProvider', () => {
           id: 'app-1',
           label: 'My App',
           providerKind: 'coolify',
-          status: 'success',
+          status: 'unknown',
+          runtimeStatus: 'success',
           url: 'https://app.example.dev',
           urls: ['https://app.example.dev'],
           project: 'Marketing',
@@ -159,7 +160,7 @@ describe('CoolifyProvider', () => {
       const containers = await makeProvider().listContainers()
 
       expect(containers).toHaveLength(1)
-      expect(containers[0]).toMatchObject({ id: 'app-2', status: 'success' })
+      expect(containers[0]).toMatchObject({ id: 'app-2', runtimeStatus: 'success' })
     })
 
     it('falls back to fqdn then uuid for the label when name is absent', async () => {
@@ -205,12 +206,14 @@ describe('CoolifyProvider', () => {
       ['unhealthy', 'failed'],
       ['oops', 'failed'],
       ['unexpected-state', 'unknown']
-    ])('normalizes application status %s -> %s', async (raw, expected) => {
+    ])('normalizes application runtime status %s -> %s', async (raw, expected) => {
       fetchMock.mockResolvedValueOnce(jsonResponse([{ uuid: 'app-1', status: raw }]))
 
       const containers = await makeProvider().listContainers()
 
-      expect(containers[0].status).toBe(expected)
+      // The application read yields runtime state only; the deployment outcome is
+      // unknown until a deployment record is read.
+      expect(containers[0]).toMatchObject({ status: 'unknown', runtimeStatus: expected })
     })
 
     it('normalizes deployment statuses when a deployment record overrides the status', async () => {
@@ -246,7 +249,9 @@ describe('CoolifyProvider', () => {
 
       const container = await makeProvider().getStatus('app-1')
 
-      expect(container?.status).toBe('failed')
+      // A running container whose last deployment failed: the deployment outcome
+      // and the runtime state stay independent.
+      expect(container).toMatchObject({ status: 'failed', runtimeStatus: 'success' })
     })
   })
 
@@ -259,7 +264,7 @@ describe('CoolifyProvider', () => {
       const container = await makeProvider().getStatus('app-1')
 
       expect(requestUrl()).toBe(`${BASE_URL}/api/v1/applications/app-1`)
-      expect(container).toMatchObject({ id: 'app-1', status: 'success' })
+      expect(container).toMatchObject({ id: 'app-1', status: 'unknown', runtimeStatus: 'success' })
       expect(fetchMock).toHaveBeenCalledTimes(2)
     })
 
@@ -307,7 +312,7 @@ describe('CoolifyProvider', () => {
 
       const container = await makeProvider().getStatus('app-1')
 
-      expect(container).toMatchObject({ id: 'app-1', status: 'success' })
+      expect(container).toMatchObject({ id: 'app-1', status: 'unknown', runtimeStatus: 'success' })
     })
 
     it('degrades gracefully when the deployment list endpoint is unsupported (405)', async () => {
@@ -317,7 +322,7 @@ describe('CoolifyProvider', () => {
 
       const container = await makeProvider().getStatus('app-1')
 
-      expect(container).toMatchObject({ id: 'app-1', status: 'success' })
+      expect(container).toMatchObject({ id: 'app-1', status: 'unknown', runtimeStatus: 'success' })
     })
   })
 

@@ -9,7 +9,7 @@
     Send
   } from '@lucide/svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { openInBrowser } from '$lib/open-in-browser'
   import { revealCitationFile } from '$lib/reveal-file'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -128,7 +128,7 @@
       {#if written}
         <p class="min-w-0 truncate text-[0.5625rem] text-dimmed">
           {report.updatedAt ? 'Written' : 'Assigned'}
-          {relativeTime(written)}
+          {formatCompactAge(written)}
         </p>
       {/if}
       <div class="ml-auto flex shrink-0 items-center gap-1">

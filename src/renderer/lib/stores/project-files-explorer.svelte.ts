@@ -1,5 +1,6 @@
 import type {
   DirectoryPreviewSession,
+  ProjectDirectorySize,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -567,6 +568,18 @@ export class ProjectFilesExplorer {
     return this.runFileOperation(() =>
       invoke(
         'projectFiles:info',
+        projectId,
+        path,
+        this.host.scopeFor(projectId),
+        this.host.threadArg(projectId)
+      )
+    )
+  }
+
+  async directorySize(projectId: string, path: string): Promise<ProjectDirectorySize> {
+    return this.runFileOperation(() =>
+      invoke(
+        'projectFiles:directorySize',
         projectId,
         path,
         this.host.scopeFor(projectId),

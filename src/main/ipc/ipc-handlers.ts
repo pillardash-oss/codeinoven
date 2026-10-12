@@ -158,6 +158,17 @@ export function registerIpcHandlers(
     },
     scopeRoots
   )
+  // Intent (semantic) search rides the same thread search: the provider
+  // returns semantic matches that the search service merges with keyword hits.
+  threadManager.setIntentSearchProvider(
+    options.searchService
+      ? (query, searchOptions) =>
+          options.searchService!.searchIntent(
+            query,
+            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200))
+          )
+      : null
+  )
   // A routine's threads (its hidden how-to thread included) are deleted through
   // this same canonical path when the routine is removed.
   routineManager.attachThreadDeleter((threadId) =>

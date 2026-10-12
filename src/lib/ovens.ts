@@ -1,3 +1,5 @@
+import type { CustomIconImage } from './custom-icon'
+
 /** Local remains a stable identity even when the user's default is remote. */
 export const LOCAL_OVEN_ID = 'local'
 export const OVEN_PROTOCOL_VERSION = 1
@@ -59,7 +61,8 @@ export interface SaveOvenInput {
   name: string
   icon: OvenIcon
   customSvg?: string
-  imagePath?: string
+  /** A finished icon image from the shared custom-icon pipeline. */
+  image?: CustomIconImage
   clearImage?: boolean
   color: string
   connection: OvenConnection

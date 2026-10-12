@@ -16,7 +16,8 @@
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
-  import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
+  import { buildCommitTree, fileDiffKey } from './git-status-panel-format'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     assignAgentToPullRequest as assignAgentToPullRequestAction,
     diagnoseDeployment,
@@ -3450,7 +3451,7 @@
         <span>·</span>
         <span class="truncate">{commit.author}</span>
         <span>·</span>
-        <span class="shrink-0">{relativeTime(commit.date)}</span>
+        <span class="shrink-0">{formatCompactAge(commit.date)}</span>
       </div>
     </div>
     <!--
@@ -3514,7 +3515,7 @@
           <span class="truncate">{stash.branch}</span>
         {/if}
         <span>·</span>
-        <span class="shrink-0">{relativeTime(stash.date)}</span>
+        <span class="shrink-0">{formatCompactAge(stash.date)}</span>
       </div>
     </div>
   {:else if activeTab === 'notifications' && openNotification}
@@ -3557,7 +3558,7 @@
         <span class="shrink-0">{reasonLabel(openNotification.reason)}</span>
         <span>·</span>
         <span class="shrink-0" title={openNotification.updatedAt}>
-          {relativeTime(Date.parse(openNotification.updatedAt))}
+          {formatCompactAge(Date.parse(openNotification.updatedAt))}
         </span>
       </div>
     </div>
@@ -3624,7 +3625,7 @@
         <span>·</span>
         <span class="shrink-0 font-mono">{selectedDeployment.sha.slice(0, 7)}</span>
         <span>·</span>
-        <span class="shrink-0">{relativeTime(Date.parse(selectedDeployment.updatedAt))}</span>
+        <span class="shrink-0">{formatCompactAge(Date.parse(selectedDeployment.updatedAt))}</span>
       </div>
     </div>
     <span

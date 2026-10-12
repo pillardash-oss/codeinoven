@@ -14,7 +14,12 @@
     findQuery?: string
     findActiveIndex?: number
     findNonce?: number
-    replaceRequest?: { nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null
+    replaceRequest?: {
+      nonce: number
+      action: 'one' | 'all'
+      query: string
+      replacement: string
+    } | null
     focusLine?: number | null
     focusLineRequest?: number
     /** Editor command request driven by toolbar buttons (undo/redo); the
@@ -58,6 +63,8 @@
     if (!hostElement) return
     let cancelled = false
     let created: FileEditorController | null = null
+    const syncDocument = (): void => created?.setRoot(hostElement.ownerDocument)
+    hostElement.addEventListener('native-floating-document-change', syncDocument)
     void createFileEditor({
       host: hostElement,
       value,
@@ -75,10 +82,12 @@
         return
       }
       created = instance
+      syncDocument()
       controller = instance
     })
     return () => {
       cancelled = true
+      hostElement.removeEventListener('native-floating-document-change', syncDocument)
       controller = null
       created?.destroy()
     }
@@ -122,8 +131,8 @@
       request.action === 'all'
         ? controller.replaceAll(request.query, request.replacement)
         : controller.replaceOne(request.query, request.replacement, findActiveIndex)
-        ? 1
-        : 0
+          ? 1
+          : 0
     onReplaceDone?.(replaced)
   })
 
@@ -141,7 +150,7 @@
     if (!controller || !requestedLine || request === 0 || request === handledFocusLineRequest)
       return
     handledFocusLineRequest = request
-    controller.scrollToLine(requestedLine)
+    controller.revealLine(requestedLine)
   })
 </script>
 
@@ -149,4 +158,5 @@
   bind:this={host}
   class="min-h-0 min-w-0 flex-1 overflow-hidden bg-app"
   data-editor-codemirror
+  data-floating-document
 ></div>

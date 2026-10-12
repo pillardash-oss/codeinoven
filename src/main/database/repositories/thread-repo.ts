@@ -950,6 +950,24 @@ export class ThreadRepo {
   }
 
   /**
+   * Whole thread rows for the given ids, read on the database worker. Used to
+   * hydrate semantic search matches, which arrive as ids and scores and must
+   * become full `Thread` results without a synchronous read.
+   */
+  async listByIdsViaWorker(ids: readonly string[]): Promise<Thread[]> {
+    const unique = [...new Set(ids)].filter((id) => id.length > 0)
+    if (unique.length === 0) return []
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads WHERE id IN (${placeholders})`,
+      unique,
+      0
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => rowToThread(row as unknown as ThreadRow))
+  }
+
+  /**
    * Assistant task ids grouped by the routine they belong to, read on the
    * database worker. Every task of a routine mounts that routine's single
    * workspace directory, so a caller that owns the directory needs their ids to
@@ -1387,6 +1405,39 @@ function threadSearchScopeClause(
       }
       return { sql: clauses.join(' AND '), params }
     }
+  }
+}
+
+/**
+ * Whether a thread belongs to the family a search was scoped to. This is the
+ * in-memory twin of {@link threadSearchScopeClause}, used by the semantic path
+ * after matches are hydrated back into `Thread` rows (which carry `projectId`
+ * and `routineId` but no SQL to filter against).
+ */
+export function threadMatchesSearchScope(
+  thread: Pick<Thread, 'projectId' | 'routineId'>,
+  options: ThreadSearchOptions
+): boolean {
+  switch (options.family) {
+    case 'chats':
+      return thread.projectId === INBOX_PROJECT_ID
+    case 'assistant':
+      return (
+        thread.projectId === ASSISTANT_SPACE_ID &&
+        (!options.routineId || thread.routineId === options.routineId)
+      )
+    case 'projects':
+      if (
+        thread.projectId === GLOBAL_BROWSER_PROJECT_ID ||
+        thread.projectId === ASSISTANT_SPACE_ID ||
+        thread.projectId === INBOX_PROJECT_ID
+      ) {
+        return false
+      }
+      return !options.projectId || thread.projectId === options.projectId
+    default:
+      if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return false
+      return !options.projectId || thread.projectId === options.projectId
   }
 }
 

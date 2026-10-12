@@ -13,6 +13,7 @@ import {
   validateThreadStatus
 } from '../ipc-validation'
 import { requireString, requireVersion, validateStringArray } from './shared'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import type { IpcHandlerContext } from './context'
 
 /** Upper bound on one persisted composer draft payload. */
@@ -51,7 +52,9 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     const customSvg =
       record['customSvg'] === null
         ? null
-        : validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
+        : sanitizeCustomSvg(
+            validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
+          )
     const imagePath =
       record['imagePath'] === null
         ? null

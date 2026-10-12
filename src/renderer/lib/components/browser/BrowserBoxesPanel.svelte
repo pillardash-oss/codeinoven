@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronLeft, Plus } from '@lucide/svelte'
+  import { ChevronDown, ChevronLeft, Plus, Star } from '@lucide/svelte'
   import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'
@@ -35,6 +35,7 @@
 
   const boxes = $derived(globalBrowser.boxes)
   const activeBoxId = $derived(globalBrowser.activeTabBoxId)
+  const defaultBoxId = $derived(globalBrowser.defaultBoxId)
 
   function accent(box: GlobalBrowserBox): string {
     return browserAppearanceAccent(box)
@@ -101,6 +102,7 @@
       {#each boxes as box (box.id)}
         {@const url = iconUrl(box)}
         {@const expanded = expandedBoxId === box.id}
+        {@const isDefault = defaultBoxId === box.id}
         <li>
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors {activeBoxId ===
@@ -128,8 +130,26 @@
                   {globalBrowser.tabCountInBox(jarIdForBox(box.id))}
                   {globalBrowser.tabCountInBox(jarIdForBox(box.id)) === 1 ? 'tab' : 'tabs'}
                   {#if activeBoxId === box.id}· in use{/if}
+                  {#if isDefault}· new tabs default{/if}
                 </span>
               </span>
+            </button>
+            <button
+              type="button"
+              class={[
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors group-hover:opacity-100 hover:bg-overlay focus-visible:opacity-100',
+                isDefault ? 'text-primary opacity-100' : 'text-muted opacity-0'
+              ]}
+              title={isDefault
+                ? `${box.name} is the default box for new tabs`
+                : `Make ${box.name} the default box for new tabs`}
+              aria-label={isDefault
+                ? `${box.name} is the default box for new tabs`
+                : `Make ${box.name} the default box for new tabs`}
+              aria-pressed={isDefault}
+              onclick={() => globalBrowser.setDefaultBox(box.id)}
+            >
+              <Star size={13} class={isDefault ? 'fill-current' : ''} />
             </button>
             <button
               type="button"
@@ -162,8 +182,8 @@
     <p
       class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed"
     >
-      Tabs in the same box share sign-ins. Pick a box when you open a tab; a tab cannot change boxes
-      in place.
+      Tabs in the same box share sign-ins. A new tab with none to inherit starts in the starred box.
+      Pick a box when you open a tab; a tab cannot change boxes in place.
     </p>
   </div>
 {/if}

@@ -213,8 +213,22 @@ export class NotificationService {
 
   /** Resolves once the durable inbox has been read, at most once per service. */
   private inboxReady(): Promise<void> {
-    this.inboxLoad ??= this.inbox.load()
+    this.inboxLoad ??= this.loadInbox()
     return this.inboxLoad
+  }
+
+  /**
+   * Read the durable inbox, then heal the assistant entries written before the
+   * payload carried a routine. The run thread is the only place left that knows
+   * which routine those entries belong to, so the store reads it back from
+   * there; the pass is a no-op once the file has been rewritten.
+   */
+  private async loadInbox(): Promise<void> {
+    await this.inbox.load()
+    await this.inbox.resolveMissingRoutineIds(async (threadId) => {
+      const thread = await this.threadRepo.getViaWorker(threadId)
+      return thread?.routineId ?? null
+    })
   }
 
   start(): void {
@@ -661,8 +675,8 @@ export class NotificationService {
 
   /**
    * One shared delivery path for every notification kind: record it durably,
-   * broadcast the payload to all renderers, then show the OS notification when
-   * the app is not focused.
+   * broadcast the payload (with this delivery's focus verdict) to all renderers,
+   * then show the OS notification when the app is not focused.
    *
    * The durable write comes first and is deliberately not awaited: it is the
    * record of what the panel owes the user across a restart, and it must not be
@@ -683,10 +697,17 @@ export class NotificationService {
       this.inbox.add({ ...payload, timestamp: Date.now() } satisfies PersistedAgentNotification)
     )
     const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
+    // The one focus verdict for this notification, taken once here and carried
+    // to the renderer with the card. The renderer must never decide focus for
+    // itself: its `document.hasFocus()` is false while an embedded browser view
+    // or an auxiliary window holds the keyboard, even though the app is very
+    // much in front, and that disagreement is what made a notification arrive
+    // silently. Focus is one status, and this is where it is read.
+    const focused = this.appFocused()
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        sendToRenderer(window.webContents, 'notification:show', payload)
+        sendToRenderer(window.webContents, 'notification:show', payload, focused)
       }
     }
     if (options.badgeThreadKey) this.markThreadNotified(options.badgeThreadKey)
@@ -696,7 +717,6 @@ export class NotificationService {
     // full-volume alert is dispatched from here. While the app is in front the
     // card is suppressed and the renderer plays the quieter in-app alert itself,
     // at the moment it shows the toast, so a suppressed toast stays silent.
-    const focused = this.appFocused()
     if (focused) return
 
     this.dispatchNotificationSound(notificationSoundKind(payload.kind, payload.projectId), windows)
@@ -1174,33 +1194,42 @@ export class NotificationService {
     kind: NotificationSoundKind = 'default',
     windows = BrowserWindow.getAllWindows()
   ): boolean {
-    const soundWindow = windows.find(
+    const soundWindows = windows.filter(
       (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
     )
-    if (!soundWindow) return false
+    if (soundWindows.length === 0) return false
 
     const now = Date.now()
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
 
-    // The window is throttled while it is occluded, which is the normal state
-    // whenever the user is in another app, and this alert exists exactly for
-    // that case. Lift throttling for the dispatch so the alert lands with the OS
-    // card instead of after Chromium's next throttled turn, then let the window
-    // fall back to throttled once the alert has had time to play.
-    try {
-      soundWindow.webContents.setBackgroundThrottling(false)
-      const restore = setTimeout(() => {
-        if (soundWindow.isDestroyed() || soundWindow.webContents.isDestroyed()) return
-        soundWindow.webContents.setBackgroundThrottling(true)
-      }, NOTIFICATION_SOUND_DEDUP_MS)
-      restore.unref()
-    } catch (error) {
-      // Throttling control is best effort; the alert still dispatches.
-      Logger.dev('Could not lift background throttling for the notification alert:', error)
+    // Dispatch to every live renderer rather than one picked arbitrarily. Only
+    // the app document subscribes to `notification:playSound`; auxiliary windows
+    // (the browser overlay, the permission prompt) have no listener, so choosing
+    // one at random could hand the alert to a window that drops it, losing the
+    // sound and consuming the dedup window with it. Addressed to all, exactly the
+    // window that owns the app plays it.
+    let delivered = false
+    for (const window of soundWindows) {
+      // The window is throttled while it is occluded, which is the normal state
+      // whenever the user is in another app, and this alert exists exactly for
+      // that case. Lift throttling for the dispatch so the alert lands with the
+      // OS card instead of after Chromium's next throttled turn, then let the
+      // window fall back to throttled once the alert has had time to play.
+      try {
+        window.webContents.setBackgroundThrottling(false)
+        const restore = setTimeout(() => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) return
+          window.webContents.setBackgroundThrottling(true)
+        }, NOTIFICATION_SOUND_DEDUP_MS)
+        restore.unref()
+      } catch (error) {
+        // Throttling control is best effort; the alert still dispatches.
+        Logger.dev('Could not lift background throttling for the notification alert:', error)
+      }
+      if (sendToRenderer(window.webContents, 'notification:playSound', kind)) delivered = true
     }
-
-    return sendToRenderer(soundWindow.webContents, 'notification:playSound', kind)
+    return delivered
   }
 
   private retainNotification(key: string, notification: Notification): void {

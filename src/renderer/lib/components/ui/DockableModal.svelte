@@ -2,16 +2,17 @@
   import { Minus, X, GripVertical } from '@lucide/svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
-  import type { NativeDockInteraction } from '$shared/native-dock'
+  import { BitsConfig } from 'bits-ui'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
-  import { NativeDockController } from '$lib/native-dock-controller.svelte'
+  import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
+    findFirstTextField,
     focusOwnsEnter
   } from '$lib/modal-primary-action.svelte'
 
@@ -243,7 +244,7 @@
     // Let the header's own buttons keep their click behavior   never start a drag.
     if (event.target instanceof Element && event.target.closest('button')) return
     dragging = true
-    dragStart = { x: event.clientX, y: event.clientY }
+    dragStart = { x: event.screenX, y: event.screenY }
     dragOrigin = { x: position.x, y: position.y }
     const target = event.currentTarget
     if (target instanceof HTMLElement) target.setPointerCapture(event.pointerId)
@@ -253,8 +254,8 @@
   function onHeaderPointerMove(event: PointerEvent): void {
     if (!dragging) return
     position = {
-      x: clampX(dragOrigin.x + (event.clientX - dragStart.x), width),
-      y: clampY(dragOrigin.y + (event.clientY - dragStart.y), height)
+      x: clampX(dragOrigin.x + (event.screenX - dragStart.x), width),
+      y: clampY(dragOrigin.y + (event.screenY - dragStart.y), height)
     }
   }
 
@@ -287,7 +288,7 @@
   let panelEl = $state<HTMLElement | null>(null)
 
   /**
-   * The host that draws this panel above a live browser page.
+   * The live host that draws this panel above a browser page.
    *
    * A dockable panel floats over whatever is behind it, and the browser's page is
    * a native view the compositor paints above every DOM node of this window. So
@@ -302,53 +303,17 @@
    * panel over the workspace keeps the app window's own presentation, which is
    * both faithful and free.
    */
-  const native = new NativeDockController(
-    `dockable-modal-${crypto.randomUUID()}`,
-    onNativeInteraction,
-    (width: number, height: number) => ({ x: position.x, y: position.y, width, height }),
-    false,
-    {
-      panel: true,
-      // A panel that cannot be projected whole keeps the app window's drawing
-      // rather than a half-drawn one: an editor, a terminal, a select, or a
-      // field that needs a keyboard this window does not own.
-      requireCompleteProjection: true,
-      onHover: () => {},
-      onDismiss: () => {},
-      onCommit: () => {}
-    }
-  )
-  const nativeArmed = $derived(
-    open && !minimized && browserVisibility.canUseNativeDock && !native.failed
-  )
-
-  /**
-   * The host's drag reports, applied to the panel's own placement.
-   *
-   * The press happened in the host's document, so the pointer's travel is a
-   * delta: the panel re-clamps and persists it exactly as its own header drag
-   * does, which keeps one placement and one storage key behind both.
-   */
-  function onNativeInteraction(report: NativeDockInteraction): void {
-    if (report.kind !== 'drag') return
-    if (!dragging) {
-      dragging = true
-      dragOrigin = { x: position.x, y: position.y }
-    }
-    position = {
-      x: clampX(dragOrigin.x + report.dx, width),
-      y: clampY(dragOrigin.y + report.dy, height)
-    }
-    if (report.done) {
-      dragging = false
-      persistSnapshot()
-    }
-  }
-
+  const native = new NativeFloatingPanel(`dockable-modal-${crypto.randomUUID()}`)
+  const nativeArmed = $derived(open && browserVisibility.canUseNativeDock && !native.failed)
   const nativeMount: Attachment<HTMLElement> = (element) => native.mount(element)
 
+  // Restore before the original conditional block removes its node range.
+  $effect.pre(() => {
+    if (!open) native.restore()
+  })
+
   $effect(() => {
-    native.update(nativeArmed, { x: position.x, y: position.y, width, height })
+    native.update(nativeArmed, !minimized, { x: position.x, y: position.y, width, height })
   })
 
   // A collapsed panel is `invisible`, but the DOM keeps focus on whatever was
@@ -357,26 +322,28 @@
   // to the surface behind the chip the moment the panel collapses.
   $effect(() => {
     if (!minimized) return
-    const focused = document.activeElement
+    const focused = panelEl?.ownerDocument.activeElement
     if (focused instanceof HTMLElement && panelEl?.contains(focused)) focused.blur()
   })
 
   /**
-   * The app's modal focus convention, once per open, for an owner that claims it.
-   *
-   * The flag is a plain binding rather than state: it renders nothing, and it is
-   * the `panelEl` read below that re-runs this effect once the panel is actually
-   * in the DOM. A minimized panel is skipped, so restoring from the dock does not
-   * steal the caret back.
+   * Apply the canonical modal focus convention on open and dock expansion.
+   * The owner can choose a control first; otherwise focus a field, the primary
+   * action, or the panel itself, never the minimize or close affordances.
    */
   let claimedInitialFocus = false
   $effect(() => {
-    if (!open) {
+    if (!open || minimized) {
       claimedInitialFocus = false
       return
     }
-    if (minimized || claimedInitialFocus || !panelEl || !claimInitialFocus) return
-    if (claimInitialFocus(panelEl)) claimedInitialFocus = true
+    if (claimedInitialFocus || !panelEl || (nativeArmed && !native.live)) return
+    if (!claimInitialFocus?.(panelEl)) {
+      ;(findFirstTextField(panelEl) ?? findPanelPrimaryAction(panelEl) ?? panelEl).focus({
+        preventScroll: true
+      })
+    }
+    claimedInitialFocus = true
   })
 
   const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
@@ -437,106 +404,131 @@
   }}
 />
 
-{#if open}
-  <!--
+<BitsConfig defaultPortalTo={native.portalTarget ?? document.body}>
+  {#if open}
+    <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
     its embedded terminal PTYs are never torn down   minimize only hides it while
     the dock row keeps the run badges live. The dock renders as a sibling, outside
     this panel, so the panel's `invisible` state cannot hide it.
   -->
-  <!--
+    <!--
     `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog
     (the full screen reader, terminal, browser, file editor) sets
     `body { pointer-events: none }` while it is open, and pointer events inherit,
     so a panel that does not opt back in is visible above that surface at z-80 but
     completely dead to the mouse. That is the whole reason `layer="top"` exists.
   -->
-  <div
-    class="fixed {layer === 'top'
-      ? 'z-80'
-      : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
-      ? 'invisible pointer-events-none'
-      : 'pointer-events-auto'}"
-    inert={nativeArmed}
-    style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed
-      ? ' opacity: 0;'
-      : ''}"
-    bind:this={panelEl}
-    {@attach nativeMount}
-    role="dialog"
-    aria-label={title}
-  >
     <div
-      class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
-        ? 'cursor-grabbing'
-        : 'cursor-grab'}"
-      data-native-dock-handle
-      title={dragLabel}
-      aria-label={dragLabel}
-      role="group"
-      onpointerdown={onHeaderPointerDown}
-      onpointermove={onHeaderPointerMove}
-      onpointerup={onHeaderPointerUp}
+      class="fixed {layer === 'top'
+        ? 'z-80'
+        : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl outline-none {minimized
+        ? 'invisible pointer-events-none'
+        : 'pointer-events-auto'}"
+      style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
+      !native.live
+        ? ' opacity: 0;'
+        : ''}"
+      bind:this={panelEl}
+      {@attach nativeMount}
+      role="dialog"
+      tabindex="-1"
+      aria-label={title}
+      onkeydown={(event) => {
+        if (event.key !== 'Tab' || !panelEl) return
+        const targets = Array.from(
+          panelEl.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"], [contenteditable="true"]'
+          )
+        ).filter((element) => element.checkVisibility() && !element.closest('[inert]'))
+        const first = targets[0]
+        const last = targets.at(-1)
+        const active = panelEl.ownerDocument.activeElement
+        if (
+          !first ||
+          (event.shiftKey
+            ? active === first || active === panelEl
+            : active === last || active === panelEl)
+        ) {
+          event.preventDefault()
+          ;(event.shiftKey ? (last ?? panelEl) : (first ?? panelEl)).focus({ preventScroll: true })
+        }
+      }}
     >
-      <span class="flex min-w-0 items-center gap-2">
-        <GripVertical size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
-        {#if headerPrefix}
-          <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
-        {/if}
-        <h2 class="truncate text-xs font-semibold">{title}</h2>
-      </span>
-      <span class="flex shrink-0 items-center gap-1">
-        {#if headerActions}
-          {@render headerActions()}
-        {/if}
-        <button
-          class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Minimize"
-          title="Minimize"
-          onclick={onMinimize}
-        >
-          <Minus size={14} />
-        </button>
-        {#if closable}
+      <div
+        class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
+          ? 'cursor-grabbing'
+          : 'cursor-grab'}"
+        data-native-dock-handle
+        title={dragLabel}
+        aria-label={dragLabel}
+        role="group"
+        onpointerdown={onHeaderPointerDown}
+        onpointermove={onHeaderPointerMove}
+        onpointerup={onHeaderPointerUp}
+      >
+        <span class="flex min-w-0 items-center gap-2">
+          <GripVertical size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          {#if headerPrefix}
+            <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
+          {/if}
+          <h2 class="truncate text-xs font-semibold">{title}</h2>
+        </span>
+        <span class="flex shrink-0 items-center gap-1">
+          {#if headerActions}
+            {@render headerActions()}
+          {/if}
           <button
             class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close"
-            title="Close"
-            onclick={onClose}
+            data-modal-dismiss
+            aria-label="Minimize"
+            title="Minimize"
+            onclick={onMinimize}
           >
-            <X size={14} />
+            <Minus size={14} />
           </button>
-        {/if}
-      </span>
-    </div>
+          {#if closable}
+            <button
+              class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              data-modal-dismiss
+              aria-label="Close"
+              title="Close"
+              onclick={onClose}
+            >
+              <X size={14} />
+            </button>
+          {/if}
+        </span>
+      </div>
 
-    <div
-      class={flushBody
-        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-        : 'min-h-0 flex-1 overflow-y-auto p-4'}
-    >
-      {@render children()}
-    </div>
+      <div
+        class={flushBody
+          ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+          : 'min-h-0 flex-1 overflow-y-auto p-4'}
+      >
+        {@render children()}
+      </div>
 
-    {#if footer}
-      <!--
+      {#if footer}
+        <!--
         `flex-wrap` because the footer carries three actions in the pull request
         sheet (compose, dismiss, create). It was sized for two, and at the panel's
         360px minimum width the third would have overflowed the edge instead of
         wrapping to a second row. Panels that already fit are unaffected.
       -->
-      <div
-        class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
-        data-modal-footer
-      >
-        {@render footer()}
+        <div
+          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+          data-modal-footer
+        >
+          {@render footer()}
+        </div>
+      {/if}
+    </div>
+
+    {#if minimized}
+      <div class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}">
+        {@render dock()}
       </div>
     {/if}
-  </div>
-
-  {#if minimized}
-    <div class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}">
-      {@render dock()}
-    </div>
   {/if}
-{/if}
+</BitsConfig>

@@ -218,6 +218,18 @@ html[data-native-toasts] [data-sonner-toaster] [data-sonner-toast] {
   width: var(--width) !important;
 }
 
+/* The stack's geometry depends on every card staying out of normal flow.
+   svelte-sonner positions each card absolutely and translates it by its own
+   `--offset`, which already includes the height of every card above it; a card
+   put back into flow (`position: relative`, which the status-type rules above
+   once carried for an accent bar) counts its height twice and lands a full
+   card-height away from the one above it, while a plain toast keeps the correct
+   `--gap`. This selector outranks those two-attribute status rules, so pinning
+   the position here keeps the regression from returning. */
+html[data-native-toasts] [data-sonner-toast] {
+  position: absolute !important;
+}
+
 /* Native cards keep Sonner's transform/opacity motion and respond without IPC. */
 html[data-native-toasts] [data-sonner-toast] {
   transition-duration: 200ms !important;

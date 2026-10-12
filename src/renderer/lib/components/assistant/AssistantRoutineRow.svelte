@@ -32,8 +32,8 @@
   interface Props {
     routine: Routine
     expanded: boolean
-    /** True while any task in the routine is running. */
-    working: boolean
+    /** How many tasks in the routine are currently running. */
+    workingCount: number
     /** At least one task or run in the routine has unread activity. */
     unread: boolean
     /** Any task carries a pending missed run. */
@@ -68,7 +68,7 @@
   let {
     routine,
     expanded,
-    working,
+    workingCount,
     unread,
     missed,
     runCount,
@@ -98,6 +98,8 @@
   // without either the row draws the routine default mark.
   const routineIcon = $derived(getRoutineIcon(routine, iconUrl))
   const incomplete = $derived(routineGap(routine) !== null)
+  const working = $derived(workingCount > 0)
+  const workingLabel = $derived(`${workingCount} ${workingCount === 1 ? 'task' : 'tasks'} working`)
   /** Line 2's next fire, beside the run count (see `routineNextRunLine`). */
   const nextRunLabel = $derived(routineNextRunLine(routine, nextRunAt, Date.now()))
   const gapLabel = $derived(routineGap(routine) ?? '')
@@ -468,11 +470,17 @@
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   </span>
-  {#if working}
+  {#if workingCount > 0}
     <span
-      class="pointer-events-none flex h-5 w-5 shrink-0 items-center justify-center opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      class="pointer-events-none flex h-5 shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      role="img"
+      aria-label={workingLabel}
+      title={workingLabel}
     >
       <span class="h-1.5 w-1.5 animate-pulse rounded-full" style="background: {color}"></span>
+      <span class="text-[0.5625rem] font-semibold tabular-nums" style="color: {color}">
+        {workingCount}
+      </span>
     </span>
   {/if}
 </div>

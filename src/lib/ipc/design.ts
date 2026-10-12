@@ -29,6 +29,14 @@ export interface DesignEntry {
   name: string
   /** Whether the folder holds an `index.html` entry file. */
   hasEntry: boolean
+  /**
+   * When the folder was made (ms), for the board's "created" stamp.
+   *
+   * The filesystem's birth time is the design's own creation; a volume that does
+   * not record one stands its change time in, which is the closest thing it has.
+   * Zero means the folder could not be read at all.
+   */
+  createdAt: number
   /** Latest modification time inside the folder (ms), for newest-first ordering. */
   updatedAt: number
 }
@@ -185,6 +193,68 @@ export interface DesignThumbnail {
    * rather than keeping a second one that could disagree with it.
    */
   tabId: string | null
+}
+
+/**
+ * What produced a point in a design's history.
+ *
+ * A design is iterated, and the point of keeping its history is that the user can
+ * walk back through the iterations without fear. The cause is what the board uses
+ * to say who moved the work: the app when the folder was first seen, the agent
+ * when a turn settled, or the user editing the files directly.
+ */
+export type DesignRevisionCause = 'initial' | 'agent' | 'user'
+
+/**
+ * One point in a design's history: a snapshot the user can return to.
+ *
+ * The revision is content, not a diff: undoing restores the folder to exactly the
+ * files this revision holds. Only the facts a timeline row needs travel here; the
+ * snapshot itself stays in main, addressed by id.
+ */
+export interface DesignRevisionSummary {
+  id: string
+  /** Position in the folder's history, oldest first, starting at 1. */
+  sequence: number
+  /** What produced the change this revision captured. */
+  cause: DesignRevisionCause
+  /** When the snapshot was taken (ms). */
+  createdAt: number
+  /** Files added, changed, or removed from the revision this one follows. */
+  changedFiles: number
+  /** Files the snapshot holds. */
+  fileCount: number
+  /** Total size of the snapshot's files, in bytes. */
+  totalBytes: number
+}
+
+/**
+ * One authored-work folder's history, as the board reads it.
+ *
+ * A folder is the unit: a design and a composition each get their own timeline,
+ * and the two capabilities share this shape the same way they share the board.
+ * `cursorIndex` is where the folder currently sits, so Undo and Redo know which
+ * step is next without the renderer recomputing it from ids.
+ */
+export interface DesignHistoryState {
+  /** Project-relative folder, with forward slashes. */
+  directory: string
+  /**
+   * Whether Git already tracks this folder, so the app keeps no history of its own.
+   *
+   * A user who keeps their designs in the repository is tracking them already, and
+   * a second timeline would only disagree with Git's. The board says so and offers
+   * no Undo rather than pretending there is nothing to go back to.
+   */
+  gitBacked: boolean
+  /** Revisions oldest first. */
+  revisions: DesignRevisionSummary[]
+  /** The revision the folder is currently at, or null when there is no history. */
+  cursorId: string | null
+  /** Index of `cursorId` in `revisions`, or -1. */
+  cursorIndex: number
+  canUndo: boolean
+  canRedo: boolean
 }
 
 /** The Screen Canvas of one design folder: the page that shows every screen at once. */

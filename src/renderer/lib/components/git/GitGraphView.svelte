@@ -8,7 +8,7 @@
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { absoluteTime } from './git-status-panel-format'
   import {
     GRAPH_LANE_WIDTH,
@@ -133,7 +133,7 @@
         <ArrowDownToLine size={10} class="shrink-0" aria-hidden="true" />
       {/if}
       {direction}
-      {ref}{at === null ? '' : ` · ${relativeTime(at)}`}
+      {ref}{at === null ? '' : ` · ${formatCompactAge(at)}`}
     </span>
     <span class="h-px flex-1 bg-border"></span>
   </div>
@@ -264,7 +264,7 @@
               {row.commit.shortHash}
             </span>
             <span class="shrink-0 text-[0.5625rem] text-dimmed">
-              {relativeTime(row.commit.date)}
+              {formatCompactAge(row.commit.date)}
             </span>
           </button>
         </div>

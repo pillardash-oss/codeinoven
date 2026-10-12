@@ -11,6 +11,7 @@
     RotateCcw,
     X
   } from '@lucide/svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
     type NotificationAssistantSubject,
@@ -317,12 +318,23 @@
     return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
   }
 
+  /**
+   * Acknowledge one notice: retire it, and retire the unattended run it stands
+   * for when a failure left both a notice and a ledger entry for one run. The
+   * panel draws those two as a single row, so both leave together.
+   */
+  function acknowledgeNotification(n: InAppNotification): void {
+    notificationPanelState.dismiss(n.id)
+    const run = notificationPanelState.assistantRunPairedWithNotice(n)
+    if (run) void dismissBackgroundRun(run.runThreadId)
+  }
+
   async function navigateToNotification(n: InAppNotification): Promise<void> {
     busyId = n.id
     try {
       if (onOpenThread) {
         await onOpenThread(n.projectId, n.threadId, n.temporaryChatId)
-        notificationPanelState.dismiss(n.id)
+        acknowledgeNotification(n)
         return
       }
       const [project, thread] = await Promise.all([
@@ -333,7 +345,7 @@
       const openDesktopThread = workspaceState.openThreadFromNotification
       if (!openDesktopThread) return
       await openDesktopThread(thread, project, n.temporaryChatId)
-      notificationPanelState.dismiss(n.id)
+      acknowledgeNotification(n)
     } catch {
       // Thread or project may have been deleted
     } finally {
@@ -385,6 +397,15 @@
     }
   }
 
+  /**
+   * Open an unattended run and acknowledge it: the row leaves the panel the
+   * moment its thread opens, exactly as any other thread's notice does.
+   */
+  async function openBackgroundRun(run: BackgroundRun): Promise<void> {
+    await openMissedRun(run.runThreadId)
+    await dismissBackgroundRun(run.runThreadId)
+  }
+
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
@@ -410,7 +431,7 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message)
+      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message, null)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
@@ -431,7 +452,7 @@
 
   async function copyNotificationError(n: InAppNotification): Promise<void> {
     try {
-      await copyText(notificationErrorText(n))
+      await copyText(notificationErrorText(n), null)
       copiedId = n.id
       window.setTimeout(() => {
         if (copiedId === n.id) copiedId = null
@@ -482,18 +503,6 @@
 
   function appErrorLabel(kind: AppErrorEntry['kind']): string {
     return kind === 'error' ? 'Error' : 'Warning'
-  }
-
-  function formatTime(ts: number): string {
-    const diff = Date.now() - ts
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 60) return 'just now'
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
   }
 </script>
 
@@ -553,7 +562,7 @@
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
-        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(n.timestamp)}</span>
       </div>
       <!--
         An assistant notice drops the source line: the reader is already on the
@@ -641,7 +650,7 @@
         <span class="truncate text-[0.6875rem] font-medium text-foreground"
           >{missedRunTitle(run)}</span
         >
-        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(run.dueAt)}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(run.dueAt)}</span>
       </div>
       <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
         {missedRunReasonText(run.reason)}
@@ -690,7 +699,7 @@
       class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
       title="Open this run"
       aria-label="Open unattended run for {backgroundRunTitle(run)}"
-      onclick={() => void openMissedRun(run.runThreadId)}
+      onclick={() => void openBackgroundRun(run)}
     >
       <div class="flex w-2 shrink-0 pt-1">
         <StatusBadge
@@ -704,7 +713,7 @@
             >{backgroundRunTitle(run)}</span
           >
           <span class="shrink-0 text-[0.625rem] text-dimmed"
-            >{formatTime(run.settledAt ?? run.startedAt)}</span
+            >{formatCompactAge(run.settledAt ?? run.startedAt)}</span
           >
         </div>
         <p class="mt-0.5 text-[0.625rem] text-muted">
@@ -845,7 +854,7 @@
                     {appErrorLabel(e.kind)}
                   </span>
                   <span class="shrink-0 text-[0.625rem] text-dimmed">
-                    {formatTime(e.timestamp)}
+                    {formatCompactAge(e.timestamp)}
                     {#if e.count > 1}
                       <span class="text-dimmed">· ×{e.count}</span>
                     {/if}
@@ -937,7 +946,7 @@
                   >{section.items.length}</span
                 >
                 <span class="shrink-0 text-[0.625rem] text-dimmed"
-                  >{formatTime(section.latestAt)}</span
+                  >{formatCompactAge(section.latestAt)}</span
                 >
               </button>
               {#if !collapsed}

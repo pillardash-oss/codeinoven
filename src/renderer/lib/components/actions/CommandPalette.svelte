@@ -479,7 +479,6 @@
       {#if filter}
         <MultiSelectPicker
           compact
-          inline={mode === 'dialog'}
           options={filter.options}
           selectedIds={filter.selectedIds}
           onSelectionChange={filter.onChange}

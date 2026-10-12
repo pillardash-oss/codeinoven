@@ -30,7 +30,7 @@ material way, and the difference is deliberate.
   and a sign-in made in a box in the global browser is the same sign-in a thread
   browser gets when it picks that box. Clearing or deleting a box erases that jar for
   every context using it, while clearing a project's own browser clears only that
-  project's jar   the global browser's clear still takes its boxes with it. The
+  project's jar the global browser's clear still takes its boxes with it. The
   startup sweep reclaims the per-project box jars an earlier build created, since
   nothing resolves to them any more.
   The profile's `Default` box is the global browser's own unboxed session, not a
@@ -46,7 +46,7 @@ material way, and the difference is deliberate.
   - Closing a thread destroys exactly that thread's tabs (`browser:destroyThread`).
 - **Popup windows are a global-browser feature.** The personal browser hosts a page's
   `window.open` in a view its right rail shows, one tab per popup
-  (`src/main/browser/browser-service/browser-popup-windows.ts`, see *Popup windows*
+  (`src/main/browser/browser-service/browser-popup-windows.ts`, see _Popup windows_
   below). A project's browser and every page an agent drives keep the older behaviour,
   where an opened window is a tab, because those surfaces have no rail to show a popup
   in and an agent's pages must stay addressable.
@@ -105,10 +105,36 @@ material way, and the difference is deliberate.
   extension's badge, icon and title from what comes back. A port rather than
   `runtime.sendMessage`, because a message is delivered to every `onMessage`
   listener the extension has and a real one can throw on it.
+- **An extension's native messaging host is opened by the app.** Electron implements
+  `chrome.runtime.connectNative` but refuses every host, and has no
+  `chrome.permissions` at all, so a password manager's desktop bridge the whole of
+  Bitwarden's biometric unlock cannot connect and cannot even be granted the
+  optional `nativeMessaging` permission it asks for. The app does Chromium's work
+  itself: it finds and validates the host manifest (this app's own directory and the
+  Chromium-family browsers', with `allowed_origins` checked against the extension's
+  own origin), owns the host process in main, and speaks Chromium's length-prefixed
+  JSON over its stdio (`browser-native-messaging.ts`,
+  `browser-native-host-process.ts`, `browser-native-host-manifest.ts`). The
+  compatibility preamble replaces `runtime.connectNative`/`sendNativeMessage` with
+  ports carried over the same bridge, and implements `chrome.permissions` from the
+  extension's declared manifest in the worker and, through the extension-page
+  preload, in the extension's own pages.
+- **An extension's offscreen document is kept focused.** Electron implements
+  `chrome.offscreen`, so an extension that cannot write the clipboard from its
+  worker (a password manager copying a generated password from its context menu)
+  creates an offscreen document and asks it to. Electron never marks that document
+  focused, so it reports `document.hasFocus() === false`, `clipboard.writeText`
+  rejects with `NotAllowedError: Document is not focused`, and the
+  `execCommand('copy')` fallback returns `false`, so the write is silently lost. The
+  app restores Chromium's behaviour: `BrowserExtensionOffscreenDocuments`
+  (`browser-extension-offscreen-documents.ts`) focuses each browser-created
+  extension document (`WebContents` of type `remote` on a `chrome-extension://`
+  URL) on every load. The document is never shown, so the window the user is
+  working in keeps the keyboard, and it stays focused for the document's life.
 - **An extension's own popup is told which tab it is acting on.** The app hosts an
   action's popup in a rail popup and gives it the keyboard on first show, so the
   runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's
-  own document   which a password manager reads as the website the user is on, and
+  own document which a password manager reads as the website the user is on, and
   reports as "Site doesn't match" naming the extension's id. The tab facts a tab's
   pages receive are therefore pushed into the extension's own documents as well as
   into its worker: `compat/cio-page-tabs.js` wraps `tabs.query` on both roots in the
@@ -178,11 +204,11 @@ A page's `window.open(url, name, features)` is a popup window, not a tab: a sign
 - The hosting hook is Electron's own: `setWindowOpenHandler` answers `{ action: 'allow', createWindow }` for a `new-window` disposition, and the hook is handed the `WebContents` Chromium created for the popup. That one is presented by the app; the native window is never created.
 - Presenting that exact `WebContents` is what keeps the popup a real popup: `window.opener` and `window.opener.postMessage` reach the opening page, the popup inherits the opener's session so the cookies a sign-in just set are the ones the page around it already has, and the opener closing destroys what it opened.
 - The popup closes itself: `window.close()` (what every completed sign-in and checkout calls) destroys the popup's own `WebContents`, the app is told, and the panel drops the tab. Closing the tab that opened it does the same.
-- Adopting the `WebContents` of a popup Electron created as a *window* is refused (`options.webContents is already attached to a window`), which is why the native window is never created in the first place.
+- Adopting the `WebContents` of a popup Electron created as a _window_ is refused (`options.webContents is already attached to a window`), which is why the native window is never created in the first place.
 - A popup starts at `about:blank` legitimately (a checkout writes its own form into the new window), so that one document is allowed alongside the `https:` the browser navigates to; everything else is refused.
 - A popup is a second native view over a DOM panel, so the same visibility rules apply to it as to a tab's page: a full-window DOM surface, the thread switcher or an overlay over the panel keeps it off screen, and hiding it parks it offscreen instead of pausing it.
-- The rail carries one tab per popup, in its own single-row strip (`BrowserPopupWindowContextTab`): the tab *is* the window, so a window that ends stops appearing and its tab leaves the strip with it. Each tab closes its own window, the rail's far-right close ends every window the page on screen opened, and the tool closes itself with the last window rather than sitting there as an empty strip.
-- The rail animates the width of its own track with a plain CSS transition (`src/renderer/lib/components/browser/BrowserView.svelte`), the same motion the workspace rail's track makes. It must not go back to a Svelte `css` transition: those wait for a zero-duration dummy animation's `finish` event before the real animation starts, and a renderer whose window is not visible never sends that event, which pinned the rail at its first keyframe   `width: 0`   and left the page beside it half open until the view remounted.
+- The rail carries one tab per popup, in its own single-row strip (`BrowserPopupWindowContextTab`): the tab _is_ the window, so a window that ends stops appearing and its tab leaves the strip with it. Each tab closes its own window, the rail's far-right close ends every window the page on screen opened, and the tool closes itself with the last window rather than sitting there as an empty strip.
+- The rail animates the width of its own track with a plain CSS transition (`src/renderer/lib/components/browser/BrowserView.svelte`), the same motion the workspace rail's track makes. It must not go back to a Svelte `css` transition: those wait for a zero-duration dummy animation's `finish` event before the real animation starts, and a renderer whose window is not visible never sends that event, which pinned the rail at its first keyframe `width: 0` and left the page beside it half open until the view remounted.
 - The rail's popup panel places the popup's page by following the frame while the track opens, and re-follows it when the window becomes visible again, because a rail that opened while the window was in the background resumes its opening when the user comes back.
 - Install permission request and permission check handlers on the browser session. Default deny; prompt for the exact origin and permission; support Allow once, Always allow for this site, and Deny. Start with camera, microphone, geolocation, notifications, HID, serial, USB, MIDI, screen capture, and filesystem access denied.
 - Prevent silent downloads. A download always goes through the native save dialog and a safe filename, never lands in the repository by itself, and stays visible with progress and an explicit open/reveal action. See "Downloads" below for what happens when one is stopped, cancelled or left running at a quit.
@@ -287,14 +313,14 @@ window costs progress events and nothing else.
 
 Records persist to `browser/downloads.json` through the storage engine, with the
 same merge-on-write shape the browser permission memory uses, so a download is
-still on screen   with the action it can honour   in the next run:
+still on screen with the action it can honour in the next run:
 
-| State | What it means | Actions |
-| --- | --- | --- |
-| `progressing` | A live Chromium download; `paused` when the user paused it | Pause/Resume, Cancel |
+| State         | What it means                                                      | Actions                    |
+| ------------- | ------------------------------------------------------------------ | -------------------------- |
+| `progressing` | A live Chromium download; `paused` when the user paused it         | Pause/Resume, Cancel       |
 | `interrupted` | Stopped, with bytes on disk; `resumable` when they can continue it | Resume, Start over, Remove |
-| `cancelled` | Stopped and discarded, as Chrome's own Cancel does | Start over, Remove |
-| `completed` | The file is finished | Open, Reveal, Remove |
+| `cancelled`   | Stopped and discarded, as Chrome's own Cancel does                 | Start over, Remove         |
+| `completed`   | The file is finished                                               | Open, Reveal, Remove       |
 
 The file is shared state: more than one instance can run against one config root,
 so a write re-reads it and merges this instance's records over it by id rather
@@ -306,17 +332,17 @@ from before the removal, and without the tombstone surviving it the merge would
 put the record back and nothing would ever take it out again.
 
 A removal that reaches the file has to reach the list the user is looking at as
-well, and nothing else can carry it: a report of a download is a report *about* a
+well, and nothing else can carry it: a report of a download is a report _about_ a
 record, so the record that was just dropped is the one no report can describe.
 The manager therefore sends `browser:downloadRemoved` wherever it drops a record
-on its own   the user removes it, its project is forgotten, or the tracked list is
-trimmed past its cap   and the renderer's mirror deletes that row on the report.
+on its own the user removes it, its project is forgotten, or the tracked list is
+trimmed past its cap and the renderer's mirror deletes that row on the report.
 The mirror is not written to optimistically: main is the one that decides a
 removal (it refuses one for a download still running), and a row deleted on the
 click would only come back on the next report.
 
-The same reasoning covers the moment between a request and a download. *Start
-over* and *Resume* ask Chromium for a download that takes a moment to exist, and
+The same reasoning covers the moment between a request and a download. _Start
+over_ and _Resume_ ask Chromium for a download that takes a moment to exist, and
 the row reads as downloading while it waits, so Cancel is the obvious thing to
 reach for on a server that is not answering. The user's decision outlives the
 request: a download that arrives after they stopped it is cancelled rather than
@@ -328,26 +354,26 @@ Electron 44 and kept honest by the code that reads them:
 
 - A download's partial file is written at the path the save dialog chose, and
   Chromium deletes it when the download is cancelled or the process owning it
-exits. Pausing does not save it. A quit therefore pauses each running download,
-lets it settle, and *moves its bytes* beside the target (`.codeinoven-part`,
-renamed rather than copied) before the records are written. Without that move a
-quit leaves a record with nothing to resume from, which is what "the download
-was gone after I closed the app" was.
+  exits. Pausing does not save it. A quit therefore pauses each running download,
+  lets it settle, and _moves its bytes_ beside the target (`.codeinoven-part`,
+  renamed rather than copied) before the records are written. Without that move a
+  quit leaves a record with nothing to resume from, which is what "the download
+  was gone after I closed the app" was.
 - Resuming is Chromium's own resume (`session.createInterruptedDownload` plus
   `resume()`), which sends the range request with the validator the response
   already provided (`ETag`, else `Last-Modified`). The offset never exceeds what
   this app wrote, so a file that was longer before the download started cannot be
   mistaken for downloaded bytes, and a download whose total or validator
-  Chromium never learned offers *Start over* instead of an unsafe resume.
-- `DownloadItem.getFilename()` is the name Chromium *suggests* (the `download`
+  Chromium never learned offers _Start over_ instead of an unsafe resume.
+- `DownloadItem.getFilename()` is the name Chromium _suggests_ (the `download`
   attribute, a `Content-Disposition`, or the URL's last segment) and it keeps
-answering with that suggestion after the user renames the file in the save
-dialog: the chosen name only ever appears in `getSavePath()`. The path is
-therefore the truth as soon as it exists, and
-`src/main/browser/browser-service/browser-download-name.ts` reads the record's
-name from it. A record still without a path   the dialog is open, or an older run
-wrote it before the answer   keeps the suggestion until the next launch corrects
-it from the path the record holds.
+  answering with that suggestion after the user renames the file in the save
+  dialog: the chosen name only ever appears in `getSavePath()`. The path is
+  therefore the truth as soon as it exists, and
+  `src/main/browser/browser-service/browser-download-name.ts` reads the record's
+  name from it. A record still without a path the dialog is open, or an older run
+  wrote it before the answer keeps the suggestion until the next launch corrects
+  it from the path the record holds.
 
 A download whose bytes already add up to its declared total is settled as
 completed: the last byte landed and only the completion event was lost.
@@ -375,7 +401,7 @@ is paused like any other.
 
 The one path that cannot keep the bytes is a process that dies without running the
 shutdown pipeline: the quit failsafe's forced exit, a crash, or `SIGKILL`. Those
-downloads keep their records and are offered *Start over*, because nothing moved
+downloads keep their records and are offered _Start over_, because nothing moved
 the partial file out of Chromium's reach.
 
 ## Tabs and the history they remember
@@ -393,12 +419,12 @@ config root's `state/` directory, beside the browsing history. The main process 
 both reader and writer, because it is the only process that can read a stack off a
 view and the only one that already sees all three commit points:
 
-| Commit point | What happens to the stack |
-| --- | --- |
-| Parking a view (a switch to another surface) | read off the view, queued for the coalesced write |
-| Hibernating a tab (`browser:destroy` with `hibernated`) | read off the view, record kept, view closed |
-| Closing a tab (`browser:destroy` with `closed`) | record dropped: a closed tab's history goes with the tab row |
-| Quitting | every open tab read, then the write awaited before `dispose()` closes the views |
+| Commit point                                            | What happens to the stack                                                       |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Parking a view (a switch to another surface)            | read off the view, queued for the coalesced write                               |
+| Hibernating a tab (`browser:destroy` with `hibernated`) | read off the view, record kept, view closed                                     |
+| Closing a tab (`browser:destroy` with `closed`)         | record dropped: a closed tab's history goes with the tab row                    |
+| Quitting                                                | every open tab read, then the write awaited before `dispose()` closes the views |
 
 Only the active entry keeps Chromium's `pageState` snapshot, and only when it fits
 its bound whole, because that blob dwarfs the rest of an entry and a truncated one

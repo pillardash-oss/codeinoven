@@ -57,13 +57,28 @@ export function activeIdFor(settings: SpeechSettings, sub: ModelSubTab): string 
   return settings.cleanupArtifactId
 }
 
+/** The model sub-tab a capability belongs to. */
+export function modelSubTabForCapability(capability: SpeechCapability): ModelSubTab {
+  if (capability === 'asr') return 'asr'
+  if (capability === 'tts') return 'tts'
+  return 'llm'
+}
+
+/** The persisted active artifact id for a capability. */
+export function activeIdForCapability(
+  settings: SpeechSettings,
+  capability: SpeechCapability
+): string | undefined {
+  return activeIdFor(settings, modelSubTabForCapability(capability))
+}
+
 /** True when the artifact is the active model of the given capability. */
-export function isActiveArtifact(
+export function isActiveCapability(
   settings: SpeechSettings,
   artifactId: string,
-  sub: ModelSubTab
+  capability: SpeechCapability
 ): boolean {
-  return activeIdFor(settings, sub) === artifactId
+  return activeIdForCapability(settings, capability) === artifactId
 }
 
 export function labelForInstalled(
@@ -90,41 +105,6 @@ export function runtimeBadge(runtime: string): string {
   return runtime.toUpperCase()
 }
 
-export function runtimeBadgeClass(runtime: string): string {
-  if (runtime === 'mlx') return 'bg-violet-500/15 text-violet-600 border-violet-500/20'
-  if (runtime === 'sherpa-onnx') return 'bg-emerald-500/15 text-emerald-600 border-emerald-500/20'
-  if (runtime === 'gguf') return 'bg-amber-500/15 text-amber-600 border-amber-500/20'
-  if (runtime === 'coreml') return 'bg-blue-500/15 text-blue-600 border-blue-500/20'
-  return 'bg-muted/10 text-muted border-border'
-}
-
-export function bestForBadge(artifact: SpeechModelArtifact): { label: string; cls: string } | null {
-  if (artifact.id === 'parakeet-tdt-v2-sherpa-onnx-int8')
-    return { label: 'Best for English', cls: 'bg-sky-500 text-white border-sky-600' }
-  if (artifact.id === 'parakeet-tdt-v3-sherpa-onnx-int8')
-    return { label: 'Best for Multilingual', cls: 'bg-indigo-500 text-white border-indigo-600' }
-  if (artifact.id === 'parakeet-tdt-v2-coreml')
-    return { label: 'Best for English · Core ML', cls: 'bg-sky-600 text-white border-sky-700' }
-  if (artifact.id === 'parakeet-tdt-v3-coreml')
-    return {
-      label: 'Best for Multilingual · Core ML',
-      cls: 'bg-indigo-600 text-white border-indigo-700'
-    }
-  if (artifact.id === 'whisper-base-mlx-4bit')
-    return { label: 'Apple Silicon · Fast', cls: 'bg-zinc-800 text-white border-zinc-700' }
-  if (artifact.id === 'whisper-base-sherpa-int8')
-    return { label: 'Portable · All platforms', cls: 'bg-white text-zinc-700 border-zinc-200' }
-  if (artifact.id === 'kokoro-en-mlx-8bit')
-    return { label: 'Best quality · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
-  if (artifact.id === 'kokoro-en-sherpa-v0-19')
-    return { label: 'Portable · ONNX', cls: 'bg-white text-zinc-700 border-zinc-200' }
-  if (artifact.id === 'qwen3-cleanup-mlx-0-6b-4bit')
-    return { label: 'Recommended · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
-  if (artifact.id === 'sherpa-punctuation-zh-en')
-    return { label: 'Lightweight · Portable', cls: 'bg-white text-zinc-700 border-zinc-200' }
-  return null
-}
-
 /**
  * Byte counts moved to `$lib/format/bytes` so every surface that reports a size
  * shares one implementation. Re-exported here because the sound settings tab
@@ -139,17 +119,56 @@ export function downloadPercent(download: { bytesReceived: number; totalBytes: n
   )
 }
 
-export function isImportedForCapability(
-  artifact: { capability?: SpeechCapability; runtime: SpeechRuntime },
-  cap: SpeechCapability
-): boolean {
-  if (artifact.capability) return artifact.capability === cap
-  // Fallback for legacy imports without capability: infer via runtime
-  // gguf only belongs to cleanup, coreml only to asr
-  if (artifact.runtime === 'gguf') return cap === 'cleanup'
-  if (artifact.runtime === 'coreml') return cap === 'asr'
-  // mlx/sherpa-onnx could be any, but without capability we hide to avoid leakage - only show on asr as safest fallback
-  return cap === 'asr'
+/**
+ * Read the capability out of an artifact id.
+ *
+ * Artifact ids are a stable `<family>-<capability>-...` contract, so a model the
+ * catalog has since dropped still presents in the right tab. Returns null when
+ * the id carries no recognisable capability, so a row is never *guessed* into a
+ * tab it may not belong to.
+ */
+export function capabilityFromArtifactId(artifactId: string): SpeechCapability | null {
+  const tokens = new Set(artifactId.toLowerCase().split('-'))
+  if (
+    tokens.has('cleanup') ||
+    tokens.has('normalizer') ||
+    tokens.has('punctuation') ||
+    tokens.has('qwen') ||
+    tokens.has('s1')
+  ) {
+    return 'cleanup'
+  }
+  if (tokens.has('tts') || tokens.has('kokoro')) return 'tts'
+  if (tokens.has('asr') || tokens.has('whisper') || tokens.has('parakeet')) return 'asr'
+  return null
+}
+
+/**
+ * The capability an installed artifact serves, or null when it cannot be
+ * established.
+ *
+ * The catalog is the authority: a downloaded model is identified by its catalog
+ * entry. An imported model carries the capability it was imported for. A row
+ * with neither (a download from a catalog that has since dropped the model) is
+ * read from its id, and only then from an unambiguous runtime: `gguf` is
+ * cleanup-only and `coreml` is ASR-only, while `mlx` and `sherpa-onnx` serve
+ * several capabilities and are therefore never guessed.
+ */
+export function installedCapability(
+  installed: { artifactId?: string; capability?: SpeechCapability; runtime: SpeechRuntime },
+  catalogArtifacts: SpeechModelArtifact[]
+): SpeechCapability | null {
+  const catalog =
+    installed.artifactId !== undefined
+      ? catalogArtifacts.find((artifact) => artifact.id === installed.artifactId)
+      : undefined
+  if (catalog) return catalog.capability
+  if (installed.capability) return installed.capability
+  const fromId = installed.artifactId ? capabilityFromArtifactId(installed.artifactId) : null
+  if (fromId) return fromId
+  if (installed.runtime === 'gguf') return 'cleanup'
+  if (installed.runtime === 'coreml') return 'asr'
+  return null
 }
 
 export function runtimesForSubTab(sub: ModelSubTab): SpeechRuntime[] {
@@ -176,8 +195,10 @@ export function sortedForSubTab(
     'whisper-base-sherpa-int8': 6,
     'kokoro-en-mlx-8bit': 1,
     'kokoro-en-sherpa-v0-19': 2,
-    'qwen3-cleanup-mlx-0-6b-4bit': 1,
-    'sherpa-punctuation-zh-en': 2
+    'qwen3-cleanup-gguf-0-6b': 1,
+    's1-mini-cleanup-gguf-q4': 2,
+    'qwen3-cleanup-gguf-1-7b': 3,
+    'sherpa-punctuation-zh-en': 4
   }
   const sorted = [...filtered].sort((a, b) => (order[a.id] ?? 99) - (order[b.id] ?? 99))
   if (runtimeFilter !== 'all')

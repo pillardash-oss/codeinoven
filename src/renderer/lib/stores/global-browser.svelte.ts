@@ -79,6 +79,7 @@ import {
   DEFAULT_BOX_ID,
   boxIdForJar,
   defaultBrowserBox,
+  jarIdForBox,
   isTabIdlePastWindow,
   type BrowserBoxAppearance,
   type BrowserGroupAppearance,
@@ -381,6 +382,13 @@ export class GlobalBrowserState {
    *  no tab; the tabs that name it do, and a box nobody uses is a row here and a
    *  profile directory on disk, nothing more. */
   boxes: GlobalBrowserBox[] = $state([])
+  /** The box a brand-new global-browser tab starts in when it has no tab to
+   *  inherit a box from, or {@link DEFAULT_BOX_ID} for the profile's own jar.
+   *
+   *  It is deliberately the global browser's own setting. A thread browser reads
+   *  its own jar instead, so a profile-wide preference can never move a thread tab
+   *  out of the conversation that owns it. */
+  defaultBoxId: string = $state(DEFAULT_BOX_ID)
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
   groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
@@ -461,6 +469,10 @@ export class GlobalBrowserState {
    *  list is still arriving belongs to the user, so it is kept and stored rather
    *  than replaced by what was read. */
   private mutatedSinceBoot = false
+
+  /** Whether this session chose a default box, so a stored one never overwrites an
+   *  earlier choice of the user's when the two lists are merged. */
+  private defaultBoxChosen = false
 
   /**
    * Whether {@link start} has wired the runtime.
@@ -617,6 +629,7 @@ export class GlobalBrowserState {
     this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
     this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
     this.boxes = withDefaultBox((snapshot.boxes ?? []).map(runtimeBoxFromPersisted))
+    this.adoptDefaultBox(snapshot.defaultBoxId)
     // Through `setActiveTab`, not a direct assignment: the restored tab is the one
     // the browser view is about to show, and it has to count as a visit for the
     // Ctrl+Tab switcher exactly as an activation does. `markOpened` runs before
@@ -652,6 +665,18 @@ export class GlobalBrowserState {
     // loop zero times and never mint it, which is exactly what happened when this
     // first shipped: a profile with one box showed one box and no default.
     this.boxes = withDefaultBox(this.boxes)
+    // A session that has not chosen a default of its own takes the stored one, so a
+    // change that landed before the read still shows the box the user last picked.
+    // A session that already chose keeps its choice: that is the newer intent.
+    if (!this.defaultBoxChosen) this.adoptDefaultBox(snapshot.defaultBoxId)
+  }
+
+  /** Take a stored default box, narrowed to one this profile actually offers. A
+   *  value that names no box, or one this strip does not hold, is the profile's
+   *  own box, so the fallback can never point at a jar nothing owns. */
+  private adoptDefaultBox(boxId: string | null | undefined): void {
+    const known = boxId === DEFAULT_BOX_ID || this.boxes.some((box) => box.id === boxId)
+    this.defaultBoxId = known && typeof boxId === 'string' ? boxId : DEFAULT_BOX_ID
   }
 
   /**
@@ -1482,14 +1507,22 @@ export class GlobalBrowserState {
   /** Open an address: focus the tab already showing it, otherwise create one.
    *  A named box scopes the match, so the same address in another jar opens its
    *  own tab rather than stealing the one already logged in elsewhere; with no
-   *  box named, an open copy of the address is focused wherever it lives. */
-  open(url: string, groupId: string | null = null, boxId: string | null = null): string {
+   *  box named, an open copy of the address is focused wherever it lives.
+   *
+   *  A page arriving with no box named is a link or an external open, not a tab
+   *  opened beside another, so it starts in the profile's chosen default box
+   *  instead of inheriting the box of whatever tab happens to be on screen. */
+  open(
+    url: string,
+    groupId: string | null = null,
+    boxId: string | null | undefined = undefined
+  ): string {
     const existing = this.findTabByUrl(url, boxId ?? undefined)
     if (existing) {
       this.activate(existing.id)
       return existing.id
     }
-    return this.createTab(url, groupId, boxId)
+    return this.createTab(url, groupId, boxId === undefined ? this.newTabBoxId() : boxId)
   }
 
   /**
@@ -1523,10 +1556,15 @@ export class GlobalBrowserState {
   /**
    * Create a tab for an address (blank allowed) and make it active.
    *
-   * `boxId` names the jar the tab runs in, or null for the default one. `anchor`
+   * `boxId` names the jar the tab runs in, or null for the profile's own. `anchor`
    * places the new row before or after an existing tab and, when no group or box
    * is named, inherits both from that tab, which keeps "new tab here" a one-click
    * gesture that lands beside the page it came from.
+   *
+   * With no box named and no tab to inherit from at all   the browser's first tab,
+   * an external open   the tab starts in the profile's chosen default box. That
+   * fallback is the global browser's alone: a thread browser never reaches this
+   * store, so a thread tab with nothing to inherit stays in the thread's own jar.
    */
   createTab(
     url: string,
@@ -1537,7 +1575,8 @@ export class GlobalBrowserState {
     this.enforceTabCap()
     const anchorTab = anchor ? this.tabById(anchor.tabId) : this.activeTab
     const targetGroupId = groupId === undefined ? (anchorTab?.groupId ?? null) : groupId
-    const targetBoxId = boxId === undefined ? (anchorTab?.boxId ?? null) : boxId
+    const targetBoxId =
+      boxId !== undefined ? boxId : anchorTab ? anchorTab.boxId : this.newTabBoxId()
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -2006,6 +2045,34 @@ export class GlobalBrowserState {
     }
   }
 
+  /**
+   * Choose the box a brand-new global-browser tab starts in.
+   *
+   * This is the box a tab with nothing to inherit lands in   the first tab, an
+   * external open, a link   so it is the profile's answer to "where do my new
+   * tabs go", not a thread's. A box the profile does not offer is ignored rather
+   * than stored, because a default that names nothing would silently start tabs in
+   * the wrong jar.
+   */
+  setDefaultBox(boxId: string): void {
+    if (boxId !== DEFAULT_BOX_ID && !this.boxById(boxId)) return
+    if (this.defaultBoxId === boxId) return
+    this.defaultBoxId = boxId
+    this.defaultBoxChosen = true
+    this.persist()
+  }
+
+  /**
+   * The jar a new global-browser tab starts in when it has no tab to inherit.
+   *
+   * The profile's own box is its own jar, which main names as no box, so the
+   * chosen default goes through `jarIdForBox` before it reaches a tab. Only the
+   * global browser reads this; a thread browser falls back to the thread's jar.
+   */
+  private newTabBoxId(): string | null {
+    return jarIdForBox(this.defaultBoxId)
+  }
+
   /** How many tabs currently run in a jar. The argument is a jar id, not a box id:
    *  the default box's jar is the absent id, so pass it through `jarIdForBox`. */
   tabCountInBox(jarId: string | null): number {
@@ -2045,6 +2112,9 @@ export class GlobalBrowserState {
     }
     this.boxes = this.boxes.filter((box) => box.id !== id)
     this.boxIconUrls.delete(id)
+    // A default box that no longer exists would start new tabs in a jar nothing
+    // owns, so the profile's own box takes it back.
+    if (this.defaultBoxId === id) this.defaultBoxId = DEFAULT_BOX_ID
     this.persist()
   }
 
@@ -2260,7 +2330,13 @@ export class GlobalBrowserState {
 
   /** The strip in its stored shape. */
   private snapshot(): GlobalBrowserTabsSnapshot {
-    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.boxes, this.activeTabId)
+    return globalBrowserTabsSnapshot(
+      this.tabs,
+      this.groups,
+      this.boxes,
+      this.activeTabId,
+      this.defaultBoxId
+    )
   }
 
   /**

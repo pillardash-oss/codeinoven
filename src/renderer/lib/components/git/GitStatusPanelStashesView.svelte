@@ -2,7 +2,7 @@
   import { Archive, Loader2, Trash2 } from '@lucide/svelte'
   import type { GitDiff, GitFileChange, GitRestoreTarget, GitStashEntry } from '$shared/types'
   import GitFileRow from './GitFileRow.svelte'
-  import { relativeTime } from './git-status-panel-format'
+  import { formatCompactAge } from '$shared/date-time-format'
 
   interface Props {
     selectedStash: GitStashEntry | null
@@ -110,7 +110,7 @@
                   <span class="truncate">{stash.branch}</span>
                 {/if}
                 <span>·</span>
-                <span>{relativeTime(stash.date)}</span>
+                <span>{formatCompactAge(stash.date)}</span>
               </span>
             </span>
           </button>

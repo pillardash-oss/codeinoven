@@ -10,6 +10,7 @@
   import type { NativeDockRequest } from '$shared/native-dock'
   import BrowserOverlayDock from './BrowserOverlayDock.svelte'
   import TooltipHost from './TooltipHost.svelte'
+  import { syncTitleTooltipPointer } from './tooltip-manager.svelte'
   import BrowserOverlayStrip from './BrowserOverlayStrip.svelte'
   import BrowserOverlayStatus from './BrowserOverlayStatus.svelte'
 
@@ -204,6 +205,9 @@
     }
     if (pointerWatch !== undefined) clearInterval(pointerWatch)
     pointerWatch = undefined
+    // No interactive content remains. Clear a tooltip whose projected anchor
+    // was removed even when the cursor never moved.
+    syncTitleTooltipPointer(-1, -1)
   }
 
   /**
@@ -222,8 +226,8 @@
    * resets its own copies of both answers whenever it shows or hides this window:
    * a state that did not change from this document's point of view still has to
    * be asserted, or the two sides stay disagreeing and the control stays
-   * unpressable. The watch that runs while content is on screen reports only a
-   * change, which is all it can ever have to say.
+   * unpressable. The watch also reasserts aggregate hover so main can distinguish
+   * a dock departure from moving into another interactive overlay region.
    */
   function syncPointerFromCursor(force = false): void {
     const epoch = pointerEpoch
@@ -231,8 +235,12 @@
       .then((cursor) => {
         if (!cursor || epoch !== pointerEpoch) return
         pointer = { x: cursor.x, y: cursor.y, known: true }
-        reportPointer(force)
+        // Reassert on each window-server sample. Moving from a dock to the
+        // strip keeps the aggregate `over` true, but must release dock focus.
+        // Main guards the native click-through toggle against redundant calls.
+        reportPointer(true)
         reportStripPointer(force)
+        syncTitleTooltipPointer(cursor.x, cursor.y)
       })
       .catch(() => {})
   }

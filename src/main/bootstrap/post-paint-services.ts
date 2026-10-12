@@ -46,6 +46,10 @@ import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
+import { SearchService } from '../search/search-service'
+import { registerSearchSettingsIpc } from '../ipc/search-settings-ipc'
+import { getLlamaServerBinary } from '../speech/backends/llama-backend'
+import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
 import type { BootstrapState } from './bootstrap-state'
 
 /** Boot-scoped collaborators a per-window browser attach needs. */
@@ -557,6 +561,20 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.speechService,
     () => state.mainWindow?.webContents ?? null
   )
+  // Intent search shares the one local llama.cpp runtime with speech, so both
+  // draw from the same discovered/downloaded binary and the same process journal.
+  state.searchService = new SearchService(database, {
+    llamaServerPath: () => getLlamaServerBinary(),
+    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
+    registerProcess: (pid, command, cwd) =>
+      sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
+    unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
+  })
+  await state.searchService.initialize()
+  state.unregisterSearchIpc = registerSearchSettingsIpc(
+    state.searchService,
+    () => state.mainWindow?.webContents ?? null
+  )
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -740,6 +758,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.error('Orphaned harness process reaping failed at startup:', error)
   }
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
+    searchService: state.searchService ?? undefined,
     projectManager,
     projectFilesService,
     browser: () => state.browserService,

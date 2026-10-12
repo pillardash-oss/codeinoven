@@ -18,7 +18,7 @@
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -566,7 +566,7 @@
                     {#if pr.authorIsBot}
                       <BotBadge />
                     {/if}
-                    <span class="shrink-0">· {relativeTime(pr.updatedAt)}</span>
+                    <span class="shrink-0">· {formatCompactAge(pr.updatedAt)}</span>
                   </p>
                   <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
                     {pr.headRef} → {pr.baseRef}

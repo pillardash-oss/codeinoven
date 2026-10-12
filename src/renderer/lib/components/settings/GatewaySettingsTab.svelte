@@ -14,6 +14,7 @@
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
+  import { notifyClipboard } from '$lib/copy-text'
   import { gatewayState } from '$lib/stores/gateway.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -144,7 +145,7 @@
   async function copyDashboardPassword(pluginId: string): Promise<void> {
     try {
       await invoke('gateway:copyDashboardPassword', pluginId)
-      toast.success('Dashboard password copied to the clipboard')
+      notifyClipboard('Dashboard password copied to the clipboard')
     } catch (copyError) {
       reportError(copyError, 'The dashboard password could not be copied.')
     }

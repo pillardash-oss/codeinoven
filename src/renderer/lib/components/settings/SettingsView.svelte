@@ -93,6 +93,7 @@
   import AgentPluginsMarketplaceView from './AgentPluginsMarketplaceView.svelte'
   import AgentPluginDetail from './AgentPluginDetail.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
+  import SearchSettingsTab from './SearchSettingsTab.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
@@ -1436,6 +1437,8 @@
       <CuaBridgeSettings />
     {:else if section === 'sound'}
       <SoundSettingsTab settings={config.sound} {settingsReady} {updateConfig} />
+    {:else if section === 'search'}
+      <SearchSettingsTab />
     {:else if section === 'gateways'}
       <GatewaySettingsTab />
     {:else if section === 'keymap'}

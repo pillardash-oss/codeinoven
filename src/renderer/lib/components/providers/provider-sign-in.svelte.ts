@@ -1,6 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { openSignInPage, prefersCioBrowser } from '$lib/open-in-browser'
-import type { HarnessAccount, OfferedProvider } from '$shared/types'
+import type { OfferedProvider } from '$shared/types'
 
 export interface OAuthDeviceCode {
   userCode: string
@@ -16,17 +16,23 @@ export interface OAuthPrompt {
 }
 
 /**
- * Everything the in-app sign-in flow needs from its host modal: the harness and
- * provider selection it is running for, the shared message line, and the
- * pending-account lifecycle it hands the authenticated result back to.
+ * Everything the in-app sign-in flow needs from its host: the harness and
+ * provider selection it is running for, the shared message line, the account the
+ * credential must land in, and the result handoff once the flow finishes.
  */
-export interface AddProviderModalOAuthHost {
+export interface ProviderSignInHost {
   harnessId: () => string
   selectedProvider: () => OfferedProvider | null
   clearApiKey: () => void
   clearMessages: () => void
   setActionError: (message: string) => void
-  preparePendingAccount: (providerId?: string) => Promise<HarnessAccount>
+  /**
+   * Account whose credential home this sign-in must write into, or `undefined`
+   * for the harness's shared home. The add-provider panel creates a pending
+   * container here; a surface re-authenticating an existing account returns
+   * that account's id so the flow lands on the account the thread runs on.
+   */
+  bindSignInAccount: (providerId: string) => Promise<string | undefined>
   finishAuthentication: (providerId: string, providerName: string) => Promise<void>
   discardPendingAccount: () => Promise<void>
 }
@@ -36,8 +42,14 @@ export interface AddProviderModalOAuthHost {
  * flows). Owns the login id, progress line, device code, and interactive
  * prompts, and routes the shared `providerAccounts:oauthEvent` payloads into
  * them until the flow completes, fails, or is cancelled.
+ *
+ * Shared by every surface that starts an in-app sign-in: the add-provider
+ * panel (provider picking, pending account) and the provider status card / usage
+ * cell (re-authenticating an account the thread already runs on). The host
+ * decides which account the credential must land in, so the same machine serves
+ * both without the surfaces duplicating it.
  */
-export class AddProviderModalOAuthController {
+export class ProviderSignInController {
   loginId = $state<string | null>(null)
   status = $state('')
   deviceCode = $state<OAuthDeviceCode | null>(null)
@@ -74,7 +86,7 @@ export class AddProviderModalOAuthController {
    */
   authPageInAppBrowser = $state(false)
 
-  #host: AddProviderModalOAuthHost
+  #host: ProviderSignInHost
   /**
    * Sign-in events can reach the renderer before the `beginOAuthLogin` invoke
    * resolves and assigns the login id - the main process starts the flow
@@ -85,7 +97,7 @@ export class AddProviderModalOAuthController {
   #earlyEvents: Array<Record<string, unknown>> = []
   static #EARLY_EVENT_LIMIT = 50
 
-  constructor(host: AddProviderModalOAuthHost) {
+  constructor(host: ProviderSignInHost) {
     this.#host = host
   }
 
@@ -105,7 +117,7 @@ export class AddProviderModalOAuthController {
       return
     }
     if (this.loginId === null) {
-      if (this.#earlyEvents.length < AddProviderModalOAuthController.#EARLY_EVENT_LIMIT) {
+      if (this.#earlyEvents.length < ProviderSignInController.#EARLY_EVENT_LIMIT) {
         this.#earlyEvents.push(payload as Record<string, unknown>)
       }
       return
@@ -269,12 +281,12 @@ export class AddProviderModalOAuthController {
     this.status = 'Starting sign-in…'
     this.#earlyEvents = []
     try {
-      const account = await this.#host.preparePendingAccount(provider.id)
+      const accountId = await this.#host.bindSignInAccount(provider.id)
       this.loginId = await invoke(
         'providerAccounts:beginOAuthLogin',
         this.#host.harnessId(),
         provider.id,
-        account.id
+        accountId
       )
       const buffered = this.#earlyEvents
       this.#earlyEvents = []

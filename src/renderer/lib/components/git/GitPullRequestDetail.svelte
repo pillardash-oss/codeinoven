@@ -24,7 +24,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   // The `@query` detection is shared with the chat composer rather than
@@ -802,7 +802,7 @@
       {#if summary.authorIsBot}
         <BotBadge />
       {/if}
-      <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
+      <span class="shrink-0">· {formatCompactAge(summary.updatedAt)}</span>
       {#if detail}
         <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
           <span class="text-success">+{detail.additions}</span>

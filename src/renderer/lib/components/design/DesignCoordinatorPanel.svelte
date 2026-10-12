@@ -2,10 +2,12 @@
   import { onMount } from 'svelte'
   import {
     Check,
+    ChevronDown,
     Ellipsis,
     Film,
     Frame,
     GlobeCode,
+    History,
     ImageOff,
     ListClock,
     LoaderCircle,
@@ -19,6 +21,7 @@
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -27,6 +30,7 @@
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
+  import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import {
     SCREEN_CANVAS_FILE,
     isScreenCanvasEntry,
@@ -52,8 +56,10 @@
    * between designs, bring one on screen, or ask the agent for more.
    *
    * The panel is a header plus one scrolling surface. The header owns the design in
-   * front, the design tabs the user can drag into their own order, the refresh and
-   * the menu; the surface is the board, and its first two entries are the two pages
+   * front, the refresh and the menu; every other design of the project sits behind
+   * the dropdown beside it, so a project with a dozen designs still shows one tab
+   * and a way to reach the rest. The surface is the board, and its first two entries
+   * are the two pages
    * that are not screens: the Screen Canvas that shows every screen at once, and the
    * live preview a visitor lands on. Everything after them is a screen of the folder
    * in front, all the same size: a picture is a picture of a screen, not the screen
@@ -107,21 +113,18 @@
   /** The canvas open in flight, kept apart from the design preview so opening one
    *  never spins the other's button. */
   let openingCanvas = $state(false)
-  /** The tab strip's scroller, so the tab in front can be scrolled into view. */
-  let tabStrip = $state<HTMLElement | null>(null)
-
-  function captureTabStrip(element: HTMLElement): void {
-    tabStrip = element
-  }
-  /** The design tab being dragged, the one it is over, and which side of it the
-   *  dragged tab would land on: the same three the terminal strip keeps. */
-  let draggingTab = $state('')
-  let dropTab = $state('')
-  let dropSide = $state<'before' | 'after'>('after')
   let error = $state('')
   /** The tab holding the work, so the board can reach its own controls. Empty
    *  until the first capture opens one, and an empty id reads as idle state. */
   let tabId = $state('')
+
+  /**
+   * Whether the history pane is on screen.
+   *
+   * The pane is what makes iteration safe, so it is one click from the board rather
+   * than a detour: the design stays in the top half and its history opens under it.
+   */
+  let historyOpen = $state(false)
 
   /**
    * The folder the user is looking at, when it is not the thread's own.
@@ -196,8 +199,20 @@
 
   /** Every folder of this kind the project holds, newest first. */
   let items = $derived(designState?.items ?? [])
-  /** The same folders in the order the user dragged their tabs into. */
-  let tabs = $derived(designCoordinatorState.orderedItems(projectId, threadId, items))
+  /**
+   * The folder this thread itself last previewed.
+   *
+   * Every other design in the list belongs to another thread of the project, so
+   * this is the one the dropdown badges as current: it is what the thread is
+   * working on, whichever design the board happens to be showing.
+   */
+  let threadDesignDirectory = $derived(designState?.current?.directory ?? '')
+  /** How many designs sit behind the "Others" trigger. */
+  let otherCount = $derived(Math.max(0, items.length - 1))
+  /** What the trigger and its menu are called, in this board's own words. */
+  let switchLabel = $derived(
+    `Switch ${noun}, ${otherCount} other ${otherCount === 1 ? noun : `${noun}s`} in this project`
+  )
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
     const current = designState?.current ?? null
@@ -388,7 +403,12 @@
     }
   }
 
-  /** Show another design of this project on the board. A view change, not a preview. */
+  /**
+   * Show another design of this project on the board. A view change, not a preview.
+   *
+   * This is what picking an entry from the dropdown runs, so the board follows the
+   * user's choice while the browser stays where it is.
+   */
   function selectDesign(directory: string): void {
     if (directory === '' || directory === selected.directory) return
     viewedDirectory = directory
@@ -397,52 +417,10 @@
     void loadCanvas()
   }
 
-  /**
-   * Drag a design tab into the user's own order.
-   *
-   * The order is the panel's and the set is main's: a design written since the last
-   * look is not in the order yet, so it lands in front where the newest work belongs.
-   */
-  function handleTabDragStart(event: DragEvent, directory: string): void {
-    draggingTab = directory
-    if (!event.dataTransfer) return
-    event.dataTransfer.setData('text/plain', directory)
-    event.dataTransfer.effectAllowed = 'move'
+  /** Pick a design from the dropdown, which the radio group reports as a string. */
+  function handleDesignChange(directory: string): void {
+    selectDesign(directory)
   }
-
-  function handleTabDragOver(event: DragEvent, directory: string): void {
-    if (draggingTab === '' || draggingTab === directory) return
-    event.preventDefault()
-    dropTab = directory
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-    dropSide = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
-  }
-
-  function handleTabDrop(event: DragEvent, directory: string): void {
-    event.preventDefault()
-    const dragged = event.dataTransfer?.getData('text/plain') || draggingTab
-    if (dragged !== '' && dragged !== directory) {
-      designCoordinatorState.moveTab(projectId, threadId, items, dragged, directory, dropSide)
-    }
-    endTabDrag()
-  }
-
-  function endTabDrag(): void {
-    draggingTab = ''
-    dropTab = ''
-  }
-
-  $effect(() => {
-    // The tab in front is scrolled into the strip, so a design the user picked is
-    // never the one tab they cannot see.
-    const directory = selected.directory
-    const strip = tabStrip
-    if (strip === null || directory === '') return
-    strip.querySelector<HTMLElement>('[data-active-design="true"]')?.scrollIntoView({
-      inline: 'nearest',
-      block: 'nearest'
-    })
-  })
 
   /** Serve the work and bring its tab to the user. Main reveals it; the
    *  workspace opens and focuses the sidebar tab from that event, so this panel
@@ -570,6 +548,18 @@
     void loadCanvas()
   }
 
+  /**
+   * The folder moved along its history, so picture it as it now is.
+   *
+   * A restore rewrote the files, so the pictures the board holds are pictures of a
+   * design that no longer exists: forcing the sweep is what puts the folder the user
+   * chose on screen instead of the one they left.
+   */
+  function restoreBoard(): void {
+    void loadGallery(true)
+    void loadCanvas()
+  }
+
   $effect(() => {
     // The agent writes the canvas inside a turn, so the board re-reads when that
     // turn settles. Nothing polls: a canvas that appeared is read then, and one
@@ -589,14 +579,18 @@
     void loadWorkRoots()
   })
 
-  function updatedLabel(item: DesignEntry): string {
-    if (item.updatedAt <= 0) return ''
-    return new Date(item.updatedAt).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+  /** A design's age, in the same compact form a thread row uses. */
+  function ageLabel(value: number): string {
+    return value > 0 ? formatCompactAge(value) : ''
+  }
+
+  /** A design's timestamps in full, for the row's tooltip. */
+  function designTooltip(item: DesignEntry): string {
+    if (!item.hasEntry) return `${item.name}, no entry page`
+    const parts = [item.name]
+    if (item.createdAt > 0) parts.push(`created ${formatDateTime(item.createdAt)}`)
+    if (item.updatedAt > 0) parts.push(`updated ${formatDateTime(item.updatedAt)}`)
+    return parts.join(', ')
   }
 </script>
 
@@ -704,8 +698,97 @@
 
   <header class="shrink-0 border-b border-border">
     <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-      <WorkIcon size={13} class="shrink-0 text-accent" />
-      {#if tabs.length === 1}
+      {#if items.length > 1}
+        <!--
+          One tab holds the design in front, and every other design of the project
+          waits behind the word beside it. A project with a dozen designs would
+          otherwise be a strip that scrolls sideways, hiding the very design the
+          user came for; here the tab never moves and the list is one click away.
+        -->
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+            title="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
+            aria-label="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
+          >
+            <WorkIcon size={13} class="shrink-0 text-accent" />
+            <span
+              class="min-w-0 truncate text-xs font-semibold text-foreground"
+              title={selected.directory}
+            >
+              {selectedName === '' ? nounTitle : selectedName}
+            </span>
+            {#if !video && designScreens.length > 0}
+              <span
+                class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+              >
+                {designScreens.length}
+              </span>
+            {/if}
+            <span
+              class="flex shrink-0 items-center gap-0.5 pl-0.5 text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
+            >
+              Others
+              <ChevronDown size={10} class="shrink-0" />
+            </span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
+              aria-label={listLabel}
+            >
+              <DropdownMenu.RadioGroup
+                value={selected.directory}
+                onValueChange={handleDesignChange}
+              >
+                {#each items as item (item.directory)}
+                  {@const created = ageLabel(item.createdAt)}
+                  {@const updated = ageLabel(item.updatedAt)}
+                  {@const stamp =
+                    created === ''
+                      ? updated
+                      : updated === '' || created === updated
+                        ? created
+                        : `${created} · ${updated}`}
+                  <DropdownMenu.RadioItem
+                    value={item.directory}
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    title={designTooltip(item)}
+                  >
+                    <WorkIcon size={12} class="shrink-0 text-dimmed" />
+                    <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                    {#if item.directory === threadDesignDirectory}
+                      <span
+                        class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                      >
+                        Current
+                      </span>
+                    {/if}
+                    {#if stamp !== ''}
+                      <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
+                        {stamp}
+                      </span>
+                    {/if}
+                    <Check
+                      size={12}
+                      class={[
+                        'shrink-0',
+                        item.directory === selected.directory ? 'text-primary' : 'invisible'
+                      ]}
+                      aria-hidden="true"
+                    />
+                  </DropdownMenu.RadioItem>
+                {/each}
+              </DropdownMenu.RadioGroup>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {:else}
+        <WorkIcon size={13} class="shrink-0 text-accent" />
         <span
           class="max-w-40 shrink-0 truncate text-xs font-semibold text-foreground"
           title={selected.directory}
@@ -720,56 +803,7 @@
           </span>
         {/if}
       {/if}
-      {#if tabs.length > 1}
-        <div
-          class="-my-1.5 min-w-0 flex-1 overflow-x-auto"
-          {@attach captureTabStrip}
-          aria-label={listLabel}
-        >
-          <div class="flex min-w-max items-stretch">
-            {#each tabs as item (item.directory)}
-              {@const active = item.directory === selected.directory}
-              {@const updated = updatedLabel(item)}
-              <button
-                type="button"
-                class="group relative flex max-w-40 shrink-0 cursor-grab items-center gap-1 border-r border-border px-2 text-[0.6875rem] transition-colors active:cursor-grabbing {active
-                  ? 'bg-app font-medium text-foreground'
-                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
-                draggable="true"
-                data-active-design={active ? 'true' : undefined}
-                title={item.hasEntry
-                  ? updated === ''
-                    ? item.name
-                    : `${item.name}, updated ${updated}`
-                  : `${item.name}, no index.html`}
-                aria-current={active ? 'true' : undefined}
-                onclick={() => selectDesign(item.directory)}
-                ondragstart={(event) => handleTabDragStart(event, item.directory)}
-                ondragover={(event) => handleTabDragOver(event, item.directory)}
-                ondrop={(event) => handleTabDrop(event, item.directory)}
-                ondragend={endTabDrag}
-              >
-                <WorkIcon
-                  size={10}
-                  class={active ? 'shrink-0 text-accent' : 'shrink-0 text-dimmed'}
-                />
-                <span class="truncate">{item.name}</span>
-                {#if dropTab === item.directory}
-                  <span
-                    class="absolute inset-y-0 w-0.5 bg-accent {dropSide === 'before'
-                      ? 'left-0'
-                      : 'right-0'}"
-                    aria-hidden="true"
-                  ></span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-      {#if tabs.length <= 1}
-        <span class="min-w-0 flex-1"></span>
-      {/if}
+      <span class="min-w-0 flex-1"></span>
       <span class="flex shrink-0 items-center gap-0.5">
         {#if video && tabId !== ''}
           <button
@@ -789,6 +823,19 @@
             {/if}
           </button>
         {/if}
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:text-foreground'}"
+          disabled={selected.directory === ''}
+          aria-pressed={historyOpen}
+          title={`${nounTitle} history`}
+          aria-label={`${nounTitle} history`}
+          onclick={() => (historyOpen = !historyOpen)}
+        >
+          <History size={12} />
+        </button>
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
@@ -847,6 +894,14 @@
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => (historyOpen = !historyOpen)}
+              >
+                <History size={13} class="shrink-0 text-muted" />
+                {historyOpen ? 'Hide history' : 'Show history'}
+              </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={beginEditRoot}
@@ -964,72 +1019,83 @@
     </StalePanelNotice>
   {/if}
 
-  <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-    {#if error !== ''}
-      <p
-        class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-        role="alert"
-      >
-        {error}
-      </p>
-    {/if}
+  <div class="flex min-h-0 flex-1 flex-col">
+    <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+      {#if error !== ''}
+        <p
+          class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+          role="alert"
+        >
+          {error}
+        </p>
+      {/if}
 
-    {#if video && gallery.length === 0}
-      <div
-        class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
-      >
-        {#if galleryBusy}
-          <LoaderCircle size={16} class="animate-spin" />
-          <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-        {:else}
-          <ImageOff size={16} />
-          <span class="px-4 text-center text-[0.6875rem]">
-            {items.length === 0
-              ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-              : 'No preview captured yet.'}
-          </span>
-        {/if}
-      </div>
-    {:else}
-      <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-        {#if !video}
-          {@render entryCard({
-            icon: Presentation,
-            name: 'Screen Canvas',
-            shot: canvasShot,
-            label: 'Open the Screen Canvas in the in-app browser',
-            empty: canvasEntryNote,
-            busy: !canvasRead || openingCanvas,
-            ready: canvasState !== null,
-            onOpen: () => void openCanvas()
-          })}
-          {@render entryCard({
-            icon: PlayingCardsFan,
-            name: 'Live preview',
-            shot: liveShot,
-            label: `Open the live preview of this ${noun} in the in-app browser`,
-            empty: liveEntryNote,
-            busy: opening,
-            ready: liveReady,
-            onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
-          })}
-        {/if}
-        {#each designScreens as screen (screen.entry)}
-          {@render screenCard(screen, video)}
-        {/each}
-      </div>
-      {#if !video && designScreens.length === 0}
-        {#if galleryBusy}
-          <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-            <LoaderCircle size={12} class="animate-spin" />
-            Capturing the {noun}…
-          </p>
-        {:else}
-          <p class="mt-2 text-center text-[0.6875rem] text-muted">
-            {`The agent has not written a ${noun} yet. It will appear here when it does.`}
-          </p>
+      {#if video && gallery.length === 0}
+        <div
+          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+        >
+          {#if galleryBusy}
+            <LoaderCircle size={16} class="animate-spin" />
+            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+          {:else}
+            <ImageOff size={16} />
+            <span class="px-4 text-center text-[0.6875rem]">
+              {items.length === 0
+                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+                : 'No preview captured yet.'}
+            </span>
+          {/if}
+        </div>
+      {:else}
+        <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+          {#if !video}
+            {@render entryCard({
+              icon: Presentation,
+              name: 'Screen Canvas',
+              shot: canvasShot,
+              label: 'Open the Screen Canvas in the in-app browser',
+              empty: canvasEntryNote,
+              busy: !canvasRead || openingCanvas,
+              ready: canvasState !== null,
+              onOpen: () => void openCanvas()
+            })}
+            {@render entryCard({
+              icon: PlayingCardsFan,
+              name: 'Live preview',
+              shot: liveShot,
+              label: `Open the live preview of this ${noun} in the in-app browser`,
+              empty: liveEntryNote,
+              busy: opening,
+              ready: liveReady,
+              onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+            })}
+          {/if}
+          {#each designScreens as screen (screen.entry)}
+            {@render screenCard(screen, video)}
+          {/each}
+        </div>
+        {#if !video && designScreens.length === 0}
+          {#if galleryBusy}
+            <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+              <LoaderCircle size={12} class="animate-spin" />
+              Capturing the {noun}…
+            </p>
+          {:else}
+            <p class="mt-2 text-center text-[0.6875rem] text-muted">
+              {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+            </p>
+          {/if}
         {/if}
       {/if}
-    {/if}
+    </div>
+    <DesignHistoryPanel
+      {projectId}
+      {threadId}
+      directory={selected.directory}
+      {noun}
+      open={historyOpen}
+      onRestored={restoreBoard}
+      onClose={() => (historyOpen = false)}
+    />
   </div>
 </div>

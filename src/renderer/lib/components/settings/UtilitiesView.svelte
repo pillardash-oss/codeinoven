@@ -29,7 +29,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -590,7 +590,7 @@
     return [
       updated,
       failed > 0 ? `${failed} source${failed === 1 ? '' : 's'} unreachable` : '',
-      status.lastCheckedAt ? `checked ${relativeTime(status.lastCheckedAt)}` : ''
+      status.lastCheckedAt ? `checked ${formatCompactAge(status.lastCheckedAt)}` : ''
     ]
       .filter(Boolean)
       .join(' · ')

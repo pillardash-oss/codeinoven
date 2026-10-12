@@ -23,7 +23,7 @@
   import AddProviderModalConnectTab from './AddProviderModalConnectTab.svelte'
   import AddProviderModalCustomTab from './AddProviderModalCustomTab.svelte'
   import AddProviderModalFooter from './AddProviderModalFooter.svelte'
-  import { AddProviderModalOAuthController } from './add-provider-modal-oauth.svelte'
+  import { ProviderSignInController } from './provider-sign-in.svelte'
   import {
     type AddTab,
     type ConnectStep,
@@ -131,7 +131,7 @@
     )
   )
 
-  const oauth = new AddProviderModalOAuthController({
+  const oauth = new ProviderSignInController({
     harnessId: () => harness.id,
     selectedProvider: () => selectedProvider,
     clearApiKey: () => (apiKey = ''),
@@ -141,7 +141,7 @@
       notice = ''
     },
     setActionError: (message) => (actionError = message),
-    preparePendingAccount: (providerId) => preparePendingAccount(providerId),
+    bindSignInAccount: async (providerId) => (await preparePendingAccount(providerId)).id,
     finishAuthentication: (providerId, providerName) =>
       finishAuthentication(providerId, providerName),
     discardPendingAccount: () => discardPendingAccount()

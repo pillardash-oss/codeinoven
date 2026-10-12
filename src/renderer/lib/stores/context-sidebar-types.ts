@@ -353,7 +353,7 @@ export type TemporaryChatMode = 'elaborate' | 'quick'
  *  explain a selection. Displayed in the conversation as the short action
  *  label ("Explain") while the full instruction travels as the transport text. */
 export const EXPLAIN_SELECTION_PROMPT =
-  'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only \u2014 do not make changes or run commands.'
+  'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only do not make changes or run commands. and your response should not be more than one paragraph unless explicitly asked for more. Be very terse and avoid words salad, prioritize human understanding!'
 
 export interface TemporaryChatContextTab {
   id: string

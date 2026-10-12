@@ -14,7 +14,7 @@
     UserPlus,
     X
   } from '@lucide/svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { openInBrowser } from '$lib/open-in-browser'
   import { GitState, gitState } from '$lib/stores/git.svelte'
@@ -523,7 +523,9 @@
           {#if subject.authorIsBot}
             <BotBadge />
           {/if}
-          <span class="text-[0.5625rem] text-dimmed">opened {relativeTime(subject.createdAt)}</span>
+          <span class="text-[0.5625rem] text-dimmed"
+            >opened {formatCompactAge(subject.createdAt)}</span
+          >
           <span class="flex-1"></span>
           {#if issueNodeId}
             <PrReactionPicker
@@ -583,7 +585,9 @@
                 {#if comment.authorIsBot}
                   <BotBadge />
                 {/if}
-                <span class="text-[0.5625rem] text-dimmed">{relativeTime(comment.createdAt)}</span>
+                <span class="text-[0.5625rem] text-dimmed"
+                  >{formatCompactAge(comment.createdAt)}</span
+                >
                 {#if comment.updatedAt}
                   <span class="text-[0.5625rem] text-dimmed">· edited</span>
                 {/if}

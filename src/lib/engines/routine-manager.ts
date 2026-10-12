@@ -1,12 +1,7 @@
 import { generateId, getRoutinePath } from '../utils'
 import { rm } from 'fs/promises'
-import { extname } from 'path'
-import {
-  isSupportedIconExtension,
-  readIconDataUrl,
-  removeIconFile,
-  storeIconFile
-} from '../icon-file'
+import { readIconDataUrl, removeIconFile, storeCustomIconFile } from '../icon-file'
+import type { CustomIconImage } from '../custom-icon'
 import { ASSISTANT_SPACE_ID, isAssistantSetupThread, isAssistantRunThread } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import { sortRoutines } from '../routine-order'
@@ -167,14 +162,11 @@ export class RoutineManager {
    * The previous icon file is replaced; the routine's colour and SVG icon type
    * stay in place so clearing the image later restores the prior appearance.
    */
-  async setIcon(routineId: string, sourcePath: string): Promise<Routine> {
+  async setIcon(routineId: string, image: CustomIconImage): Promise<Routine> {
     const existing = this.routineRepo.get(routineId)
     if (!existing) throw new Error(`Routine not found: ${routineId}`)
 
-    const ext = extname(sourcePath).toLowerCase() || '.png'
-    if (!isSupportedIconExtension(ext)) throw new Error(`Unsupported icon format: ${ext}`)
-
-    const iconFile = await storeIconFile(getRoutinePath(routineId), sourcePath, existing.icon)
+    const iconFile = await storeCustomIconFile(getRoutinePath(routineId), image, existing.icon)
     const updated: Routine = { ...existing, icon: iconFile, updatedAt: this.now() }
     this.routineRepo.upsert(updated)
     return updated

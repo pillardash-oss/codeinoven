@@ -11,7 +11,7 @@
     Rocket
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
   import GitWorkflowRunDetail from './GitWorkflowRunDetail.svelte'
@@ -304,7 +304,7 @@
                         <span class="max-w-28 truncate font-mono">{run.branch}</span>
                       {/if}
                       <span>·</span>
-                      <span class="shrink-0">{relativeTime(run.updatedAt)}</span>
+                      <span class="shrink-0">{formatCompactAge(run.updatedAt)}</span>
                     </div>
                   </div>
                 </button>
@@ -357,7 +357,7 @@
                       <span>·</span>
                       <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
                       <span>·</span>
-                      <span>{relativeTime(deployment.updatedAt)}</span>
+                      <span>{formatCompactAge(deployment.updatedAt)}</span>
                     </div>
                     {#if deployment.latestStatus?.description}
                       <p class="mt-1 truncate text-[0.5625rem] text-muted">

@@ -52,7 +52,7 @@ import {
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
 import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
-import { ThreadSearchService } from './thread-manager-search'
+import { ThreadSearchService, type IntentSearchProvider } from './thread-manager-search'
 import { ThreadTranscriptStore } from './thread-manager-transcripts'
 import { recoverBrowserTranscript } from '../../main/chat/browser-transcript-recovery'
 import { StorageEngine } from '../../main/storage/storage-engine'
@@ -1616,6 +1616,14 @@ export class ThreadManager {
     options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
+  }
+
+  /**
+   * Attach the semantic (intent) search provider. Set once during service
+   * wiring; passing null restores keyword-only search.
+   */
+  setIntentSearchProvider(provider: IntentSearchProvider | null): void {
+    this.searchService.setIntentProvider(provider)
   }
 
   /**

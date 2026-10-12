@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Clock } from '@lucide/svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
 
   interface Props {
     /** Stable listbox id, so the field that drives the list can point at it. */
@@ -80,7 +80,7 @@
             compact ? 'text-[0.625rem]' : 'text-[0.6875rem]'
           ]}
         >
-          {relativeTime(entry.visitedAt)}
+          {formatCompactAge(entry.visitedAt)}
         </span>
       </button>
     {/each}

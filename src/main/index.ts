@@ -11,6 +11,7 @@ import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
 import { registerGlobalBrowserIpcHandlers } from './ipc/global-browser-ipc'
+import { NativeFloatingPanelWindow } from './browser/native-floating-panel-window'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
@@ -449,6 +450,7 @@ function createWindow(): BrowserWindow {
     }
   })
   state.mainWindow = window
+  const floatingPanels = new NativeFloatingPanelWindow(window)
 
   if (isProduction) {
     lockDownProductionWindow(window)
@@ -537,6 +539,8 @@ function createWindow(): BrowserWindow {
   // back to the system browser when no project thread can own the tab, so
   // sending the request is never a dead end.
   window.webContents.setWindowOpenHandler((details) => {
+    const floatingPanel = floatingPanels.handleWindowOpen(details)
+    if (floatingPanel) return floatingPanel
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
       const local = isLocalDevelopmentUrl(safeUrl)

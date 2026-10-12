@@ -2,7 +2,7 @@
   import { Loader2, Search } from '@lucide/svelte'
   import type { GitCommitInfo } from '$shared/types'
   import FindInBar from '../files/FindInBar.svelte'
-  import { relativeTime } from './git-status-panel-format'
+  import { formatCompactAge } from '$shared/date-time-format'
 
   interface Props {
     open: boolean
@@ -86,7 +86,7 @@
                   <span>·</span>
                   <span class="truncate">{commit.author}</span>
                   <span>·</span>
-                  <span class="shrink-0">{relativeTime(commit.date)}</span>
+                  <span class="shrink-0">{formatCompactAge(commit.date)}</span>
                 </span>
               </span>
             </button>

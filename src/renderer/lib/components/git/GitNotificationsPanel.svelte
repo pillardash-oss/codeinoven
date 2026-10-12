@@ -12,7 +12,7 @@
     TriangleAlert
   } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { onMount } from 'svelte'
   import { githubNotificationsUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -333,7 +333,8 @@
                   <span aria-hidden="true">·</span>
                   <span class="shrink-0">{reasonLabel(item.reason)}</span>
                   <span aria-hidden="true">·</span>
-                  <span class="shrink-0" title={item.updatedAt}>{relativeTime(item.updatedAt)}</span
+                  <span class="shrink-0" title={item.updatedAt}
+                    >{formatCompactAge(item.updatedAt)}</span
                   >
                 </div>
               </div>

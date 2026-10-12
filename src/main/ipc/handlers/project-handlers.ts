@@ -46,6 +46,7 @@ import type {
 } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
+import { validateCustomIconImage } from '../../../lib/custom-icon'
 import { randomUUID } from 'node:crypto'
 
 /** Upper bound on one in-app "open these paths" request (a drag selection). */
@@ -711,8 +712,11 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       projectManager.getIconDataUrl(projectId)
     )
   }
-  ipcMain.handle('project:setIcon', (_, projectId: string, sourcePath: string) =>
-    projectManager.setIcon(projectId, sourcePath)
+  ipcMain.handle('project:setIcon', (_, projectId: unknown, rawImage: unknown) =>
+    projectManager.setIcon(
+      validateEntityId(projectId, 'Project ID'),
+      validateCustomIconImage(rawImage)
+    )
   )
   ipcMain.handle('project:clearIcon', (_, projectId: string) => projectManager.clearIcon(projectId))
   ipcMain.handle('project:setPinned', (_, projectId: unknown, pinned: unknown) =>
@@ -858,6 +862,18 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     'projectFiles:info',
     (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
       projectFilesService.getInfo(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
+      )
+  )
+  ipcMain.handle(
+    'projectFiles:directorySize',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
+      projectFilesService.directorySize(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
         scopeBucketId === undefined

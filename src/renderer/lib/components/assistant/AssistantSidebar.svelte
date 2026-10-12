@@ -293,10 +293,15 @@
     return routines.find((routine) => routine.id === task.routineId)?.color
   }
 
-  function routineWorking(routineId: string): boolean {
-    return routineTasks(routineId).some(
-      (task) => threadStatusPolicy(task.status).tone === 'working' || taskRunWorking(task.id)
-    )
+  /** How many of a routine's tasks are working: either the task's own status is
+   *  working or one of its runs is. The routine row shows this count beside its
+   *  working indicator, exactly as a project row does. */
+  function routineWorkingCount(routineId: string): number {
+    let count = 0
+    for (const task of routineTasks(routineId)) {
+      if (threadStatusPolicy(task.status).tone === 'working' || taskRunWorking(task.id)) count++
+    }
+    return count
   }
 
   function routineNextRun(routineId: string): number | null {
@@ -491,7 +496,7 @@
         <AssistantRoutineRow
           {routine}
           expanded={isExpanded}
-          working={routineWorking(routine.id)}
+          workingCount={routineWorkingCount(routine.id)}
           unread={unreadRoutineIds.has(routine.id)}
           missed={missedRoutineIds.has(routine.id)}
           runCount={routineRunList.length}
