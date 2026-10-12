@@ -5,7 +5,6 @@ import type {
   AgentUsageCredits,
   NormalizedUsage
 } from '../../../lib/types'
-import { rateLimitWindowLabel } from '../../usage/rate-limit-window-label'
 import { numberValue, recordValue, stringValue } from './codex-values'
 
 /** Codex token accounting and account rate-limit normalization. */
@@ -128,6 +127,18 @@ export function mapCodexUsage(value: unknown):
   }
 }
 
+function rateLimitLabel(window: Record<string, unknown>, fallback: string): string {
+  const minutes = numberValue(window['windowDurationMins'])
+  if (minutes === 300) return '5-hour limit'
+  if (minutes === 10_080) return 'Weekly limit'
+  if (minutes !== undefined) {
+    if (minutes % 1_440 === 0) return `${minutes / 1_440}-day limit`
+    if (minutes % 60 === 0) return `${minutes / 60}-hour limit`
+    return `${minutes}-minute limit`
+  }
+  return fallback
+}
+
 /**
  * Normalize one Codex `RateLimitSnapshot` window (primary/secondary) plus the
  * per-limit metadata (window length, credits, plan) into the shared shape.
@@ -152,7 +163,7 @@ function mapCodexRateLimitSnapshot(
     const resetsAt = numberValue(window['resetsAt'])
     const windowMinutes = numberValue(window['windowDurationMins'])
     if (usedPercent === undefined && resetsAt === undefined) continue
-    const baseLabel = rateLimitWindowLabel(numberValue(window['windowDurationMins']), fallback)
+    const baseLabel = rateLimitLabel(window, fallback)
     mapped.push({
       id: `codex:${limitId}:${key}`,
       label: modelSuffix ? `${modelSuffix} · ${baseLabel}` : baseLabel,

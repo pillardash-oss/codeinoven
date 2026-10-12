@@ -13605,11 +13605,9 @@
                       ) && !busy}
                       {compacting}
                       onCompact={() => void compactWork()}
-                      onActivateBankedReset={settings.harnessId === 'codex'
-                        ? () => {
-                            showBankedResetConfirm = true
-                          }
-                        : undefined}
+                      onActivateBankedReset={() => {
+                        showBankedResetConfirm = true
+                      }}
                       projectId={thread.projectId}
                       threadId={thread.id}
                       {scopeShoe}

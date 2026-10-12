@@ -1,32 +1,26 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import type { AgentBankedResets, AgentRateLimitWindow, AgentUsageCredits } from '../../lib/types'
+import type { AgentRateLimitWindow, AgentUsageCredits } from '../../lib/types'
 import { Logger } from '../system/logger'
 import {
   mapOpenCodeAccountUsage,
   OPENCODE_ACCOUNT_PROVIDER_IDS,
   OPENCODE_ACCOUNT_USAGE_ENDPOINT
 } from './opencode-provider-usage'
-import { CHATGPT_USAGE_ENDPOINT, mapChatGptPlanUsage } from './pi/pi-chatgpt-usage'
 
 /**
- * On-demand account quota and prepaid-credit balances for pi's providers.
- *
- * Pi stores provider auth in `~/.pi/agent/auth.json`; the gateways that expose
- * a credit-balance endpoint are probed with the stored credential so the
+ * On-demand prepaid-credit balances for pi's gateway providers. Pi stores
+ * provider auth in `~/.pi/agent/auth.json`; the gateways that expose a
+ * credit-balance endpoint are probed with the stored credential so the
  * battery popover can show "how much is left" the same way codex/claude-code
- * report plan balances, and a Codex-style ChatGPT credential answers the
- * ChatGPT plan-usage route with the subscription windows, credits, and banked
- * resets. Providers without a known route return null.
+ * report plan balances. Providers without a known endpoint return null.
  */
 
 interface PiAuthEntry {
   type?: unknown
   key?: unknown
   access?: unknown
-  /** ChatGPT account id stored by Pi's Codex-style sign-in (`openai-codex`). */
-  accountId?: unknown
 }
 
 const CREDITS_TIMEOUT_MS = 5_000
@@ -35,7 +29,6 @@ const CREDITS_CACHE_TTL_MS = 60_000
 interface PiProviderUsage {
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
-  bankedResets?: AgentBankedResets
 }
 
 interface CachedUsage {
@@ -68,38 +61,10 @@ function credentialValue(entry: PiAuthEntry): string | undefined {
   return undefined
 }
 
-/**
- * The ChatGPT account id that authenticates the plan-usage route. Pi's
- * Codex-style sign-in stores it on the credential; when it is absent the id can
- * still be read from the access token's `chatgpt_account_id` claim. The modern
- * `openai` sign-in token carries neither, which is why it answers no plan data.
- */
-function chatGptAccountId(entry: PiAuthEntry | null): string | undefined {
-  if (typeof entry?.accountId === 'string' && entry.accountId.length > 0) return entry.accountId
-  const access = typeof entry?.access === 'string' ? entry.access : undefined
-  if (!access) return undefined
-  const parts = access.split('.')
-  if (parts.length !== 3) return undefined
-  try {
-    const payload: unknown = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
-    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
-    const auth = (payload as Record<string, unknown>)['https://api.openai.com/auth']
-    if (auth === null || typeof auth !== 'object' || Array.isArray(auth)) return undefined
-    const id = (auth as Record<string, unknown>)['chatgpt_account_id']
-    return typeof id === 'string' && id.length > 0 ? id : undefined
-  } catch {
-    return undefined
-  }
-}
-
-async function fetchJson(
-  url: string,
-  credential: string,
-  extraHeaders: Record<string, string> = {}
-): Promise<Record<string, unknown> | null> {
+async function fetchJson(url: string, credential: string): Promise<Record<string, unknown> | null> {
   try {
     const response = await fetch(url, {
-      headers: { authorization: `Bearer ${credential}`, ...extraHeaders },
+      headers: { authorization: `Bearer ${credential}` },
       signal: AbortSignal.timeout(CREDITS_TIMEOUT_MS)
     })
     if (!response.ok) return null
@@ -130,27 +95,9 @@ export async function fetchPiProviderUsage(
   if (cached && Date.now() - cached.fetchedAt < CREDITS_CACHE_TTL_MS) return cached.usage
 
   let credits: AgentUsageCredits | null = null
-  let bankedResets: AgentBankedResets | undefined
   const rateLimits: AgentRateLimitWindow[] = []
   const entry = await piAuthEntry(providerId, authPath)
   const credential = entry ? credentialValue(entry) : undefined
-  const accountId = chatGptAccountId(entry)
-  if (credential && accountId) {
-    // Codex-style ChatGPT credential: answer with the subscription plan quota
-    // and banked resets. The modern `openai` sign-in has no account id, so this
-    // route is skipped for it and the battery shows only context usage.
-    const body = await fetchJson(CHATGPT_USAGE_ENDPOINT, credential, {
-      'chatgpt-account-id': accountId,
-      originator: 'codeinoven',
-      'user-agent': 'codeinoven'
-    })
-    const plan = mapChatGptPlanUsage(body)
-    if (plan) {
-      rateLimits.push(...plan.rateLimits)
-      if (plan.credits) credits = plan.credits
-      bankedResets = plan.bankedResets
-    }
-  }
   if (credential) {
     if (providerId === 'vercel-ai-gateway') {
       const body = await fetchJson('https://ai-gateway.vercel.sh/v1/credits', credential)
@@ -188,11 +135,10 @@ export async function fetchPiProviderUsage(
     }
   }
 
-  if (rateLimits.length === 0 && !credits && !bankedResets) return null
+  if (rateLimits.length === 0 && !credits) return null
   const usage: PiProviderUsage = {
     rateLimits,
-    ...(credits ? { credits } : {}),
-    ...(bankedResets ? { bankedResets } : {})
+    ...(credits ? { credits } : {})
   }
   usageCache.set(cacheKey, { usage, fetchedAt: Date.now() })
   return usage
