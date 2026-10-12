@@ -205,6 +205,16 @@ export interface DesignThumbnail {
  */
 export type DesignRevisionCause = 'initial' | 'agent' | 'user'
 
+/** Result of an explicit named agent checkpoint. */
+export interface DesignCheckpointResult {
+  directory: string
+  entry: string
+  label: string
+  revisionId: string | null
+  checkpointed: boolean
+  gitBacked: boolean
+}
+
 /**
  * One point in a design's history: a snapshot the user can return to.
  *
@@ -218,6 +228,10 @@ export interface DesignRevisionSummary {
   sequence: number
   /** What produced the change this revision captured. */
   cause: DesignRevisionCause
+  /** Named agent step, for example "Hero title updated". */
+  label?: string
+  /** Screen whose step was checkpointed. */
+  checkpointEntry?: string
   /** When the snapshot was taken (ms). */
   createdAt: number
   /** Files added, changed, or removed from the revision this one follows. */
@@ -235,6 +249,8 @@ export interface DesignRevisionSummary {
 
 /** One file the timeline has touched, for the page scope picker. */
 export interface DesignHistoryFile {
+  /** Screen name shown to the user. */
+  name: string
   /** Path inside the design folder, with forward slashes. */
   path: string
   /** How many revisions added, changed, or removed it. */
@@ -252,6 +268,7 @@ export interface DesignHistoryFile {
  * two neighbours restores exactly one file and leaves every other page where it is.
  */
 export interface DesignPageRevision {
+  label?: string
   /** The revision whose content this state was read from. */
   revisionId: string
   /** Position on the folder's timeline, oldest first. */
@@ -264,6 +281,7 @@ export interface DesignPageRevision {
 
 /** One page's history, and where the page currently sits in it. */
 export interface DesignPageHistoryState {
+  gitBacked: boolean
   /** Project-relative folder, with forward slashes. */
   directory: string
   /** The file this line belongs to. */

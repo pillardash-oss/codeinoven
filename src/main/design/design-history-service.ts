@@ -1,3 +1,4 @@
+import { designScreenName, isDesignScreenEntry } from '../../lib/design/screens'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -234,6 +235,26 @@ export class DesignHistoryService {
     })
   }
 
+  /** Explicit agent step, saved before moving to the next section or scene. */
+  async checkpoint(
+    target: DesignHistoryTarget,
+    entry: string,
+    label: string
+  ): Promise<DesignHistoryState> {
+    if (!isDesignScreenEntry(entry) || !this.resolvePagePath(target, entry))
+      throw new Error('Checkpoint requires a screen')
+    if (!label.trim() || label.length > 160)
+      throw new Error('Checkpoint requires a short step name')
+    return this.runExclusive(target, async () => {
+      if (await this.isGitBacked(target)) return this.gitBackedState(target)
+      const exact = await this.capture(target, 'agent', {
+        entry,
+        label: label.replace(/\s+/gu, ' ').trim()
+      })
+      return this.readState(target, !exact)
+    })
+  }
+
   /**
    * Move a folder to one point in its history.
    *
@@ -276,7 +297,27 @@ export class DesignHistoryService {
    * lets a page-scoped undo stay put after the folder cursor is left alone.
    */
   async pageState(target: DesignHistoryTarget, path: string): Promise<DesignPageHistoryState> {
-    return this.runExclusive(target, async () => this.readPageState(target, path))
+    if (!isDesignScreenEntry(path) || !this.resolvePagePath(target, path))
+      throw new Error('History requires a screen')
+    return this.runExclusive(target, async () => {
+      if (await this.isGitBacked(target))
+        return {
+          directory: target.directory,
+          path,
+          gitBacked: true,
+          revisions: [],
+          cursorIndex: -1,
+          modified: false,
+          canUndo: false,
+          canRedo: false
+        }
+      if (!(await this.isDirectory(target.absolute))) {
+        await this.dropFolder(target.projectId, target.directory)
+        return this.readPageState(target, path)
+      }
+      await this.capture(target, 'user')
+      return this.readPageState(target, path)
+    })
   }
 
   /**
@@ -295,13 +336,22 @@ export class DesignHistoryService {
     path: string
   ): Promise<DesignHistoryRestoreFileResult> {
     return this.runExclusive(target, async () => {
-      if (!this.resolvePagePath(target, path)) {
+      if (!isDesignScreenEntry(path) || !this.resolvePagePath(target, path)) {
         throw new Error('That page is not part of this design.')
       }
       if (await this.isGitBacked(target)) {
         return {
           history: this.gitBackedState(target),
-          page: await this.readPageState(target, path)
+          page: {
+            directory: target.directory,
+            path,
+            gitBacked: true,
+            revisions: [],
+            cursorIndex: -1,
+            modified: false,
+            canUndo: false,
+            canRedo: false
+          }
         }
       }
       await this.capture(target, 'user')
@@ -316,7 +366,7 @@ export class DesignHistoryService {
       const after = await this.snapshotOrEmpty(target)
       await this.trackerFor(target).restoreBefore(before, after, new Set([path]))
       this.revisions.setPageCursor(target.projectId, target.directory, path, wanted.id)
-      const exact = await this.capture(target, 'user')
+      const exact = await this.capture(target, 'user', undefined, wanted)
       return {
         history: await this.readState(target, !exact),
         page: await this.readPageState(target, path)
@@ -419,27 +469,53 @@ export class DesignHistoryService {
    * cut away the very states the page is stepping through, so the folder is marked
    * modified and the timeline is left whole.
    */
-  private async capture(target: DesignHistoryTarget, cause: DesignRevisionCause): Promise<boolean> {
+  private async capture(
+    target: DesignHistoryTarget,
+    cause: DesignRevisionCause,
+    step?: { entry: string; label: string },
+    preferredRevision?: StoredDesignRevision
+  ): Promise<boolean> {
     let checkpoint: ProjectCheckpoint
     try {
       checkpoint = await this.trackerFor(target).snapshot(target.absolute)
     } catch (error) {
       // A folder that does not exist yet, or cannot be read, has no present to
       // capture: the history it already has is kept rather than erased.
+      if (step) throw error
       Logger.dev('A design history capture was skipped:', error)
       return true
     }
     const files = revisionFilesOf(checkpoint)
+    if (step && !files[step.entry])
+      throw new Error('Checkpoint screen is missing or cannot be captured')
     const digest = digestOfFiles(files)
     // A folder that now matches a revision already in its history is that revision,
     // not a new one: this is what lets a restored folder be read without recording
     // the restore itself as an edit, and a manual redo by hand land on the redo.
-    const match = await this.revisions.findByDigestViaWorker(
-      target.projectId,
-      target.directory,
-      digest
-    )
-    if (match) {
+    const presentCursor = await this.revisions.cursorIdViaWorker(target.projectId, target.directory)
+    const currentRevision =
+      preferredRevision?.digest === digest
+        ? preferredRevision
+        : presentCursor
+          ? await this.revisions.getViaWorker(target.projectId, target.directory, presentCursor)
+          : null
+    // A named sequence can revisit the same content. Keep the explicitly restored
+    // cursor rather than jumping to the newest revision with identical bytes.
+    const match =
+      currentRevision?.digest === digest
+        ? currentRevision
+        : step
+          ? null
+          : await this.revisions.findByDigestViaWorker(target.projectId, target.directory, digest)
+    if (match && (!step || match.id === presentCursor)) {
+      if (step)
+        this.revisions.labelCheckpoint(
+          target.projectId,
+          target.directory,
+          match.id,
+          step.label,
+          step.entry
+        )
       const cursorId = await this.revisions.cursorIdViaWorker(target.projectId, target.directory)
       if (cursorId !== match.id)
         this.revisions.setCursor(target.projectId, target.directory, match.id)
@@ -448,14 +524,13 @@ export class DesignHistoryService {
     // Not a whole-folder match, but every file may still be a state the timeline
     // already holds: a page-scoped undo, or a hand edit that reverted a file. Keep
     // the timeline as it is and let the board say the folder is modified.
-    if (await this.isExplainedByTimeline(target, files)) return false
+    if (!step && (await this.isExplainedByTimeline(target, files))) return false
     const count = await this.revisions.countViaWorker(target.projectId, target.directory)
-    const cursorId = await this.revisions.cursorIdViaWorker(target.projectId, target.directory)
-    const cursor = cursorId
-      ? await this.revisions.getViaWorker(target.projectId, target.directory, cursorId)
-      : count > 0
+    const cursor =
+      currentRevision ??
+      (count > 0
         ? await this.revisions.getLatestViaWorker(target.projectId, target.directory)
-        : null
+        : null)
     // A new edit made while the folder sits behind the tip cuts the steps ahead of
     // it away, the way editing after an undo does anywhere else.
     if (cursor) this.revisions.deleteAfter(target.projectId, target.directory, cursor.sequence)
@@ -467,6 +542,8 @@ export class DesignHistoryService {
       sequence: (cursor?.sequence ?? 0) + 1,
       parentId: cursor?.id ?? null,
       cause,
+      label: step?.label,
+      checkpointEntry: step?.entry,
       digest,
       files,
       skippedFiles: checkpoint.skippedFiles ?? [],
@@ -603,6 +680,8 @@ export class DesignHistoryService {
       id: revision.id,
       sequence: revision.sequence,
       cause: revision.cause,
+      label: revision.label,
+      checkpointEntry: revision.checkpointEntry,
       createdAt: revision.createdAt,
       changedFiles: revision.changedFiles,
       changedPaths: revision.changedPaths,
@@ -631,14 +710,21 @@ export class DesignHistoryService {
     let latest: StoredDesignRevision | undefined
     for await (const revision of this.revisionBatches(target)) {
       latest = revision
-      for (const path of Object.keys(revision.files)) seen.add(path)
-      for (const path of revision.changedPaths) counts.set(path, (counts.get(path) ?? 0) + 1)
+      for (const path of Object.keys(revision.files)) if (isDesignScreenEntry(path)) seen.add(path)
+      for (const path of revision.changedPaths)
+        if (isDesignScreenEntry(path)) counts.set(path, (counts.get(path) ?? 0) + 1)
     }
     const present = new Set(latest ? Object.keys(latest.files) : [])
     const paths = new Set<string>([...counts.keys(), ...seen, ...present])
     return [...paths]
+      .filter(isDesignScreenEntry)
       .sort()
-      .map((path) => ({ path, changeCount: counts.get(path) ?? 0, present: present.has(path) }))
+      .map((path) => ({
+        path,
+        name: designScreenName(path),
+        changeCount: counts.get(path) ?? 0,
+        present: present.has(path)
+      }))
   }
 
   /**
@@ -669,6 +755,7 @@ export class DesignHistoryService {
         revisionId: revision.id,
         sequence: revision.sequence,
         createdAt: revision.createdAt,
+        label: revision.checkpointEntry === path ? (revision.label ?? undefined) : undefined,
         present: hash !== null
       })
       hashes.push(hash)
@@ -709,6 +796,7 @@ export class DesignHistoryService {
     return {
       directory: target.directory,
       path,
+      gitBacked: false,
       revisions: states,
       cursorIndex,
       modified,

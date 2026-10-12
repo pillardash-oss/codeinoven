@@ -211,12 +211,40 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   }
 ]
 
+/** The agent names completed steps, not every keystroke or tool call. */
+function authoredWorkCheckpointTool(): McpTool {
+  return {
+    name: 'checkpoint',
+    description:
+      'Save a durable, named step for one screen. Call before editing an existing screen and after each major section, title, image, navbar or scene change, before starting the next step. Unchanged content creates no duplicate snapshot. When Git tracks this folder, reports that Git owns history and creates no app snapshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Project-relative authored-work folder.' },
+        entry: {
+          type: 'string',
+          description: 'Screen entry relative to that folder, such as index.html or creator.html.'
+        },
+        label: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 160,
+          description:
+            'Short user-facing description of the completed step, such as Hero title updated.'
+        }
+      },
+      required: ['directory', 'entry', 'label'],
+      additionalProperties: false
+    }
+  }
+}
+
 /**
  * Operations of the app-owned design capability (`cio:design`).
  *
- * Four, and all of them are things the agent cannot do with its own tools: show
+ * These operations are things the agent cannot do with its own tools: show
  * the design on the app's own origin, run the model the user assigned to a piece
- * of design work, generate an asset with the model assigned to a media craft, and
+ * of design work, save a named checkpoint, generate an asset with the model assigned to a media craft, and
  * turn a generated asset into a file beside the design. Looking at the result is
  * deliberately not repeated here: the browser capability already owns
  * screenshots, viewports and console reads, and the docs point at it.
@@ -225,6 +253,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
   const designRoot = workRootForKind(roots, 'design')
   return [
     generateMediaTool(roots),
+    authoredWorkCheckpointTool(),
     {
       name: 'preview',
       description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file, and name \`entry\` to turn it to one of that design's screens.`,
@@ -316,6 +345,7 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
   const videoRoot = workRootForKind(roots, 'video')
   return [
     generateMediaTool(roots),
+    authoredWorkCheckpointTool(),
     {
       name: 'preview',
       description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,

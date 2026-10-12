@@ -580,6 +580,20 @@
           "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
         },
         {
+          "id": "browser-design-undo",
+          "keys": [],
+          "label": "Undo screen checkpoint",
+          "description": "Returns the authored screen being viewed to its previous checkpoint.",
+          "scenario": "Bindable while viewing a design or video screen in the thread browser."
+        },
+        {
+          "id": "browser-design-redo",
+          "keys": [],
+          "label": "Redo screen checkpoint",
+          "description": "Restores the next checkpoint of the authored screen being viewed.",
+          "scenario": "Bindable while viewing a design or video screen in the thread browser."
+        },
+        {
           "id": "browser-save-page",
           "keys": [],
           "label": "Save page",

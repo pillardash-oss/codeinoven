@@ -37,6 +37,8 @@ const ACTION_ENTRIES: ReadonlyArray<readonly [BrowserShortcutAction, string]> = 
   ['zoomOut', 'browser-zoom-out'],
   ['zoomReset', 'browser-zoom-reset'],
   ['toggleDevTools', 'browser-devtools'],
+  ['designUndo', 'browser-design-undo'],
+  ['designRedo', 'browser-design-redo'],
   ['closeTab', 'browser-close-tab'],
   ['newTab', 'browser-new-tab'],
   ['reopenTab', 'browser-reopen-tab'],

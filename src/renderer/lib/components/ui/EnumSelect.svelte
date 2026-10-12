@@ -38,6 +38,9 @@
     ariaLabel: string
     title: string
     disabled?: boolean
+    /** Compact height for toolbar placement. */
+    compact?: boolean
+    closeOnSelect?: boolean
     /** Render short choices in the owning panel, so native projection keeps every action. */
     inline?: boolean
     /** Layout classes for the trigger, e.g. a flex sizing class. */
@@ -52,6 +55,8 @@
     ariaLabel,
     title,
     disabled = false,
+    compact = false,
+    closeOnSelect = false,
     inline = false,
     class: className = ''
   }: Props = $props()
@@ -85,7 +90,9 @@
 {:else}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex w-full items-center gap-2 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-left text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+      class="flex w-full items-center gap-2 rounded-lg border border-border bg-elevated px-2.5 {compact
+        ? 'h-7 py-0'
+        : 'py-1.5'} text-left text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
       aria-label={ariaLabel}
       {title}
       {disabled}
@@ -101,7 +108,11 @@
           <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {selected.accent}"
           ></span>
         {/if}
-        <span class="min-w-0 truncate text-[0.75rem] {selected ? '' : 'text-dimmed'}">
+        <span
+          class="min-w-0 truncate {compact ? 'text-[0.6875rem]' : 'text-[0.75rem]'} {selected
+            ? ''
+            : 'text-dimmed'}"
+        >
           {selected?.label ?? placeholder}
         </span>
       </span>
@@ -120,7 +131,7 @@
             class="flex items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
             textValue={option.label}
             onSelect={(event) => {
-              event.preventDefault()
+              if (!closeOnSelect) event.preventDefault()
               onChange(option.id)
             }}
           >

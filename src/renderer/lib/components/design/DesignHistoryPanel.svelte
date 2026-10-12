@@ -1,8 +1,9 @@
 <script lang="ts">
+  import DesignHistoryActions from './DesignHistoryActions.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import { onMount } from 'svelte'
-  import { GitBranch, History, LoaderCircle, Redo2, Undo2, X } from '@lucide/svelte'
+  import { GitBranch, History, LoaderCircle, X } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
@@ -55,8 +56,8 @@
   let pendingRestore = $state('')
   let request = 0
   const scopeOptions = $derived([
-    { id: '', label: `Entire ${noun}` },
-    ...(history?.files ?? []).map((file) => ({ id: file.path, label: file.path }))
+    { id: '', label: 'All screens' },
+    ...(history?.files ?? []).map((file) => ({ id: file.path, label: file.name }))
   ])
 
   let revisions = $derived(
@@ -67,6 +68,7 @@
           sequence: entry.sequence,
           createdAt: entry.createdAt,
           cause: 'user',
+          label: entry.label,
           changedFiles: 1,
           changedPaths: [scope],
           fileCount: entry.present ? 1 : 0,
@@ -91,6 +93,7 @@
 
   /** What produced a revision, in the user's terms. */
   function causeLabel(revision: DesignRevisionSummary): string {
+    if (revision.label) return revision.label
     if (revision.cause === 'initial') return 'First captured'
     if (revision.cause === 'agent') return 'Agent turn'
     return 'Your edit'
@@ -105,11 +108,13 @@
   /** How much a revision changed, in files. */
   function changeLabel(revision: DesignRevisionSummary): string {
     if (revision.cause === 'initial') {
-      return `${revision.fileCount} file${revision.fileCount === 1 ? '' : 's'}`
+      return 'Initial design'
     }
-    const changed = revision.changedFiles
-    if (changed === 0) return 'No file changed'
-    return `${changed} file${changed === 1 ? '' : 's'} changed`
+    const changed = revision.changedPaths.filter((path) =>
+      history?.files.some((screen) => screen.path === path)
+    ).length
+    if (changed === 0) return 'Design updated'
+    return `${changed} screen${changed === 1 ? '' : 's'} changed`
   }
 
   /** Read the folder's history, capturing the present as `cause` when it changed. */
@@ -123,11 +128,13 @@
     try {
       const next = await invoke('design:history', projectId, threadId, directory, cause)
       if (token !== request) return
-      history = next
-      page =
+      const nextPage =
         scope === ''
           ? null
           : await invoke('design:historyPage', projectId, threadId, directory, scope)
+      if (token !== request) return
+      history = next
+      page = nextPage
       error = ''
     } catch (failure) {
       // A history that cannot be read must not take the design down with it: the
@@ -190,13 +197,21 @@
 
   onMount(() => {
     void load('user')
-    return subscribe('thread:updated', (thread) => {
+    const unsubscribeThread = subscribe('thread:updated', (thread) => {
       if (thread.id !== threadId || thread.projectId !== projectId) return
       if (isThreadBusyStatus(thread.status)) return
       // The agent settles, so whatever it wrote is a revision now. Reading captures
       // it: the pane never has to guess that a turn touched this folder.
       void load('agent')
     })
+    const unsubscribeHistory = subscribe('design:historyChanged', (owner, folder) => {
+      if (owner === projectId && folder === directory && restoring === '') void load('agent')
+    })
+    return () => {
+      ++request
+      unsubscribeThread()
+      unsubscribeHistory()
+    }
   })
 </script>
 
@@ -206,38 +221,37 @@
 >
   <header class="flex shrink-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5">
     <History size={12} class="shrink-0 text-accent" />
-    <span class="text-[0.6875rem] font-semibold text-foreground">History</span>
-    {#if !history?.gitBacked && revisions.length > 0}
-      <span
-        class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
-      >
-        {cursorIndex >= 0 ? `${cursorIndex + 1}/${revisions.length}` : revisions.length}
-      </span>
-    {/if}
-    <span class="min-w-0 flex-1"></span>
+    <span class="text-[0.6875rem] shrink-0 font-semibold text-foreground">History</span>
+    {#if !history?.gitBacked}
+      <EnumSelect
+        compact
+        closeOnSelect
+        class="min-w-0 flex-1"
+        options={scopeOptions}
+        value={scope}
+        placeholder="Screen history"
+        ariaLabel="History scope"
+        title="Choose the whole design or one screen"
+        disabled={loading || restoring !== ''}
+        onChange={(value) => {
+          scope = value
+          void load('user')
+        }}
+      />
+    {:else}<span class="min-w-0 flex-1"></span>{/if}
     {#if loading}
       <LoaderCircle size={11} class="shrink-0 animate-spin text-dimmed" aria-hidden="true" />
     {/if}
-    <button
-      type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-      disabled={!canUndo}
-      title="Undo the last change to this {noun}"
-      aria-label="Undo the last change to this {noun}"
-      onclick={undo}
-    >
-      <Undo2 size={12} />
-    </button>
-    <button
-      type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-      disabled={!canRedo}
-      title="Redo the change that was undone"
-      aria-label="Redo the change that was undone"
-      onclick={redo}
-    >
-      <Redo2 size={12} />
-    </button>
+    <DesignHistoryActions
+      {canUndo}
+      {canRedo}
+      undoTitle={scope === ''
+        ? `Undo the last change to this ${noun}`
+        : `Undo the last change to ${history?.files.find((screen) => screen.path === scope)?.name ?? 'this screen'}`}
+      redoTitle="Redo the change that was undone"
+      onUndo={undo}
+      onRedo={redo}
+    />
     <button
       type="button"
       class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -249,27 +263,6 @@
     </button>
   </header>
 
-  {#if !history?.gitBacked}
-    <div class="shrink-0 border-b border-border/60 px-2.5 py-1.5">
-      <EnumSelect
-        options={scopeOptions}
-        value={scope}
-        placeholder="History scope"
-        ariaLabel="History scope"
-        title="Choose the entire design or one file"
-        disabled={loading || restoring !== ''}
-        onChange={(value) => {
-          scope = value
-          void load('user')
-        }}
-      />
-      {#if history?.modified}
-        <p class="mt-1 text-[0.625rem] text-muted">
-          Individual files are at different history points.
-        </p>
-      {/if}
-    </div>
-  {/if}
   <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
     {#if error !== ''}
       <p
@@ -339,7 +332,12 @@
                       ? 'font-semibold text-foreground'
                       : 'text-muted'}"
                   >
-                    {scope === '' ? causeLabel(revision) : scope}
+                    {revision.label
+                      ? revision.label
+                      : scope === ''
+                        ? causeLabel(revision)
+                        : (history?.files.find((screen) => screen.path === scope)?.name ??
+                          'Screen')}
                   </span>
                   {#if current}
                     <span
@@ -368,7 +366,7 @@
 
 <ConfirmDialog
   open={pendingRestore !== ''}
-  title={scope === '' ? `Restore this ${noun}?` : 'Remove this file?'}
+  title={scope === '' ? `Restore this ${noun}?` : 'Remove this screen?'}
   confirmLabel="Restore history point"
   variant="primary"
   onCancel={() => (pendingRestore = '')}
@@ -380,8 +378,8 @@
 >
   <p>
     {scope === ''
-      ? `This replaces the entire ${noun} with the selected history point. Files absent from that point will be removed.`
-      : `The file ${scope} did not exist at this history point and will be removed.`}
+      ? `This replaces the entire ${noun} with the selected history point. Screens absent from that point will be removed.`
+      : `The ${history?.files.find((screen) => screen.path === scope)?.name ?? 'selected'} screen did not exist at this history point and will be removed.`}
   </p>
   <p>You can return to its current version through history.</p>
 </ConfirmDialog>

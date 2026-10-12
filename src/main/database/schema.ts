@@ -1101,6 +1101,8 @@ CREATE TABLE IF NOT EXISTS design_revisions (
   unavailable_files TEXT,
   changed_files   INTEGER NOT NULL DEFAULT 0,
   changed_paths   TEXT,
+  label           TEXT,
+  checkpoint_entry TEXT,
   file_count      INTEGER NOT NULL DEFAULT 0,
   total_bytes     INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL

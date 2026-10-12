@@ -872,7 +872,7 @@ export class Database {
       this.migrateRoutineExecution(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
-      this.migrateDesignRevisionChangedPaths(connection)
+      this.migrateDesignRevisionMetadata(connection)
     })()
   }
 
@@ -1127,21 +1127,22 @@ export class Database {
   }
 
   /**
-   * Record the paths each revision changed, so a timeline row can name what moved
-   * without re-reading every snapshot.
+   * Keep changed screens and named checkpoint steps beside revision metadata.
    *
-   * The column arrived after the revisions table, so an existing database gets it
-   * here; rows written before it read back as changing no named path, which the
-   * board treats as "unknown" rather than as a wrong answer.
+   * These columns arrived after the revisions table. Existing rows keep their
+   * content and timeline position, while unlabeled revisions use their usual cause.
    */
-  private migrateDesignRevisionChangedPaths(connection: DatabaseType): void {
+  private migrateDesignRevisionMetadata(connection: DatabaseType): void {
     const columns = new Set<string>(
       (
         connection.prepare('PRAGMA table_info(design_revisions)').all() as Array<{ name: string }>
       ).map((column) => column.name)
     )
-    if (columns.size === 0 || columns.has('changed_paths')) return
-    connection.exec('ALTER TABLE design_revisions ADD COLUMN changed_paths TEXT')
+    if (columns.size === 0) return
+    for (const column of ['changed_paths', 'label', 'checkpoint_entry']) {
+      if (!columns.has(column))
+        connection.exec(`ALTER TABLE design_revisions ADD COLUMN ${column} TEXT`)
+    }
   }
 
   /**

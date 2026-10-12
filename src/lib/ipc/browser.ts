@@ -378,6 +378,8 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'zoomOut',
   'zoomReset',
   'toggleDevTools',
+  'designUndo',
+  'designRedo',
   'closeTab',
   'newTab',
   'reopenTab',
@@ -436,6 +438,8 @@ export interface BrowserSwitcherKey {
  * reopening a tab, showing the tab's notes, and find.
  */
 export type BrowserPanelShortcutAction =
+  | 'design-undo'
+  | 'design-redo'
   | 'focus-address'
   | 'close-tab'
   | 'new-tab'

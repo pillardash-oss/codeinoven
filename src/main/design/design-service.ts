@@ -8,6 +8,7 @@ import {
 import type {
   AuthoredWorkKind,
   DesignEntry,
+  DesignCheckpointResult,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -166,6 +167,7 @@ function screenShotKey(
 
 export interface DesignServiceOptions {
   database: Database
+  onHistoryChanged?: (projectId: string, directory: string) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -327,7 +329,33 @@ export class DesignService {
     revisionId: string
   ): Promise<DesignHistoryState> {
     const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.restore(target, revisionId)
+    const result = await this.history.restore(target, revisionId)
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return result
+  }
+
+  /** Agent checkpointing uses the same durable timeline as the board. */
+  async checkpoint(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>,
+    kind: AuthoredWorkKind
+  ): Promise<DesignCheckpointResult> {
+    const entry = requirePath(input['entry'])
+    const label = requireId(input['label'], 'checkpoint label')
+    const directory = requirePath(input['directory'])
+    const target = await this.historyTarget(projectId, threadId, directory)
+    const state = await this.history.checkpoint(target, entry, label)
+    this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return {
+      directory: target.directory,
+      entry,
+      label,
+      revisionId: state.cursorId,
+      checkpointed: !state.gitBacked,
+      gitBacked: state.gitBacked
+    }
   }
 
   /** One page's own line through a folder's history. */
@@ -350,7 +378,9 @@ export class DesignService {
     revisionId: string
   ): Promise<DesignHistoryRestoreFileResult> {
     const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.restoreFile(target, revisionId, path)
+    const result = await this.history.restoreFile(target, revisionId, path)
+    this.options.onHistoryChanged?.(projectId, target.directory)
+    return result
   }
 
   /**

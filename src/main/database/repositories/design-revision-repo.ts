@@ -38,6 +38,8 @@ export interface StoredDesignRevision {
   /** The revision this one follows, or null for the first. */
   parentId: string | null
   cause: DesignRevisionCause
+  label?: string
+  checkpointEntry?: string
   /** Digest of the file map, so an unchanged folder matches a revision by value. */
   digest: string
   /** Path → file, the whole folder the revision restores to. */
@@ -60,6 +62,8 @@ export interface StoredDesignRevisionSummary {
   id: string
   sequence: number
   cause: DesignRevisionCause
+  label?: string
+  checkpointEntry?: string
   changedFiles: number
   changedPaths: string[]
   fileCount: number
@@ -80,6 +84,8 @@ interface RevisionRow {
   sequence: number
   parent_id: string | null
   cause: string
+  label: string | null
+  checkpoint_entry: string | null
   digest: string
   files: string
   skipped_files: string | null
@@ -95,6 +101,8 @@ interface SummaryRow {
   id: string
   sequence: number
   cause: string
+  label: string | null
+  checkpoint_entry: string | null
   changed_files: number
   changed_paths: string | null
   file_count: number
@@ -119,7 +127,7 @@ function parseJson<T>(value: string | null, fallback: T): T {
 
 const REVISION_COLUMNS =
   'id, project_id, directory, sequence, parent_id, cause, digest, files, skipped_files, ' +
-  'unavailable_files, changed_files, changed_paths, file_count, total_bytes, created_at'
+  'unavailable_files, changed_files, changed_paths, file_count, total_bytes, created_at, label, checkpoint_entry'
 
 function toRevision(row: RevisionRow): StoredDesignRevision {
   return {
@@ -129,6 +137,8 @@ function toRevision(row: RevisionRow): StoredDesignRevision {
     sequence: row.sequence,
     parentId: row.parent_id,
     cause: causeOfRow(row.cause),
+    label: row.label ?? undefined,
+    checkpointEntry: row.checkpoint_entry ?? undefined,
     digest: row.digest,
     files: parseJson<Record<string, DesignRevisionFile>>(row.files, {}),
     skippedFiles: parseJson<string[]>(row.skipped_files, []),
@@ -146,6 +156,8 @@ function toSummary(row: SummaryRow): StoredDesignRevisionSummary {
     id: row.id,
     sequence: row.sequence,
     cause: causeOfRow(row.cause),
+    label: row.label ?? undefined,
+    checkpointEntry: row.checkpoint_entry ?? undefined,
     changedFiles: row.changed_files,
     changedPaths: parseJson<string[]>(row.changed_paths, []),
     fileCount: row.file_count,
@@ -181,9 +193,18 @@ export class DesignRevisionRepo {
     directory: string,
     path: string,
     maxRows: number
-  ): Promise<Array<{ id: string; sequence: number; createdAt: number; hash: string | null }>> {
+  ): Promise<
+    Array<{
+      id: string
+      sequence: number
+      createdAt: number
+      hash: string | null
+      label: string | null
+      checkpointEntry: string | null
+    }>
+  > {
     const result = await this.db.queryViaWorker(
-      `SELECT id, sequence, created_at,
+      `SELECT id, sequence, created_at, label, checkpoint_entry,
       (SELECT json_extract(value, '$.hash') FROM json_each(files) WHERE key = ? LIMIT 1) AS hash
       FROM design_revisions WHERE project_id = ? AND directory = ? ORDER BY sequence LIMIT ?`,
       [path, projectId, directory, maxRows],
@@ -195,12 +216,16 @@ export class DesignRevisionRepo {
         id: string
         sequence: number
         created_at: number
+        label: string | null
+        checkpoint_entry: string | null
         hash: string | null
       }>
     ).map((row) => ({
       id: row.id,
       sequence: row.sequence,
       createdAt: row.created_at,
+      label: row.label,
+      checkpointEntry: row.checkpoint_entry,
       hash: row.hash
     }))
   }
@@ -218,7 +243,7 @@ export class DesignRevisionRepo {
     maxRows: number
   ): Promise<StoredDesignRevisionSummary[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, sequence, cause, changed_files, changed_paths, file_count, total_bytes, created_at
+      `SELECT id, sequence, cause, label, checkpoint_entry, changed_files, changed_paths, file_count, total_bytes, created_at
          FROM design_revisions
         WHERE project_id = ? AND directory = ?
         ORDER BY sequence ASC LIMIT ?`,
@@ -345,8 +370,8 @@ export class DesignRevisionRepo {
       `INSERT INTO design_revisions (
          id, project_id, directory, sequence, parent_id, cause, digest, files,
          skipped_files, unavailable_files, changed_files, changed_paths, file_count,
-         total_bytes, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         total_bytes, created_at, label, checkpoint_entry
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       revision.id,
       revision.projectId,
       revision.directory,
@@ -361,7 +386,26 @@ export class DesignRevisionRepo {
       revision.changedPaths.length > 0 ? JSON.stringify(revision.changedPaths) : null,
       revision.fileCount,
       revision.totalBytes,
-      revision.createdAt
+      revision.createdAt,
+      revision.label ?? null,
+      revision.checkpointEntry ?? null
+    )
+  }
+
+  labelCheckpoint(
+    projectId: string,
+    directory: string,
+    revisionId: string,
+    label: string,
+    entry: string
+  ): void {
+    this.db.run(
+      'UPDATE design_revisions SET label = ?, checkpoint_entry = ? WHERE project_id = ? AND directory = ? AND id = ? AND label IS NULL',
+      label,
+      entry,
+      projectId,
+      directory,
+      revisionId
     )
   }
 

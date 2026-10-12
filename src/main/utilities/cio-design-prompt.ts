@@ -78,7 +78,11 @@ How to run the session:
    present generated or placeholder content as the real thing.
 7. Report in the user's terms: what a viewer sees, what they can try, the folder
    the design lives in, and the URL that shows it. If a decision was a guess,
-   say which one and what would settle it.`
+   say which one and what would settle it.
+
+Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 
 /** Every later turn of the same session. */
-export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the design folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. If the design has a Screen Canvas, keep it in step with the screens in the same pass, because the user reviews the design on it. Report what changed and what a viewer can now try.`
+export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the design folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. If the design has a Screen Canvas, keep it in step with the screens in the same pass, because the user reviews the design on it. Report what changed and what a viewer can now try.
+
+Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.`
