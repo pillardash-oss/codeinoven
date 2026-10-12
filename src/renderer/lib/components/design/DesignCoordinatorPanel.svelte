@@ -749,7 +749,11 @@
                   {@const created = ageLabel(item.createdAt)}
                   {@const updated = ageLabel(item.updatedAt)}
                   {@const stamp =
-                    created === '' ? updated : updated === '' ? created : `${created} · ${updated}`}
+                    created === ''
+                      ? updated
+                      : updated === '' || created === updated
+                        ? created
+                        : `${created} · ${updated}`}
                   <DropdownMenu.RadioItem
                     value={item.directory}
                     class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
