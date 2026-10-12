@@ -7,6 +7,7 @@ import type {
   NotificationInboxSnapshot,
   NotificationSource
 } from '$shared/ipc-contract'
+import type { BackgroundRunOutcome } from '$shared/types'
 import {
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
@@ -21,10 +22,14 @@ import { threadStatusPolicy } from '$shared/thread-status-policy'
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
 
-/** Second-level filters shown under the active top tab. The assistants tab
- *  carries only missed runs, which are rendered straight from the assistant
- *  store, so it exposes no sub-filters. */
+/** Second-level filters shown under the active top tab. */
 export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'issues'
+
+/**
+ * The assistant-subject narrowing behind the Assistants tab's filter button:
+ * everything, only runs owned by a routine, or only standalone task runs.
+ */
+export type NotificationAssistantSubject = 'all' | 'routine' | 'task'
 
 export interface InAppNotification {
   id: string
@@ -39,6 +44,9 @@ export interface InAppNotification {
   temporaryChatId?: string
   projectName: string
   projectColor?: string
+  /** Owning routine of an assistant run, when the task belongs to one. Absent
+   *  for a standalone task run; drives the routines/tasks filter. */
+  routineId?: string
   /** Full diagnostic text (message plus raw detail/stack) for `error`
    *  notifications; drives the panel's copy action. */
   errorDetail?: string
@@ -57,6 +65,32 @@ const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotif
   attention: 'attention',
   spec: 'spec',
   issues: 'error'
+}
+
+/**
+ * Whether a notification kind answers to a sub-filter. `all` accepts every
+ * kind; the rest accept the one kind they name. Shared with the panel so the
+ * assistant runs it renders straight from the assistant store filter on exactly
+ * the same rule as the notifications the store owns.
+ */
+export function notificationMatchesSubFilter(
+  kind: InAppNotification['kind'],
+  sub: NotificationSubFilter
+): boolean {
+  return sub === 'all' || SUB_FILTER_KINDS[sub] === kind
+}
+
+/**
+ * Which sub-filter an unattended (background) run answers to: a finished run is
+ * Done, a failure is an Issue, and anything still running or parked on the user
+ * is Attention.
+ */
+export function backgroundRunNotificationKind(
+  outcome: BackgroundRunOutcome | undefined
+): InAppNotification['kind'] {
+  if (outcome === 'completed') return 'completed'
+  if (outcome === 'failed') return 'error'
+  return 'attention'
 }
 
 /**
@@ -114,6 +148,8 @@ class NotificationPanelState {
   private _dismissed = new SvelteSet<string>()
   topTab: NotificationTopTab = $state('projects')
   subFilter: NotificationSubFilter = $state('all')
+  /** The Assistants tab's routines/tasks narrowing. Ignored by every other tab. */
+  assistantSubject: NotificationAssistantSubject = $state('all')
 
   /**
    * Chats live in the Inbox project or arrive through a chat source.
@@ -150,8 +186,17 @@ class NotificationPanelState {
 
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
     if (sub === 'all') return items
-    const kind = SUB_FILTER_KINDS[sub]
-    return items.filter((n) => n.kind === kind)
+    return items.filter((n) => notificationMatchesSubFilter(n.kind, sub))
+  }
+
+  /**
+   * Whether an assistant entry (a notice, a missed fire, or an unattended run)
+   * answers to the routines/tasks filter. A routine-owned entry has a routine;
+   * a standalone task run does not.
+   */
+  matchesAssistantSubject(hasRoutine: boolean): boolean {
+    if (this.assistantSubject === 'all') return true
+    return this.assistantSubject === 'routine' ? hasRoutine : !hasRoutine
   }
 
   get projectNotifications(): InAppNotification[] {
@@ -168,6 +213,15 @@ class NotificationPanelState {
     return this._notifications.filter((n) => this.isAssistant(n))
   }
 
+  /** Assistant notices that survive both the sub-filter and the subject filter. */
+  get assistantVisibleNotifications(): InAppNotification[] {
+    return this.assistantNotifications.filter(
+      (n) =>
+        notificationMatchesSubFilter(n.kind, this.subFilter) &&
+        this.matchesAssistantSubject(Boolean(n.routineId))
+    )
+  }
+
   /** Items for the currently active top tab + sub filter. App errors are
    *  rendered by the panel straight from `appErrorState`, so this returns an
    *  empty list for that tab. */
@@ -178,7 +232,7 @@ class NotificationPanelState {
       case 'chats':
         return this.byKind(this.chatNotifications, this.subFilter)
       case 'assistants':
-        return this.byKind(this.assistantNotifications, this.subFilter)
+        return this.assistantVisibleNotifications
       case 'app-errors':
         return []
     }
@@ -196,12 +250,30 @@ class NotificationPanelState {
     return this.count(this.chatNotifications, sub)
   }
 
+  /**
+   * Rows the Assistants tab shows for a sub-filter. The tab carries three lists
+   * that the panel renders straight from the assistant store   notices here,
+   * pending missed fires, and unattended runs   so its counts are the sum of
+   * what survives the active sub-filter and subject filter in all three. A
+   * missed fire is an Attention state; an unattended run reads by its outcome.
+   */
   assistantCount(sub: NotificationSubFilter): number {
-    // The assistants tab carries assistant notices plus the pending missed
-    // runs the panel renders straight from the assistant store. Missed runs
-    // surface under the tab's "All" view, which is its only view.
-    const notices = this.count(this.assistantNotifications, sub)
-    return sub === 'all' ? notices + assistantRoutines.missedRuns.length : notices
+    const notices = this.assistantNotifications.filter(
+      (n) =>
+        notificationMatchesSubFilter(n.kind, sub) &&
+        this.matchesAssistantSubject(Boolean(n.routineId))
+    ).length
+    const missed = assistantRoutines.missedRuns.filter(
+      (run) =>
+        notificationMatchesSubFilter('attention', sub) &&
+        this.matchesAssistantSubject(Boolean(run.routineId))
+    ).length
+    const runs = assistantRoutines.recentBackgroundRuns.filter(
+      (run) =>
+        notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
+        this.matchesAssistantSubject(Boolean(run.routineId))
+    ).length
+    return notices + missed + runs
   }
 
   /**
@@ -459,10 +531,15 @@ class NotificationPanelState {
   setTab(tab: NotificationTopTab): void {
     this.topTab = tab
     this.subFilter = 'all'
+    this.assistantSubject = 'all'
   }
 
   setSubFilter(sub: NotificationSubFilter): void {
     this.subFilter = sub
+  }
+
+  setAssistantSubject(subject: NotificationAssistantSubject): void {
+    this.assistantSubject = subject
   }
 
   /**
@@ -518,6 +595,7 @@ class NotificationPanelState {
           ...(errorDetail ? { errorDetail } : {}),
           projectId: thread.projectId,
           threadId: thread.id,
+          ...(thread.routineId ? { routineId: thread.routineId } : {}),
           source: isChat ? 'chat' : isAssistant ? 'assistant' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color
@@ -542,6 +620,7 @@ class NotificationPanelState {
               : `${thread.title} is waiting for your input in ${project?.name ?? ''}.`,
           projectId: thread.projectId,
           threadId: thread.id,
+          ...(thread.routineId ? { routineId: thread.routineId } : {}),
           source: isChat ? 'chat' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color

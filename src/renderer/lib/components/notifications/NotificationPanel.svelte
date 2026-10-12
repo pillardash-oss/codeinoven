@@ -12,11 +12,15 @@
     X
   } from '@lucide/svelte'
   import {
+    backgroundRunNotificationKind,
+    notificationMatchesSubFilter,
     notificationPanelState,
+    type NotificationAssistantSubject,
     type NotificationSubFilter,
     type NotificationTopTab,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
+  import NotificationFilterMenu from './NotificationFilterMenu.svelte'
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
@@ -75,10 +79,11 @@
         return ['all', 'done', 'attention', 'spec', 'issues']
       case 'chats':
         return ['all', 'done', 'attention', 'issues']
-      // Assistants carry only missed runs, rendered straight from the assistant
-      // store: no sub-filter tabs, and nothing at all until a run is missed.
+      // Assistants carry assistant notices plus the missed and unattended runs
+      // rendered straight from the assistant store, so they narrow exactly like
+      // Chats does. No Spec: the assistant space never raises one.
       case 'assistants':
-        return []
+        return ['all', 'done', 'attention', 'issues']
       case 'app-errors':
         return []
     }
@@ -158,15 +163,73 @@
   const routineNameById = $derived(
     new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
   )
-  let missedGroups = $derived(
-    groupMissedRunsByRoutine(assistantRoutines.missedRuns, routineNameById)
+
+  /**
+   * Missed fires and unattended runs the panel shows after both filters. Both
+   * live in the assistant store, so they narrow on the same rule the store
+   * applies to the notices it owns: a missed fire is Attention, an unattended
+   * run reads by its outcome, and the routines/tasks filter reads `routineId`.
+   */
+  const visibleMissedRuns = $derived(
+    assistantRoutines.missedRuns.filter(
+      (run) =>
+        notificationMatchesSubFilter('attention', notificationPanelState.subFilter) &&
+        notificationPanelState.matchesAssistantSubject(Boolean(run.routineId))
+    )
   )
+  const visibleBackgroundRuns = $derived(
+    assistantRoutines.recentBackgroundRuns.filter(
+      (run) =>
+        notificationMatchesSubFilter(
+          backgroundRunNotificationKind(run.outcome),
+          notificationPanelState.subFilter
+        ) && notificationPanelState.matchesAssistantSubject(Boolean(run.routineId))
+    )
+  )
+
+  let missedGroups = $derived(groupMissedRunsByRoutine(visibleMissedRuns, routineNameById))
 
   // Unattended runs get their own routine grouping: one group per owning
   // routine, plus a single group for routine-less tasks, mirroring missed runs.
   const backgroundGroups = $derived(
-    groupBackgroundRunsByRoutine(assistantRoutines.recentBackgroundRuns, routineNameById)
+    groupBackgroundRunsByRoutine(visibleBackgroundRuns, routineNameById)
   )
+
+  // The assistants tab's routines/tasks narrowing, behind the filter button at
+  // the end of the sub-filter row.
+  const assistantSubjectOptions: Array<{
+    id: NotificationAssistantSubject
+    label: string
+    hint: string
+  }> = [
+    { id: 'all', label: 'Routines and tasks', hint: 'Everything the assistant ran' },
+    { id: 'routine', label: 'Routines only', hint: 'Runs owned by a scheduled routine' },
+    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no routine' }
+  ]
+
+  const assistantSubjectLabel = $derived(
+    assistantSubjectOptions.find((option) => option.id === notificationPanelState.assistantSubject)
+      ?.label ?? 'Routines and tasks'
+  )
+
+  /** Whether any assistant activity exists before either filter narrows it. */
+  const assistantHasActivity = $derived(
+    notificationPanelState.assistantNotifications.length > 0 ||
+      assistantRoutines.missedRuns.length > 0 ||
+      assistantRoutines.backgroundRuns.length > 0
+  )
+
+  /** Whether the active filters hide everything there is to show. */
+  const assistantFilteredEmpty = $derived(
+    notificationPanelState.assistantVisibleNotifications.length === 0 &&
+      visibleMissedRuns.length === 0 &&
+      visibleBackgroundRuns.length === 0
+  )
+
+  function resetAssistantFilters(): void {
+    notificationPanelState.setSubFilter('all')
+    notificationPanelState.setAssistantSubject('all')
+  }
 
   /**
    * The task a run row reports for, resolved from the loaded thread list. A
@@ -330,6 +393,20 @@
     return `color-mix(in srgb, ${notificationPanelState.accentColor(n)} 40%, transparent)`
   }
 
+  /**
+   * The line under an entry's title.
+   *
+   * An assistant completion states its outcome: the reader is on the Assistants
+   * tab, the title is already the routine or task name, and the payload's body
+   * repeated that name ("Shower News finished."). Entries the durable inbox
+   * restored from an older session still carry that repetition, so the outcome
+   * is derived here rather than trusted from the stored body.
+   */
+  function displayBody(n: InAppNotification): string {
+    if (notificationPanelState.isAssistant(n) && n.kind === 'completed') return 'Run completed'
+    return n.body
+  }
+
   function kindLabel(kind: InAppNotification['kind']): string {
     switch (kind) {
       case 'completed':
@@ -404,7 +481,7 @@
     role="button"
     tabindex="0"
     aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
-    title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
+    title={`${n.title}${displayBody(n) ? `   ${displayBody(n)}` : ''}`}
     onclick={() => void navigateToNotification(n)}
     onkeydown={(e: KeyboardEvent) => {
       // Ignore keys that belong to a nested control (the stack-trace
@@ -424,31 +501,39 @@
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
         <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
       </div>
-      <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
-        {#if n.source === 'chat'}
-          <MessageSquare size={10} class="shrink-0" />
-          <span>Chat</span>
-        {:else}
-          <span
-            class="h-1.5 w-1.5 shrink-0 rounded-full"
-            style="background: {n.projectColor ?? 'var(--color-border)'}"
-            role="presentation"
-          ></span>
-          <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span>
-          {#if n.source === 'temporary-chat'}
-            <span class="shrink-0">·</span>
-            <MessageCircleDashed
-              size={10}
-              class="shrink-0 text-temporary-chat"
-              title="Temporary chat"
-              aria-hidden="true"
-            />
+      <!--
+        An assistant notice drops the source line: the reader is already on the
+        Assistants tab, so naming the assistant space under every row said
+        nothing, and the row's own title plus its outcome line carry the meaning.
+      -->
+      {#if !notificationPanelState.isAssistant(n)}
+        <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
+          {#if n.source === 'chat'}
+            <MessageSquare size={10} class="shrink-0" />
+            <span>Chat</span>
+          {:else}
+            <span
+              class="h-1.5 w-1.5 shrink-0 rounded-full"
+              style="background: {n.projectColor ?? 'var(--color-border)'}"
+              role="presentation"
+            ></span>
+            <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span
+            >
+            {#if n.source === 'temporary-chat'}
+              <span class="shrink-0">·</span>
+              <MessageCircleDashed
+                size={10}
+                class="shrink-0 text-temporary-chat"
+                title="Temporary chat"
+                aria-hidden="true"
+              />
+            {/if}
           {/if}
-        {/if}
-      </div>
-      {#if n.body}
+        </div>
+      {/if}
+      {#if displayBody(n)}
         <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
-          {n.body}
+          {displayBody(n)}
         </p>
       {/if}
       {#if n.kind === 'error' && n.errorDetail && hasUsefulDetails(errorHeadline(n.body), n.errorDetail)}
@@ -546,6 +631,18 @@
           {/if}
         </button>
       {/each}
+      {#if notificationPanelState.topTab === 'assistants'}
+        <div class="ml-auto">
+          <NotificationFilterMenu
+            value={notificationPanelState.assistantSubject}
+            options={assistantSubjectOptions}
+            onValueChange={(next) => notificationPanelState.setAssistantSubject(next)}
+            label="Filter assistant notifications by routines or tasks"
+            current={assistantSubjectLabel}
+            narrowed={notificationPanelState.assistantSubject !== 'all'}
+          />
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -635,15 +732,28 @@
         </div>
       {/if}
     {:else if showingAssistants}
-      {#if notificationPanelState.assistantNotifications.length === 0 && assistantRoutines.missedRuns.length === 0 && assistantRoutines.backgroundRuns.length === 0}
+      {#if !assistantHasActivity}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
           <Bot size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No assistant activity</p>
         </div>
+      {:else if assistantFilteredEmpty}
+        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+          <Bell size={20} class="text-dimmed" />
+          <p class="text-xs text-muted">Nothing matches this filter</p>
+          <button
+            class="rounded px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Clear the assistant filters"
+            aria-label="Clear the assistant filters"
+            onclick={resetAssistantFilters}
+          >
+            Show all
+          </button>
+        </div>
       {:else}
-        {#if notificationPanelState.assistantNotifications.length > 0}
+        {#if notificationPanelState.assistantVisibleNotifications.length > 0}
           <div class="space-y-px p-1.5">
-            {#each notificationPanelState.assistantNotifications as n (n.id)}
+            {#each notificationPanelState.assistantVisibleNotifications as n (n.id)}
               {@render notificationCard(n)}
             {/each}
           </div>
