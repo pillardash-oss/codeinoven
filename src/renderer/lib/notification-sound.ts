@@ -15,6 +15,14 @@
  *   silent too. It is an attention cue for something already on screen, so it
  *   plays at a reduced volume and must never startle or distract.
  *
+ * Which of the two surfaces applies is one status and only one: whether the app
+ * is in focus. The main process reads it (`BrowserWindow.isFocused()` over every
+ * app window, so focus held by an embedded browser view or an auxiliary window
+ * still counts as in front) and carries its verdict on the notification payload.
+ * The renderer never reads focus for itself: its `document.hasFocus()` is false
+ * whenever an embedded view holds the keyboard even though the app is in front,
+ * and that disagreement is exactly what used to lose the alert.
+ *
  * A successful assistant run is announced by `alert-assistant.wav` on both
  * surfaces: the same alert, louder off-app and quieter in-app.
  *
@@ -26,6 +34,7 @@
  */
 import { subscribe } from '$lib/ipc.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import {
   inAppSoundGroup,
   NOTIFICATION_SOUND_DEDUP_MS,
@@ -83,7 +92,16 @@ function alertElement(kind: NotificationSoundKind, surface: AlertSurface): HTMLA
 function playAlert(kind: NotificationSoundKind, surface: AlertSurface): void {
   const audio = alertElement(kind, surface)
   audio.currentTime = 0
-  void audio.play().catch(() => undefined)
+  // A rejected play (autoplay, decode, or a queued play interrupted by this
+  // one) is otherwise indistinguishable from a deliberate silence, which is how
+  // a lost alert used to go unreported. Record it for diagnosis instead.
+  void audio.play().catch((error: unknown) => {
+    logRendererDev(
+      `The ${surface} notification alert could not play: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    )
+  })
 }
 
 /**
@@ -92,12 +110,12 @@ function playAlert(kind: NotificationSoundKind, surface: AlertSurface): void {
  * nothing plays for a suppressed toast, and no alert announces a notification
  * the user is already looking at.
  *
- * Stays silent while another window holds focus (that window shows the toast,
- * and the background case is announced by the off-app alert), when the user
- * muted this alert's group, and for the rest of a burst.
+ * Stays silent when main reports the app is not in front (the background case is
+ * announced by the off-app alert), when the user muted this alert's group, and
+ * for the rest of a burst. `appFocused` is main's verdict, never this window's.
  */
-export function playInAppAlert(kind: NotificationSoundKind): void {
-  if (!document.hasFocus()) return
+export function playInAppAlert(kind: NotificationSoundKind, appFocused: boolean): void {
+  if (!appFocused) return
   if (!appConfigState.inAppNotificationSound[inAppSoundGroup(kind)]) return
   const now = Date.now()
   if (now - lastInAppAlertAt < NOTIFICATION_SOUND_DEDUP_MS) return

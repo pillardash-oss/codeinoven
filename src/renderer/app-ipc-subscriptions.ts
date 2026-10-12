@@ -94,6 +94,7 @@ async function openNotificationThread(
 
 function showAgentNotification(
   payload: AgentNotificationPayload,
+  appFocused: boolean,
   deps: AppIpcSubscriptionDeps
 ): void {
   const onSelectedThread =
@@ -115,8 +116,11 @@ function showAgentNotification(
   }
   // The toast is shown from here, so this is the only place the in-app alert is
   // played: the cue exists exactly when the card does, and a suppressed toast
-  // (the user is already on this thread) stays silent.
-  playInAppAlert(notificationSoundKind(payload.kind, payload.projectId))
+  // (the user is already on this thread) stays silent. Focus is main's verdict,
+  // carried with the payload: this window never reads focus for itself, because
+  // its own `document.hasFocus()` is false whenever an embedded view or an
+  // auxiliary window holds the keyboard.
+  playInAppAlert(notificationSoundKind(payload.kind, payload.projectId), appFocused)
   notificationPanelState.add(payload)
   // No `onDismiss`: a toast is a transient announcement that expires on its own,
   // so letting its expiry retire the panel entry would drop exactly the
@@ -180,8 +184,8 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeClick = subscribeGuarded('notification:threadClicked', (payload) => {
     void openNotificationThread(payload, deps)
   })
-  const unsubscribeShow = subscribeGuarded('notification:show', (payload) =>
-    showAgentNotification(payload, deps)
+  const unsubscribeShow = subscribeGuarded('notification:show', (payload, appFocused) =>
+    showAgentNotification(payload, appFocused, deps)
   )
   const unsubscribeConfirmClose = subscribeGuarded('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
