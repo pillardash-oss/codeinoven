@@ -1,3 +1,4 @@
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 
 async function copyWithElectron(text: string): Promise<void> {
@@ -23,4 +24,17 @@ export async function copyText(text: string): Promise<void> {
   } catch {
     throw new Error('Clipboard copy failed')
   }
+}
+
+/**
+ * Confirm a clipboard action (a copy, a cut) in the default toast.
+ *
+ * Putting something on the clipboard is a routine acknowledgement, not a status
+ * the app reports about its own health, so it must not borrow the success card's
+ * green tint: the branded status toasts stay reserved for real outcomes. Every
+ * "copied" notice routes through here so the whole app reads in one quiet
+ * default card.
+ */
+export function notifyClipboard(message: string): void {
+  toast(message)
 }

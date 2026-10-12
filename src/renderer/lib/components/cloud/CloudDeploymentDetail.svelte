@@ -17,7 +17,7 @@
     X
   } from '@lucide/svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import { copyText as copyTextToClipboard } from '$lib/copy-text'
+  import { copyText as copyTextToClipboard, notifyClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { toast } from 'svelte-sonner'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
@@ -297,7 +297,7 @@
     if (!readableLog) return
     try {
       await copyTextToClipboard(readableLog)
-      toast.success('Deployment log copied.')
+      notifyClipboard('Deployment log copied.')
     } catch {
       toast.error('The log could not be copied.')
     }
@@ -308,7 +308,7 @@
     if (!log) return
     try {
       await copyTextToClipboard(log)
-      toast.success('Raw log copied.')
+      notifyClipboard('Raw log copied.')
     } catch {
       toast.error('The raw log could not be copied.')
     }

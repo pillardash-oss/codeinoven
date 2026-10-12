@@ -16,7 +16,7 @@
   import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { copyText } from '$lib/copy-text'
+  import { copyText, notifyClipboard } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
@@ -765,9 +765,9 @@
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
     try {
       await copyText(paths.map((path) => `@${path}`).join('\n'))
-      toast.success(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
+      notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
     } catch {
-      toast.success(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
+      notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
     }
   }
 
@@ -778,7 +778,7 @@
         paths.map((path) => projectFilesWorkspace.fileInfo(projectId, path))
       )
       await copyText(infos.map((info) => info.absolutePath).join('\n'))
-      toast.success(`${label} copied`)
+      notifyClipboard(`${label} copied`)
     } catch {
       toast.error(`The ${label.toLocaleLowerCase()} could not be copied`)
     }

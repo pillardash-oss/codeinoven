@@ -10,7 +10,7 @@
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { copyText } from '$lib/copy-text'
+  import { copyText, notifyClipboard } from '$lib/copy-text'
   import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpoint } from '$shared/ovens'
 
   interface Props {
@@ -60,7 +60,7 @@
     copying = true
     try {
       await copyText(startCommand)
-      toast.success('Command copied')
+      notifyClipboard('Command copied')
     } catch (cause) {
       error = message(cause)
     } finally {
