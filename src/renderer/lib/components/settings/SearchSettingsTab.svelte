@@ -101,21 +101,35 @@
 
 <div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
-    <div>
-      <h1 class="text-xl font-bold tracking-tight">Search</h1>
+    <div class="min-w-0">
+      <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Find threads by meaning. Embedding and indexing stay on this machine.
+        Blends keyword hits with meaning-based matches on every thread search. Title matches stay
+        first, semantic matches follow, keyword-only finds come last.
       </p>
+      {#if !canEnable}
+        <p class="mt-1.5 text-xs text-dimmed">Install an embedding model below to turn this on.</p>
+      {/if}
     </div>
-    <button
-      type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
-      title="Refresh search settings"
-      aria-label="Refresh search settings"
-      onclick={() => void search.load()}
-    >
-      <RefreshCw size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
-    </button>
+    <div class="flex shrink-0 items-center gap-2">
+      <Switch
+        checked={enabled}
+        disabled={!canEnable}
+        label="Enabled"
+        title="Turn intent search on or off"
+        aria-label="Enable intent search"
+        onchange={(checked) => void search.setEnabled(checked)}
+      />
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
+        title="Refresh search settings"
+        aria-label="Refresh search settings"
+        onclick={() => void search.load()}
+      >
+        <RefreshCw size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
+      </button>
+    </div>
   </div>
 
   {#if search.error}
@@ -154,30 +168,6 @@
         </button>
       </div>
     {/if}
-
-    <!-- Intent toggle -->
-    <div class="rounded-xl border bg-surface p-4">
-      <div class="flex items-start justify-between gap-6">
-        <div class="min-w-0">
-          <p class="text-sm font-medium">Search by intent</p>
-          <p class="mt-0.5 text-xs leading-relaxed text-muted">
-            Blends keyword hits with meaning-based matches on every thread search. Title matches
-            stay first, semantic matches follow, keyword-only finds come last.
-          </p>
-          {#if !canEnable}
-            <p class="mt-1.5 text-xs text-dimmed">
-              Install an embedding model below to turn this on.
-            </p>
-          {/if}
-        </div>
-        <Switch
-          checked={enabled}
-          disabled={!canEnable}
-          aria-label="Enable intent search"
-          onchange={(checked) => void search.setEnabled(checked)}
-        />
-      </div>
-    </div>
 
     <!-- Index -->
     <div class="rounded-xl border bg-surface p-4">

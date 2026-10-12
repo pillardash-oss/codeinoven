@@ -111,6 +111,7 @@ class SearchSettingsStore {
   async rebuildIndex(): Promise<void> {
     try {
       await invoke('search:rebuildIndex')
+      await this.load()
     } catch (cause) {
       reportError(cause, 'The search index could not be rebuilt.')
     }
