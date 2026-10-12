@@ -36,16 +36,40 @@ const OPENUSAGE_HARNESS_PROVIDER_IDS: Readonly<Record<string, string>> = {
 }
 
 /**
+ * Provider ids of ONE harness whose plan quota OpenUsage keys under a different
+ * id than the provider the account reports, when the harness itself is not
+ * scoped to a single plan id (see {@link OPENUSAGE_HARNESS_PROVIDER_IDS}).
+ *
+ * Pi's ChatGPT sign-in registers the provider as `openai`, while OpenUsage keys
+ * the ChatGPT plan quota as `codex` (Pi's older `openai-codex` sign-in already
+ * aliases to it). Only those provider ids are remapped, so Pi's other providers
+ * keep their own OpenUsage ids.
+ */
+const OPENUSAGE_HARNESS_PROVIDER_ALIASES: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  pi: { openai: 'codex' }
+}
+
+/**
  * OpenUsage provider ids to try for one harness/provider pair, most specific
- * first: the harness-scoped plan id, then the provider the account reports,
- * then that provider's canonical OpenUsage alias.
+ * first: the harness-scoped plan id, the harness's per-provider plan id, the
+ * provider the account reports, then that provider's canonical OpenUsage alias.
  */
 export function openUsageProviderCandidates(
   harnessId: string | undefined,
   providerId: string
 ): string[] {
   const harnessScoped = harnessId ? OPENUSAGE_HARNESS_PROVIDER_IDS[harnessId] : undefined
-  return [harnessScoped, providerId, OPENUSAGE_PROVIDER_ALIASES[providerId]].filter(
+  const harnessProviderAlias = harnessId
+    ? OPENUSAGE_HARNESS_PROVIDER_ALIASES[harnessId]?.[providerId]
+    : undefined
+  return [
+    harnessScoped,
+    harnessProviderAlias,
+    providerId,
+    OPENUSAGE_PROVIDER_ALIASES[providerId]
+  ].filter(
     (candidate, index, all): candidate is string =>
       typeof candidate === 'string' && candidate.length > 0 && all.indexOf(candidate) === index
   )
