@@ -29,6 +29,14 @@ export interface DesignEntry {
   name: string
   /** Whether the folder holds an `index.html` entry file. */
   hasEntry: boolean
+  /**
+   * When the folder was made (ms), for the board's "created" stamp.
+   *
+   * The filesystem's birth time is the design's own creation; a volume that does
+   * not record one stands its change time in, which is the closest thing it has.
+   * Zero means the folder could not be read at all.
+   */
+  createdAt: number
   /** Latest modification time inside the folder (ms), for newest-first ordering. */
   updatedAt: number
 }

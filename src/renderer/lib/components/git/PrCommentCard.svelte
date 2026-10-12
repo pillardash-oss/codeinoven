@@ -12,7 +12,7 @@
   import type { Snippet } from 'svelte'
   import { Check, ChevronDown, Loader2, MoreHorizontal } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import {
     githubAbuseReportUrl,
@@ -339,13 +339,13 @@
           data-external-url={entry.url}
           onclick={openEntryOnGitHub}
         >
-          {relativeTime(entry.at)}
+          {formatCompactAge(entry.at)}
         </button>
         {#if entry.updatedAt && entry.updatedAt !== entry.at}
           <!-- GitHub marks an edited comment here rather than only changing the
                timestamp, so a reader can tell that what they are looking at is
                not what was first posted. -->
-          <span title="Edited {relativeTime(entry.updatedAt)}">· edited</span>
+          <span title="Edited {formatCompactAge(entry.updatedAt)}">· edited</span>
         {/if}
         {#if repliesTo}
           <!-- A thread is linear, so the row says which comment it answers: the

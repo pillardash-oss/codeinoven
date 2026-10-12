@@ -15,7 +15,7 @@
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { pathToFileUrl } from '$lib/mime'
   import {
     cloudDeployState,
@@ -869,7 +869,7 @@ ${fence}`
                           >
                             <span class="truncate font-mono">{container.id}</span>
                             {#if container.updatedAt}
-                              <span class="shrink-0">· {relativeTime(container.updatedAt)}</span>
+                              <span class="shrink-0">· {formatCompactAge(container.updatedAt)}</span>
                             {/if}
                           </div>
                         </div>

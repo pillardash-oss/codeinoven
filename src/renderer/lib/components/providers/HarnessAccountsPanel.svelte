@@ -17,9 +17,8 @@
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
-  import { relativeTime } from '$lib/format/relative-time'
   import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
-  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
+  import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -510,7 +509,7 @@
                     class="truncate text-[0.625rem] text-dimmed"
                     title={`Last checked ${formatDateTimeWithWeekday(usageSnapshot.fetchedAt)}${usageSnapshot.error ? ` · ${usageSnapshot.error}` : ''}`}
                   >
-                    Updated {relativeTime(usageSnapshot.fetchedAt)}
+                    Updated {formatCompactAge(usageSnapshot.fetchedAt)}
                   </p>
                 {/if}
               {/if}

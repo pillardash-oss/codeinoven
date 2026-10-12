@@ -30,6 +30,7 @@
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
+  import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import {
     SCREEN_CANVAS_FILE,
     isScreenCanvasEntry,
@@ -578,14 +579,18 @@
     void loadWorkRoots()
   })
 
-  function updatedLabel(item: DesignEntry): string {
-    if (item.updatedAt <= 0) return ''
-    return new Date(item.updatedAt).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+  /** A design's age, in the same compact form a thread row uses. */
+  function ageLabel(value: number): string {
+    return value > 0 ? formatCompactAge(value) : ''
+  }
+
+  /** A design's timestamps in full, for the row's tooltip. */
+  function designTooltip(item: DesignEntry): string {
+    if (!item.hasEntry) return `${item.name}, no entry page`
+    const parts = [item.name]
+    if (item.createdAt > 0) parts.push(`created ${formatDateTime(item.createdAt)}`)
+    if (item.updatedAt > 0) parts.push(`updated ${formatDateTime(item.updatedAt)}`)
+    return parts.join(', ')
   }
 </script>
 
@@ -741,15 +746,14 @@
                 onValueChange={handleDesignChange}
               >
                 {#each items as item (item.directory)}
-                  {@const updated = updatedLabel(item)}
+                  {@const created = ageLabel(item.createdAt)}
+                  {@const updated = ageLabel(item.updatedAt)}
+                  {@const stamp =
+                    created === '' ? updated : updated === '' ? created : `${created} · ${updated}`}
                   <DropdownMenu.RadioItem
                     value={item.directory}
                     class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    title={item.hasEntry
-                      ? updated === ''
-                        ? item.name
-                        : `${item.name}, updated ${updated}`
-                      : `${item.name}, no entry page`}
+                    title={designTooltip(item)}
                   >
                     <WorkIcon size={12} class="shrink-0 text-dimmed" />
                     <span class="min-w-0 flex-1 truncate">{item.name}</span>
@@ -760,9 +764,9 @@
                         Current
                       </span>
                     {/if}
-                    {#if updated !== ''}
+                    {#if stamp !== ''}
                       <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-                        {updated}
+                        {stamp}
                       </span>
                     {/if}
                     <Check

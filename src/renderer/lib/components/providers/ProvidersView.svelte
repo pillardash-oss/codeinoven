@@ -14,6 +14,7 @@
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { canRestartHarness, canUninstallHarness } from '$shared/harness-actions'
   import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
@@ -134,20 +135,8 @@
   let lastCheckedLabel = $derived(
     lastCheckedAt === null
       ? 'Not checked yet'
-      : `Last checked: ${formatRelativeTime(lastCheckedAt, now)}`
+      : `Last checked: ${formatCompactAge(lastCheckedAt, now)}`
   )
-
-  function formatRelativeTime(fromMs: number, toMs: number): string {
-    const diffSec = Math.max(0, Math.round((toMs - fromMs) / 1000))
-    if (diffSec < 5) return 'just now'
-    if (diffSec < 60) return `${diffSec}s ago`
-    const diffMin = Math.round(diffSec / 60)
-    if (diffMin < 60) return `${diffMin} min ago`
-    const diffHour = Math.round(diffMin / 60)
-    if (diffHour < 24) return `${diffHour}h ago`
-    const diffDay = Math.round(diffHour / 24)
-    return `${diffDay}d ago`
-  }
 
   function toggleSettings(harnessId: string): void {
     expandedSettings[harnessId] = !expandedSettings[harnessId]

@@ -127,14 +127,29 @@ export function formatMessageTimestamp(
 }
 
 /**
- * The stamp a dense list row carries: `Now`, `5m`, `23h`, `6d`, and then the
- * real day (`Sep 16`, `Sep 16, 2025`) once the age passes a week.
+ * The stamp every relative age in the app carries: `Now`, `5m`, `23h`, `6d`, and
+ * then the real day (`Sep 16`, `Sep 16, 2025`) once the age passes a week.
  *
  * An age past a week is where `2w` and `3mo` stop telling an operator anything,
- * so the ladder hands over to the date the moment it stops being precise.
+ * so the ladder hands over to the date the moment it stops being precise. That
+ * makes this the one relative formatter: a thread row, a Git panel, a provider,
+ * a download, and a design's timestamps all read the same way.
+ *
+ * It accepts the shapes those callers actually hold: an epoch millisecond, a
+ * `Date`, or an ISO-8601 string, and a missing value degrades to an empty string
+ * so it can be rendered inline without a guard at every call site.
  */
-export function formatCompactAge(value: Date | number, now: Date | number = Date.now()): string {
-  const timestamp = typeof value === 'number' ? value : value.getTime()
+export function formatCompactAge(
+  value: Date | number | string | null | undefined,
+  now: Date | number = Date.now()
+): string {
+  if (value === null || value === undefined || value === '') return ''
+  const timestamp =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Date.parse(value)
+        : value.getTime()
   if (!Number.isFinite(timestamp)) return ''
   const reference = typeof now === 'number' ? now : now.getTime()
   const minutes = Math.floor((reference - timestamp) / 60_000)

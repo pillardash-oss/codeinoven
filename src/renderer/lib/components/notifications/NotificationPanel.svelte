@@ -11,6 +11,7 @@
     RotateCcw,
     X
   } from '@lucide/svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
     type NotificationAssistantSubject,
@@ -503,18 +504,6 @@
   function appErrorLabel(kind: AppErrorEntry['kind']): string {
     return kind === 'error' ? 'Error' : 'Warning'
   }
-
-  function formatTime(ts: number): string {
-    const diff = Date.now() - ts
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 60) return 'just now'
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
-  }
 </script>
 
 {#snippet detailsBlock(key: string, details: string)}
@@ -573,7 +562,7 @@
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
-        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(n.timestamp)}</span>
       </div>
       <!--
         An assistant notice drops the source line: the reader is already on the
@@ -661,7 +650,7 @@
         <span class="truncate text-[0.6875rem] font-medium text-foreground"
           >{missedRunTitle(run)}</span
         >
-        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(run.dueAt)}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(run.dueAt)}</span>
       </div>
       <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
         {missedRunReasonText(run.reason)}
@@ -724,7 +713,7 @@
             >{backgroundRunTitle(run)}</span
           >
           <span class="shrink-0 text-[0.625rem] text-dimmed"
-            >{formatTime(run.settledAt ?? run.startedAt)}</span
+            >{formatCompactAge(run.settledAt ?? run.startedAt)}</span
           >
         </div>
         <p class="mt-0.5 text-[0.625rem] text-muted">
@@ -865,7 +854,7 @@
                     {appErrorLabel(e.kind)}
                   </span>
                   <span class="shrink-0 text-[0.625rem] text-dimmed">
-                    {formatTime(e.timestamp)}
+                    {formatCompactAge(e.timestamp)}
                     {#if e.count > 1}
                       <span class="text-dimmed">· ×{e.count}</span>
                     {/if}
@@ -957,7 +946,7 @@
                   >{section.items.length}</span
                 >
                 <span class="shrink-0 text-[0.625rem] text-dimmed"
-                  >{formatTime(section.latestAt)}</span
+                  >{formatCompactAge(section.latestAt)}</span
                 >
               </button>
               {#if !collapsed}

@@ -8,7 +8,7 @@
     TriangleAlert
   } from '@lucide/svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { GitState, gitState } from '$lib/stores/git.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -314,7 +314,7 @@
                   {#if issue.authorIsBot}
                     <BotBadge />
                   {/if}
-                  <span class="shrink-0">· {relativeTime(issue.updatedAt)}</span>
+                  <span class="shrink-0">· {formatCompactAge(issue.updatedAt)}</span>
                 </p>
                 {#if (issue.assignees && issue.assignees.length > 0) || issue.milestone}
                   <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">

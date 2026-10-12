@@ -6,9 +6,8 @@
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
-  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import type { HarnessAccount } from '$shared/types'
 
   interface Props {
@@ -96,7 +95,7 @@
     No limits to report
     {#if snapshot && snapshot.fetchedAt > 0}
       <span class="mx-1" aria-hidden="true">·</span>
-      <span title={checkedAtTitle}>Updated {relativeTime(snapshot.fetchedAt)}</span>
+      <span title={checkedAtTitle}>Updated {formatCompactAge(snapshot.fetchedAt)}</span>
     {/if}
   </p>
 {/snippet}

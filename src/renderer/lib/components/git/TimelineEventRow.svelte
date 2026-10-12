@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { openInBrowser } from '$lib/open-in-browser'
   import BotBadge from './BotBadge.svelte'
@@ -89,6 +89,6 @@
     {#if line.trail}
       <span> {line.trail}</span>
     {/if}
-    <span class="text-dimmed"> · {relativeTime(event.createdAt)}</span>
+    <span class="text-dimmed"> · {formatCompactAge(event.createdAt)}</span>
   </p>
 </TimelineRailItem>

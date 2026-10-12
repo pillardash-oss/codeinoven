@@ -7,7 +7,7 @@
     browserLibraryHost,
     type BrowserHistoryEntry
   } from '$shared/browser/browser-library'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import BrowserLibraryRow from './BrowserLibraryRow.svelte'
 
@@ -137,7 +137,7 @@
         <li>
           <BrowserLibraryRow
             title={entry.title}
-            meta="{browserLibraryHost(entry.url)} · {relativeTime(entry.visitedAt)}"
+            meta="{browserLibraryHost(entry.url)} · {formatCompactAge(entry.visitedAt)}"
             url={entry.url}
             onOpen={() => onOpen(entry.url)}
           >

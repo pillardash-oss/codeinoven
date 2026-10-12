@@ -16,7 +16,7 @@
     Search,
     X
   } from '@lucide/svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { toast } from 'svelte-sonner'
@@ -430,7 +430,7 @@
         {/if}
         {#if selectedDeployment.updatedAt}
           <span>·</span>
-          <span>{relativeTime(selectedDeployment.updatedAt)}</span>
+          <span>{formatCompactAge(selectedDeployment.updatedAt)}</span>
         {/if}
       {:else}
         <span class="font-mono">{container.id}</span>
@@ -636,7 +636,7 @@
                     <span class="font-mono">{deployment.commit.slice(0, 7)}</span>
                     <span> · </span>
                   {/if}
-                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : ' '}
+                  {deployment.updatedAt ? formatCompactAge(deployment.updatedAt) : ' '}
                 </span>
               </span>
               {#if deployment.status !== 'unknown'}
