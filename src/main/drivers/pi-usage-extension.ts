@@ -44,7 +44,23 @@ export const PI_RATE_LIMIT_HEADERS: readonly string[] = [
   'x-ratelimit-reset-requests',
   'x-ratelimit-limit-tokens',
   'x-ratelimit-remaining-tokens',
-  'x-ratelimit-reset-tokens'
+  'x-ratelimit-reset-tokens',
+  // OpenAI Codex subscription quota, returned by the Codex backend (Pi's
+  // `openai-codex` provider). Carries the 5-hour/weekly plan windows, the plan
+  // type, and the prepaid-credit state.
+  'x-codex-active-limit',
+  'x-codex-plan-type',
+  'x-codex-primary-used-percent',
+  'x-codex-secondary-used-percent',
+  'x-codex-primary-window-minutes',
+  'x-codex-secondary-window-minutes',
+  'x-codex-primary-reset-after-seconds',
+  'x-codex-secondary-reset-after-seconds',
+  'x-codex-primary-reset-at',
+  'x-codex-secondary-reset-at',
+  'x-codex-credits-has-credits',
+  'x-codex-credits-unlimited',
+  'x-codex-credits-balance'
 ]
 
 export function piUsageExtension(): string {

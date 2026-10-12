@@ -6,6 +6,7 @@ import type {
   SessionAgentEvent
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
+import { rateLimitWindowLabel } from '../../usage/rate-limit-window-label'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { PiRpcClient } from '../pi-rpc-client'
 import { numberValue, record } from './pi-values'
@@ -163,10 +164,14 @@ function mirroredContextUsed(messages: readonly AgentMessage[]): number | undefi
   return undefined
 }
 
-/** Numeric header value ('1234' → 1234); non-numeric returns undefined. */
+/** Numeric header value ('1234' → 1234); empty/non-numeric returns undefined. */
 function headerNumber(value: string | undefined): number | undefined {
   if (value === undefined) return undefined
-  const parsed = Number(value)
+  // Providers zero-fill unused header slots with an empty string; an empty
+  // value is "not reported", not numeric zero.
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  const parsed = Number(trimmed)
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
@@ -189,6 +194,40 @@ function headerResetAt(value: string | undefined): number | undefined {
   }
   const epoch = Date.parse(value)
   return Number.isFinite(epoch) ? epoch : undefined
+}
+
+/**
+ * Build a quota window from the OpenAI Codex backend's `x-codex-*` headers
+ * (Pi's `openai-codex` provider). The family reports the percentage already
+ * used, the window length in minutes, and the reset as an absolute Unix-second
+ * timestamp and/or a relative number of seconds. A window with neither a length
+ * nor a reset (the backend zero-fills the secondary window on a single-window
+ * plan) is not a real window and is skipped.
+ */
+function codexHeaderWindow(
+  key: 'primary' | 'secondary',
+  headers: Record<string, string>,
+  fallbackLabel: string
+): AgentRateLimitWindow | null {
+  const usedPercent = headerNumber(headers[`x-codex-${key}-used-percent`])
+  const rawMinutes = headerNumber(headers[`x-codex-${key}-window-minutes`])
+  const windowMinutes = rawMinutes !== undefined && rawMinutes > 0 ? rawMinutes : undefined
+  const resetAt = headerNumber(headers[`x-codex-${key}-reset-at`])
+  const resetAfter = headerNumber(headers[`x-codex-${key}-reset-after-seconds`])
+  const resetsAt =
+    resetAt !== undefined
+      ? resetAt * 1_000
+      : resetAfter !== undefined && resetAfter > 0
+        ? Date.now() + resetAfter * 1_000
+        : undefined
+  if (windowMinutes === undefined && resetsAt === undefined) return null
+  return {
+    id: `pi-codex:${key}`,
+    label: rateLimitWindowLabel(windowMinutes, fallbackLabel),
+    ...(usedPercent === undefined ? {} : { usedPercent: Math.max(0, Math.min(100, usedPercent)) }),
+    ...(windowMinutes === undefined ? {} : { windowMinutes }),
+    ...(resetsAt === undefined ? {} : { resetsAt })
+  }
 }
 
 /** Build a usage bar window from remaining/limit header pairs. */
@@ -304,6 +343,13 @@ export function mapPiRateLimitHeaders(payload: unknown): AgentRateLimitWindow[] 
     'anthropic-ratelimit-input-tokens-reset'
   )
   if (inputTokens) windows.push(inputTokens)
+
+  // OpenAI Codex subscription quota (Pi's `openai-codex` provider). The two
+  // windows are the primary (5-hour) and secondary (weekly) plan buckets.
+  const codexPrimary = codexHeaderWindow('primary', stringHeaders, 'Primary limit')
+  if (codexPrimary) windows.push(codexPrimary)
+  const codexSecondary = codexHeaderWindow('secondary', stringHeaders, 'Secondary limit')
+  if (codexSecondary) windows.push(codexSecondary)
 
   // OpenAI-compatible family (OpenAI, OpenRouter, OpenAI-compatible proxies).
   const openAiRequests = windowFromHeaders(

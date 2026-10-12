@@ -4,6 +4,7 @@ import { existsSync, createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { join } from 'path'
 import type {
+  AgentBankedResets,
   AgentEvent,
   AgentMessage,
   AgentPart,
@@ -1299,6 +1300,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
   } | null> {
@@ -1321,8 +1323,15 @@ export class PiDriver extends PersistentCliDriver {
       : null
     const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
     const credits = providerUsage?.credits
+    const bankedResets = providerUsage?.bankedResets
     if (!client || (sessionId !== undefined && this.sessionStatsBroken.has(sessionId))) {
-      return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
+      return windows.length > 0 || credits || bankedResets
+        ? {
+            rateLimits: windows,
+            ...(credits ? { credits } : {}),
+            ...(bankedResets ? { bankedResets } : {})
+          }
+        : null
     }
     try {
       const stats = record(await client.getSessionStats())
@@ -1333,12 +1342,14 @@ export class PiDriver extends PersistentCliDriver {
         contextWindow === undefined &&
         contextUsed === undefined &&
         windows.length === 0 &&
-        !credits
+        !credits &&
+        !bankedResets
       )
         return null
       return {
         ...(windows.length > 0 ? { rateLimits: windows } : { rateLimits: [] }),
         ...(credits ? { credits } : {}),
+        ...(bankedResets ? { bankedResets } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(contextUsed !== undefined ? { contextUsed } : {})
       }
@@ -1347,7 +1358,13 @@ export class PiDriver extends PersistentCliDriver {
         this.sessionStatsBroken.add(sessionId)
       }
       Logger.dev('Pi account usage read failed:', error)
-      return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
+      return windows.length > 0 || credits || bankedResets
+        ? {
+            rateLimits: windows,
+            ...(credits ? { credits } : {}),
+            ...(bankedResets ? { bankedResets } : {})
+          }
+        : null
     }
   }
 
