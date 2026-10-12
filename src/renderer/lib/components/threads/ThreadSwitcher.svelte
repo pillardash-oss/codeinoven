@@ -370,7 +370,7 @@
         aria-selected={entryKey === highlightedKey}
         data-entry-index={index}
         data-native-dock-key={entryKey}
-        class="w-full cursor-pointer overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
+        class="w-full cursor-pointer overflow-hidden rounded-lg text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
         title={entryTitle(entry)}
         onpointerenter={(event) => {
           // The native window owns pointer selection, including its opening
