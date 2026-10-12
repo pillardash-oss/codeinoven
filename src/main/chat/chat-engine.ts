@@ -25279,22 +25279,34 @@ export class ChatEngine {
         ? { unclassifiedTool: unclassifiedTool.trim() }
         : {})
     })
+    const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     // Only an app-owned browser call may supply this decision. Harness metadata
     // cannot turn an unclassified tool into an automatically approved action.
     if (settleBrowserAction && browserReview && level === 'auto_review') {
-      const decision = browserReview.approved ? 'auto_review' : 'ask'
+      // A routine assistant runs unattended on the browser pages it opens
+      // itself, so a card it cannot answer would only park the run. The
+      // capability's own effect review still runs and is recorded, but it never
+      // escalates to the user for these threads. The browser assistant in the
+      // global browser's sidebar keeps asking, because it acts on the page the
+      // user is reading and a surprise mutation there is the user's to approve.
+      const unattended = thread !== null && isAssistantThread(thread)
+      const approved = unattended || browserReview.approved
+      const reason = unattended
+        ? 'Auto-approved: a routine assistant acting on a page it opened itself.'
+        : browserReview.reason
+      const decision = approved ? 'auto_review' : 'ask'
       policy = {
         ...policy,
-        approved: browserReview.approved,
+        approved,
         decision,
         risk: browserReview.risk,
-        reason: browserReview.reason,
-        approval: { required: !browserReview.approved },
+        reason,
+        approval: { required: !approved },
         ledger: {
           ...policy.ledger,
           decision,
           risk: browserReview.risk,
-          reason: browserReview.reason
+          reason
         }
       }
     }
@@ -25335,7 +25347,6 @@ export class ChatEngine {
     this.pendingPermissions.set(request.id, pending)
     this.markProjectActive(info.projectId)
 
-    const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     // A temporary side chat registers its session against the parent thread, but
     // its permission gate is the side chat's own: the parent thread is idle and
     // must keep its status, unread flag, and headline untouched by a blocking
