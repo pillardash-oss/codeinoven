@@ -206,9 +206,15 @@ export class NativeFloatingPanelWindow {
   update(id: string, bounds: NativeFloatingPanelBounds, visible: boolean): boolean {
     const panel = this.panels.get(id)
     if (!panel?.window || panel.window.isDestroyed()) return false
+    const expanding = visible && !panel.visible
     panel.bounds = bounds
     panel.visible = visible
     this.synchronize(panel)
+    // Activation belongs to expansion, not repeated bounds updates or parent events.
+    if (expanding && panel.window.isVisible()) {
+      panel.window.focus()
+      panel.window.webContents.focus()
+    }
     return true
   }
 

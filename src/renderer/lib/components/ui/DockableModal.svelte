@@ -12,6 +12,7 @@
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
+    findFirstTextField,
     focusOwnsEnter
   } from '$lib/modal-primary-action.svelte'
 
@@ -326,21 +327,23 @@
   })
 
   /**
-   * The app's modal focus convention, once per open, for an owner that claims it.
-   *
-   * The flag is a plain binding rather than state: it renders nothing, and it is
-   * the `panelEl` read below that re-runs this effect once the panel is actually
-   * in the DOM. A minimized panel is skipped, so restoring from the dock does not
-   * steal the caret back.
+   * Apply the canonical modal focus convention on open and dock expansion.
+   * The owner can choose a control first; otherwise focus a field, the primary
+   * action, or the panel itself, never the minimize or close affordances.
    */
   let claimedInitialFocus = false
   $effect(() => {
-    if (!open) {
+    if (!open || minimized) {
       claimedInitialFocus = false
       return
     }
-    if (minimized || claimedInitialFocus || !panelEl || !claimInitialFocus) return
-    if (claimInitialFocus(panelEl)) claimedInitialFocus = true
+    if (claimedInitialFocus || !panelEl || (nativeArmed && !native.live)) return
+    if (!claimInitialFocus?.(panelEl)) {
+      ;(findFirstTextField(panelEl) ?? findPanelPrimaryAction(panelEl) ?? panelEl).focus({
+        preventScroll: true
+      })
+    }
+    claimedInitialFocus = true
   })
 
   const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
@@ -419,7 +422,7 @@
     <div
       class="fixed {layer === 'top'
         ? 'z-80'
-        : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
+        : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl outline-none {minimized
         ? 'invisible pointer-events-none'
         : 'pointer-events-auto'}"
       style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
@@ -429,7 +432,28 @@
       bind:this={panelEl}
       {@attach nativeMount}
       role="dialog"
+      tabindex="-1"
       aria-label={title}
+      onkeydown={(event) => {
+        if (event.key !== 'Tab' || !panelEl) return
+        const targets = Array.from(
+          panelEl.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"], [contenteditable="true"]'
+          )
+        ).filter((element) => element.checkVisibility() && !element.closest('[inert]'))
+        const first = targets[0]
+        const last = targets.at(-1)
+        const active = panelEl.ownerDocument.activeElement
+        if (
+          !first ||
+          (event.shiftKey
+            ? active === first || active === panelEl
+            : active === last || active === panelEl)
+        ) {
+          event.preventDefault()
+          ;(event.shiftKey ? (last ?? panelEl) : (first ?? panelEl)).focus({ preventScroll: true })
+        }
+      }}
     >
       <div
         class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
@@ -456,6 +480,7 @@
           {/if}
           <button
             class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            data-modal-dismiss
             aria-label="Minimize"
             title="Minimize"
             onclick={onMinimize}
@@ -465,6 +490,7 @@
           {#if closable}
             <button
               class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              data-modal-dismiss
               aria-label="Close"
               title="Close"
               onclick={onClose}

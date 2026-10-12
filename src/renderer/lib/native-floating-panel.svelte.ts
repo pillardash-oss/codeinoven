@@ -3,7 +3,13 @@ import type { Attachment } from 'svelte/attachments'
 import type { NativeFloatingPanelBounds } from '$shared/native-floating-panel'
 import { invoke } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
+import {
+  findFirstTextField,
+  findPanelPrimaryAction,
+  isFocusableTarget
+} from '$lib/modal-primary-action.svelte'
 import NativeFloatingEventRoot from '$lib/components/ui/NativeFloatingEventRoot.svelte'
+import { terminalEntryForHost } from '$lib/terminal/host-registry'
 
 /** Hosts the original component tree, not an inert copy of editor/terminal markup. */
 export class NativeFloatingPanel {
@@ -26,6 +32,8 @@ export class NativeFloatingPanel {
   private sending = false
   private dirty = false
   private origin = { x: 0, y: 0 }
+  private movedFocus: HTMLElement | null = null
+  private focusPending = false
 
   constructor(readonly id: string) {}
 
@@ -43,6 +51,7 @@ export class NativeFloatingPanel {
     this.enabled = enabled
     this.visible = visible
     this.bounds = bounds
+    if (visibilityChanged) this.focusPending = visible
     if (!enabled) {
       this.restore()
       void this.hide()
@@ -64,12 +73,22 @@ export class NativeFloatingPanel {
   /** Must run before Svelte removes the original block's node range. */
   restore(): void {
     if (this.root && this.anchor?.parentNode && this.root.ownerDocument !== document) {
+      const focused = this.focusedElement()
+      const hadFocus = this.root.ownerDocument.hasFocus()
       this.anchor.after(this.root)
       this.root.removeAttribute('data-native-floating-panel')
       this.notifyDocumentChange()
+      // Adoption clears activeElement even though the same editor stays mounted.
+      // Only transfer window focus when the child actually owned it.
+      if (!this.disposed && this.visible && focused && hadFocus) {
+        window.focus()
+        focused.focus({ preventScroll: true })
+      }
     }
     this.live = false
     this.portalTarget = null
+    this.movedFocus = null
+    this.focusPending = false
   }
 
   private async create(): Promise<void> {
@@ -114,12 +133,50 @@ export class NativeFloatingPanel {
   private moveIntoHost(container = this.hostContainer): void {
     if (!container || !this.root || !this.enabled) return
     if (this.root.parentNode !== container) {
+      this.movedFocus = this.focusedElement()
       container.append(this.root)
       this.notifyDocumentChange()
+      this.movedFocus?.focus({ preventScroll: true })
+      this.focusPending = this.visible
     }
     this.root.setAttribute('data-native-floating-panel', '')
     this.live = true
     this.portalTarget = container
+  }
+
+  private focusedElement(): HTMLElement | null {
+    const active = this.root?.ownerDocument.activeElement
+    // The live controls were created in the app realm, even after adoption.
+    return active instanceof HTMLElement && this.root?.contains(active) ? active : null
+  }
+
+  private focusExpandedPanel(): void {
+    const root = this.root
+    if (!root || !this.popup || !this.visible || !this.live || !this.enabled || this.disposed)
+      return
+    const isContentTarget = (element: HTMLElement | null): element is HTMLElement =>
+      element !== null &&
+      root.contains(element) &&
+      !element.closest('[data-native-dock-handle]') &&
+      !element.matches(':disabled') &&
+      isFocusableTarget(element)
+    const active = this.focusedElement()
+    const preserved = isContentTarget(active)
+      ? active
+      : isContentTarget(this.movedFocus)
+        ? this.movedFocus
+        : null
+    const target = preserved ?? findFirstTextField(root) ?? findPanelPrimaryAction(root) ?? root
+    if (target === root && !root.hasAttribute('tabindex')) root.tabIndex = -1
+    // Main uses showInactive so geometry updates cannot steal focus. Expansion
+    // is the one point where this controller activates the native window.
+    this.popup.focus()
+    target.focus({ preventScroll: true })
+    if (target === root) {
+      const host = root.querySelector<HTMLElement>('.terminal-host')
+      if (host) terminalEntryForHost(host)?.term.focus()
+    }
+    this.movedFocus = null
   }
 
   private notifyDocumentChange(): void {
@@ -295,7 +352,12 @@ export class NativeFloatingPanel {
     if (this.root?.style.getPropertyValue('--floating-y') !== y)
       this.root?.style.setProperty('--floating-y', y)
     try {
-      await invoke('app:updateFloatingPanel', this.id, bounds, this.visible && this.live)
+      const visible = this.visible && this.live
+      const updated = await invoke('app:updateFloatingPanel', this.id, bounds, visible)
+      if (updated && visible && this.focusPending && this.enabled && !this.disposed) {
+        this.focusPending = false
+        this.focusExpandedPanel()
+      }
     } catch (error) {
       logRendererError('The native floating panel could not update', error)
     } finally {

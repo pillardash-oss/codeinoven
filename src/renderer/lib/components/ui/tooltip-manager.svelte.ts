@@ -72,6 +72,7 @@ interface SuppressedTitle {
 const SUPPRESSED_TITLES = new WeakMap<Element, SuppressedTitle>()
 
 let activeTitleElement: HTMLElement | null = null
+let dismissedTitleElement: HTMLElement | null = null
 
 /**
  * Reads an element's optional shortcut declaration for the tooltip chip. The
@@ -89,11 +90,12 @@ function shortcutKeysFor(el: HTMLElement): readonly string[] {
 
 function resolveTitleElement(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null
-  const el = target.closest<HTMLElement>('[title]')
+  let el: HTMLElement | null = target instanceof HTMLElement ? target : target.parentElement
+  while (el && !el.hasAttribute('title') && !SUPPRESSED_TITLES.has(el)) el = el.parentElement
   if (!el) return null
   if (el.closest('[data-tooltip]') !== null) return null
   if (el.closest('[data-tooltip-host]') !== null) return null
-  const title = el.getAttribute('title')
+  const title = SUPPRESSED_TITLES.get(el)?.title ?? el.getAttribute('title')
   if (!title || title.trim() === '') return null
   return el
 }
@@ -125,6 +127,59 @@ function restoreNativeTitle(el: HTMLElement): void {
   }
 }
 
+/** Keep a projected redraw from reintroducing a native tooltip while hovered. */
+export function patchSuppressedTooltipTitle(
+  el: Element,
+  title: string | null,
+  describedBy: string | null
+): boolean {
+  const entry = SUPPRESSED_TITLES.get(el)
+  if (!entry) return false
+  entry.describedBy = describedBy ?? ''
+  if (!title?.trim()) {
+    SUPPRESSED_TITLES.delete(el)
+    if (activeTitleElement === el) {
+      activeTitleElement = null
+      tooltipState.end()
+    }
+    return false
+  }
+  if (entry.title !== title) {
+    entry.title = title
+    const request = tooltipState.request
+    if (activeTitleElement === el && request && el instanceof HTMLElement)
+      tooltipState.begin(
+        title,
+        request.anchorX,
+        request.anchorY,
+        request.side,
+        request.sideOffset,
+        shortcutKeysFor(el)
+      )
+  }
+  return true
+}
+
+/** Use the window-server cursor when a native overlay cannot trust hover events. */
+export function syncTitleTooltipPointer(x: number, y: number): void {
+  const el = resolveTitleElement(document.elementFromPoint(x, y))
+  if (el !== dismissedTitleElement) dismissedTitleElement = null
+  if (el && el === dismissedTitleElement) return
+  if (activeTitleElement === el) {
+    if (el) tooltipState.update(x, y)
+    return
+  }
+  if (activeTitleElement) restoreNativeTitle(activeTitleElement)
+  activeTitleElement = el
+  if (!el) {
+    tooltipState.end()
+    return
+  }
+  const title = SUPPRESSED_TITLES.get(el)?.title ?? el.getAttribute('title') ?? ''
+  suppressNativeTitle(el)
+  tooltipState.begin(title, x, y, 'top', TOOLTIP_GAP_PX, shortcutKeysFor(el))
+}
+
 /**
  * Delegates the native `title` attribute to the custom tooltip system. Any
  * element (or ancestor) carrying a `title` gets the custom tooltip after the
@@ -135,13 +190,14 @@ function restoreNativeTitle(el: HTMLElement): void {
 export function attachTitleTooltipDelegation(): () => void {
   function onPointerOver(event: PointerEvent): void {
     const el = resolveTitleElement(event.target)
-    if (!el) return
+    if (!el || el === dismissedTitleElement) return
+    dismissedTitleElement = null
     if (activeTitleElement === el) {
       suppressNativeTitle(el)
       tooltipState.update(event.clientX, event.clientY)
       return
     }
-    const title = el.getAttribute('title') ?? ''
+    const title = SUPPRESSED_TITLES.get(el)?.title ?? el.getAttribute('title') ?? ''
     if (activeTitleElement) {
       restoreNativeTitle(activeTitleElement)
     }
@@ -165,8 +221,15 @@ export function attachTitleTooltipDelegation(): () => void {
   }
 
   function onPointerOut(event: PointerEvent): void {
+    const related = event.relatedTarget instanceof Node ? event.relatedTarget : null
+    if (
+      dismissedTitleElement &&
+      event.target instanceof Node &&
+      dismissedTitleElement.contains(event.target) &&
+      (!related || !dismissedTitleElement.contains(related))
+    )
+      dismissedTitleElement = null
     if (!activeTitleElement) return
-    const related = event.relatedTarget as Node | null
     if (related && activeTitleElement.contains(related)) return
     restoreNativeTitle(activeTitleElement)
     activeTitleElement = null
@@ -174,6 +237,7 @@ export function attachTitleTooltipDelegation(): () => void {
   }
 
   function onWindowBlur(): void {
+    dismissedTitleElement = activeTitleElement ?? dismissedTitleElement
     if (activeTitleElement) {
       restoreNativeTitle(activeTitleElement)
       activeTitleElement = null
@@ -195,6 +259,7 @@ export function attachTitleTooltipDelegation(): () => void {
     window.removeEventListener('blur', onWindowBlur)
     window.removeEventListener('pointerdown', onWindowBlur, true)
     window.removeEventListener('keydown', onWindowBlur, true)
+    dismissedTitleElement = null
     if (activeTitleElement) {
       restoreNativeTitle(activeTitleElement)
       activeTitleElement = null

@@ -1,3 +1,5 @@
+import { patchSuppressedTooltipTitle } from './components/ui/tooltip-manager.svelte'
+
 /** Update projected controls in place so hover and a pending mouse press survive a paint. */
 export function patchNativeDockChildren(parent: Element, next: readonly Node[]): void {
   const keyed = new Map<string, Node>()
@@ -48,11 +50,18 @@ function patch(current: Node, next: Node): Node {
       field &&
       Number(current.getAttribute('data-native-dock-version')) >
         Number(next.getAttribute('data-native-dock-version'))
+    const suppressedTitle = patchSuppressedTooltipTitle(
+      current,
+      next.getAttribute('title'),
+      next.getAttribute('aria-describedby')
+    )
     for (const attribute of [...current.attributes]) {
+      if (suppressedTitle && ['title', 'aria-describedby'].includes(attribute.name)) continue
       if (!next.hasAttribute(attribute.name) && attribute.name !== 'data-native-modal-row')
         current.removeAttribute(attribute.name)
     }
     for (const attribute of next.attributes) {
+      if (suppressedTitle && ['title', 'aria-describedby'].includes(attribute.name)) continue
       if (
         pending &&
         ['data-native-dock-value', 'data-native-dock-version'].includes(attribute.name)

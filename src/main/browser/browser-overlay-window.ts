@@ -5,7 +5,7 @@ import {
   type NativeDockCommit,
   type NativeDockRequest
 } from '../../lib/native-dock'
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, screen, webContents, type WebContents, type InputEvent } from 'electron'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
@@ -124,6 +124,9 @@ export class BrowserOverlayWindow {
    *  the pointer and hands the document an event it would misread. */
   private ignoringMouse = true
   private parentThrottling: boolean | null = null
+  /** Keyboard ownership borrowed only while an interactive dock is hovered. */
+  private hoverKeyboardOwner: { window: BrowserWindow; contents: WebContents | null } | null = null
+  private hoverKeyboardYielded = false
 
   constructor(
     private readonly parent: BrowserWindow,
@@ -396,6 +399,63 @@ export class BrowserOverlayWindow {
   setPointerOverContent(over: boolean): void {
     this.pointerOverContent = over
     this.applyClickThrough()
+    this.syncDockHoverFocus()
+  }
+
+  /**
+   * macOS only delivers native hover and cursor changes to a key window. Borrow
+   * that status on a cursor report, never merely because a dock was published.
+   * Passive tooltips and the transparent area must not take keyboard ownership.
+   */
+  private syncDockHoverFocus(): void {
+    if (process.platform !== 'darwin' || this.hasModalDock()) return
+    const popup = this.popup
+    if (!popup || popup.isDestroyed()) return
+    const point = this.pointerOverContent ? this.pointerInClientSpace() : null
+    const overDock =
+      point &&
+      [...this.docks.values()].some((dock) => {
+        const bounds = dock.bounds
+        return (
+          !dock.passive &&
+          point.x >= bounds.x &&
+          point.x <= bounds.x + bounds.width &&
+          point.y >= bounds.y &&
+          point.y <= bounds.y + bounds.height
+        )
+      })
+    if (!overDock || !this.ready || !popup.isVisible()) {
+      this.hoverKeyboardYielded = false
+      this.releaseDockHoverFocus()
+      return
+    }
+    if (this.hoverKeyboardOwner || this.hoverKeyboardYielded) return
+    // Do not reactivate the app after a cursor poll overtakes an app switch.
+    const owner = BrowserWindow.getFocusedWindow()
+    if (owner !== this.parent) return
+    this.hoverKeyboardOwner = { window: owner, contents: webContents.getFocusedWebContents() }
+    if (this.parentThrottling === null) {
+      this.parentThrottling = this.parent.webContents.getBackgroundThrottling()
+      this.parent.webContents.setBackgroundThrottling(false)
+    }
+    popup.setFocusable(true)
+    popup.focus()
+    popup.webContents.focus()
+  }
+
+  /** Return the keyboard to the exact page or app document that owned it. */
+  private releaseDockHoverFocus(): void {
+    const owner = this.hoverKeyboardOwner
+    this.hoverKeyboardOwner = null
+    if (!owner) return
+    this.restoreParentThrottling()
+    const popup = this.popup
+    if (!popup || popup.isDestroyed()) return
+    const restore = popup.isFocused()
+    popup.setFocusable(false)
+    if (!restore || owner.window.isDestroyed()) return
+    owner.window.focus()
+    if (owner.contents && !owner.contents.isDestroyed()) owner.contents.focus()
   }
 
   /**
@@ -419,6 +479,7 @@ export class BrowserOverlayWindow {
 
   dispose(): void {
     this.onModalHostChanged(null)
+    this.releaseDockHoverFocus()
     this.restoreParentThrottling()
     clearTimeout(this.idleTimer)
     this.idleTimer = undefined
@@ -470,6 +531,7 @@ export class BrowserOverlayWindow {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
     if (!this.hasModalDock()) this.onModalHostChanged(null)
+    if (!this.hasModalDock()) this.releaseDockHoverFocus()
     if (!this.hasModalDock() && popup.isFocusable()) {
       const restoreFocus = popup.isFocused()
       popup.setFocusable(false)
@@ -621,8 +683,26 @@ export class BrowserOverlayWindow {
     this.ignoringMouse = true
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
-    popup.webContents.on('before-input-event', (_event, input) => {
+    popup.webContents.on('before-input-event', (event, input) => {
       const modal = [...this.docks.values()].findLast((dock) => dock.modal)
+      if (!modal && this.hoverKeyboardOwner && input.type === 'keyDown') {
+        const contents = this.hoverKeyboardOwner.contents
+        this.hoverKeyboardYielded = true
+        // Hover must not consume typing meant for the page beneath the chip.
+        this.releaseDockHoverFocus()
+        if (contents && !contents.isDestroyed()) {
+          event.preventDefault()
+          const modifiers: NonNullable<InputEvent['modifiers']> = []
+          if (input.control) modifiers.push('control')
+          if (input.shift) modifiers.push('shift')
+          if (input.alt) modifiers.push('alt')
+          if (input.meta) modifiers.push('meta')
+          contents.sendInputEvent({ type: 'keyDown', keyCode: input.key, modifiers })
+          if (input.key.length === 1 && !input.control && !input.meta && !input.alt)
+            contents.sendInputEvent({ type: 'char', keyCode: input.key, modifiers })
+        }
+        return
+      }
       if (!modal || (input.type !== 'keyDown' && input.type !== 'keyUp')) return
       sendToRenderer(this.parent.webContents, 'browser:overlay:dockKey', {
         id: modal.id,
@@ -638,6 +718,9 @@ export class BrowserOverlayWindow {
       })
     })
     popup.on('blur', () => {
+      // A real focus departure invalidates the borrowed owner. It must not be
+      // restored later by a delayed cursor response after another app activates.
+      if (!this.hasModalDock()) this.releaseDockHoverFocus()
       for (const dock of this.docks.values()) {
         if (dock.modal)
           sendToRenderer(this.parent.webContents, 'browser:overlay:dockEvent', {
