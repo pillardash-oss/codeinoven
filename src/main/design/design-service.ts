@@ -8,7 +8,9 @@ import {
 import type {
   AuthoredWorkKind,
   DesignEntry,
+  DesignHistoryState,
   DesignOpenResult,
+  DesignRevisionCause,
   DesignScreen,
   DesignScreenShot,
   DesignThumbnail,
@@ -33,6 +35,7 @@ import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState } from './screen-canvas-state'
+import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
 import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
 
@@ -164,6 +167,8 @@ interface ServedWork {
 export class DesignService {
   private readonly designs: DesignRepo
   private readonly threads: ThreadRepo
+  /** The change history behind the board's Undo and Redo, one line per folder. */
+  private readonly history: DesignHistoryService
   /** Canonical spelling of a project's path per stored spelling, filled on first use. */
   private readonly canonicalProjects = new Map<string, string>()
   /** Picture per screen, keyed by project, folder, entry, the file's stamp and width. */
@@ -176,6 +181,7 @@ export class DesignService {
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
     this.threads = new ThreadRepo(options.database)
+    this.history = new DesignHistoryService(options.database)
   }
 
   registerIpc(): void {
@@ -231,6 +237,76 @@ export class DesignService {
       defaults: { ...DEFAULT_WORK_ROOTS },
       reports: currentWorkRootReports()
     }))
+    // The history behind Undo and Redo. Reading captures the present first, so a
+    // change the app has not seen yet becomes a point the user can return to; the
+    // restore is what Undo, Redo and clicking a revision all run.
+    ipcMain.handle(
+      'design:history',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawCause) =>
+        this.historyState(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          rawCause === 'agent' || rawCause === 'initial' ? rawCause : 'user'
+        )
+    )
+    ipcMain.handle(
+      'design:historyRestore',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawRevisionId) =>
+        this.historyRestore(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          requireId(rawRevisionId, 'revision id')
+        )
+    )
+  }
+
+  /**
+   * The history of the folder a directory argument names.
+   *
+   * The folder is resolved the same way every other design call resolves one, so a
+   * history answer always belongs to a folder the app would also serve and capture.
+   */
+  async historyState(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    cause: DesignRevisionCause
+  ): Promise<DesignHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.state(target, cause)
+  }
+
+  /** Move a folder to one point in its history, which is what Undo and Redo do. */
+  async historyRestore(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    revisionId: string
+  ): Promise<DesignHistoryState> {
+    const target = await this.historyTarget(projectId, threadId, directory)
+    return this.history.restore(target, revisionId)
+  }
+
+  /** One history request resolved against the project and the thread's session kind. */
+  private async historyTarget(
+    projectId: string,
+    threadId: string,
+    directory: unknown
+  ): Promise<DesignHistoryTarget> {
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const kind = await this.resolveKind(threadId)
+    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind))
+    return {
+      projectId,
+      projectPath: project.path,
+      directory: folder.display,
+      absolute: folder.absolute,
+      // Only a project whose change tracking is Git can have the folder tracked by
+      // a repository; a manual-tracking project is the app's to version, always.
+      gitMode: project.changeTrackingMode === 'git'
+    }
   }
 
   /** Forget a thread's authored-work record when the thread itself is gone. */
@@ -361,6 +437,7 @@ export class DesignService {
 
   forgetProject(projectId: string): void {
     this.designs.deleteProject(projectId)
+    this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
       if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)
     }

@@ -6,6 +6,7 @@
     Film,
     Frame,
     GlobeCode,
+    History,
     ImageOff,
     ListClock,
     LoaderCircle,
@@ -19,6 +20,7 @@
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -122,6 +124,14 @@
   /** The tab holding the work, so the board can reach its own controls. Empty
    *  until the first capture opens one, and an empty id reads as idle state. */
   let tabId = $state('')
+
+  /**
+   * Whether the history pane is on screen.
+   *
+   * The pane is what makes iteration safe, so it is one click from the board rather
+   * than a detour: the design stays in the top half and its history opens under it.
+   */
+  let historyOpen = $state(false)
 
   /**
    * The folder the user is looking at, when it is not the thread's own.
@@ -570,6 +580,18 @@
     void loadCanvas()
   }
 
+  /**
+   * The folder moved along its history, so picture it as it now is.
+   *
+   * A restore rewrote the files, so the pictures the board holds are pictures of a
+   * design that no longer exists: forcing the sweep is what puts the folder the user
+   * chose on screen instead of the one they left.
+   */
+  function restoreBoard(): void {
+    void loadGallery(true)
+    void loadCanvas()
+  }
+
   $effect(() => {
     // The agent writes the canvas inside a turn, so the board re-reads when that
     // turn settles. Nothing polls: a canvas that appeared is read then, and one
@@ -791,6 +813,19 @@
         {/if}
         <button
           type="button"
+          class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:text-foreground'}"
+          disabled={selected.directory === ''}
+          aria-pressed={historyOpen}
+          title={`${nounTitle} history`}
+          aria-label={`${nounTitle} history`}
+          onclick={() => (historyOpen = !historyOpen)}
+        >
+          <History size={12} />
+        </button>
+        <button
+          type="button"
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={galleryBusy || selected.directory === ''}
           title={refreshLabel}
@@ -847,6 +882,14 @@
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => (historyOpen = !historyOpen)}
+              >
+                <History size={13} class="shrink-0 text-muted" />
+                {historyOpen ? 'Hide history' : 'Show history'}
+              </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={beginEditRoot}
@@ -964,72 +1007,83 @@
     </StalePanelNotice>
   {/if}
 
-  <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-    {#if error !== ''}
-      <p
-        class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-        role="alert"
-      >
-        {error}
-      </p>
-    {/if}
+  <div class="flex min-h-0 flex-1 flex-col">
+    <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+      {#if error !== ''}
+        <p
+          class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+          role="alert"
+        >
+          {error}
+        </p>
+      {/if}
 
-    {#if video && gallery.length === 0}
-      <div
-        class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
-      >
-        {#if galleryBusy}
-          <LoaderCircle size={16} class="animate-spin" />
-          <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-        {:else}
-          <ImageOff size={16} />
-          <span class="px-4 text-center text-[0.6875rem]">
-            {items.length === 0
-              ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-              : 'No preview captured yet.'}
-          </span>
-        {/if}
-      </div>
-    {:else}
-      <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-        {#if !video}
-          {@render entryCard({
-            icon: Presentation,
-            name: 'Screen Canvas',
-            shot: canvasShot,
-            label: 'Open the Screen Canvas in the in-app browser',
-            empty: canvasEntryNote,
-            busy: !canvasRead || openingCanvas,
-            ready: canvasState !== null,
-            onOpen: () => void openCanvas()
-          })}
-          {@render entryCard({
-            icon: PlayingCardsFan,
-            name: 'Live preview',
-            shot: liveShot,
-            label: `Open the live preview of this ${noun} in the in-app browser`,
-            empty: liveEntryNote,
-            busy: opening,
-            ready: liveReady,
-            onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
-          })}
-        {/if}
-        {#each designScreens as screen (screen.entry)}
-          {@render screenCard(screen, video)}
-        {/each}
-      </div>
-      {#if !video && designScreens.length === 0}
-        {#if galleryBusy}
-          <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-            <LoaderCircle size={12} class="animate-spin" />
-            Capturing the {noun}…
-          </p>
-        {:else}
-          <p class="mt-2 text-center text-[0.6875rem] text-muted">
-            {`The agent has not written a ${noun} yet. It will appear here when it does.`}
-          </p>
+      {#if video && gallery.length === 0}
+        <div
+          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+        >
+          {#if galleryBusy}
+            <LoaderCircle size={16} class="animate-spin" />
+            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+          {:else}
+            <ImageOff size={16} />
+            <span class="px-4 text-center text-[0.6875rem]">
+              {items.length === 0
+                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+                : 'No preview captured yet.'}
+            </span>
+          {/if}
+        </div>
+      {:else}
+        <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+          {#if !video}
+            {@render entryCard({
+              icon: Presentation,
+              name: 'Screen Canvas',
+              shot: canvasShot,
+              label: 'Open the Screen Canvas in the in-app browser',
+              empty: canvasEntryNote,
+              busy: !canvasRead || openingCanvas,
+              ready: canvasState !== null,
+              onOpen: () => void openCanvas()
+            })}
+            {@render entryCard({
+              icon: PlayingCardsFan,
+              name: 'Live preview',
+              shot: liveShot,
+              label: `Open the live preview of this ${noun} in the in-app browser`,
+              empty: liveEntryNote,
+              busy: opening,
+              ready: liveReady,
+              onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+            })}
+          {/if}
+          {#each designScreens as screen (screen.entry)}
+            {@render screenCard(screen, video)}
+          {/each}
+        </div>
+        {#if !video && designScreens.length === 0}
+          {#if galleryBusy}
+            <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+              <LoaderCircle size={12} class="animate-spin" />
+              Capturing the {noun}…
+            </p>
+          {:else}
+            <p class="mt-2 text-center text-[0.6875rem] text-muted">
+              {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+            </p>
+          {/if}
         {/if}
       {/if}
-    {/if}
+    </div>
+    <DesignHistoryPanel
+      {projectId}
+      {threadId}
+      directory={selected.directory}
+      {noun}
+      open={historyOpen}
+      onRestored={restoreBoard}
+      onClose={() => (historyOpen = false)}
+    />
   </div>
 </div>
