@@ -191,6 +191,16 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
 export const MAX_NATIVE_DOCK_NODES = 4096
 const MAX_TEXT = 48_000
 export const MAX_NATIVE_DOCK_IMAGE_CHARS = 4_000_000
+/**
+ * The most distinct images one dock frame may carry.
+ *
+ * A busy panel   a tab strip with dozens of favicons, a switcher full of
+ * project and oven marks   can reference more icons than a frame is allowed to
+ * hold. That ceiling must never be the thing that refuses the panel and hides
+ * the browser behind it, so the projection reads this same number and draws the
+ * icons past it blank instead.
+ */
+export const MAX_NATIVE_DOCK_IMAGES = 64
 const NATIVE_DOCK_IMAGE_ID = /^image-[0-9]{1,8}$/
 
 /**
@@ -210,7 +220,7 @@ export const MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS = 60 * 1024
 export function validateNativeDockImages(value: unknown): Record<string, string> {
   const images = record(value)
   const entries = Object.entries(images)
-  if (entries.length > 64) throw new TypeError('Too many native dock images')
+  if (entries.length > MAX_NATIVE_DOCK_IMAGES) throw new TypeError('Too many native dock images')
   let size = 0
   const result: Record<string, string> = {}
   for (const [id, source] of entries) {
@@ -240,6 +250,32 @@ export function nativeDockImageIds(nodes: readonly (NativeDockNode | string)[]):
   }
   visit(nodes)
   return ids
+}
+
+/**
+ * Drop the image reference from nodes whose source a frame could not supply.
+ *
+ * A frame carries only the images it has not already delivered, and the native
+ * host keeps the rest. When that cache is cold   a fresh overlay window, a dock
+ * that was retired and re-created   a referenced source can be absent. Rather
+ * than refuse the whole panel, the node is drawn without its image: a blank
+ * glyph is the panel, a refusal is the app window with the browser hidden
+ * behind it.
+ */
+export function withoutNativeDockImages(
+  nodes: readonly (NativeDockNode | string)[],
+  missing: ReadonlySet<string>
+): Array<NativeDockNode | string> {
+  return nodes.map((node) => {
+    if (typeof node === 'string') return node
+    const reference = node.attributes['data-native-dock-image']
+    if (reference && missing.has(reference)) {
+      const attributes = { ...node.attributes }
+      delete attributes['data-native-dock-image']
+      return { ...node, attributes, children: withoutNativeDockImages(node.children, missing) }
+    }
+    return { ...node, children: withoutNativeDockImages(node.children, missing) }
+  })
 }
 
 /**

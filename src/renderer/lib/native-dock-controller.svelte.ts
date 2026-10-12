@@ -7,6 +7,7 @@ import {
   NATIVE_DOCK_STYLE_PROPERTIES,
   MAX_NATIVE_DOCK_NODES,
   MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS,
+  MAX_NATIVE_DOCK_IMAGES,
   nativeDockColor,
   nativeDockStyleAllowed,
   validateNativeDockImages,
@@ -132,6 +133,10 @@ export class NativeDockController {
   private imageCopies = new SvelteMap<string, string>()
   /** Sources whose copy is being decoded, so one icon is only queued once. */
   private imageCopyPending = new SvelteSet<string>()
+  /** Sources that never decoded, so a broken icon is not retried every frame. */
+  private imageCopyFailed = new SvelteSet<string>()
+  /** Distinct original sources admitted to the frame being built. */
+  private frameImageSources = new SvelteSet<string>()
   private signature = ''
   private active = false
   constructor(
@@ -330,7 +335,12 @@ export class NativeDockController {
       clearTimeout(this.timer)
       return
     }
+    // A panel that was hidden left the native host, which drops the dock and the
+    // image cache that came with it. Re-entering sends every image again rather
+    // than believing the host still holds what it was sent before the hide.
+    const resumed = !this.active
     this.active = true
+    if (resumed) this.deliveredImages.clear()
     this.schedule()
   }
 
@@ -537,13 +547,32 @@ export class NativeDockController {
    * this frame projects the node without an image: a panel that is missing one
    * glyph is the panel, while a panel refused over that glyph is the app window
    * with the browser hidden behind it.
+   *
+   * The frame also holds at most {@link MAX_NATIVE_DOCK_IMAGES} distinct icons.
+   * A panel that references more is drawn with the surplus blank rather than
+   * refused, so a tab strip that grows a hundred favicons can never take the
+   * browser down with it.
    */
   private projectedImageSource(source: string): string | null {
-    if (source.length <= MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS) return source
-    const copy = this.imageCopies.get(source)
-    if (copy) return copy
-    this.enqueueImageCopy(source)
-    return null
+    let resolved: string | null
+    if (source.length <= MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS) {
+      resolved = source
+    } else if (this.imageCopyFailed.has(source)) {
+      resolved = null
+    } else {
+      const copy = this.imageCopies.get(source)
+      if (copy) resolved = copy
+      else {
+        this.enqueueImageCopy(source)
+        resolved = null
+      }
+    }
+    if (resolved === null) return null
+    if (!this.frameImageSources.has(source)) {
+      if (this.frameImageSources.size >= MAX_NATIVE_DOCK_IMAGES) return null
+      this.frameImageSources.add(source)
+    }
+    return resolved
   }
 
   /** Decode one oversized icon and re-project the frame when its copy is ready. */
@@ -554,11 +583,17 @@ export class NativeDockController {
     image.onload = () => {
       this.imageCopyPending.delete(source)
       const copy = copyNativeDockImage(image)
-      if (copy === null) return
+      if (copy === null) {
+        this.imageCopyFailed.add(source)
+        return
+      }
       this.imageCopies.set(source, copy)
       this.schedule()
     }
-    image.onerror = () => this.imageCopyPending.delete(source)
+    image.onerror = () => {
+      this.imageCopyPending.delete(source)
+      this.imageCopyFailed.add(source)
+    }
     image.src = source
   }
 
@@ -580,6 +615,7 @@ export class NativeDockController {
       this.scrollTargets.clear()
       this.nodeCount = 0
       this.frameImages = {}
+      this.frameImageSources.clear()
       const nodes = (this.modalOptions ? [this.root] : [...this.root.childNodes])
         .map((child) => this.project(child))
         .filter((child) => child !== null)

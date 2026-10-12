@@ -1,6 +1,7 @@
 import {
   nativeDockImageIds,
   validateNativeDockImages,
+  withoutNativeDockImages,
   type NativeDockCommit,
   type NativeDockRequest
 } from '../../lib/native-dock'
@@ -329,12 +330,22 @@ export class BrowserOverlayWindow {
     if (!popup) return false
     const previous = this.docks.get(id)?.images ?? {}
     const images: Record<string, string> = {}
+    const missing = new Set<string>()
     for (const imageId of nativeDockImageIds(request.nodes)) {
       const source = request.images?.[imageId] ?? previous[imageId]
-      if (!source) throw new TypeError('Native dock image is missing')
+      if (!source) {
+        // A frame carries only the images it has not delivered, and this host's
+        // cache can be cold   a fresh overlay window, a dock re-created after a
+        // retire. Drawing that glyph blank keeps the panel; refusing the frame
+        // falls back to the app window, which hides the browser behind it. The
+        // icon stays blank until the surface mounts again and resends its source.
+        missing.add(imageId)
+        continue
+      }
       images[imageId] = source
     }
-    this.docks.set(id, { ...request, images: validateNativeDockImages(images) })
+    const nodes = missing.size ? withoutNativeDockImages(request.nodes, missing) : request.nodes
+    this.docks.set(id, { ...request, nodes, images: validateNativeDockImages(images) })
     if (request.modal) this.onModalHostChanged(popup)
     // A dock that joins or leaves can change whether a modal owns the window, so
     // re-derive the click-through state before the window is shown for it.
