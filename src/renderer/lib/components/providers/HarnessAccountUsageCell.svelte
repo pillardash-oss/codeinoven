@@ -1,14 +1,12 @@
 <script lang="ts">
   import { BatteryCharging, Loader2, LogIn, RefreshCw } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
-  import type { ProviderAccountLoginHandoff } from '$shared/types'
-  import Modal from '../ui/Modal.svelte'
-  import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
-  import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
+  import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import type { HarnessAccount } from '$shared/types'
+  import { harnessDisplayName } from '../threads/thread-message-presentation'
+  import ProviderSignInPanel from './ProviderSignInPanel.svelte'
 
   interface Props {
     account: HarnessAccount
@@ -44,50 +42,7 @@
   const checkedAtTitle = $derived(
     `Last checked ${checkedAt}${snapshot?.error ? ` · ${snapshot.error}` : ''}`
   )
-  let loginOpen = $state(false)
-  let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
-  let loginError = $state('')
-  let loginTerminalId = $state('')
-
-  async function beginSignIn(): Promise<void> {
-    loginError = ''
-    loginHandoff = null
-    loginTerminalId = `provider-login-${crypto.randomUUID()}`
-    loginOpen = true
-    try {
-      loginHandoff = await invoke('providerAccounts:beginLogin', account.harnessId, {
-        mode: 'default',
-        ...(account.providerId ? { providerId: account.providerId } : {}),
-        accountId: account.id
-      })
-    } catch (error) {
-      loginError = error instanceof Error ? error.message : 'Sign-in could not be started.'
-    }
-  }
-
-  async function finishSignIn(exitCode: number): Promise<void> {
-    loginHandoff = null
-    if (exitCode !== 0) {
-      loginError = `Sign-in exited with code ${exitCode}.`
-      return
-    }
-    try {
-      const status = await invoke(
-        'providerAccounts:getAuthStatus',
-        account.harnessId,
-        undefined,
-        account.id
-      )
-      if (status.state === 'unauthenticated') {
-        loginError = 'Sign-in was not completed for this account.'
-        return
-      }
-      loginOpen = false
-      harnessAccountUsageCache.schedule([account], { force: true })
-    } catch (error) {
-      loginError = error instanceof Error ? error.message : 'The sign-in could not be verified.'
-    }
-  }
+  let signInOpen = $state(false)
 </script>
 
 {#snippet noLimitsMessage()}
@@ -124,7 +79,7 @@
             class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline"
             title={`Sign in again to ${account.label}`}
             aria-label={`Sign in again to ${account.label}`}
-            onclick={() => void beginSignIn()}
+            onclick={() => (signInOpen = true)}
           >
             <LogIn size={10} aria-hidden="true" />
             Sign in again
@@ -163,24 +118,17 @@
   </div>
 </div>
 
-<Modal open={loginOpen} title={`Sign in to ${account.label}`} onClose={() => (loginOpen = false)}>
-  <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
-    {#if loginHandoff}
-      <ProviderLoginTerminal
-        terminalId={loginTerminalId}
-        command={loginHandoff.command}
-        args={loginHandoff.args}
-        environment={loginHandoff.environment}
-        onExit={(exitCode) => void finishSignIn(exitCode)}
-      />
-    {:else if loginError}
-      <div class="flex h-full items-center justify-center p-6">
-        <p class="max-w-md text-center text-sm text-danger">{loginError}</p>
-      </div>
-    {:else}
-      <div class="flex h-full items-center justify-center text-sm text-muted">
-        Preparing sign-in…
-      </div>
-    {/if}
-  </div>
-</Modal>
+{#if signInOpen}
+  <ProviderSignInPanel
+    harnessId={account.harnessId}
+    harnessName={harnessDisplayName(account.harnessId)}
+    providerId={account.providerId}
+    providerName={account.label}
+    accountId={account.id}
+    onClose={() => (signInOpen = false)}
+    onComplete={() => {
+      signInOpen = false
+      harnessAccountUsageCache.schedule([account], { force: true })
+    }}
+  />
+{/if}

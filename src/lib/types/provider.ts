@@ -90,6 +90,11 @@ export interface ProviderAccountAuthCapabilities {
   pickerLogin: boolean
   /** CodeInOven can store an API key for a catalog provider in the harness's own auth store. */
   apiKeyEntry: boolean
+  /**
+   * CodeInOven can run the harness's own sign-in flow in-app (Pi), so a bundled
+   * runtime with no CLI to hand off to a terminal can still be signed in.
+   */
+  inAppLogin: boolean
 }
 
 /** Progress surfaced while an in-app OAuth sign-in runs (Pi). */

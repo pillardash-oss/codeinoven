@@ -10,8 +10,9 @@
     ProviderConnectionInfo
   } from '$shared/types'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
+  import ProviderSignInProgress from './ProviderSignInProgress.svelte'
   import Switch from '../ui/Switch.svelte'
-  import type { AddProviderModalOAuthController } from './add-provider-modal-oauth.svelte'
+  import type { ProviderSignInController } from './provider-sign-in.svelte'
   import { shellCommand, stateLabel, type ConnectStep } from './add-provider-modal-helpers'
 
   interface Props {
@@ -40,7 +41,7 @@
     /** Whether this harness exposes a config-file mechanism to hide providers. */
     supportsHide: boolean
     togglingHide: boolean
-    oauth: AddProviderModalOAuthController
+    oauth: ProviderSignInController
     accountForConnected: (connected: ProviderAccountAuthEntry) => HarnessAccount | undefined
     onCheckAuth: () => void
     onSaveAuthenticatedAccount: () => void
@@ -358,96 +359,7 @@
       {#if apiKeyEntry && selectedProvider}
         <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
           {#if oauth.loginId !== null}
-            <div class="space-y-2">
-              <div class="flex items-center gap-2">
-                <Loader2 size={13} class="animate-spin text-primary" />
-                <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
-                  {oauth.status || 'Waiting for the provider…'}
-                </p>
-                <button
-                  class="shrink-0 rounded-lg border bg-elevated px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-overlay"
-                  type="button"
-                  title="Cancel the sign-in"
-                  onclick={() => void oauth.cancel()}
-                >
-                  Cancel
-                </button>
-              </div>
-              {#if oauth.deviceCode}
-                <div class="rounded-lg border bg-surface p-2.5 text-center">
-                  <p class="text-[0.625rem] text-dimmed">
-                    Enter this code at
-                    <button
-                      class="font-medium text-primary underline underline-offset-2"
-                      type="button"
-                      title="Open {oauth.deviceCode.verificationUri}"
-                      data-external-url={oauth.deviceCode.verificationUri}
-                      onclick={() => void oauth.openDeviceCodePage()}
-                    >
-                      {oauth.deviceCode.verificationUri}
-                    </button>
-                  </p>
-                  <p class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground">
-                    {oauth.deviceCode.userCode}
-                  </p>
-                </div>
-              {/if}
-              {#if oauth.prompt}
-                <div class="space-y-1.5">
-                  {#if oauth.prompt.type === 'select' && oauth.prompt.options}
-                    <p class="text-[0.6875rem] font-medium text-foreground">
-                      {oauth.prompt.message}
-                    </p>
-                    <div class="space-y-1">
-                      {#each oauth.prompt.options as option (option.id)}
-                        <button
-                          class="w-full rounded-lg border bg-elevated px-3 py-2 text-left text-xs text-foreground hover:bg-overlay"
-                          type="button"
-                          title="Choose {option.label}"
-                          onclick={() => void oauth.answerSelect(option.id)}
-                        >
-                          {option.label}
-                        </button>
-                      {/each}
-                    </div>
-                  {:else}
-                    <label
-                      class="block text-[0.6875rem] font-medium text-foreground"
-                      for="oauth-prompt-input"
-                    >
-                      {oauth.prompt.message}
-                    </label>
-                    <!-- svelte-ignore a11y_autofocus -->
-                    <input
-                      id="oauth-prompt-input"
-                      type={oauth.prompt.type === 'secret' ? 'password' : 'text'}
-                      autocomplete="off"
-                      spellcheck="false"
-                      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                      placeholder={oauth.prompt.placeholder ??
-                        (oauth.prompt.type === 'secret' ? 'Enter the value' : 'Paste the code')}
-                      bind:value={oauth.promptAnswer}
-                      autofocus
-                      onkeydown={(event: KeyboardEvent) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          void oauth.submitPrompt()
-                        }
-                      }}
-                    />
-                    <button
-                      class="flex h-8 w-full items-center justify-center rounded-lg bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                      type="button"
-                      title="Continue the sign-in"
-                      disabled={oauth.promptAnswer.trim() === ''}
-                      onclick={() => void oauth.submitPrompt()}
-                    >
-                      Continue
-                    </button>
-                  {/if}
-                </div>
-              {/if}
-            </div>
+            <ProviderSignInProgress {oauth} />
           {:else if selectedProviderIsOauth}
             <p class="text-[0.6875rem] font-medium text-foreground">
               Sign in to {selectedProvider.name}

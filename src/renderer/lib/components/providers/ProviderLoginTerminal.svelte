@@ -85,6 +85,15 @@
       fit.observeResize()
       fit.fit()
 
+      // Keep the existing terminal and PTY when its live panel changes documents.
+      const syncDocument = (): void => {
+        fit.fit()
+      }
+      container.addEventListener('native-floating-document-change', syncDocument)
+      unsubs.push(() =>
+        container.removeEventListener('native-floating-document-change', syncDocument)
+      )
+
       // Only render the caret while this terminal actually holds focus.
       const cursorVisibility = new TerminalCursorController(terminal)
       const onFocusIn = (): void => cursorVisibility.focus()
@@ -164,6 +173,7 @@
 <div
   tabindex="-1"
   class="login-host relative h-full w-full overflow-hidden bg-app"
+  data-floating-document
   {@attach terminalAttachment}
 >
   {#if !started && !error}
