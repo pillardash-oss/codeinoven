@@ -221,12 +221,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'search',
     title: 'Search',
     description:
-      'Intent search: embed the local embedding model, index your threads, and find them by meaning.',
+      'Intent search: embed a local EmbeddingGemma model, index your threads, and find them by meaning.',
     keywords: [
       'semantic',
       'intent',
       'embedding',
       'gemma',
+      'embeddinggemma',
       'vector',
       'hybrid',
       'threads',

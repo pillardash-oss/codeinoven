@@ -19,7 +19,7 @@ import { normalizeInPlace } from '../../lib/search/vector'
 import { SearchModelDownloader } from './embedding-model-downloader'
 import type { EmbeddingRuntime } from './llama-embedding-runtime'
 import { LlamaEmbeddingRuntime } from './llama-embedding-runtime'
-import { SearchModelImporter } from './search-model-importer'
+import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
 
@@ -143,7 +143,7 @@ export class SearchService {
       label: imported.label,
       runtime: 'gguf',
       dimensions: imported.dimensions,
-      contextTokens: 2048,
+      contextTokens: imported.contextTokens,
       queryPrefix: '',
       documentPrefix: '',
       byteSize: imported.byteSize,
@@ -303,17 +303,17 @@ export class SearchService {
     this.emitStatus()
   }
 
-  private async probeModel(directory: string): Promise<{ dimensions: number }> {
+  private async probeModel(directory: string): Promise<ImportProbe> {
     if (!this.host.llamaServerPath()) {
       throw new Error('A local llama.cpp runtime is required to use an imported model.')
     }
-    const runtime = new LlamaEmbeddingRuntime(directory, 2048, this.host)
+    const runtime = new LlamaEmbeddingRuntime(directory, 0, this.host)
     try {
       const [vector] = await runtime.embed(['compatibility probe'], new AbortController().signal)
       if (!vector || vector.length === 0) {
         throw new Error('The model did not return an embedding for a probe input.')
       }
-      return { dimensions: vector.length }
+      return { dimensions: vector.length, contextTokens: 0 }
     } finally {
       await runtime.dispose()
     }

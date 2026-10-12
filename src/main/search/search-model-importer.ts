@@ -6,6 +6,11 @@ import type { SearchStorage } from './search-storage'
 export interface ImportProbe {
   /** Output dimensionality of the model, discovered by running it once. */
   dimensions: number
+  /**
+   * Usable context window. `0` means "defer to the model's own metadata", which
+   * is the only honest answer for a model we did not convert ourselves.
+   */
+  contextTokens: number
 }
 
 export interface ImportedSearchModelFile {
@@ -13,6 +18,7 @@ export interface ImportedSearchModelFile {
   directory: string
   byteSize: number
   dimensions: number
+  contextTokens: number
   label: string
 }
 
@@ -61,6 +67,7 @@ export class SearchModelImporter {
         directory,
         byteSize,
         dimensions: probe.dimensions,
+        contextTokens: probe.contextTokens,
         label: basename(sourcePath)
       }
     } catch (cause) {

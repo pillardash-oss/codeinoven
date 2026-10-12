@@ -1,16 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import {
-    CircleAlert,
-    Cpu,
-    Database,
-    Download,
-    LoaderCircle,
-    RefreshCw,
-    Sparkles,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+  import { CircleAlert, Download, LoaderCircle, RefreshCw, Trash2, Upload } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { searchSettingsStore as search } from '$lib/stores/search.svelte'
   import { formatCompactAge } from '../../../../lib/date-time-format'
@@ -29,6 +19,9 @@
   const enabled = $derived(state?.settings.enabled ?? false)
   const installedIds = $derived(new Set(models.map((model) => model.id)))
   const availableArtifacts = $derived(catalog.filter((artifact) => !installedIds.has(artifact.id)))
+  const activeModelLabel = $derived(
+    models.find((model) => model.id === status?.activeModelId)?.label ?? 'None'
+  )
 
   let llamaRuntime: SpeechLlamaRuntimeStatus | null = $state(null)
   let installingRuntime = $state(false)
@@ -79,241 +72,256 @@
   onDestroy(() => search.dispose())
 </script>
 
-<div class="space-y-6 p-6 pb-24">
-  <!-- Intro -->
-  <section class="space-y-1">
-    <h2 class="text-lg font-semibold tracking-tight">Intent search</h2>
-    <p class="max-w-3xl text-sm text-muted">
-      Search your threads by meaning, not just by keywords. Intent search embeds each thread with a
-      local Gemma embedding model and merges the semantic matches with the existing keyword results.
-      Everything runs on this machine; nothing leaves it.
-    </p>
-  </section>
+<div class="p-6 pb-24">
+  <div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-xl font-bold tracking-tight">Search</h1>
+      <p class="mt-0.5 text-sm text-muted">
+        Find threads by meaning. Embedding and indexing stay on this machine.
+      </p>
+    </div>
+    <button
+      type="button"
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
+      title="Refresh search settings"
+      aria-label="Refresh search settings"
+      onclick={() => void search.load()}
+    >
+      <RefreshCw size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
+    </button>
+  </div>
 
-  <!-- Runtime -->
-  {#if status && !status.runtimeAvailable}
-    <section class="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
-      <div class="flex items-start gap-3">
-        <CircleAlert class="mt-0.5 size-5 shrink-0 text-amber-500" />
-        <div class="min-w-0 flex-1 space-y-2">
-          <p class="text-sm font-medium text-foreground">A local llama.cpp runtime is required</p>
-          <p class="text-sm text-muted">
-            Embedding models run through the same local llama.cpp runtime the app uses for speech
-            cleanup. Install it once and both features share it.
+  {#if search.error}
+    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {search.error}
+    </p>
+  {/if}
+
+  <div class="space-y-4">
+    {#if status && !status.runtimeAvailable}
+      <div class="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+        <CircleAlert size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium">A local llama.cpp runtime is required</p>
+          <p class="mt-0.5 text-xs leading-relaxed text-muted">
+            Embedding models run through the same runtime the app uses for speech cleanup. Install
+            it once and both features share it.
+            {#if llamaRuntime?.downloadByteSize}
+              ({llamaRuntime.downloadName} · {formatBytes(llamaRuntime.downloadByteSize)})
+            {/if}
           </p>
-          {#if llamaRuntime?.downloadByteSize}
-            <p class="text-xs text-dimmed">
-              {llamaRuntime.downloadName} · {formatBytes(llamaRuntime.downloadByteSize)}
-            </p>
-          {/if}
         </div>
         <button
           type="button"
-          class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
           disabled={installingRuntime}
           onclick={() => void installRuntime()}
         >
           {#if installingRuntime}
-            <LoaderCircle class="size-4 animate-spin" />
-            Installing…
+            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            Installing
           {:else}
-            <Download class="size-4" />
-            Install runtime
+            <Download size={12} aria-hidden="true" />
+            Install
           {/if}
         </button>
       </div>
-    </section>
-  {/if}
+    {/if}
 
-  <!-- Enable -->
-  <section class="rounded-xl border bg-surface p-5">
-    <div class="flex items-start justify-between gap-4">
-      <div class="min-w-0 space-y-1">
-        <p class="flex items-center gap-2 text-sm font-semibold">
-          <Sparkles class="size-4 text-muted" />
-          Search by intent
-        </p>
-        <p class="max-w-2xl text-sm text-muted">
-          When on, every thread search blends keyword hits with semantic matches. Title matches stay
-          first, semantic matches follow, and keyword-only finds come last.
-        </p>
-        {#if !canEnable}
-          <p class="text-xs text-dimmed">
-            Install an embedding model below to enable intent search.
+    <!-- Intent toggle -->
+    <div class="rounded-xl border bg-surface p-4">
+      <div class="flex items-start justify-between gap-6">
+        <div class="min-w-0">
+          <p class="text-sm font-medium">Search by intent</p>
+          <p class="mt-0.5 text-xs leading-relaxed text-muted">
+            Blends keyword hits with meaning-based matches on every thread search. Title matches
+            stay first, semantic matches follow, keyword-only finds come last.
           </p>
-        {/if}
-      </div>
-      <Switch
-        checked={enabled}
-        disabled={!canEnable}
-        aria-label="Enable intent search"
-        onchange={(checked) => void search.setEnabled(checked)}
-      />
-    </div>
-  </section>
-
-  <!-- Status -->
-  <section class="rounded-xl border bg-surface p-5">
-    <p class="mb-4 flex items-center gap-2 text-sm font-semibold">
-      <Database class="size-4 text-muted" />
-      Index
-    </p>
-    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-wide text-dimmed">Indexed threads</p>
-        <p class="text-xl font-semibold tabular-nums">{status?.indexedThreads ?? 0}</p>
-      </div>
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-wide text-dimmed">Indexing</p>
-        <p class="text-xl font-semibold tabular-nums">
-          {#if status?.indexing}
-            <LoaderCircle class="inline size-5 animate-spin text-primary" />
-          {:else}
-            {status?.pendingThreads ?? 0}
+          {#if !canEnable}
+            <p class="mt-1.5 text-xs text-dimmed">
+              Install an embedding model below to turn this on.
+            </p>
           {/if}
-        </p>
+        </div>
+        <Switch
+          checked={enabled}
+          disabled={!canEnable}
+          aria-label="Enable intent search"
+          onchange={(checked) => void search.setEnabled(checked)}
+        />
       </div>
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-wide text-dimmed">Active model</p>
-        <p class="truncate text-sm font-medium">{status?.activeModelId ?? 'None'}</p>
-      </div>
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-wide text-dimmed">Last indexed</p>
-        <p class="text-sm font-medium">
-          {status?.lastIndexedAt ? formatCompactAge(status.lastIndexedAt) : 'Never'}
-        </p>
-      </div>
-    </div>
-    <div class="mt-4 flex items-center gap-3">
-      <button
-        type="button"
-        class="inline-flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
-        disabled={!enabled || status?.indexing}
-        onclick={() => void search.rebuildIndex()}
-      >
-        <RefreshCw class="size-4 {status?.indexing ? 'animate-spin' : ''}" />
-        Rebuild index
-      </button>
-      <p class="text-xs text-dimmed">
-        Rebuilds from scratch. Runs in the background and never blocks the app.
-      </p>
-    </div>
-  </section>
-
-  <!-- Installed models -->
-  <section class="space-y-3">
-    <div class="flex items-center justify-between gap-3">
-      <p class="flex items-center gap-2 text-sm font-semibold">
-        <Cpu class="size-4 text-muted" />
-        Installed models
-      </p>
-      <button
-        type="button"
-        class="inline-flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-sm font-medium transition-colors hover:bg-overlay"
-        onclick={() => void search.importModel()}
-      >
-        <Upload class="size-4" />
-        Import model
-      </button>
     </div>
 
-    {#if models.length === 0}
-      <div class="rounded-xl border border-dashed bg-surface p-4 text-sm text-muted">
-        No embedding model is installed yet. Download one below, or import a compatible GGUF model
-        of your own.
+    <!-- Index -->
+    <div class="rounded-xl border bg-surface p-4">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Index</h3>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          title="Rebuild the thread index from scratch"
+          aria-label="Rebuild thread index"
+          disabled={!enabled || status?.indexing}
+          onclick={() => void search.rebuildIndex()}
+        >
+          <RefreshCw size={12} class={status?.indexing ? 'animate-spin' : ''} aria-hidden="true" />
+          Rebuild
+        </button>
       </div>
-    {:else}
-      <ul class="divide-y overflow-hidden rounded-xl border bg-surface">
-        {#each models as model (model.id)}
-          {@const isActive = status?.activeModelId === model.id}
-          <li class="flex items-center gap-3 p-3">
-            <span
-              class="size-2.5 shrink-0 rounded-full {isActive ? 'bg-primary' : 'bg-border'}"
-              aria-hidden="true"
-            ></span>
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-medium">{model.label}</p>
-              <p class="truncate text-xs text-muted">
-                {model.runtime} · {model.dimensions}-dim · {formatBytes(model.byteSize)} ·
-                {model.source === 'imported' ? 'imported' : 'catalog'}
-              </p>
-            </div>
-            {#if isActive}
-              <span
-                class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-                >Active</span
-              >
+      <div class="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+        <div>
+          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Threads indexed</p>
+          <p class="text-sm font-medium tabular-nums">{status?.indexedThreads ?? 0}</p>
+        </div>
+        <div>
+          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">
+            {status?.indexing ? 'Indexing' : 'Waiting'}
+          </p>
+          <p class="flex items-center gap-1.5 text-sm font-medium">
+            {#if status?.indexing}
+              <LoaderCircle size={13} class="animate-spin text-primary" aria-hidden="true" />
+              In progress
             {:else}
+              <span class="tabular-nums">{status?.pendingThreads ?? 0}</span>
+            {/if}
+          </p>
+        </div>
+        <div class="min-w-0">
+          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Model</p>
+          <p class="truncate text-sm font-medium" title={activeModelLabel}>{activeModelLabel}</p>
+        </div>
+        <div>
+          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Last indexed</p>
+          <p class="text-sm font-medium">
+            {status?.lastIndexedAt ? formatCompactAge(status.lastIndexedAt) : 'Never'}
+          </p>
+        </div>
+      </div>
+      <p class="mt-3 text-xs leading-relaxed text-dimmed">
+        Indexing runs in the background in small batches, so it never blocks the app.
+      </p>
+    </div>
+
+    <!-- Models -->
+    <div class="rounded-xl border bg-surface p-4">
+      <div class="mb-1 flex items-center justify-between gap-3">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Embedding model</h3>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          title="Import a GGUF embedding model from disk"
+          aria-label="Import an embedding model"
+          onclick={() => void search.importModel()}
+        >
+          <Upload size={12} aria-hidden="true" />
+          Import
+        </button>
+      </div>
+
+      {#if models.length === 0}
+        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
+          No embedding model is installed. Download one below, or import a compatible GGUF model of
+          your own.
+        </p>
+      {:else}
+        <ul class="divide-y">
+          {#each models as model (model.id)}
+            {@const isActive = status?.activeModelId === model.id}
+            <li class="flex items-center gap-3 py-2.5">
+              <span
+                class="size-1.5 shrink-0 rounded-full {isActive
+                  ? 'bg-primary'
+                  : 'bg-border-strong'}"
+                aria-hidden="true"
+              ></span>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium" title={model.label}>{model.label}</p>
+                <p class="truncate text-xs text-dimmed">
+                  {model.runtime} · {model.dimensions}-dim · {model.contextTokens > 0
+                    ? `${model.contextTokens / 1024}K context`
+                    : 'model context'} · {formatBytes(model.byteSize)} ·
+                  {model.source === 'imported' ? 'imported' : 'catalog'}
+                </p>
+              </div>
+              {#if isActive}
+                <span
+                  class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-medium text-primary"
+                  >Active</span
+                >
+              {:else}
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+                  title="Use this model for intent search"
+                  aria-label="Use {model.label} for intent search"
+                  onclick={() => void search.setActiveModel(model.id)}
+                >
+                  Use
+                </button>
+              {/if}
               <button
                 type="button"
-                class="h-8 shrink-0 rounded-lg border bg-elevated px-3 text-xs font-medium transition-colors hover:bg-overlay"
-                onclick={() => void search.setActiveModel(model.id)}
+                class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                title="Remove this model"
+                aria-label="Remove {model.label}"
+                onclick={() => (pendingDelete = { id: model.id, label: model.label })}
               >
-                Use
+                <Trash2 size={13} aria-hidden="true" />
               </button>
-            {/if}
-            <button
-              type="button"
-              class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger"
-              title="Remove model"
-              aria-label="Remove {model.label}"
-              onclick={() => (pendingDelete = { id: model.id, label: model.label })}
-            >
-              <Trash2 class="size-4" />
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
+            </li>
+          {/each}
+        </ul>
+      {/if}
 
-  <!-- Available models -->
-  <section class="space-y-3">
-    <p class="text-sm font-semibold">Available models</p>
-    {#if availableArtifacts.length === 0}
-      <div class="rounded-xl border border-dashed bg-surface p-4 text-sm text-muted">
-        Every model in the catalog is already installed.
-      </div>
-    {:else}
-      <ul class="space-y-3">
-        {#each availableArtifacts as artifact (artifact.id)}
-          {@render artifactCard(artifact)}
-        {/each}
-      </ul>
-    {/if}
-  </section>
+      {#if availableArtifacts.length > 0}
+        <div class="mt-4 border-t pt-3">
+          <p class="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+            Available
+          </p>
+          <ul class="divide-y">
+            {#each availableArtifacts as artifact (artifact.id)}
+              {@render artifactRow(artifact)}
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    </div>
+  </div>
 </div>
 
-{#snippet artifactCard(artifact: SearchModelArtifact)}
+{#snippet artifactRow(artifact: SearchModelArtifact)}
   {@const download = downloadState(artifact.id)}
-  <li class="rounded-xl border bg-surface p-4">
-    <div class="flex items-start justify-between gap-4">
-      <div class="min-w-0 space-y-1">
-        <p class="flex items-center gap-2 text-sm font-medium">
-          {artifact.label}
-          <span class="rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted"
+  <li class="py-3">
+    <div class="flex items-start justify-between gap-6">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p class="text-sm font-medium">{artifact.label}</p>
+          <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
             >{artifact.quantization}</span
           >
-        </p>
-        <p class="max-w-3xl text-sm text-muted">{artifact.description}</p>
-        <p class="text-xs text-dimmed">
-          {formatBytes(artifact.byteSize)} · {artifact.dimensions}-dim · {artifact.license}
+        </div>
+        <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
+        <p class="mt-1 text-xs text-dimmed">
+          {formatBytes(artifact.byteSize)} · {artifact.dimensions}-dim · {artifact.contextTokens /
+            1024}K context · {artifact.license}
         </p>
       </div>
       {#if !download || download.state === 'cancelled' || download.state === 'failed'}
         <button
           type="button"
-          class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
+          title="Download {artifact.label}"
+          aria-label="Download {artifact.label}"
           onclick={() => void search.download(artifact.id)}
         >
-          <Download class="size-4" />
+          <Download size={12} aria-hidden="true" />
           {download?.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       {/if}
     </div>
 
     {#if download?.state === 'downloading' || download?.state === 'verifying'}
-      <div class="mt-3">
+      <div class="mt-2.5">
         <DownloadProgress
           percent={download.state === 'verifying' ? 100 : downloadPercent(download)}
           label={download.state === 'verifying' ? 'Verifying…' : 'Downloading…'}
@@ -324,12 +332,10 @@
           cancelLabel="Cancel download"
         />
       </div>
-    {:else if download?.state === 'installed'}
-      <p class="mt-3 text-xs font-medium text-primary">Installed</p>
     {:else if download?.state === 'failed'}
-      <p class="mt-3 text-xs text-danger">{download.message}</p>
+      <p class="mt-2.5 text-xs text-danger">{download.message}</p>
     {:else if download?.state === 'cancelled'}
-      <p class="mt-3 text-xs text-muted">Download cancelled.</p>
+      <p class="mt-2.5 text-xs text-muted">Download cancelled.</p>
     {/if}
   </li>
 {/snippet}

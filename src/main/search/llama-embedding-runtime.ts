@@ -128,7 +128,9 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         '--port',
         '0',
         '--ctx-size',
-        String(Math.max(512, this.contextTokens)),
+        // `0` lets llama.cpp adopt the model's own trained context, which is the
+        // only correct answer for an imported model whose window we cannot know.
+        this.contextTokens > 0 ? String(this.contextTokens) : '0',
         '--parallel',
         '1',
         // Serve the OpenAI-compatible /v1/embeddings endpoint. Pooling and
