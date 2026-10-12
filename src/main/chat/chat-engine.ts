@@ -131,6 +131,7 @@ import {
   MEMORY_DECISION_SEAM,
   memoryDecisionDefaultScope,
   memorySpanCandidates,
+  narrowMemoryDecisionScope,
   readMemoryDecision
 } from './memory/memory-decision'
 import { estimateTypesafeTokens, typesafeCostUsd } from '../../lib/typesafe/policy'
@@ -29351,7 +29352,7 @@ export class ChatEngine {
                 content: decision.content,
                 category: decision.category,
                 priority: decision.priority,
-                scopes: [decision.scope],
+                scopes: [narrowMemoryDecisionScope(decision)],
                 modelKeys:
                   decision.category === 'models'
                     ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -29440,7 +29441,7 @@ export class ChatEngine {
               content: decision.content,
               category: decision.category,
               priority: decision.priority,
-              scopes: [decision.scope],
+              scopes: [narrowMemoryDecisionScope(decision)],
               modelKeys:
                 decision.category === 'models'
                   ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -29591,7 +29592,7 @@ export class ChatEngine {
         ? 'This is a standalone chat. Use scope chat for preferences applying to every standalone chat, or thread only for this chat.'
         : audience === 'assistant'
           ? "This is an assistant task. Use scope assistant for preferences applying to every assistant task, routine for preferences applying to this routine's tasks, or task only for this task."
-          : 'This is a project thread. Use scope projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
+          : 'This is a project thread. Use scope project for a rule about this project or its codebase, thread only for this conversation, and projects only when the user’s own words say the rule applies to every project or repository. Default to project when unsure.'
     const decisionSystemPrompt = [
       'Evaluate one completed exchange and decide whether it contains durable, user-authored information worth proposing for persistent memory. Judge the user intent, never summarize, and never write memory unless the exchange qualifies.',
       'Step 1, decide whether the user stated something lasting: a standing preference, a reusable rule or convention, an identity fact, or a behavioral instruction that must keep applying after this task ends. Step 2, only when Step 1 concluded lasting, write the memory and set propose to true.',
