@@ -111,9 +111,13 @@ export function projectToast(entry: ToastT): ToastOverlayToast | null {
   if (memory) {
     return {
       id: entry.id,
-      kind: 'default',
+      kind: 'memory',
       title: memory.message,
       duration: entry.duration,
+      // The icon chip (`toaster.css`) derives its tint from `--status`, so
+      // the memory card's icon reads primary the way status icons read
+      // their own colour.
+      style: '--status: var(--color-primary);',
       closeButton: entry.closeButton,
       dismissible: entry.dismissible,
       action: { label: 'Review Memory' }
