@@ -18,6 +18,7 @@ class SearchSettingsStore {
     this.error = ''
     try {
       this.state = await invoke('search:getState')
+      this.error = this.state.status.error ?? ''
       this.unsubscribe ??= subscribe('search:progress', (progress) => this.onProgress(progress))
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
@@ -136,6 +137,7 @@ class SearchSettingsStore {
       return
     }
     this.state = { ...this.state, status: progress.status }
+    this.error = progress.status.error ?? ''
   }
 }
 

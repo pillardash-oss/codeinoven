@@ -36,6 +36,10 @@ export class SearchStorage {
     return join(this.indexDir, 'thread-index.bin')
   }
 
+  get summaryDirectory(): string {
+    return join(this.indexDir, 'thread-summaries')
+  }
+
   async initialize(): Promise<void> {
     await mkdir(this.modelsDir, { recursive: true })
     await mkdir(this.stagingDir, { recursive: true })

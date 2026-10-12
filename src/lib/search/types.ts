@@ -139,6 +139,8 @@ export interface SearchIndexStatus {
   indexing: boolean
   dimensions: number
   lastIndexedAt: number | null
+  /** Latest background summarization or embedding failure, displayed by Search settings. */
+  error?: string | null
 }
 
 export interface SearchState {

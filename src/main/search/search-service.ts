@@ -24,6 +24,7 @@ import { LlamaEmbeddingRuntime } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
+import { ThreadSearchSummaries, type SearchSummaryExecutor } from './thread-search-summary'
 
 /** Interval between light staleness sweeps while intent search is enabled. */
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
@@ -34,6 +35,7 @@ interface PersistedModelIndex {
 }
 
 export interface SearchServiceHost {
+  summarizeThread: SearchSummaryExecutor
   llamaServerPath: () => string | null
   /**
    * llama.cpp build of the selected runtime, or null when it cannot be read.
@@ -70,13 +72,19 @@ export class SearchService {
   private indexing = false
   private periodicTimer: ReturnType<typeof setInterval> | null = null
   private disposed = false
+  private sweepController: AbortController | null = null
+  private indexingError: string | null = null
 
   constructor(
     private readonly db: Database,
     private readonly host: SearchServiceHost,
     private readonly storage: SearchStorage = new SearchStorage()
   ) {
-    this.index = new ThreadEmbeddingIndex(db, storage.threadIndexPath)
+    this.index = new ThreadEmbeddingIndex(
+      db,
+      storage.threadIndexPath,
+      new ThreadSearchSummaries(db, storage.summaryDirectory, host.summarizeThread)
+    )
     this.downloader = new SearchModelDownloader(storage, {
       catalog: () => this.catalog,
       emitDownload: (artifactId, download) => this.onDownload(artifactId, download),
@@ -133,6 +141,7 @@ export class SearchService {
   async deleteModel(modelId: string): Promise<void> {
     const model = this.models.find((candidate) => candidate.id === modelId)
     if (!model) throw new Error('The model is not installed.')
+    if (this.settings.activeModelId === modelId) await this.stopSweep()
     await rm(model.directory, { recursive: true, force: true }).catch(() => undefined)
     this.models = this.models.filter((candidate) => candidate.id !== modelId)
     if (this.runtimeModelId === modelId) await this.disposeRuntime()
@@ -175,6 +184,7 @@ export class SearchService {
 
   async setEnabled(enabled: boolean): Promise<void> {
     this.settings.enabled = enabled
+    if (!enabled) this.sweepController?.abort()
     await this.saveSettings()
     if (enabled) {
       if (!this.settings.activeModelId) {
@@ -193,6 +203,7 @@ export class SearchService {
     }
     const previous = this.settings.activeModelId
     if (previous === modelId) return
+    await this.stopSweep()
     this.settings.activeModelId = modelId
     await this.saveSettings()
     // A different model produces a different vector space, so the existing
@@ -212,6 +223,7 @@ export class SearchService {
   async setContextTokens(tokens: number): Promise<void> {
     const next = clampSearchContextTokens(tokens)
     if (this.settings.contextTokens === next) return
+    await this.stopSweep()
     this.settings.contextTokens = next
     await this.saveSettings()
     await this.disposeRuntime()
@@ -224,6 +236,7 @@ export class SearchService {
   }
 
   async rebuildIndex(): Promise<void> {
+    await this.stopSweep()
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
     if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
@@ -260,6 +273,7 @@ export class SearchService {
 
   async dispose(): Promise<void> {
     this.disposed = true
+    this.sweepController?.abort()
     if (this.periodicTimer) clearInterval(this.periodicTimer)
     this.periodicTimer = null
     this.downloader.abortAll()
@@ -293,7 +307,8 @@ export class SearchService {
       pendingThreads: this.sweepTotals.pending,
       indexing: this.indexing,
       dimensions: model?.dimensions ?? 0,
-      lastIndexedAt: this.index.lastIndexedAt
+      lastIndexedAt: this.index.lastIndexedAt,
+      error: this.indexingError
     }
   }
 
@@ -437,13 +452,20 @@ export class SearchService {
     return this.sweep
   }
 
+  private async stopSweep(): Promise<void> {
+    this.sweepController?.abort()
+    await this.sweep
+  }
+
   private async performSweep(reason: string): Promise<void> {
     const model = this.activeModel()
     if (!model) return
     if (!this.canEmbed()) return
     this.indexing = true
+    this.indexingError = null
     this.emitStatus()
     const controller = new AbortController()
+    this.sweepController = controller
     try {
       const runtime = await this.ensureRuntime(model)
       const result = await this.index.sweep(
@@ -453,17 +475,24 @@ export class SearchService {
           return vectors
         },
         {
-          modelSignature: `${model.id}:${model.dimensions}`,
+          modelSignature: `summary-v1:${model.id}:${model.dimensions}`,
           documentPrefix: model.documentPrefix,
           expectedDimensions: model.dimensions,
-          signal: controller.signal
+          signal: controller.signal,
+          onProgress: ({ total, pending }) => {
+            this.sweepTotals = { total, pending }
+            this.emitStatus()
+          }
         }
       )
       this.sweepTotals = { total: result.total, pending: 0 }
       Logger.dev(`Thread embedding index swept (${reason})`, result)
     } catch (error) {
+      if (controller.signal.aborted) return
+      this.indexingError = error instanceof Error ? error.message : String(error)
       Logger.error('Thread embedding index sweep failed:', error)
     } finally {
+      this.sweepController = null
       this.indexing = false
       this.emitStatus()
     }

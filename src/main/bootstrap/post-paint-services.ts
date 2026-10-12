@@ -565,6 +565,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Intent search shares the one local llama.cpp runtime with speech, so both
   // draw from the same discovered/downloaded binary and the same process journal.
   state.searchService = new SearchService(database, {
+    summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
     llamaServerPath: () => getLlamaServerBinary(),
     runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
     registerProcess: (pid, command, cwd) =>

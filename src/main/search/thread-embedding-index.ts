@@ -1,31 +1,25 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Database } from '../database/database'
 import type { IntentThreadMatch, ThreadEmbeddingRecord } from '../../lib/search/types'
 import { cosineSimilarity, decodeThreadIndex, encodeThreadIndex } from '../../lib/search/vector'
 import { Logger } from '../system/logger'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/types/project'
+import { ThreadSearchSummaries, type SearchSummaryThread } from './thread-search-summary'
 
-/** How many threads are embedded per model request. */
-const INDEX_BATCH_SIZE = 8
+/** Process one thread at a time, including provider summaries and embeddings. */
+const INDEX_BATCH_SIZE = 1
 /** Hard ceiling on threads considered by one sweep. */
 const MAX_THREADS = 20_000
-/** Ceiling on message rows read per batch. */
-const MESSAGES_PER_BATCH = 4_000
 /** Characters of conversation text kept per thread before embedding. */
 const MAX_DOCUMENT_CHARS = 8_000
-/** Characters kept from each message chunk. */
-const MAX_MESSAGE_CHARS = 2_000
 /** Cosine floor below which a semantic hit is treated as noise. */
 const MIN_INTENT_SCORE = 0.2
 /** Persist the on-disk index every this many embedded threads. */
-const PERSIST_EVERY = 64
+const PERSIST_EVERY = 8
 
-interface CandidateThread {
-  id: string
-  title: string
-  stamp: number
-}
+type CandidateThread = SearchSummaryThread
 
 export interface SweepResult {
   total: number
@@ -34,11 +28,11 @@ export interface SweepResult {
 }
 
 /**
- * Embeds a thread's title and conversation into one vector and answers intent
+ * Embeds a thread's title and cached conversation summary into one vector and answers intent
  * queries by cosine similarity.
  *
  * The index is derived from the same corpus the full-text index covers: the
- * thread title plus `agent_messages.search_text` for the main conversation, so
+ * thread title plus a summary of `agent_messages.search_text` for the main conversation, so
  * keyword and semantic search describe one body of content. It lives entirely
  * in memory while the app runs (a few thousand 768-dimension vectors is small)
  * and is persisted as one compact blob so it survives restart.
@@ -49,7 +43,8 @@ export class ThreadEmbeddingIndex {
 
   constructor(
     private readonly db: Database,
-    private readonly indexPath: string
+    private readonly indexPath: string,
+    private readonly summaries: ThreadSearchSummaries
   ) {}
 
   get size(): number {
@@ -73,6 +68,7 @@ export class ThreadEmbeddingIndex {
         return
       }
       for (const record of decoded) this.records.set(record.threadId, record)
+      this.lastPersistedAt = (await stat(this.indexPath)).mtimeMs
     } catch {
       // No index yet, or it was removed. Nothing to restore.
     }
@@ -96,11 +92,14 @@ export class ThreadEmbeddingIndex {
       documentPrefix: string
       expectedDimensions: number
       signal: AbortSignal
+      onProgress?: (result: SweepResult) => void
     }
   ): Promise<SweepResult> {
     const candidates = await this.listCandidates()
     if (candidates.length === 0) {
-      if (this.records.size > 0) await this.persist()
+      await this.pruneMissing(new Set())
+      await this.summaries.prune([])
+      await this.persist()
       return { total: 0, indexed: 0, pending: 0 }
     }
     const stale = candidates.filter((candidate) => {
@@ -111,22 +110,29 @@ export class ThreadEmbeddingIndex {
     const pending = stale.length
     let indexed = 0
     let sinceLastPersist = 0
-    for (let offset = 0; offset < stale.length; offset += INDEX_BATCH_SIZE) {
-      if (options.signal.aborted) break
-      const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
-      await this.indexBatch(batch, embed, options)
-      indexed += batch.length
-      sinceLastPersist += batch.length
-      if (sinceLastPersist >= PERSIST_EVERY) {
-        sinceLastPersist = 0
-        await this.persist()
+    options.onProgress?.({ total, indexed, pending })
+    try {
+      for (let offset = 0; offset < stale.length; offset += INDEX_BATCH_SIZE) {
+        options.signal.throwIfAborted()
+        const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
+        await this.indexBatch(batch, embed, options)
+        indexed += batch.length
+        options.onProgress?.({ total, indexed, pending: pending - indexed })
+        sinceLastPersist += batch.length
+        if (sinceLastPersist >= PERSIST_EVERY) {
+          sinceLastPersist = 0
+          await this.persist()
+        }
+        // Yield so a long backfill never monopolizes the event loop.
+        await new Promise((resolve) => setImmediate(resolve))
       }
-      // Yield so a long backfill never monopolizes the event loop.
-      await new Promise((resolve) => setImmediate(resolve))
+      await this.pruneMissing(new Set(candidates.map((candidate) => candidate.id)))
+      await this.summaries.prune(candidates)
+      return { total, indexed, pending: pending - indexed }
+    } finally {
+      // Preserve completed threads even if a later provider request fails.
+      await this.persist()
     }
-    await this.pruneMissing(new Set(candidates.map((candidate) => candidate.id)))
-    await this.persist()
-    return { total, indexed, pending }
   }
 
   /** Rank indexed threads by cosine similarity to the query vector. */
@@ -149,16 +155,20 @@ export class ThreadEmbeddingIndex {
       modelSignature: string
       documentPrefix: string
       expectedDimensions: number
+      signal: AbortSignal
     }
   ): Promise<void> {
-    const bodies = await this.loadConversationBodies(batch.map((candidate) => candidate.id))
-    const texts = batch.map((candidate) =>
-      composeDocument(options.documentPrefix, candidate.title, bodies.get(candidate.id) ?? '')
-    )
+    const texts: string[] = []
+    for (const candidate of batch) {
+      const summary = await this.summaries.get(candidate, options.signal)
+      texts.push(composeDocument(options.documentPrefix, candidate.title, summary))
+    }
     const vectors = await embed(texts)
     for (let index = 0; index < batch.length; index += 1) {
       const vector = vectors[index]
-      if (!vector || vector.length !== options.expectedDimensions) continue
+      if (!vector || vector.length !== options.expectedDimensions) {
+        throw new Error('The embedding model returned an unexpected vector dimension.')
+      }
       const candidate = batch[index]
       this.records.set(candidate.id, {
         threadId: candidate.id,
@@ -178,52 +188,28 @@ export class ThreadEmbeddingIndex {
 
   private async listCandidates(): Promise<CandidateThread[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, title,
+      `SELECT id, project_id, title,
           MAX(COALESCE(last_activity, 0), COALESCE(updated_at, 0)) AS stamp
         FROM threads
-        WHERE drafting = 0
+        WHERE drafting = 0 AND project_id != ?
         ORDER BY last_activity DESC
         LIMIT ?`,
-      [MAX_THREADS],
+      [GLOBAL_BROWSER_PROJECT_ID, MAX_THREADS],
       MAX_THREADS
     )
-    if (!result.ok) return []
+    if (!result.ok) throw new Error('The threads could not be read for search indexing.')
     const candidates: CandidateThread[] = []
     for (const row of result.rows) {
       const id = row['id']
       if (typeof id !== 'string' || id.length === 0) continue
       candidates.push({
         id,
+        projectId: typeof row['project_id'] === 'string' ? row['project_id'] : '',
         title: typeof row['title'] === 'string' ? row['title'] : '',
         stamp: typeof row['stamp'] === 'number' ? row['stamp'] : 0
       })
     }
     return candidates
-  }
-
-  private async loadConversationBodies(threadIds: readonly string[]): Promise<Map<string, string>> {
-    const bodies = new Map<string, string>()
-    if (threadIds.length === 0) return bodies
-    const placeholders = threadIds.map(() => '?').join(',')
-    const result = await this.db.queryViaWorker(
-      `SELECT thread_id, SUBSTR(search_text, 1, ?) AS chunk
-        FROM agent_messages
-        WHERE visibility = 'conversation' AND session_id IS NULL
-          AND thread_id IN (${placeholders})
-        ORDER BY thread_id ASC, created_at ASC`,
-      [MAX_MESSAGE_CHARS, ...threadIds],
-      MESSAGES_PER_BATCH
-    )
-    if (!result.ok) return bodies
-    for (const row of result.rows) {
-      const threadId = row['thread_id']
-      const chunk = row['chunk']
-      if (typeof threadId !== 'string' || typeof chunk !== 'string' || chunk.length === 0) continue
-      const existing = bodies.get(threadId) ?? ''
-      if (existing.length >= MAX_DOCUMENT_CHARS) continue
-      bodies.set(threadId, `${existing}${existing ? '\n' : ''}${chunk}`)
-    }
-    return bodies
   }
 
   private async persist(): Promise<void> {
