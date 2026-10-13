@@ -257,10 +257,12 @@
       {/if}
     </header>
 
-    <Command.List
-      class="max-h-[min(24rem,55vh)] overflow-y-auto p-1.5"
-      aria-label="{title} results"
-    >
+    <!-- A fixed height, never `max-h`. The spotlight swaps one screen for
+         another inside a single mounted panel, so a height that followed the
+         result count made the container collapse when a screen matched few
+         rows (an empty "search threads" screen shrank the whole surface). The
+         room is the same ceiling it always had, now always claimed. -->
+    <Command.List class="h-[min(24rem,55vh)] overflow-y-auto p-1.5" aria-label="{title} results">
       {#each visibleActions as action (action.id)}
         <Command.Item
           value={action.id}
@@ -452,7 +454,7 @@
           {/if}
         </Command.Item>
       {:else}
-        <div class="flex min-h-28 items-center justify-center px-4 text-center">
+        <div class="flex h-full items-center justify-center px-4 text-center">
           <p class="text-xs text-dimmed">{emptyLabel}</p>
         </div>
       {/each}
