@@ -13,6 +13,7 @@ import {
   STICKY_NOTES_TAB,
   TEMPORARY_CHAT_INACTIVITY_MS,
   type ContextSidebarTab,
+  type BrowserContextTab,
   type MemorySection,
   type TemporaryChatContextTab,
   type TemporaryChatMode,
@@ -161,6 +162,11 @@ class ContextSidebarState {
 
   private threadBrowserScopeLabel(projectId: string, threadId: string): string {
     return this.threadBrowserScopeLabelResolver?.(projectId, threadId) ?? 'This conversation'
+  }
+
+  /** Every owned browser tab, including projects and threads currently offscreen. */
+  get browserTabs(): readonly BrowserContextTab[] {
+    return this.browser.tabs
   }
 
   get tabs(): ContextSidebarTab[] {

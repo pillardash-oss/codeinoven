@@ -90,7 +90,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Pass attention "background" to keep it offscreen without pulling the user to it.',
+      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -99,7 +99,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'string',
           enum: ['focus', 'background'],
           description:
-            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+            'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
         }
       },
       required: ['url'],
@@ -252,6 +252,84 @@ function authoredWorkCheckpointTool(): McpTool {
 export function designUtilityTools(roots: WorkRoots): McpTool[] {
   const designRoot = workRootForKind(roots, 'design')
   return [
+    {
+      name: 'read-contract',
+      description:
+        'Read existing DESIGN.md or DESIGNS.md, case-insensitively, at root, apps and src. Root takes precedence. No recursive search.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    },
+    {
+      name: 'extract-reference',
+      description:
+        'Measure visible typography, area-weighted colours, component spacing and logo references from a user-named web page in an isolated renderer. Returns measured facts for a lightweight design contract.',
+      inputSchema: {
+        type: 'object',
+        properties: { url: { type: 'string', maxLength: 4096 } },
+        required: ['url'],
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'lint',
+      description:
+        'Run bounded craft checks over one authored HTML screen off the main thread. Returns concrete rules and source lines; visual judgement belongs in critique.',
+      inputSchema: {
+        type: 'object',
+        properties: { directory: { type: 'string' }, entry: { type: 'string' } },
+        required: ['directory', 'entry'],
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'critique',
+      description:
+        'Record one evidence-based screen critique after rendering it. Scores philosophy, hierarchy, detail, functionality and innovation equally, 0 to 10; threshold 8. Any craft finding or critical issue blocks passing. Persists model-attributed scores for Usage; repeated assessment of identical content does not add a sample.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: { type: 'string' },
+          entry: { type: 'string' },
+          dimensions: {
+            type: 'object',
+            properties: Object.fromEntries(
+              ['philosophy', 'hierarchy', 'detail', 'functionality', 'innovation'].map((name) => [
+                name,
+                {
+                  type: 'object',
+                  properties: {
+                    score: { type: 'number', minimum: 0, maximum: 10 },
+                    evidence: { type: 'string', minLength: 1, maxLength: 2000 }
+                  },
+                  required: ['score', 'evidence'],
+                  additionalProperties: false
+                }
+              ])
+            ),
+            required: ['philosophy', 'hierarchy', 'detail', 'functionality', 'innovation'],
+            additionalProperties: false
+          },
+          fixes: { type: 'array', items: { type: 'string', maxLength: 1000 }, maxItems: 30 },
+          criticalIssues: {
+            type: 'array',
+            items: { type: 'string', maxLength: 1000 },
+            maxItems: 30
+          }
+        },
+        required: ['directory', 'entry', 'dimensions', 'fixes', 'criticalIssues'],
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'write-contract',
+      description:
+        'Generate a root DESIGN.md and preserve existing matching contracts as timestamped old-file backups. Only use when the user requested contract generation.',
+      inputSchema: {
+        type: 'object',
+        properties: { markdown: { type: 'string', minLength: 1, maxLength: 131072 } },
+        required: ['markdown'],
+        additionalProperties: false
+      }
+    },
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
@@ -273,7 +351,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
             type: 'string',
             enum: ['focus', 'background'],
             description:
-              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+              'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
           }
         },
         additionalProperties: false
@@ -365,7 +443,7 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
             type: 'string',
             enum: ['focus', 'background'],
             description:
-              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+              'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
           }
         },
         additionalProperties: false

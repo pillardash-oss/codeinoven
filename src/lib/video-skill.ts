@@ -140,7 +140,7 @@ Invoke this capability with operation \`preview\`:
 
 - \`directory\`, project-relative, defaults to \`${videoRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\`.
-- \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
+- \`attention\`, \`background\` (the default) to leave the user where they are, \`focus\` to bring the tab to the user when foreground interaction is needed.
 
 The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit appears without re-previewing and without the viewer losing their place in the timeline. Preview again only when you move to a different folder.
 

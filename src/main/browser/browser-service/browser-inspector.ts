@@ -6,13 +6,16 @@
  * Chrome-style inspect affordance therefore lives in the page: this observer
  * injects an idempotent script into the document under a random per-tab global
  * name, exactly the way `browser-capture.ts` does, and that script draws the
- * hover box, the label and the numbered pins, and reports picks back.
+ * hover box, the label, the numbered pins and the persistent outline on every
+ * commented element, and reports picks back.
  *
- * It deliberately draws NO comment editor. A comment is written in the app's own
- * component, the same one the conversation and the file annotator use, so the
- * page never owns comment text and there is one editor everywhere. The page
- * draws the pin that says "this element is commented on", and clicking it asks
- * the app to open that comment.
+ * The comment bubble is deliberately NOT drawn here. The app draws its own
+ * bubble, from the app's own component, and moves it into the shared native host
+ * that renders app DOM above a browser page (`NativeFloatingPanel`), so the
+ * comment on a design element is the same bubble, with the same field, the same
+ * dictation button and the same shortcuts and draft persistence, as the one the
+ * app opens over a quoted selection. Only what can be drawn nowhere else stays
+ * here: the affordances that have to line up with the document itself.
  *
  * The overlay is themed with the application's own design tokens, which main
  * hands over with the arm command and re-sends when the theme changes: injected
@@ -34,8 +37,9 @@
 
 import type { WebContents } from 'electron'
 import type {
-  BrowserInspectorEvent,
   BrowserInspectorMarker,
+  BrowserInspectorRect,
+  BrowserInspectorTarget,
   BrowserInspectorTheme
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
@@ -54,8 +58,21 @@ export const MAX_INSPECTOR_ANCESTORS = 6
 
 export interface BrowserInspectorDeps {
   /** Called for every event the injected inspector reports. */
-  onEvent: (tabId: string, event: BrowserInspectorEvent) => void
+  onEvent: (tabId: string, event: ReportedInspectorEvent) => void
 }
+
+/**
+ * What the injected script reports, before main resolves the element's place.
+ *
+ * Deliberately not `BrowserInspectorEvent`: this is the shape the page can
+ * actually produce, with rectangles in its own CSS pixels, while the event the
+ * renderer receives carries `anchor`, which only main can compute from the frame
+ * the page sits in and the page's zoom.
+ */
+export type ReportedInspectorEvent =
+  | { kind: 'pick'; id: string; target: BrowserInspectorTarget; rect: BrowserInspectorRect }
+  | { kind: 'open'; id: string; rect: BrowserInspectorRect }
+  | { kind: 'closed' }
 
 interface ObservedTab {
   contents: WebContents
@@ -114,10 +131,12 @@ export function inspectorInstallScript(key: string): string {
       '.cio-layer{position:fixed;inset:0;pointer-events:none;z-index:2147483646}',
       '.cio-box{position:fixed;box-sizing:border-box;border-radius:2px;pointer-events:none}',
       '.cio-hover{background:color-mix(in srgb,var(--cio-accent,#d4af37) 18%,transparent);outline:1px solid var(--cio-accent,#d4af37)}',
-      '.cio-active{background:color-mix(in srgb,var(--cio-accent,#d4af37) 12%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
-      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 6px;border-radius:5px;background:var(--cio-foreground,#081825);color:var(--cio-surface,#ffffff);font:500 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 2px 8px rgba(0,0,0,.35)}',
-      '.cio-label .d{opacity:.72}',
-      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:999px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
+      '.cio-marked{position:fixed;box-sizing:border-box;border-radius:2px;pointer-events:none;outline:1px solid color-mix(in srgb,var(--cio-accent,#d4af37) 50%,transparent);transition:background-color .12s ease,outline-color .12s ease}',
+      '.cio-marked[data-hover="1"]{background:color-mix(in srgb,var(--cio-accent,#d4af37) 14%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
+      '.cio-marked[data-active="1"]{background:color-mix(in srgb,var(--cio-accent,#d4af37) 10%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
+      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:2px;background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:400 12px/1.33 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 12px 28px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.14)}',
+      '.cio-label .d{opacity:.66}',
+      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:999px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
       '.cio-pin svg{width:12px;height:12px;flex:none}',
       '.cio-pin[data-comment="1"]{border-color:var(--cio-accent,#d4af37);color:var(--cio-accent,#d4af37)}',
       '.cio-pin[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37);outline-offset:1px}'
@@ -138,13 +157,9 @@ export function inspectorInstallScript(key: string): string {
     const hoverBox = document.createElement('div');
     hoverBox.className = 'cio-box cio-hover';
     hoverBox.style.display = 'none';
-    const activeBox = document.createElement('div');
-    activeBox.className = 'cio-box cio-active';
-    activeBox.style.display = 'none';
     const labelEl = document.createElement('div');
     labelEl.className = 'cio-label';
     labelEl.style.display = 'none';
-    layer.appendChild(activeBox);
     layer.appendChild(hoverBox);
     layer.appendChild(labelEl);
 
@@ -152,6 +167,7 @@ export function inspectorInstallScript(key: string): string {
       armed: false,
       hovered: null,
       activeId: null,
+      hoverId: null,
       markers: new Map(),
       waiters: [],
       queued: [],
@@ -173,7 +189,7 @@ export function inspectorInstallScript(key: string): string {
 
     function applyTheme(tokens) {
       if (!tokens || typeof tokens !== 'object') return;
-      for (const name of ['surface', 'elevated', 'border', 'foreground', 'muted', 'accent']) {
+      for (const name of ['surface', 'elevated', 'border', 'foreground', 'muted', 'accent', 'font']) {
         const value = tokens[name];
         if (typeof value === 'string' && value) layer.style.setProperty('--cio-' + name, value);
       }
@@ -230,8 +246,19 @@ export function inspectorInstallScript(key: string): string {
       return name;
     }
 
-    function describe(element) {
+    /** One element's viewport rectangle, rounded, in the page's CSS pixels. */
+    function elementRect(element) {
+      if (!element) return { x: 0, y: 0, width: 0, height: 0 };
       const rect = element.getBoundingClientRect();
+      return {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+    }
+
+    function describe(element) {
       const ancestors = [];
       let parent = element.parentElement;
       while (parent && parent !== document.documentElement && ancestors.length < config.maxAncestors) {
@@ -247,12 +274,7 @@ export function inspectorInstallScript(key: string): string {
         text: text(element.innerText || element.textContent, config.maxText),
         html: text(element.outerHTML, config.maxHtml),
         ancestors: ancestors,
-        rect: {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
+        rect: elementRect(element)
       };
     }
 
@@ -299,23 +321,46 @@ export function inspectorInstallScript(key: string): string {
       labelEl.style.top = (above > 4 ? above : rect.y + 4) + 'px';
     }
 
-    function layout() {
-      const active = state.activeId ? state.markers.get(state.activeId) : null;
-      const activeElement = active ? resolveElement(active) : null;
-      if (activeElement) place(activeElement, activeBox);
-      else activeBox.style.display = 'none';
+    function onScreen(rect) {
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < innerHeight &&
+        rect.left < innerWidth
+      );
+    }
 
+    function layout() {
       for (const marker of state.markers.values()) {
         const element = resolveElement(marker);
-        marker.pin.setAttribute('data-active', state.activeId === marker.id ? '1' : '0');
+        const active = state.activeId === marker.id;
+        const hovered = state.hoverId === marker.id;
+        marker.box.setAttribute('data-active', active ? '1' : '0');
+        marker.box.setAttribute('data-hover', hovered ? '1' : '0');
+        marker.pin.setAttribute('data-active', active ? '1' : '0');
         if (!element) {
+          marker.box.style.display = 'none';
           marker.pin.style.display = 'none';
           continue;
         }
         const rect = element.getBoundingClientRect();
-        marker.pin.style.display = 'inline-flex';
-        marker.pin.style.left = clamp(rect.x, 2, Math.max(2, innerWidth - 52)) + 'px';
-        marker.pin.style.top = clamp(rect.y - 26, 2, Math.max(2, innerHeight - 26)) + 'px';
+        const shown = onScreen(rect);
+        place(element, marker.box);
+        marker.box.style.display = shown ? 'block' : 'none';
+        // A pin belongs to the part of the page its element is in: it is drawn
+        // at the element and hidden once that part is off screen, rather than
+        // being clamped to the viewport edge for something the reader cannot
+        // see. Sticky header offsets are left alone, because a pin that follows
+        // its element is the point.
+        if (shown) {
+          marker.pin.style.display = 'inline-flex';
+          marker.pin.style.left = clamp(rect.x, 2, Math.max(2, innerWidth - 52)) + 'px';
+          marker.pin.style.top = clamp(rect.y - 26, 2, Math.max(2, innerHeight - 26)) + 'px';
+        } else {
+          marker.pin.style.display = 'none';
+        }
       }
     }
 
@@ -341,17 +386,40 @@ export function inspectorInstallScript(key: string): string {
       return false;
     }
 
-    function onPointerMove(event) {
-      if (!state.armed) return;
-      if (ourNode(event)) return;
-      const element = event.target instanceof Element ? event.target : null;
-      if (element === state.hovered) return;
-      state.hovered = element;
+    function markerForHover(element) {
+      for (const marker of state.markers.values()) {
+        const node = resolveElement(marker);
+        if (node && (node === element || node.contains(element))) return marker;
+      }
+      return null;
+    }
+
+    function scheduleHoverFrame() {
       if (state.hoverFrame) return;
       state.hoverFrame = requestAnimationFrame(() => {
         state.hoverFrame = 0;
         syncCursor();
+        layout();
       });
+    }
+
+    function onPointerMove(event) {
+      if (ourNode(event)) return;
+      const element = event.target instanceof Element ? event.target : null;
+      const hover = element ? markerForHover(element) : null;
+      const hoverId = hover ? hover.id : null;
+      const markerChanged = state.hoverId !== hoverId;
+      state.hoverId = hoverId;
+      if (state.armed) {
+        const elementChanged = element !== state.hovered;
+        state.hovered = element;
+        if (elementChanged || markerChanged) scheduleHoverFrame();
+        return;
+      }
+      // A commented element that is hovered lights up like a commented range in
+      // the conversation, whether or not picking is armed: the pins outlive
+      // inspect mode, and their elements have to answer the pointer with them.
+      if (markerChanged) scheduleHoverFrame();
     }
 
     /**
@@ -398,28 +466,29 @@ export function inspectorInstallScript(key: string): string {
       const target = describe(element);
       const existing = markerForElement(element, target.selector);
       if (existing) {
-        // One element, one comment: the app opens that comment for editing
-        // instead of the page inventing a second pin for the same element.
-        state.activeId = existing.id;
-        layout();
-        emit({ kind: 'open', id: existing.id });
+        // One element, one comment: a second click on a pinned element asks the
+        // app to reopen that comment instead of the page inventing a second pin.
+        emit({ kind: 'open', id: existing.id, rect: target.rect });
         return;
       }
       const id = crypto.randomUUID();
       addMarker({ id: id, number: state.markers.size + 1, comment: '' }, element, target.selector);
-      state.activeId = id;
-      layout();
       emit({ kind: 'pick', id: id, target: target });
     }
 
     function onKeyDown(event) {
-      if (!state.armed) return;
       if (event.key !== 'Escape') return;
+      // The comment bubble belongs to the app and holds the keyboard while it is
+      // open, so the page only ever sees Escape with nothing left to close: it
+      // ends the session.
+      if (!state.armed) return;
       event.preventDefault();
       event.stopPropagation();
       state.armed = false;
       state.hovered = null;
+      state.hoverId = null;
       syncCursor();
+      layout();
       emit({ kind: 'closed' });
     }
 
@@ -447,12 +516,26 @@ export function inspectorInstallScript(key: string): string {
       layout();
     }
 
+    /**
+     * Keep the page listeners installed while there is a reason for them.
+     *
+     * Picking is one reason. The pins are the other: they outlive a disarmed
+     * tab, and the element a pin belongs to has to light up under the pointer
+     * with the pin still on the page, so hover is watched while any marker
+     * exists rather than only while inspect mode is on.
+     */
+    function syncListeners() {
+      if (state.armed || state.markers.size > 0) addListener();
+      else removeListener();
+    }
+
     function startScan() {
       if (state.scanTimer) return;
       state.scanTimer = setInterval(() => {
         if (state.markers.size === 0) {
           clearInterval(state.scanTimer);
           state.scanTimer = 0;
+          syncListeners();
           return;
         }
         layout();
@@ -460,15 +543,21 @@ export function inspectorInstallScript(key: string): string {
     }
 
     function renderPin(marker) {
-      marker.pin.setAttribute('data-comment', marker.comment ? '1' : '0');
-      marker.pin.title = marker.comment ? 'Edit comment on ' + marker.label : 'Comment on ' + marker.label;
+      const hasComment = Boolean(marker.comment);
+      marker.pin.setAttribute('data-comment', hasComment ? '1' : '0');
+      marker.pin.title = hasComment ? 'Edit comment on ' + marker.label : 'Comment on ' + marker.label;
       marker.pinLabel.textContent = String(marker.number);
     }
+
 
     function addMarker(input, element, selector) {
       let marker = state.markers.get(input.id);
       if (!marker) {
         if (state.markers.size >= config.maxMarkers) return null;
+        const box = document.createElement('div');
+        box.className = 'cio-box cio-marked';
+        box.style.display = 'none';
+        layer.appendChild(box);
         const pin = document.createElement('button');
         pin.type = 'button';
         pin.className = 'cio-pin';
@@ -483,6 +572,7 @@ export function inspectorInstallScript(key: string): string {
           label: (element && shortName(element)) || 'element',
           element: element || null,
           selector: selector || '',
+          box: box,
           pin: pin,
           pinLabel: pinLabel
         };
@@ -490,11 +580,10 @@ export function inspectorInstallScript(key: string): string {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
-          // The comment is written in the app, which owns the editor and the
-          // text; the page reports which pin the user asked about.
-          state.activeId = marker.id;
-          layout();
-          emit({ kind: 'open', id: marker.id });
+          // The app owns the bubble, so a pin click tells it which element the
+          // reader asked about, and where that element is, and the app opens
+          // that comment next to it.
+          emit({ kind: 'open', id: marker.id, rect: elementRect(resolveElement(marker)) });
         });
         state.markers.set(marker.id, marker);
       }
@@ -508,32 +597,42 @@ export function inspectorInstallScript(key: string): string {
       renderPin(marker);
       layout();
       startScan();
+      syncListeners();
       return marker;
     }
 
     function removeMarker(id) {
       const marker = state.markers.get(id);
       if (!marker) return;
-      if (state.activeId === id) {
-        state.activeId = null;
-        activeBox.style.display = 'none';
-      }
+      if (state.activeId === id) state.activeId = null;
+      marker.box.remove();
       marker.pin.remove();
       state.markers.delete(id);
       layout();
+      syncListeners();
     }
 
-    /** Highlight one pinned element for the user, optionally scrolling to it. */
+    /** Scroll one pinned element into view and mark it as the active one. */
     function focusMarker(id, scroll) {
       const marker = id ? state.markers.get(id) : null;
-      state.activeId = marker ? marker.id : null;
-      if (marker && scroll) {
+      if (!marker) {
+        state.activeId = null;
+        layout();
+        return id === null;
+      }
+      if (scroll) {
         const element = resolveElement(marker);
         if (element && element.scrollIntoView) {
           element.scrollIntoView({ block: 'center', inline: 'nearest' });
         }
       }
+      state.activeId = marker.id;
       layout();
+      // A focus is a request to put one element's comment in front of the reader,
+      // so it reports the same event a pin click does: the app opens the bubble
+      // beside the element, and this is where the element ended up.
+      emit({ kind: 'open', id: marker.id, rect: elementRect(resolveElement(marker)) });
+      return true;
     }
 
     function apply(command) {
@@ -541,14 +640,18 @@ export function inspectorInstallScript(key: string): string {
       if (command.type === 'arm') {
         if (!state.armed) {
           state.armed = true;
-          addListener();
+          syncListeners();
         }
         return true;
       }
       if (command.type === 'disarm') {
         state.armed = false;
         state.hovered = null;
-        removeListener();
+        state.hoverId = null;
+        state.activeId = null;
+        syncCursor();
+        layout();
+        syncListeners();
         hoverBox.style.display = 'none';
         labelEl.style.display = 'none';
         return true;
@@ -558,8 +661,7 @@ export function inspectorInstallScript(key: string): string {
         return true;
       }
       if (command.type === 'focus') {
-        focusMarker(typeof command.id === 'string' ? command.id : null, command.scroll === true);
-        return true;
+        return focusMarker(typeof command.id === 'string' ? command.id : null, command.scroll === true);
       }
       if (command.type === 'markers') {
         const incoming = Array.isArray(command.markers) ? command.markers : [];
@@ -571,8 +673,10 @@ export function inspectorInstallScript(key: string): string {
         for (const id of Array.from(state.markers.keys())) {
           if (!keep.has(id)) removeMarker(id);
         }
+        if (state.activeId && !keep.has(state.activeId)) state.activeId = null;
         layout();
         if (state.markers.size > 0) startScan();
+        syncListeners();
         return true;
       }
       if (command.type === 'cease') {
@@ -686,14 +790,16 @@ export class BrowserInspector {
     const record = this.record(tabId, contents)
     record.contents = contents
     record.focus = { id: referenceId, scroll }
-    this.command(tabId, { type: 'focus', id: referenceId, scroll })
+    this.arm(tabId)
+    void this.publishFocus(record).catch(() => undefined)
   }
 
   /** Replace the marker set the page draws. The renderer owns the truth. */
-  syncMarkers(tabId: string, markers: BrowserInspectorMarker[]): void {
-    const record = this.tabs.get(tabId)
-    if (!record) return
+  syncMarkers(tabId: string, contents: WebContents, markers: BrowserInspectorMarker[]): void {
+    const record = this.record(tabId, contents)
+    record.contents = contents
     record.markers = markers
+    this.arm(tabId)
     this.command(tabId, { type: 'markers', markers })
   }
 
@@ -755,6 +861,17 @@ export class BrowserInspector {
     return record.desiredArmed || record.markers.length > 0
   }
 
+  /** Consume a focus request only after its marker exists in the installed page. */
+  private async publishFocus(record: ObservedTab): Promise<void> {
+    const focus = record.focus
+    if (!focus || record.contents.isDestroyed()) return
+    const applied: unknown = await record.contents.executeJavaScript(
+      inspectorCommandScript(record.key, { type: 'focus', id: focus.id, scroll: focus.scroll }),
+      false
+    )
+    if (applied === true && record.focus === focus) record.focus = null
+  }
+
   /** Fire a command without waiting, keeping failures off the event loop. */
   private command(tabId: string, command: unknown): void {
     const record = this.tabs.get(tabId)
@@ -793,11 +910,7 @@ export class BrowserInspector {
       })
       .then(() => (record.theme ? issue({ type: 'theme', theme: record.theme }) : undefined))
       .then(() => issue({ type: 'markers', markers: record.markers }))
-      .then(() =>
-        record.focus
-          ? issue({ type: 'focus', id: record.focus.id, scroll: record.focus.scroll })
-          : undefined
-      )
+      .then(() => this.publishFocus(record))
       .then(() => record.contents.executeJavaScript(inspectorWaitScript(record.key), false))
       .then((event: unknown) => {
         const current = this.tabs.get(tabId)
@@ -808,7 +921,7 @@ export class BrowserInspector {
         current.pending = false
         current.failures = 0
         if (event && typeof event === 'object') {
-          this.deps.onEvent(tabId, event as BrowserInspectorEvent)
+          this.deps.onEvent(tabId, event as ReportedInspectorEvent)
         }
         this.scheduleArm(tabId)
       })

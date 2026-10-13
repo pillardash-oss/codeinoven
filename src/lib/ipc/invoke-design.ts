@@ -13,8 +13,15 @@ import type {
   WorkRootState
 } from './design'
 import type { Contract } from './contract-helpers'
+import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
+import type { DesignModelRanking } from '../design/design-review'
 
 export const invokeDesignContract = {
+  'design:rankings': {} as Contract<[startAt: number, endAt: number], DesignModelRanking[]>,
+  'design:export': {} as Contract<
+    [projectId: string, directory: string, entry: string | null, format: DesignExportFormat],
+    DesignExportResult
+  >,
   /**
    * Whether a thread is a design session, which design it last previewed, and
    * every design folder the project holds. Answers from persisted data, so a

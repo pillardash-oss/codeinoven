@@ -150,6 +150,14 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     // The stores the Usage page can clear are reported alongside the analytics,
     // so the counts a clear dialog promises always match the rows on screen.
     analytics.records.modelRankings = modelRankingRepo.recordCount()
+    const designCount = await database.queryViaWorker(
+      'SELECT COUNT(*) AS count FROM design_reviews',
+      [],
+      1,
+      { allowPrimaryFallback: false }
+    )
+    if (designCount.ok)
+      analytics.records.modelRankings += Number(designCount.rows[0]?.['count'] ?? 0)
     analytics.records.pendingGrades = pendingGrades
     return analytics
   })
@@ -186,6 +194,18 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     if (request.store === 'all' || request.store === 'modelRankings') {
       cleared.modelRankings = modelRankingRepo.clearAll()
+      const designCount = await database.queryViaWorker(
+        'SELECT COUNT(*) AS count FROM design_reviews',
+        [],
+        1,
+        { allowPrimaryFallback: false }
+      )
+      const designClear = await database.executeViaWorker('DELETE FROM design_reviews', [], {
+        allowPrimaryFallback: false
+      })
+      if (!designClear.ok)
+        throw new Error(designClear.error ?? 'Design quality records could not be cleared')
+      if (designCount.ok) cleared.modelRankings += Number(designCount.rows[0]?.['count'] ?? 0)
       const queue = await rankingSnapshotRepo.clearAllViaWorker()
       if (!queue.ok) {
         throw new Error(queue.error ?? 'The ranking grading queue could not be cleared')

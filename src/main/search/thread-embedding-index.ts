@@ -170,8 +170,9 @@ export class ThreadEmbeddingIndex {
         options.signal.throwIfAborted()
         const startedAt = performance.now()
         const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
+        let embedded = false
         try {
-          await this.indexBatch(batch, embed, options)
+          embedded = await this.indexBatch(batch, embed, options)
           indexed += batch.length
         } catch (error) {
           if (options.signal.aborted) throw error
@@ -183,7 +184,9 @@ export class ThreadEmbeddingIndex {
           sinceLastPersist = 0
           await this.persist()
         }
-        if (offset + INDEX_BATCH_SIZE < stale.length) await paceIndexing(startedAt, options.signal)
+        if (embedded && offset + INDEX_BATCH_SIZE < stale.length)
+          await paceIndexing(startedAt, options.signal)
+        else await new Promise<void>((resolve) => setImmediate(resolve))
       }
       await this.pruneMissing(new Set(this.candidates.keys()))
       await this.summaries.prune(candidates)
@@ -249,7 +252,7 @@ export class ThreadEmbeddingIndex {
         chunks: number
       ) => void
     }
-  ): Promise<void> {
+  ): Promise<boolean> {
     const texts: string[] = []
     const oversized: boolean[] = []
     for (const candidate of batch) {
@@ -260,6 +263,15 @@ export class ThreadEmbeddingIndex {
         options.documentChars
       )
       const text = composeDocument(options.documentPrefix, candidate.title, content)
+      const sourceHash = contentHashOf(options.modelSignature, text)
+      const existing = this.records.get(candidate.id)
+      if (existing && (existing.sourceHash ?? existing.contentHash) === sourceHash) {
+        existing.updatedAt = candidate.stamp
+        existing.sourceHash = sourceHash
+        if ((this.candidates.get(candidate.id)?.stamp ?? Infinity) <= candidate.stamp)
+          this.pendingIds.delete(candidate.id)
+        return false
+      }
       oversized.push(!(await options.fitsContext(text)))
       texts.push(text)
     }
@@ -274,6 +286,7 @@ export class ThreadEmbeddingIndex {
       this.records.set(candidate.id, {
         threadId: candidate.id,
         contentHash: contentHashOf(options.modelSignature, texts[index]),
+        sourceHash: contentHashOf(options.modelSignature, texts[index]),
         dimensions: vector.length,
         updatedAt: candidate.stamp,
         vector
@@ -283,6 +296,7 @@ export class ThreadEmbeddingIndex {
       if (oversized[index])
         options.onOversized?.(candidate, contentHashOf(options.modelSignature, texts[index]))
     }
+    return true
   }
 
   private async pruneMissing(present: ReadonlySet<string>): Promise<void> {

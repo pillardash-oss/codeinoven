@@ -1,5 +1,6 @@
 import { IPC_INVOKE_CONTRACT } from '../../lib/ipc-contract'
 import type { AppControlActionSummary, AppControlTarget } from '../../lib/app-control'
+import type { PermissionLevel } from '../../lib/types'
 import { requestAppControl } from './app-control-bridge'
 
 /**
@@ -22,6 +23,7 @@ export interface AppControlContext {
   projectId: string
   projectPath: string | null
   threadId: string
+  permissionLevel: PermissionLevel
 }
 
 export interface AppControlExecutor {
@@ -139,7 +141,9 @@ function readString(input: Record<string, unknown>, key: string): string | null 
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-export function createAppControlExecutor(): AppControlExecutor {
+export function createAppControlExecutor(
+  openBrowser?: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+): AppControlExecutor {
   const groups = channelsByDomain()
 
   const actions = async (): Promise<AppControlActionSummary[]> => {
@@ -158,7 +162,16 @@ export function createAppControlExecutor(): AppControlExecutor {
   ): Promise<unknown> => {
     const domain = readString(input, 'domain')
     const includeChannels = input['includeChannels'] !== false
-    const uiActions = await actions()
+    const uiActions = (await actions()).map((entry) =>
+      entry.id === 'browser.open' && openBrowser
+        ? {
+            ...entry,
+            description:
+              'Open a URL in a thread-owned background browser tab. attention="focus" reveals it when foreground interaction is needed. Returns the tab context.',
+            params: [...entry.params, 'attention?']
+          }
+        : entry
+    )
 
     const domains = includeChannels
       ? Array.from(groups, ([name, channels]) => ({
@@ -178,6 +191,8 @@ export function createAppControlExecutor(): AppControlExecutor {
 
     return {
       context,
+      controlPolicy:
+        'Try background IPC/data operations first. UI-only navigation and panel actions remain available as foreground fallback. browser.open defaults to a thread-owned background tab; params.attention="focus" explicitly reveals it.',
       destructiveChannels: CHANNEL_NAMES.filter((channel) => isDestructiveAppControl(channel)),
       domains,
       channelArgs,
@@ -185,7 +200,10 @@ export function createAppControlExecutor(): AppControlExecutor {
     }
   }
 
-  const call = async (input: Record<string, unknown>): Promise<unknown> => {
+  const call = async (
+    input: Record<string, unknown>,
+    context: AppControlContext
+  ): Promise<unknown> => {
     const channel = readString(input, 'channel')
     const action = readString(input, 'action')
     if (channel === null && action === null) {
@@ -227,6 +245,10 @@ export function createAppControlExecutor(): AppControlExecutor {
         typeof rawParams === 'object' && rawParams !== null && !Array.isArray(rawParams)
           ? (rawParams as Record<string, unknown>)
           : {}
+      if (action === 'browser.open' && openBrowser) {
+        const result = await openBrowser(params, context)
+        return { ok: true, result }
+      }
       target = { kind: 'action', action, params }
     } else {
       throw new Error('Provide either a `channel` or an `action` from cio_app_catalog.')

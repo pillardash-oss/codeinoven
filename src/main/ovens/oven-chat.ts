@@ -37,6 +37,7 @@ import {
   mergeSessionMessages
 } from '../drivers/persistent-cli/persistent-cli-transcript'
 import { Logger } from '../system/logger'
+import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 
 interface Binding {
   projectId: string
@@ -285,6 +286,7 @@ export class OvenChat {
             .slice(-80_000)
         : ''
       const prompt = [
+        BACKGROUND_AGENT_CONTROL_INSTRUCTION,
         history ? `Previous conversation:\n${history}` : '',
         context,
         text,

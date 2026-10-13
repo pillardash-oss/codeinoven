@@ -532,7 +532,8 @@ export class Database {
   async queryViaWorker(
     sql: string,
     params: unknown[],
-    maxRows: number
+    maxRows: number,
+    options: { allowPrimaryFallback?: boolean } = {}
   ): Promise<{ ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
@@ -540,6 +541,13 @@ export class Database {
       if (response.ok) {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
+      if (options.allowPrimaryFallback === false)
+        return {
+          ok: false,
+          rows: [],
+          truncated: false,
+          error: response.error ?? 'Database worker query failed'
+        }
       if (response.error) {
         Logger.error(
           'Database worker query failed; falling back to primary connection',
@@ -547,6 +555,8 @@ export class Database {
         )
       }
     }
+    if (options.allowPrimaryFallback === false)
+      return { ok: false, rows: [], truncated: false, error: 'Database worker is unavailable' }
     return runLocalBoundedQuery(this, sql, params, maxRows)
   }
 
@@ -618,11 +628,17 @@ export class Database {
   }
 
   /** Single write statement on the worker's connection; primary fallback. */
-  async executeViaWorker(sql: string, params: unknown[]): Promise<{ ok: boolean; error?: string }> {
+  async executeViaWorker(
+    sql: string,
+    params: unknown[],
+    options: { allowPrimaryFallback?: boolean } = {}
+  ): Promise<{ ok: boolean; error?: string }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
       const response = await worker.execute(sql, params)
       if (response.ok) return { ok: true }
+      if (options.allowPrimaryFallback === false)
+        return { ok: false, error: response.error ?? 'Database worker execution failed' }
       if (response.error) {
         Logger.error(
           'Database worker execute failed; falling back to primary connection',
@@ -630,6 +646,8 @@ export class Database {
         )
       }
     }
+    if (options.allowPrimaryFallback === false)
+      return { ok: false, error: 'Database worker is unavailable' }
     try {
       this.run(sql, ...params)
       return { ok: true }
@@ -867,6 +885,7 @@ export class Database {
       this.migrateCustomSvgIcons(connection)
       this.migrateProjectOvenColumn(connection)
       this.migrateStickyNoteImagePath(connection)
+      this.migrateStickyNoteSortOrder(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateRoutineExecution(connection)
@@ -915,6 +934,35 @@ export class Database {
     if (columns.size > 0 && !columns.has('image_path')) {
       connection.exec('ALTER TABLE sticky_notes ADD COLUMN image_path TEXT')
     }
+  }
+
+  /**
+   * Add the tab-strip order the sticky notes rail reorders by. Databases that
+   * predate it read as all-zero, which sorts by `created_at` exactly as before;
+   * the backfill seeds each row from that same order so the first drag starts
+   * from what the user already sees. Idempotent: the predicate stops matching
+   * once the column exists.
+   */
+  private migrateStickyNoteSortOrder(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('sort_order')) {
+      connection.exec('ALTER TABLE sticky_notes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+      connection.exec(`
+        UPDATE sticky_notes SET sort_order = (
+          SELECT COUNT(*) FROM sticky_notes AS earlier
+          WHERE earlier.created_at < sticky_notes.created_at
+             OR (earlier.created_at = sticky_notes.created_at AND earlier.rowid < sticky_notes.rowid)
+        )
+      `)
+    }
+    // The index is created here rather than in the schema block: a database
+    // that predates the column would fail to create it before this migration
+    // added it, so the schema runs first and the index must follow the column.
+    connection.exec('CREATE INDEX IF NOT EXISTS idx_sticky_notes_sort ON sticky_notes(sort_order)')
   }
 
   /** Remove the obsolete required name column while preserving saved SVGs. */

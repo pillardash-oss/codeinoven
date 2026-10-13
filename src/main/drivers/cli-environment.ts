@@ -191,6 +191,8 @@ export function buildProcessEnvironment(
   const commonPaths =
     platform === 'win32'
       ? [
+          ...(base['ProgramFiles'] ? [join(base['ProgramFiles'], 'nodejs')] : []),
+          ...(base['ProgramFiles(x86)'] ? [join(base['ProgramFiles(x86)'], 'nodejs')] : []),
           join(base['APPDATA'] ?? homedir(), 'npm'),
           join(base['LOCALAPPDATA'] ?? homedir(), 'Microsoft', 'WinGet', 'Links')
         ]

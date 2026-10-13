@@ -91,6 +91,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
+  import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
@@ -1167,7 +1168,10 @@
   }
 
   function updateOnboardingStep(step: number): void {
-    if (step === 4) navigate('chats')
+    // The first-run tour stays in Projects: the composer spotlight falls back
+    // to a centered callout there (its anchor only exists in Chats), and the
+    // Chats view owns its own tour when the user opens it for the first time.
+    // Adding a project therefore never yanks the user into the Chats view.
     onboardingStep = step
   }
 
@@ -2098,6 +2102,16 @@
          opens the harness's provider list without navigating away. -->
     {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
       <ProviderConnectHost />
+    {/await}
+  {/if}
+
+  {#if baseUrlProviderFlow.request}
+    <!-- The custom base-URL provider editor is a dockable panel, so it is owned
+         here rather than by the settings page that lists the providers: docking
+         it leaves a chip behind while the user keeps working, and a chip owned
+         by the settings subtree would vanish the moment they navigated away. -->
+    {#await import('$lib/components/providers/BaseUrlProviderHost.svelte') then { default: BaseUrlProviderHost }}
+      <BaseUrlProviderHost />
     {/await}
   {/if}
 

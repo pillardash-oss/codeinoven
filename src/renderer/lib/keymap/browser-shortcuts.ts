@@ -116,18 +116,43 @@ const BROWSER_OWNED_IDS = new Set<string>([
 ])
 
 /**
+ * Keys that always belong to the page's own caret and scroll movement, so the
+ * app must never claim them from a page.
+ *
+ * Modifier+arrow is a native movement gesture in every document: Option+Arrow
+ * hops a word on macOS, Ctrl+Arrow does the same on Windows and Linux, and the
+ * app knows this itself (the palette's back gesture is guarded so that
+ * Option+ArrowLeft keeps its native word-jump while editing). The app's own
+ * arrow bindings belong to surfaces that cannot hold the keyboard while a
+ * native page does: the terminal translates Option/Ctrl+Arrow into word moves,
+ * and a palette's back gesture never fires with a page focused. Claiming one
+ * from the page would preventDefault the document's own gesture and pull focus
+ * out of the page for a command nothing on that page could run, so a chord that
+ * ends on an arrow is never handed back.
+ */
+const PAGE_OWNED_ARROW_KEYS: ReadonlySet<string> = new Set([
+  'arrowup',
+  'arrowdown',
+  'arrowleft',
+  'arrowright'
+])
+
+/**
  * Every chord the app itself answers, so a key pressed in a page still reaches
  * the app's own shortcuts.
  *
  * A page holds the OS keyboard through its own view, so `mod+k` never reaches
  * the renderer that owns the spotlight. The whole keymap therefore travels to
- * main, which claims a matching chord in the page and hands the key back. Two
+ * main, which claims a matching chord in the page and hands the key back. Three
  * rules keep that from eating the page's own shortcuts:
  *
  * - A chord the browser answers itself is claimed first and never reaches this
  *   table, so `mod+r` still reloads the page.
  * - A chord with no Command/Control/Alt is left alone entirely, because a bare
  *   key belongs to whatever the page is doing with it.
+ * - A chord that ends on an arrow key is left alone entirely, because the page
+ *   owns modifier+arrow for its own word, line and scroll movement; see
+ *   {@link PAGE_OWNED_ARROW_KEYS}.
  */
 export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShortcutChord[] {
   const isMac = isMacPlatform()
@@ -137,6 +162,7 @@ export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShor
       if (BROWSER_OWNED_IDS.has(shortcut.id)) continue
       for (const chord of resolveChords(source.keysFor(shortcut.id), isMac)) {
         if (!chord.meta && !chord.control && !chord.alt) continue
+        if (PAGE_OWNED_ARROW_KEYS.has(chord.key)) continue
         chords.set(`${chord.key}:${chord.meta}${chord.control}${chord.shift}${chord.alt}`, chord)
       }
     }

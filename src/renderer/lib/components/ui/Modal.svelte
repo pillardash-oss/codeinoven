@@ -184,6 +184,8 @@
     /** Stable identity for a custom native presentation, such as the switcher.
      * Otherwise complete button dialogs automatically use native presentation. */
     nativeOverlay?: string
+    /** Keep typing surfaces in one document throughout their screen changes. */
+    nativePresentation?: boolean
     nativeReady?: boolean
     nativeFailed?: boolean
     onNativeHover?: (control: HTMLElement) => void
@@ -223,6 +225,7 @@
     blocksBrowserView = true,
     abovePage = false,
     nativeOverlay,
+    nativePresentation = true,
     nativeReady = $bindable(false),
     nativeFailed = $bindable(false),
     onNativeHover,
@@ -241,8 +244,10 @@
   }
   const suppressionKey = `modal-${crypto.randomUUID()}`
   const nativeId = $derived(
-    nativeOverlay ??
-      (modal && blocksBrowserView && placement !== 'fullscreen' ? suppressionKey : undefined)
+    nativePresentation
+      ? (nativeOverlay ??
+          (modal && blocksBrowserView && placement !== 'fullscreen' ? suppressionKey : undefined))
+      : undefined
   )
   const frameBounds = $derived(placement === 'fullscreen' ? null : bounds)
 
@@ -401,8 +406,8 @@
   }
 
   function firstTextField(panel: HTMLElement): HTMLElement | undefined {
-    return Array.from(panel.querySelectorAll<HTMLElement>(INPUT_FIELD_SELECTOR)).find(
-      isFocusableTarget
+    return Array.from(panel.querySelectorAll<HTMLElement>(INPUT_FIELD_SELECTOR)).find((element) =>
+      isFocusableTarget(element, panel)
     )
   }
 </script>

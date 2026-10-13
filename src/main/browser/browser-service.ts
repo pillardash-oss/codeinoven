@@ -88,8 +88,10 @@ import { getConfigRoot } from '../../lib/utils'
 import type {
   BrowserExtensionActivityUpdate,
   BrowserExtensionMenuRecord,
-  BrowserExtensionProgress
+  BrowserExtensionProgress,
+  BrowserInspectorEvent
 } from '../../lib/ipc/browser'
+import type { ReportedInspectorEvent } from './browser-service/browser-inspector'
 import {
   BrowserExtensionService,
   type BrowserExtensionActionPopupOpenRequest,
@@ -896,9 +898,50 @@ export class BrowserService {
       // Every pick, comment and removal is forwarded to the renderer, which owns
       // the reference list and turns it back into the page's marker set.
       onEvent: (tabId, event) => {
-        sendToRenderer(this.window.webContents, 'browser:inspector', tabId, event)
+        sendToRenderer(
+          this.window.webContents,
+          'browser:inspector',
+          tabId,
+          this.anchorInspectorEvent(tabId, event)
+        )
       }
     })
+  }
+
+  /**
+   * Give a reported element its place in the window's own coordinates.
+   *
+   * The page reports rectangles in its own CSS pixels, and the comment bubble
+   * that anchors to one is app DOM placed by a child window in window
+   * coordinates. The frame the page sits at and the page's zoom are known here,
+   * beside the view they belong to, so the conversion happens once rather than in
+   * a renderer that can see neither. Attaching it here is also what keeps the
+   * place out of the page's hands: a page cannot choose where the app draws its
+   * bubble.
+   */
+  private anchorInspectorEvent(
+    tabId: string,
+    event: ReportedInspectorEvent
+  ): BrowserInspectorEvent {
+    if (event.kind === 'closed') return event
+    const rect = event.kind === 'pick' ? event.target.rect : event.rect
+    const tab = this.tabs.get(tabId)
+    // A tab that is already gone has no frame left to place a bubble against, so
+    // the page's own rectangle is the best answer available; the surface that
+    // asked for the bubble is going away with the tab.
+    if (!tab || tab.view.webContents.isDestroyed()) return { ...event, anchor: rect }
+    const frame =
+      this.displayedTab?.tabId === tabId ? this.displayedTab.bounds : tab.view.getBounds()
+    const zoom = tab.view.webContents.getZoomFactor()
+    return {
+      ...event,
+      anchor: {
+        x: Math.round(frame.x + rect.x * zoom),
+        y: Math.round(frame.y + rect.y * zoom),
+        width: Math.round(rect.width * zoom),
+        height: Math.round(rect.height * zoom)
+      }
+    }
   }
 
   /**
@@ -1480,8 +1523,8 @@ export class BrowserService {
     })
     replaceHandler('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
       const tabId = validateTabId(rawTabId)
-      this.requireTab(tabId)
-      this.inspector.syncMarkers(tabId, validateInspectorMarkers(rawMarkers))
+      const tab = this.requireTab(tabId)
+      this.inspector.syncMarkers(tabId, tab.view.webContents, validateInspectorMarkers(rawMarkers))
     })
     replaceHandler('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
@@ -6109,6 +6152,7 @@ export class BrowserService {
       projectId: page.owner.projectId,
       threadId: page.owner.threadId,
       requestedTabId: tabId,
+      sourceTabId: this.peekTabs.get(page.owner.tabId) ?? page.owner.tabId,
       reveal: true,
       boxId: page.owner.boxId
     })

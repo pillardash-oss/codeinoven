@@ -3,6 +3,7 @@ import { Logger } from './logger'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const WINDOW_STATE_FILE = 'window-state/window-state.json'
+const WINDOW_STATE_BACKUP = 'window-state/window-state.backup.json'
 
 const DEFAULT_WIDTH = 1440
 const DEFAULT_HEIGHT = 900
@@ -36,6 +37,7 @@ export class WindowStateService {
   private readonly storage: StorageEngine
   private state: PersistedWindowState
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingWrite: Promise<void> = Promise.resolve()
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -47,13 +49,50 @@ export class WindowStateService {
 
   /** Load persisted state. Must run after the app is ready (uses `screen`). */
   async load(): Promise<void> {
-    const persisted = await this.storage.read<Partial<PersistedWindowState>>(WINDOW_STATE_FILE)
-    if (!persisted || typeof persisted !== 'object') return
-    const bounds = this.validateBounds(persisted.bounds)
-    this.state = {
-      bounds,
-      maximized: persisted.maximized === true
+    try {
+      const persisted = await this.readState(WINDOW_STATE_FILE)
+      if (persisted) {
+        this.state = persisted
+        return
+      }
+    } catch (error) {
+      Logger.error('Window state could not be loaded; recovering without blocking startup:', error)
+      // Preserve the damaged bytes for diagnosis without allowing another I/O
+      // failure to prevent the app from opening. Keep only the latest copy.
+      try {
+        const raw = await this.storage.readRaw(WINDOW_STATE_FILE)
+        if (raw !== null) await this.storage.writeRaw('window-state/window-state.corrupt.json', raw)
+      } catch (preserveError) {
+        Logger.error('Failed to preserve damaged window state:', preserveError)
+      }
     }
+    try {
+      const backup = await this.readState(WINDOW_STATE_BACKUP)
+      if (backup) this.state = backup
+    } catch (error) {
+      Logger.error('Window state backup is unavailable; using default geometry:', error)
+    }
+    // Repair is best effort. Read-only storage must still allow a usable window.
+    await this.write()
+  }
+
+  private async readState(path: string): Promise<PersistedWindowState | null> {
+    const value = await this.storage.read<unknown>(path)
+    if (value === null) return null
+    if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid window state')
+    const persisted = value as Partial<PersistedWindowState>
+    const bounds = persisted.bounds
+    if (
+      !bounds ||
+      typeof bounds !== 'object' ||
+      !Number.isFinite(bounds.width) ||
+      !Number.isFinite(bounds.height) ||
+      bounds.width <= 0 ||
+      bounds.height <= 0 ||
+      typeof persisted.maximized !== 'boolean'
+    )
+      throw new Error('Invalid window state geometry')
+    return { bounds: this.validateBounds(bounds), maximized: persisted.maximized }
   }
 
   /** BrowserWindow constructor options restoring the last size/position. */
@@ -117,12 +156,23 @@ export class WindowStateService {
     }
   }
 
-  private async write(): Promise<void> {
-    try {
-      await this.storage.write(WINDOW_STATE_FILE, this.state)
-    } catch (error) {
-      Logger.error('Failed to persist window state:', error)
-    }
+  private write(): Promise<void> {
+    const snapshot = { bounds: { ...this.state.bounds }, maximized: this.state.maximized }
+    // Close, resize and shutdown can overlap. Serialize immutable snapshots so
+    // an older save cannot replace the newest geometry after it has finished.
+    this.pendingWrite = this.pendingWrite.then(async () => {
+      try {
+        await this.storage.write(WINDOW_STATE_BACKUP, snapshot)
+      } catch (error) {
+        Logger.error('Failed to persist window state backup:', error)
+      }
+      try {
+        await this.storage.write(WINDOW_STATE_FILE, snapshot)
+      } catch (error) {
+        Logger.error('Failed to persist window state:', error)
+      }
+    })
+    return this.pendingWrite
   }
 
   /**
@@ -160,7 +210,12 @@ export class WindowStateService {
 
     const savedX = bounds?.x
     const savedY = bounds?.y
-    if (typeof savedX !== 'number' || typeof savedY !== 'number') {
+    if (
+      typeof savedX !== 'number' ||
+      !Number.isFinite(savedX) ||
+      typeof savedY !== 'number' ||
+      !Number.isFinite(savedY)
+    ) {
       return { width, height }
     }
     const x = Math.round(savedX)

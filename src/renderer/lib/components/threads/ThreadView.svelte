@@ -314,8 +314,7 @@
   import {
     auditReportForTurn,
     buildTranscriptIndex,
-    getTurnProseParts,
-    getTurnProseText,
+    getTurnFinalText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
@@ -324,6 +323,7 @@
     pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
+    turnEndsOnQuestion,
     turnStartPromptsBefore,
     type SubagentPart
   } from './thread-turn-parts'
@@ -771,6 +771,26 @@
     )
     return [...leading, ...body]
   })
+  /**
+   * Whether the turn ending at `endIndex` may surface its closing statement in
+   * the transcript (see `getTurnFinalText`) instead of holding it in the working
+   * trace for the whole run.
+   *
+   * A turn that is over always may, and so does every turn older than the
+   * newest one. The newest turn may only once the agent has handed the floor
+   * back: it closed on a Codex `final_answer`, or it asked the reader a question
+   * and is sitting on the answer. Until then the newest text is the agent
+   * talking about work still in flight, so it stays in the trace with that work
+   * rather than flashing through the reading position and jumping back out.
+   */
+  function closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
+    const closing = getTurnFinalText(messages, endIndex)
+    if (!closing) return false
+    if (closing.phase === 'final_answer') return true
+    if (!conversationBusy || !isLastTurnEnd) return true
+    return turnEndsOnQuestion(messages, endIndex)
+  }
+
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
@@ -3981,6 +4001,18 @@
     return isAtLatest(el)
   }
 
+  /** The id of the first message in the mounted window   the reader's anchor
+   *  the moment they leave the tail. Every pin MUST use this and never a
+   *  tail-relative count: `mountedCount` and the turn-aligned window start can
+   *  disagree (a long turn spans more messages than one page), and pinning to
+   *  `messages.length - mountedCount` then points BELOW the real window start,
+   *  which silently unmounts messages the reader can see and collapses the
+   *  window toward the tail. That collapse is what threw the reader back to the
+   *  latest message when they clicked "Load earlier messages". */
+  function mountedWindowStartId(): string | null {
+    return messages[mountedStartIndex]?.id ?? null
+  }
+
   function onScroll(): void {
     if (!scrollEl) return
     const away = !isAtBottom(scrollEl)
@@ -3990,7 +4022,7 @@
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
-      windowStartId = visibleMessages[0]?.id ?? null
+      windowStartId = mountedWindowStartId()
     } else if (!away && userScrolledAway) {
       windowStartId = null
     }
@@ -4011,9 +4043,15 @@
     // button is the only trigger for the conversation-level history fetch.
   }
 
-  /** Release the tail-follow lock synchronously when the user starts scrolling up. */
+  /** Release the tail-follow lock synchronously when the user starts scrolling up.
+   *  A wheel tick arrives before the scroll it causes, so it also has to pin the
+   *  window here: setting `userScrolledAway` alone suppressed onScroll's own pin
+   *  (that branch is guarded on the flag being false), leaving the window
+   *  tail-relative until the reader happened to reload history. */
   function onWheel(event: WheelEvent): void {
-    if (event.deltaY < 0) userScrolledAway = true
+    if (event.deltaY >= 0) return
+    userScrolledAway = true
+    windowStartId ??= mountedWindowStartId()
   }
 
   let loadingOlderMessages = $state(false)
@@ -4029,8 +4067,12 @@
     userScrolledAway = true
     // Pin the window before anything prepends   with an anchor pinned, the
     // mounted content cannot change no matter what merges behind it, so the
-    // fetch loop needs no scroll compensation at all.
-    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
+    // fetch loop needs no scroll compensation at all. The pin is the window's
+    // CURRENT start, never a tail-relative count: the two differ on a long
+    // turn, and a count-based pin would start the window later than what is
+    // already mounted and destroy the reader's viewport before the fetch even
+    // begins.
+    windowStartId ??= mountedWindowStartId()
     try {
       // One click loads THREE turn-aligned pages: the store usually already
       // holds some of them, so fetch only while it does not   each fetch is a
@@ -12273,10 +12315,26 @@
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
-                    {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
+                    {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
+                    {@const turnClosingText = getTurnFinalText(messages, turnEndIndex)}
+                    {@const turnClosingVisible = closingStatementVisible(
+                      turnEndIndex,
+                      turnEndIndex === messages.length - 1
+                    )}
+                    {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+                    {@const turnWorkingParts = getTurnWorkingParts(
+                      messages,
+                      absIndex,
+                      traceHoldsClosingText
+                    )}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
+                      : streamWorkingPartsForTurn(
+                          streamParts,
+                          transcriptIndex,
+                          absIndex,
+                          traceHoldsClosingText
+                        )}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
@@ -12298,10 +12356,13 @@
                         collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
-                      : // Everyone else reads the agent's text as prose in the
-                        // transcript: the trace holds only the machinery behind it,
-                        // so an explanation is never folded away by a later tool call.
-                        collectedTurnParts.filter((part) => part.type !== 'text')}
+                      : // The transcript is showing the agent's closing statement, so
+                        // the trace must not carry a second copy of that one part.
+                        // Every other text part stays: it is the commentary that
+                        // explains the work behind the answer.
+                        turnClosingVisible && turnClosingText
+                        ? collectedTurnParts.filter((part) => part.id !== turnClosingText.id)
+                        : collectedTurnParts}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
@@ -12402,9 +12463,9 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnProseParts = getTurnProseParts(messages, absIndex)}
-                      {@const turnProseText = getTurnProseText(messages, absIndex)}
-                      {#if turnProseParts.length > 0}
+                      {@const turnClosingText = getTurnFinalText(messages, absIndex)}
+                      {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
                           speechController.playback.messageId === msg.id &&
@@ -12431,18 +12492,15 @@
                               textClass="text-[0.8125rem]"
                             />
                           {:else}
-                            <!-- One block per streamed part: only the part still
-                                 growing re-renders, so a long turn never re-parses
-                                 its whole prose on every delta. -->
-                            {#each turnProseParts as part (part.id)}
-                              <MarkdownView
-                                text={part.text}
-                                class="mt-[0.625em] first:mt-0"
-                                citationThread={citationThreadContext}
-                                onCiteFile={openFileCitation}
-                                onOpenLocalFile={(url) => void openFilePart(url)}
-                              />
-                            {/each}
+                            <!-- The agent's closing statement is the turn's answer;
+                                 the running commentary it wrote between tool calls
+                                 lives in the trace above. -->
+                            <MarkdownView
+                              text={turnClosingText.text}
+                              citationThread={citationThreadContext}
+                              onCiteFile={openFileCitation}
+                              onOpenLocalFile={(url) => void openFilePart(url)}
+                            />
                           {/if}
                         </div>
                       {/if}
@@ -12471,7 +12529,7 @@
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg, turnProseText)}
+                                onclick={() => copyMessage(msg, turnClosingText?.text)}
                               >
                                 {#if copiedMessageId === msg.id}
                                   <Check size={12} class="text-success" />
@@ -12481,7 +12539,7 @@
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={turnProseText}
+                                markdown={turnClosingText?.text ?? messageText(msg)}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,

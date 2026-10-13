@@ -166,6 +166,8 @@ export type SearchProgressEvent =
 
 /** A vector persisted for one thread, with the content hash that produced it. */
 export interface ThreadEmbeddingRecord {
+  /** Raw corpus fingerprint, retained when optional summaries replace the vector. */
+  sourceHash?: string
   threadId: string
   contentHash: string
   dimensions: number

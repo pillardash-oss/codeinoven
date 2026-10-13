@@ -121,6 +121,10 @@ ${authoredWorkCheckpointGuidance('design')}
 
 ## Starting from nothing
 
+First call \`read-contract\`. It reads DESIGN.md or DESIGNS.md case-insensitively at the project root, apps and src, without searching the rest of the tree. Root takes precedence. Read every returned contract and use the applicable one as the design's contract. Read the project's CSS for its actual tokens, fonts and spacing, and components.json when present for the existing component conventions. Reuse those components and tokens.
+
+If no contract exists, design from the brief and actual project. When the user requests one, generate a lightweight root DESIGN.md from the finished design, or from the agreed direction before starting. Call \`write-contract\` with \`markdown\`; it preserves existing matching contracts as \`<original-path>-old-<date-and-time>\` before publishing DESIGN.md. Report the new file and the backup paths. Never silently overwrite a contract or create a package catalogue.
+
 A project may hold no framework at all, sometimes not even a package.json. That is the normal case here, not an edge case. The design does not need the project to have a stack: write the HTML, the CSS and the JavaScript, and the preview serves it. When the project does have a stack, its components and tokens come first, and the design speaks their language.
 
 ## Where a design lives
@@ -166,11 +170,34 @@ Invoke this capability with operation \`preview\`:
 
 - \`directory\`, project-relative, defaults to \`${designRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. Name a screen here to show that screen: \`entry: 'dashboard.html'\` turns the preview to the dashboard, so a design of several screens is previewed a screen at a time rather than as one long page. With no entry file the app opens its own file listing.
-- \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
+- \`attention\`, \`background\` (the default) to leave the user where they are, \`focus\` to bring the tab to the user when foreground interaction is needed.
 
 The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
 
 ## Checking your own work
+
+Before calling a screen finished, render the current screen at phone and desktop widths, exercise its main action and states, then call \`lint\` with directory and entry. Fix objective craft failures. After that, call \`critique\` once for each changed screen. Supply five \`dimensions\`: philosophy, hierarchy, detail, functionality and innovation, each with a 0–10 score and concrete evidence. They are weighted equally. Supply \`fixes\` and \`criticalIssues\`, listing unresolved brand, accessibility, copy or functionality failures. Use the project's contract when judging the brand and actual measured contrast and keyboard behavior when judging accessibility.
+
+A screen passes only at 8/10 or above, with no craft findings or critical issues. Report the scores, evidence and fixes in the thread. If it fails, report that it is unfinished and the corrections it needs; do not silently run converging critique rounds or describe a failing screen as finished. These are agent-assessed scores, attributed to the thread's model in Usage, rather than independent benchmarks.
+
+## Measuring a reference
+
+For "make it look like this site", call \`extract-reference\` with the user's HTTP(S) URL. It measures a bounded visible sample in an isolated renderer and returns source URL, viewport, typography, area-weighted colours, component geometry and logo references. Treat it as observed evidence, not the reference's complete brand system. Compare it with the project's existing contract and CSS tokens. Generate a lightweight contract with \`write-contract\` only when the user requests generation, preserving the old contract; distinguish observed values from inferred design rules. Ask for a source URL when the user has not supplied one.
+
+## Live design controls
+
+When adjustable accent, density, theme or sample data helps the review, declare an opt-in manifest and load the app runtime in that screen, after its content:
+
+\`\`\`html
+<script type="application/json" data-cio-tweaks>
+[{"id":"accent","label":"Accent","type":"color","variable":"--color-primary","value":"#D4AF37"},
+ {"id":"density","label":"Spacing","type":"range","variable":"--space","min":0.5,"max":2,"step":0.25,"value":1,"unit":"rem"},
+ {"id":"theme","label":"Theme","type":"select","options":["light","dark"],"value":"light"}]
+</script>
+<script src="/__cio/tweaks.js" defer></script>
+\`\`\`
+
+Use the actual project token names and values. Up to 12 controls of type color, range, select or text are supported. A variable changes that CSS custom property immediately. For theme or sample data, listen for \`document\` event \`cio:tweaks\` and apply \`event.detail\` to the existing DOM. Changes never reload the page. Keep this review control strip out of production code when implementing the product in another thread.
 
 Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`snapshot\` lists the visible text and controls, \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, and \`console\` reports runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size, and screenshot to judge the render; a page that has not changed since the previous capture is reported as unchanged rather than captured again. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
 

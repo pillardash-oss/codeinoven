@@ -167,7 +167,7 @@ export class NoteRepo {
   async listStickyNotesViaWorker(): Promise<StickyNoteSummary[]> {
     const result = await this.db.queryViaWorker(
       `SELECT id, title, icon_type, custom_svg, image_path, color, created_at, updated_at
-       FROM sticky_notes ORDER BY created_at ASC`,
+       FROM sticky_notes ORDER BY sort_order ASC, created_at ASC`,
       [],
       0
     )
@@ -183,23 +183,31 @@ export class NoteRepo {
     return row ? rowToStickyNote(row as unknown as StickyNoteRow) : null
   }
 
-  createStickyNote(note: StickyNote): void {
-    this.db.run(
-      `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, image_path, color, body, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?)`,
-      note.id,
-      note.title,
-      note.iconType,
-      note.customSvg,
-      note.imagePath,
-      note.color,
-      note.body,
-      note.createdAt,
-      note.updatedAt
+  async createStickyNote(note: StickyNote): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, image_path, color, body, sort_order, created_at, updated_at)
+       SELECT ?,?,?,?,?,?,?,COALESCE(MAX(sort_order), -1) + 1,?,? FROM sticky_notes`,
+      [
+        note.id,
+        note.title,
+        note.iconType,
+        note.customSvg,
+        note.imagePath,
+        note.color,
+        note.body,
+        note.createdAt,
+        note.updatedAt
+      ],
+      { allowPrimaryFallback: false }
     )
+    if (!result.ok) throw new Error(result.error ?? 'Could not create sticky note')
   }
 
-  updateStickyNoteAppearance(id: string, appearance: StickyNoteAppearance, updatedAt: number): void {
+  updateStickyNoteAppearance(
+    id: string,
+    appearance: StickyNoteAppearance,
+    updatedAt: number
+  ): void {
     this.db.run(
       `UPDATE sticky_notes SET title = ?, icon_type = ?, custom_svg = ?, image_path = ?, color = ?, updated_at = ?
        WHERE id = ?`,
@@ -214,10 +222,28 @@ export class NoteRepo {
   }
 
   saveStickyNoteBody(id: string, body: string, updatedAt: number): void {
-    this.db.run('UPDATE sticky_notes SET body = ?, updated_at = ? WHERE id = ?', body, updatedAt, id)
+    this.db.run(
+      'UPDATE sticky_notes SET body = ?, updated_at = ? WHERE id = ?',
+      body,
+      updatedAt,
+      id
+    )
   }
 
   deleteStickyNote(id: string): void {
     this.db.run('DELETE FROM sticky_notes WHERE id = ?', id)
+  }
+
+  /**
+   * Persist a tab strip's order. The ids are the full visible order the user
+   * dragged into place, so each one's position is its index in the list; ids the
+   * caller does not know about keep their previous order after the known set.
+   */
+  reorderStickyNotes(ids: readonly string[]): void {
+    this.db.transaction(() => {
+      ids.forEach((id, index) => {
+        this.db.run('UPDATE sticky_notes SET sort_order = ? WHERE id = ?', index, id)
+      })
+    })
   }
 }

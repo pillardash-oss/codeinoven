@@ -1937,6 +1937,11 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+    this.utilityOrchestration.setAppControlExecutor(
+      createAppControlExecutor(
+        executor ? (input, context) => executor('open', input, context) : undefined
+      )
+    )
   }
 
   /**

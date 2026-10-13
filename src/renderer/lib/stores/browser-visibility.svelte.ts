@@ -201,6 +201,11 @@ class BrowserVisibilityState {
     return true
   }
 
+  /** A tab can be mounted twice; only the winning surface owns its live editor. */
+  ownsSurface(tabId: string, surface: BrowserSurface): boolean {
+    return this.owningSurface === surface && this.claims.get(surface) === tabId
+  }
+
   /** Every native rectangle currently on screen, in viewport CSS pixels. */
   get onScreenFrames(): BrowserViewBounds[] {
     return [...this.nativeFrames.values()]

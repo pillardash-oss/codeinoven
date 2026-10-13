@@ -11,21 +11,23 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
   import { designScreenEntryFromUrl } from '$shared/design/screens'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
   import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
-  import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
+  import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import {
     browserSiteHost,
     browserSiteOrigin,
@@ -35,7 +37,6 @@
     openBrowserSiteMenu
   } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
@@ -160,14 +161,28 @@
     authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
   )
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
-  /** The comment currently open for editing on this tab, in composer order. */
-  let editingComment = $derived.by(() => {
-    const referenceId = browserInspector.editingId(tabId)
-    if (!referenceId) return null
-    const references = responseReferencesState.forThread(tabProjectId, tabThreadId)
-    const index = references.findIndex((reference) => reference.id === referenceId)
-    const reference = index < 0 ? null : references[index]
-    return reference ? { reference, number: index + 1 } : null
+  /**
+   * The comment bubble this tab has open, and what it takes to draw it.
+   *
+   * The bubble is the app's own component, placed beside the element in the app
+   * window's coordinates, so this is the element's short name (the first line of
+   * its descriptor) together with the place main resolved for the element and
+   * the comment already written.
+   */
+  const designComment = $derived.by(() => {
+    const editing = browserInspector.editingFor(tabId)
+    if (!editing) return null
+    const reference = responseReferencesState
+      .forThread(tabProjectId, tabThreadId)
+      .find((candidate) => candidate.id === editing.referenceId)
+    if (!reference) return null
+    const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
+    return {
+      referenceId: reference.id,
+      anchor: editing.anchor,
+      elementName: named || reference.label,
+      comment: reference.comment ?? ''
+    }
   })
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
@@ -343,6 +358,10 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
+    // Thread/design panels can be the first browser opened, without ever
+    // visiting the global Browser view. Wire the shared runtime before main
+    // publishes page state or inspector events for this surface.
+    await loadBrowser()
     const bounds = contentBounds()
     // Publish the frame before the visibility check: the store needs the current
     // rectangle even while the native view is detached, so the panel notices as
@@ -426,18 +445,19 @@
     browserInspector.toggle(tabId)
   }
 
-  /** Save the comment on the element being edited, and close its editor. */
-  function saveComment(referenceId: string, comment: string): void {
+  /** Persist the in-progress text, so a closed bubble cannot discard a draft. */
+  function draftDesignComment(referenceId: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+  }
+
+  /** Land the comment on the element it was written for, and close the bubble. */
+  function commitDesignComment(referenceId: string, comment: string): void {
     responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
     browserInspector.closeComment(tabId)
   }
 
-  function persistCommentDraft(referenceId: string, comment: string): void {
-    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
-  }
-
-  /** Remove a picked element from the chat, pins and all. */
-  function removeComment(referenceId: string): void {
+  /** Detach the element, and the comment it carries, from the conversation. */
+  function removeDesignComment(referenceId: string): void {
     responseReferencesState.setForThread(
       tabProjectId,
       tabThreadId,
@@ -744,16 +764,22 @@
       />
     {/if}
   </div>
-  {#if panelVisible && editingComment}
-    <BrowserCommentEditor
-      reference={editingComment.reference}
-      number={editingComment.number}
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      onDraftChange={(comment) => persistCommentDraft(editingComment.reference.id, comment)}
-      onDone={(comment) => saveComment(editingComment.reference.id, comment)}
-      onRemove={() => removeComment(editingComment.reference.id)}
-      onClose={() => browserInspector.closeComment(tabId)}
-    />
-  {/if}
+  <!--
+    The design element's comment bubble, drawn by the app.
+
+    It lives here so one host serves every comment this tab opens, and it is
+    positioned in the app window's own coordinates: the same bubble in the same
+    place whether the app window draws it or the shared native host moves it above
+    the page.
+  -->
+  <DesignElementCommentPopover
+    hostId={`design-comment-${surface}-${tabId}`}
+    comment={panelVisible && browserVisibility.ownsSurface(tabId, surface) ? designComment : null}
+    targetId={`design-comment-${tabId}-${designComment?.referenceId ?? 'none'}`}
+    scope={{ kind: 'project', projectId: tabProjectId }}
+    onDraftChange={draftDesignComment}
+    onDone={commitDesignComment}
+    onRemove={removeDesignComment}
+    onClose={() => browserInspector.closeComment(tabId)}
+  />
 </div>
