@@ -12,6 +12,7 @@ import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'
 import { resolveExecutablePath } from '../drivers/cli-environment'
+import { powershellLiteral, windowsEncodedCommand } from '../ovens/oven-remote-shell'
 
 type Platform = NodeJS.Platform
 
@@ -494,15 +495,32 @@ export class HarnessInstallService {
       throw new Error(`No npm package is configured for ${harnessName}.`)
     }
     if (platform === 'win32' && resolveExecutablePath('winget')) {
+      // A running shell keeps its old PATH after the Node installer updates
+      // Windows. Reload the persisted paths before resolving npm.cmd, and use
+      // an encoded script so cmd/PTY argument quoting cannot alter the chain.
+      const script = [
+        "$ErrorActionPreference = 'Stop'",
+        'try {',
+        "Write-Host 'Installing Node.js LTS. Approve the Windows permission dialog if it appears.'",
+        `& winget install --id ${NODE_WINGET_PACKAGE} --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity --silent`,
+        "if ($LASTEXITCODE -ne 0) { throw ('Node.js installation failed with exit code ' + $LASTEXITCODE) }",
+        "$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')",
+        "$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')",
+        "$env:Path = $env:Path + ';' + $machinePath + ';' + $userPath",
+        '$npm = (Get-Command npm.cmd -ErrorAction Stop).Source',
+        `Write-Host ${powershellLiteral(`Installing ${harnessName}...`)}`,
+        `& $npm install -g ${powershellLiteral(npmPackage)} --loglevel info`,
+        'exit $LASTEXITCODE',
+        '} catch {',
+        'Write-Host $_.Exception.Message',
+        'exit 1',
+        '}'
+      ].join('\n')
+      const [executable, ...args] = windowsEncodedCommand(script).split(' ')
       return {
         method: command.method,
-        command: 'cmd',
-        args: [
-          '/d',
-          '/s',
-          '/c',
-          `winget install ${NODE_WINGET_PACKAGE} --accept-source-agreements --accept-package-agreements && npm install -g ${npmPackage}`
-        ]
+        command: executable,
+        args
       }
     }
     if (platform === 'darwin' && resolveExecutablePath('brew')) {
