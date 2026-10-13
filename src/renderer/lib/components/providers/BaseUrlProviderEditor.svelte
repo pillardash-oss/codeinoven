@@ -1,12 +1,24 @@
 <script lang="ts">
-  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, RefreshCw, X } from '@lucide/svelte'
+  import {
+    ArrowLeft,
+    ClipboardPaste,
+    Copy,
+    Loader2,
+    Plus,
+    RefreshCw,
+    Server,
+    X
+  } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { APP_SLUG } from '$shared/brand'
+  import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import Switch from '../ui/Switch.svelte'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import {
@@ -132,6 +144,41 @@
   let { provider, harnesses, defaultHarnessId, onClose, onSaved, onBack }: Props = $props()
 
   /**
+   * Owns the panel's remembered placement, shared with the dock row below so a
+   * minimized editor reopens on the edge the user left it on.
+   */
+  const PANEL_STORAGE_KEY = `${APP_SLUG}.baseUrlProviderPanel.v1`
+
+  /**
+   * Whether the panel is collapsed into its dock chip.
+   *
+   * Docking is what makes this editor usable while the app stays in reach: the
+   * user can minimize it and watch the provider appear in the model picker, or
+   * copy a base URL from a document, instead of being held inside a blocking
+   * dialog. The draft lives here, so the panel stays mounted while docked and
+   * nothing typed is lost by collapsing it.
+   */
+  let docked = $state(false)
+
+  /**
+   * The app's modal focus rule: the first field the user would type into, else
+   * the primary action. `ui/Modal.svelte` applied this on open, so the panel
+   * claims it explicitly rather than letting the switch to `DockableModal`
+   * quietly drop it.
+   */
+  function claimPanelInitialFocus(panel: HTMLElement): boolean {
+    const field = findFirstTextField(panel)
+    if (field) {
+      field.focus()
+      return true
+    }
+    const action = findPanelPrimaryAction(panel)
+    if (!action) return false
+    action.focus()
+    return true
+  }
+
+  /**
    * Harnesses whose driver consumes custom base-URL providers. When the prop
    * is empty (e.g. the panel mounted before provider discovery finished), fall
    * back to the live provider store so the section is never blank.
@@ -154,6 +201,16 @@
   )
 
   let draft = $state<ProviderDraft>(createDraft())
+
+  /**
+   * What the dock chip says. The panel keeps the draft alive while it is
+   * collapsed, so the chip names the provider the user is working on instead of
+   * letting a bare "base URL provider" chip lose track of which of several
+   * drafts is docked.
+   */
+  const dockStatus = $derived(draft.name.trim() || 'Untitled provider')
+  const dockRestoreLabel = $derived(`Show the base URL provider form (${dockStatus})`)
+  const dockDismissLabel = $derived(`Close the base URL provider form (${dockStatus})`)
   let apiKeyConfigured = $derived(
     linkedProviders.some((p) => p.apiKeyConfigured === true || p.apiKeyRef !== undefined)
   )
@@ -558,12 +615,52 @@
   }
 </script>
 
-<Modal
+<DockableModal
   open
-  size="lg"
   title={provider ? 'Edit base URL provider' : 'Add base URL provider'}
+  minimized={docked}
+  closable={!baseUrlProviderStore.saving}
+  onMinimize={() => (docked = true)}
   {onClose}
+  storageKey={PANEL_STORAGE_KEY}
+  dragLabel="Drag to move the base URL provider panel"
+  defaultHeight={640}
+  claimInitialFocus={claimPanelInitialFocus}
 >
+  {#snippet dock()}
+    <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked base URL provider">
+      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+        <button
+          type="button"
+          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          title={dockRestoreLabel}
+          aria-label={dockRestoreLabel}
+          onclick={() => (docked = false)}
+        >
+          <Server size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <span class="flex min-w-0 flex-col">
+            <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
+              {provider ? 'Edit base URL provider' : 'Add base URL provider'}
+            </span>
+            <span class="max-w-40 truncate text-[0.625rem] leading-tight text-muted">
+              {dockStatus}
+            </span>
+          </span>
+        </button>
+        <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={dockDismissLabel}
+          title={dockDismissLabel}
+          onclick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </DockRow>
+  {/snippet}
+
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
       <div class="flex items-center gap-3">
@@ -571,6 +668,7 @@
           <button
             class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
             type="button"
+            data-modal-dismiss
             title="Back to Add provider"
             onclick={onBack}
           >
@@ -583,6 +681,7 @@
         <button
           class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
+          data-modal-dismiss
           onclick={onClose}
         >
           Cancel
@@ -590,6 +689,7 @@
         <button
           class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
+          data-modal-primary
           form="base-url-provider-form"
           disabled={baseUrlProviderStore.saving}
         >
@@ -918,4 +1018,4 @@
       {/each}
     </div>
   </form>
-</Modal>
+</DockableModal>

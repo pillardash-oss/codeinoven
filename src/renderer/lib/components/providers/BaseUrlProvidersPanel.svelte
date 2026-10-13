@@ -13,11 +13,11 @@
     X
   } from '@lucide/svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import Modal from '../ui/Modal.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
-  import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
 
   interface Props {
     providers: ProviderConnectionInfo[]
@@ -26,8 +26,6 @@
   /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
   let { providers }: Props = $props()
 
-  let editorOpen = $state(false)
-  let editingProvider = $state<BaseUrlProvider | null>(null)
   let editorError = $state('')
   /** The full linked group (one record per harness) queued for deletion. */
   let deleteTarget = $state<BaseUrlProvider[] | null>(null)
@@ -104,25 +102,23 @@
     return providers.find((provider) => provider.id === id)?.name ?? id
   }
 
+  /**
+   * Both actions open the app-wide editor panel (`BaseUrlProviderHost`) instead
+   * of a dialog owned by this panel. The editor is dockable, so a docked chip
+   * has to survive the user leaving Settings, and the panel keeps its own draft
+   *   mounting it per-open is what makes the initial provider authoritative.
+   */
   function openCreate(): void {
-    editingProvider = null
     editorError = ''
-    editorOpen = true
+    baseUrlProviderFlow.open({ provider: null, defaultHarnessId: defaultCreateHarnessId })
   }
 
   function openEdit(group: BaseUrlProvider[]): void {
-    editingProvider = group[0] ?? null
     editorError = ''
-    editorOpen = true
-  }
-
-  function closeEditor(): void {
-    editorOpen = false
-    editingProvider = null
-  }
-
-  function handleSaved(): void {
-    closeEditor()
+    baseUrlProviderFlow.open({
+      provider: group[0] ?? null,
+      defaultHarnessId: group[0]?.harnessId ?? defaultCreateHarnessId
+    })
   }
 
   /** Removes every harness-linked record in the group. Stops at the first
@@ -311,16 +307,6 @@
   </div>
 </section>
 
-{#if editorOpen}
-  <BaseUrlProviderEditor
-    provider={editingProvider}
-    harnesses={baseUrlHarnesses}
-    defaultHarnessId={defaultCreateHarnessId}
-    onClose={closeEditor}
-    onSaved={handleSaved}
-  />
-{/if}
-
 <Modal
   open={deleteTarget !== null}
   title="Delete base URL provider"
@@ -348,7 +334,9 @@
   {/snippet}
 
   {#if editorError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{editorError}</p>
+    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {editorError}
+    </p>
   {/if}
   <div class="flex gap-2 text-sm text-muted">
     <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
@@ -357,7 +345,7 @@
       {#if deleteTarget && deleteTarget.length > 1}
         It's linked to {deleteTarget.length} harnesses ({deleteTarget
           .map((p) => providerName(p.harnessId))
-          .join(', ')})   all of them will be removed. Its
+          .join(', ')}) all of them will be removed. Its
       {:else}
         Its
       {/if}
