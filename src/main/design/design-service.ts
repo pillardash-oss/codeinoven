@@ -17,6 +17,7 @@ import type {
   DesignScreen,
   DesignScreenShot,
   DesignThumbnail,
+  ProjectWorkState,
   ScreenCanvasState,
   ThreadDesignCurrent,
   ThreadDesignState
@@ -122,6 +123,17 @@ function requireId(value: unknown, label: string): string {
 }
 
 /**
+ * The kind a caller may force, or undefined to let the thread decide.
+ *
+ * A value that is neither kind is treated as absent rather than throwing: the
+ * argument is the project board's own override, and a board without it is the
+ * ordinary thread-scoped board.
+ */
+function optionalKind(value: unknown): AuthoredWorkKind | undefined {
+  return value === 'design' || value === 'video' ? value : undefined
+}
+
+/**
  * Validation for a file path inside an authored-work folder.
  *
  * Longer than an id because a nested page is a real path, and NUL-free because the
@@ -207,26 +219,34 @@ export class DesignService {
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
     )
+    // Every folder of authored work one project holds, by kind. Asked by the
+    // right rail before any thread is chosen, so the project's designs and videos
+    // are reachable whether or not a session is open.
+    ipcMain.handle('design:projectWork', async (_event, rawProjectId) =>
+      this.projectWork(requireId(rawProjectId, 'project id'))
+    )
     ipcMain.handle(
       'design:open',
-      async (_event, rawProjectId, rawThreadId, rawDirectory, rawEntry, rawReveal) =>
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawEntry, rawReveal, rawKind) =>
         this.open(
           requireId(rawProjectId, 'project id'),
           requireId(rawThreadId, 'thread id'),
           rawDirectory,
           rawEntry,
-          rawReveal === true
+          rawReveal === true,
+          optionalKind(rawKind)
         )
     )
     ipcMain.handle(
       'design:thumbnail',
-      async (_event, rawProjectId, rawThreadId, rawDirectory, rawEntry, rawWidth) =>
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawEntry, rawWidth, rawKind) =>
         this.thumbnail(
           requireId(rawProjectId, 'project id'),
           requireId(rawThreadId, 'thread id'),
           rawDirectory,
           rawEntry,
-          typeof rawWidth === 'number' ? rawWidth : 480
+          typeof rawWidth === 'number' ? rawWidth : 480,
+          optionalKind(rawKind)
         )
     )
     ipcMain.handle(
@@ -617,10 +637,16 @@ export class DesignService {
     threadId: string,
     directory: unknown,
     entry: unknown,
-    reveal: boolean
+    reveal: boolean,
+    /**
+     * The kind to open as, when the caller is the project board rather than a
+     * session. A forced kind is not recorded against the thread: the board, not
+     * the thread, chose it, so the thread is not retitled by a look.
+     */
+    forcedKind?: AuthoredWorkKind
   ): Promise<DesignOpenResult> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
-    const kind = await this.resolveKind(threadId)
+    const kind = forcedKind ?? (await this.resolveKind(threadId))
     const result = await this.serveWork({
       kind,
       projectPath: project.path,
@@ -632,14 +658,16 @@ export class DesignService {
       reveal,
       tab: kind === 'design' ? 'screen' : 'thread'
     })
-    this.designs.upsert({
-      projectId,
-      threadId,
-      directory: result.directory,
-      entry: result.entry,
-      kind
-    })
-    await this.rememberThreadKind(threadId, kind)
+    if (forcedKind === undefined) {
+      this.designs.upsert({
+        projectId,
+        threadId,
+        directory: result.directory,
+        entry: result.entry,
+        kind
+      })
+      await this.rememberThreadKind(threadId, kind)
+    }
     if (!result.tabId) {
       throw new Error('The work opened without a browser tab to show it in.')
     }
@@ -649,6 +677,29 @@ export class DesignService {
       url: result.url,
       tabId: result.tabId
     }
+  }
+
+  /**
+   * Every design and composition folder one project holds, by kind.
+   *
+   * The right rail asks this before any thread is chosen, so the project's work
+   * is reachable without hunting for the thread that made it. The two roots are
+   * read straight and the recorded creators merged in, exactly as the board's own
+   * listing does, so a folder the app has never previewed still appears.
+   */
+  async projectWork(projectId: string): Promise<ProjectWorkState> {
+    const project = await new ProjectRepo(this.options.database).getViaWorker(projectId)
+    if (!project || project.source !== 'local' || !project.path) {
+      return { projectId, design: [], video: [] }
+    }
+    const path = project.path
+    const origins = await this.designs.originsViaWorker(projectId)
+    const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
+      (await this.listWorkFolders(path, currentWorkRoot(kind))).map((item) => ({
+        ...item,
+        creatorThreadId: origins.get(item.directory) ?? null
+      }))
+    return { projectId, design: await list('design'), video: await list('video') }
   }
 
   /**
@@ -667,11 +718,13 @@ export class DesignService {
     threadId: string,
     directory: unknown,
     entry: unknown,
-    width: number
+    width: number,
+    /** The project board's kind override; see `open`. */
+    forcedKind?: AuthoredWorkKind
   ): Promise<DesignThumbnail> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const browser = this.options.browser()
-    const kind = await this.resolveKind(threadId)
+    const kind = forcedKind ?? (await this.resolveKind(threadId))
     const result = await this.serveWork({
       kind,
       projectPath: project.path,

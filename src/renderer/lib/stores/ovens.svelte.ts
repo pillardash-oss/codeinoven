@@ -90,6 +90,18 @@ class OvenIdentityStore {
   }
 
   /**
+   * One Oven's full record, or null for this device or an unread registry.
+   *
+   * Callers that need what an identity cannot carry   an Oven's connection, so
+   * a path handed to an agent can say how to reach it   ask here rather than
+   * reading the registry a second time.
+   */
+  record(ovenId: string | undefined | null): Oven | null {
+    if (!ovenId || ovenId === LOCAL_OVEN_ID) return null
+    return this.#state?.ovens.find((candidate) => candidate.id === ovenId) ?? null
+  }
+
+  /**
    * Read one Oven's harness inventory once.
    *
    * Main keeps a persisted copy per Oven and refreshes it on every probe, so
