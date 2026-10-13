@@ -22,9 +22,13 @@ import { SearchModelDownloader } from './embedding-model-downloader'
 import type { EmbeddingRuntime } from './llama-embedding-runtime'
 import { LlamaEmbeddingRuntime } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
-import { ThreadEmbeddingIndex } from './thread-embedding-index'
+import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
-import { ThreadSearchSummaries, type SearchSummaryExecutor } from './thread-search-summary'
+import {
+  ThreadSearchSummaries,
+  type SearchSummaryExecutor,
+  type SearchSummaryThread
+} from './thread-search-summary'
 
 /** Interval between light staleness sweeps while intent search is enabled. */
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
@@ -77,17 +81,28 @@ export class SearchService {
   private sweepController: AbortController | null = null
   private indexingError: string | null = null
   private indexingDetail: SearchIndexStatus['progress'] = null
+  private readonly summaries: ThreadSearchSummaries
+  private readonly summaryJobs = new Map<
+    string,
+    {
+      thread: SearchSummaryThread
+      contentHash: string
+      model: InstalledSearchModel
+      generation: number
+    }
+  >()
+  private summaryWorker: Promise<void> | null = null
+  private summaryController = new AbortController()
+  private summaryDetail: SearchIndexStatus['progress'] = null
+  private generation = 0
 
   constructor(
     private readonly db: Database,
     private readonly host: SearchServiceHost,
     private readonly storage: SearchStorage = new SearchStorage()
   ) {
-    this.index = new ThreadEmbeddingIndex(
-      db,
-      storage.threadIndexPath,
-      new ThreadSearchSummaries(db, storage.summaryDirectory, host.summarizeThread)
-    )
+    this.summaries = new ThreadSearchSummaries(db, storage.summaryDirectory, host.summarizeThread)
+    this.index = new ThreadEmbeddingIndex(db, storage.threadIndexPath, this.summaries)
     this.downloader = new SearchModelDownloader(storage, {
       catalog: () => this.catalog,
       emitDownload: (artifactId, download) => this.onDownload(artifactId, download),
@@ -188,7 +203,10 @@ export class SearchService {
   async setEnabled(enabled: boolean): Promise<void> {
     this.intentReady = false
     this.settings.enabled = enabled
-    if (!enabled) this.sweepController?.abort()
+    if (!enabled) {
+      this.sweepController?.abort()
+      this.cancelSummaries()
+    }
     await this.saveSettings()
     if (enabled) {
       if (!this.settings.activeModelId) {
@@ -290,6 +308,7 @@ export class SearchService {
   async dispose(): Promise<void> {
     this.disposed = true
     this.sweepController?.abort()
+    this.cancelSummaries()
     if (this.periodicTimer) clearInterval(this.periodicTimer)
     this.periodicTimer = null
     this.downloader.abortAll()
@@ -331,7 +350,7 @@ export class SearchService {
       dimensions: model?.dimensions ?? 0,
       lastIndexedAt: this.index.lastIndexedAt,
       error: this.indexingError,
-      progress: this.indexingDetail
+      progress: this.indexing ? this.indexingDetail : this.summaryDetail
     }
   }
 
@@ -476,6 +495,7 @@ export class SearchService {
   }
 
   private async stopSweep(): Promise<void> {
+    this.cancelSummaries()
     this.sweepController?.abort()
     await this.sweep
   }
@@ -492,6 +512,7 @@ export class SearchService {
     this.sweepController = controller
     try {
       const runtime = await this.ensureRuntime(model)
+      const documentChars = Math.min(262_144, (await runtime.contextBudget()) * 8)
       const result = await this.index.sweep(
         async (texts) => {
           const vectors = await runtime.embed(texts, controller.signal)
@@ -499,10 +520,20 @@ export class SearchService {
           return vectors
         },
         {
-          modelSignature: `summary-v1:${model.id}:${model.dimensions}`,
+          modelSignature: `raw-v3:${model.id}:${model.dimensions}:${this.settings.contextTokens}`,
           documentPrefix: model.documentPrefix,
           expectedDimensions: model.dimensions,
           signal: controller.signal,
+          fitsContext: (text) => runtime.fitsContext(text, controller.signal),
+          documentChars,
+          onOversized: (thread, contentHash) => {
+            this.summaryJobs.set(thread.id, {
+              thread,
+              contentHash,
+              model,
+              generation: this.generation
+            })
+          },
           onProgress: ({ total, pending }) => {
             this.sweepTotals = { total, pending }
             this.emitStatus()
@@ -536,6 +567,80 @@ export class SearchService {
       this.indexing = false
       this.indexingDetail = null
       this.emitStatus()
+      this.startSummaries()
+    }
+  }
+
+  private cancelSummaries(): void {
+    this.generation += 1
+    this.summaryJobs.clear()
+    this.summaryController.abort()
+    this.summaryController = new AbortController()
+    this.summaryDetail = null
+  }
+
+  /** Optional refinements never hold up the raw/truncated indexing sweep. */
+  private startSummaries(): void {
+    if (
+      this.disposed ||
+      !this.settings.enabled ||
+      this.summaryWorker ||
+      this.summaryJobs.size === 0
+    )
+      return
+    this.summaryWorker = this.drainSummaries().finally(() => {
+      this.summaryWorker = null
+      this.summaryDetail = null
+      this.emitStatus()
+      if (this.summaryJobs.size > 0) this.startSummaries()
+    })
+  }
+
+  private async drainSummaries(): Promise<void> {
+    while (!this.disposed && this.settings.enabled && this.summaryJobs.size > 0) {
+      const entry = this.summaryJobs.entries().next().value
+      if (!entry) return
+      const [id, job] = entry
+      this.summaryJobs.delete(id)
+      if (job.generation !== this.generation) continue
+      const signal = this.summaryController.signal
+      try {
+        this.summaryDetail = {
+          threadTitle: job.thread.title.slice(0, 100),
+          stage: 'summarizing',
+          completedChunks: 0
+        }
+        this.emitStatus()
+        const summary = await this.summaries.get(job.thread, signal)
+        if (signal.aborted || job.generation !== this.generation) continue
+        this.summaryDetail = {
+          threadTitle: job.thread.title.slice(0, 100),
+          stage: 'embedding',
+          completedChunks: 1
+        }
+        this.emitStatus()
+        const runtime = await this.ensureRuntime(job.model)
+        const vector = await this.embedOne(
+          runtime,
+          composeDocument(job.model.documentPrefix, job.thread.title, summary),
+          signal
+        )
+        if (signal.aborted || job.generation !== this.generation) continue
+        await this.index.applySummary(
+          job.thread,
+          job.contentHash,
+          vector,
+          summary,
+          `raw-v3:${job.model.id}:${job.model.dimensions}:${this.settings.contextTokens}`
+        )
+      } catch (error) {
+        if (!signal.aborted)
+          Logger.dev('Optional search summary failed; keeping the truncated embedding.', {
+            threadId: id,
+            error: error instanceof Error ? error.message : String(error)
+          })
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
   }
 

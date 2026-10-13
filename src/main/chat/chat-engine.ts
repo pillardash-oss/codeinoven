@@ -52,6 +52,7 @@ import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
+import { budgetSearchSummaryPrompt, validateSearchSummary } from '../search/thread-search-summary'
 import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { toPosixPath } from '../../lib/paths'
@@ -6303,6 +6304,26 @@ export class ChatEngine {
       purpose: 'Thread search summary',
       prompt: input.prompt,
       timeoutMs: 45_000,
+      preparePrompt: (candidate) => {
+        const reported = this.modelContextWindow(
+          input.projectId,
+          candidate.providerId,
+          candidate.modelId
+        )
+        const selectedWindow =
+          candidate.modelId === settings.modelId && candidate.providerId === settings.providerId
+            ? settings.contextWindow
+            : undefined
+        const window =
+          reported && selectedWindow
+            ? Math.min(reported, selectedWindow)
+            : (reported ?? selectedWindow)
+        // An unknown window gets a conservative small request, never the
+        // application's large default conversation budget.
+        const inputBudget = window && window > 0 ? Math.max(0, window - 4096) : 1024
+        return budgetSearchSummaryPrompt(input.prompt, inputBudget)
+      },
+      validateResponse: validateSearchSummary,
       ...(auxiliary ? { candidates: auxiliary.candidates } : {})
     })
     input.signal.throwIfAborted()

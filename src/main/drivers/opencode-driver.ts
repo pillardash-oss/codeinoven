@@ -385,7 +385,9 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
     candidates: Array<{ providerId: string; modelId: string }>,
     promptText: string,
     timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
-    attempts?: CheapModelAttempt[]
+    attempts?: CheapModelAttempt[],
+    preparePrompt?: CheapModelRequest['preparePrompt'],
+    validateResponse?: CheapModelRequest['validateResponse']
   ): Promise<string | null> {
     const attemptList = [
       ...candidates,
@@ -401,6 +403,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
     for (const candidate of attemptList) {
       let isolated: IsolatedHandle | null = null
       try {
+        const candidatePrompt = preparePrompt ? preparePrompt(candidate) : promptText
         isolated = await this.createIsolatedSession(projectPath, purpose)
         this.titleSessions.add(isolated.sessionId)
         await this.sendPrompt(
@@ -415,14 +418,15 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
               inferenceMode: 'normal',
               permissionLevel: 'auto_review'
             },
-            text: promptText,
+            text: candidatePrompt,
             attachments: [],
             readOnly: true,
             allowedTools: []
           },
           isolated
         )
-        const result = await this.waitForTitleResult(isolated, timeoutMs)
+        const raw = await this.waitForTitleResult(isolated, timeoutMs)
+        const result = raw !== null && validateResponse ? validateResponse(raw) : raw
         attempts?.push({
           providerId: candidate.providerId,
           modelId: candidate.modelId,
@@ -496,7 +500,9 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       candidates,
       request.prompt,
       request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS,
-      attempts
+      attempts,
+      request.preparePrompt,
+      request.validateResponse
     )
     return { text, attempts }
   }

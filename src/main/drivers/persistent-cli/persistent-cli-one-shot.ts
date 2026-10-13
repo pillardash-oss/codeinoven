@@ -123,7 +123,8 @@ export async function runOneShotWithCandidates(
   candidates: TitleModelCandidate[],
   promptText: string,
   validate: (raw: string) => string | null,
-  timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
+  timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
+  preparePrompt?: (candidate: { providerId?: string; modelId?: string }) => string
 ): Promise<OneShotOutcome> {
   const fallback = {
     providerId: options.settings.providerId,
@@ -152,6 +153,13 @@ export async function runOneShotWithCandidates(
       }
       host.quotaBlocks.delete(candidateKey)
     }
+    let candidatePrompt: string
+    try {
+      candidatePrompt = preparePrompt ? preparePrompt(candidate) : promptText
+    } catch (error) {
+      accounted.push(buildTitleAttempt(index + 1, candidate, false, describeTitleFailure(error)))
+      continue
+    }
     const sessionId = await host.createSession(projectPath, 'Auxiliary one-shot')
     host.titleTurns.register(sessionId)
     const completion = host.titleTurns.wait(sessionId, host.driverName, timeoutMs)
@@ -169,7 +177,7 @@ export async function runOneShotWithCandidates(
             inferenceMode: 'normal',
             permissionLevel: 'auto_review'
           },
-          text: promptText,
+          text: candidatePrompt,
           attachments: [],
           readOnly: true,
           allowedTools: []

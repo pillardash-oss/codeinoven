@@ -241,15 +241,13 @@
       </div>
       <p class="mt-3 flex h-4 gap-2 text-xs text-muted" role="status">
         <span class="min-w-0 truncate" title={status?.progress?.threadTitle}>
-          {#if status?.indexing && status.progress}
+          {#if status?.progress}
             {status.progress.stage === 'summarizing' ? 'Summarizing' : 'Embedding'}
             {status.progress.threadTitle}
           {/if}
         </span>
-        {#if status?.indexing && status.progress?.stage === 'summarizing'}
-          <span class="shrink-0 tabular-nums"
-            >{status.progress.completedChunks} chunks completed</span
-          >
+        {#if status?.progress?.stage === 'summarizing'}
+          <span class="shrink-0">Optional summary</span>
         {/if}
       </p>
       <p class="mt-3 text-xs leading-relaxed text-dimmed">

@@ -1004,7 +1004,9 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       candidates,
       request.prompt,
       request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS,
-      attempts
+      attempts,
+      request.preparePrompt,
+      request.validateResponse
     )
     return { text, attempts }
   }
@@ -1033,7 +1035,9 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     candidates: Array<{ providerId: string; modelId: string }>,
     promptText: string,
     timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
-    attempts?: CheapModelAttempt[]
+    attempts?: CheapModelAttempt[],
+    preparePrompt?: CheapModelRequest['preparePrompt'],
+    validateResponse?: CheapModelRequest['validateResponse']
   ): Promise<string | null> {
     const attemptList = [
       ...candidates,
@@ -1049,6 +1053,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     for (const candidate of attemptList) {
       let isolated: IsolatedHandle | null = null
       try {
+        const candidatePrompt = preparePrompt ? preparePrompt(candidate) : promptText
         isolated = await this.createIsolatedSession(projectPath, purpose)
         await this.sendPrompt(
           projectPath,
@@ -1062,14 +1067,15 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
               inferenceMode: 'normal',
               permissionLevel: 'auto_review'
             },
-            text: promptText,
+            text: candidatePrompt,
             attachments: [],
             readOnly: true,
             allowedTools: []
           },
           isolated
         )
-        const result = await this.waitForAssistantText(isolated, isolated.sessionId, timeoutMs)
+        const raw = await this.waitForAssistantText(isolated, isolated.sessionId, timeoutMs)
+        const result = raw !== null && validateResponse ? validateResponse(raw) : raw
         attempts?.push({
           providerId: candidate.providerId,
           modelId: candidate.modelId,

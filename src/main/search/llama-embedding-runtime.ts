@@ -16,6 +16,9 @@ export interface EmbeddingRuntime {
   isAvailable(): Promise<boolean>
   /** Embed a batch of texts. Order of the result matches the input order. */
   embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]>
+  /** Check the model's actual tokenizer and slot window, including special tokens. */
+  fitsContext(text: string, signal: AbortSignal): Promise<boolean>
+  contextBudget(): Promise<number>
   dispose(): Promise<void>
 }
 
@@ -48,6 +51,18 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
 
   async isAvailable(): Promise<boolean> {
     return this.host.llamaServerPath() !== null
+  }
+
+  async fitsContext(text: string, signal: AbortSignal): Promise<boolean> {
+    signal.throwIfAborted()
+    await this.ensureServer()
+    const tokens = await this.tokenize(text, signal)
+    return tokens.length < this.tokenBudget
+  }
+
+  async contextBudget(): Promise<number> {
+    await this.ensureServer()
+    return this.tokenBudget - 1
   }
 
   async embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]> {
