@@ -321,58 +321,81 @@ export function pendingTurnAnchorIndex(messages: readonly AgentMessage[]): numbe
 type TurnTextPart = Extract<AgentPart, { type: 'text' }>
 
 /**
- * Every prose part of the turn ending at `endMsgIndex`, in stream order.
+ * The agent's closing statement for the turn ending at `endMsgIndex`: the last
+ * non-empty text part of the turn.
  *
- * The agent's text is what it is saying to the reader, so the transcript
- * renders all of it as one readable message. The working trace owns only the
- * machinery behind that message (reasoning, tool calls, sub-agents, files);
- * routing a paragraph into a collapsed trace just because the agent called
- * another tool after writing it buries the agent's own words. Empty text
- * placeholders emitted at each step start are dropped so a step boundary can
- * never render as a blank paragraph.
+ * The text inside one turn is two different things. The statement the agent
+ * leaves for the reader is the one it stops on; everything it writes between
+ * tool calls ("Let me check the running instances") is commentary on work still
+ * in progress. Only the closing statement is the transcript's answer, so a turn
+ * reads as one message instead of a monologue, and each turn's statement is
+ * what replaces the one before it. The commentary stays in the working trace at
+ * its stream position, where it reads as the log of the work behind the answer,
+ * and empty text placeholders emitted at a step start are never a statement.
+ *
+ * Because the closing statement is the turn's last text, it is also the text an
+ * agent leaves behind when it hands the turn back with a question: whatever it
+ * said last is what it is saying to the reader now.
  *
  * Activity-only user messages (compaction notices, sub-agent envelopes) are
  * transparent to the turn span, exactly as they are for the trace.
  */
-export function getTurnProseParts(
+export function getTurnFinalText(
   messages: readonly AgentMessage[],
   endMsgIndex: number
-): TurnTextPart[] {
+): TurnTextPart | null {
   const turnStart = turnStartIndexForEnd(messages, endMsgIndex)
-  const parts: TurnTextPart[] = []
+  let closing: TurnTextPart | null = null
   for (let i = turnStart; i <= endMsgIndex; i++) {
-    if (i >= messages.length) break
     const message = messages[i]
-    if (message?.inlineArtifact) continue
-    if (!message) break
+    if (!message || message.inlineArtifact) continue
     if (message.role === 'user') {
       if (isActivityOnlyUserMessage(message)) continue
       break
     }
     for (const part of message.parts) {
-      if (part.type === 'text' && part.text.trim().length > 0) parts.push(part)
+      if (part.type === 'text' && part.text.trim().length > 0) closing = part
     }
   }
-  return parts
+  return closing
+}
+
+/** Parts that only mark where a step began or ended. They can follow a question
+ *  without changing what the turn ended on. */
+function isTurnBookkeepingPart(part: AgentPart): boolean {
+  return part.type === 'step-start' || part.type === 'step-finish'
 }
 
 /**
- * Find the last text part in a turn ending at the given message index.
- * Activity-only user messages are transparent to the turn span.
+ * True when the turn ending at `endMsgIndex` stops on the harness's question
+ * tool: the agent is not working any more, it is waiting for the reader's
+ * answer.
+ *
+ * The run stays flagged busy for as long as the question is pending, so the
+ * busy flag alone would hold the agent's closing statement inside the trace
+ * while it sits on screen unanswered. This is the evidence that the agent has
+ * handed the turn back, and the statement belongs in the transcript with it.
  */
-export function getTurnFinalText(
+export function turnEndsOnQuestion(
   messages: readonly AgentMessage[],
   endMsgIndex: number
-): AgentPart | null {
-  const parts = getTurnProseParts(messages, endMsgIndex)
-  return parts[parts.length - 1] ?? null
-}
-
-/** One turn's prose as the single message a reader sees and copies. */
-export function getTurnProseText(messages: readonly AgentMessage[], endMsgIndex: number): string {
-  return getTurnProseParts(messages, endMsgIndex)
-    .map((part) => part.text.trim())
-    .join('\n\n')
+): boolean {
+  const turnStart = turnStartIndexForEnd(messages, endMsgIndex)
+  for (let i = endMsgIndex; i >= turnStart; i--) {
+    const message = messages[i]
+    if (!message || message.inlineArtifact) continue
+    if (message.role === 'user') {
+      if (isActivityOnlyUserMessage(message)) continue
+      break
+    }
+    for (let j = message.parts.length - 1; j >= 0; j--) {
+      const part = message.parts[j]
+      if (!part || isTurnBookkeepingPart(part)) continue
+      if (part.type === 'text' && part.text.trim().length === 0) continue
+      return part.type === 'question'
+    }
+  }
+  return false
 }
 
 /**
@@ -383,10 +406,11 @@ export function getTurnProseText(messages: readonly AgentMessage[], endMsgIndex:
  * context must stay in front of it, while the body has to follow the log's
  * own order.
  *
- * Text parts other than the turn's final one stay in `body` because the auditor
- * transcript renders its own commentary from the trace. Every other surface
- * drops text from the trace and renders it as the agent's prose instead (see
- * `getTurnProseParts`), so prose is never buried by a collapsed trace.
+ * Only the turn's closing text leaves the trace for the transcript (see
+ * `getTurnFinalText`); every other text part stays in `body`, where it reads as
+ * the commentary behind the answer. The auditor transcript renders its own
+ * commentary from the trace, so its closing text stays in until the report card
+ * replaces it.
  */
 export function getTurnWorkingParts(
   messages: readonly AgentMessage[],
@@ -463,11 +487,18 @@ export function hasRenderableWorkingParts(parts: readonly AgentPart[]): boolean 
 /**
  * Merge durable stream-log parts (freshest) with mirror parts, deduped by id
  * and preserving the preferred list's order (see `mergeWorkingParts`).
+ *
+ * `holdsClosingText` is true while the trace owns the turn's closing statement
+ * because the transcript is not showing it yet: the live text streams inside
+ * the trace, and dropping it here would blank the very text the reader is
+ * watching. Once the statement is promoted to the transcript, its trace copy is
+ * dropped so the two surfaces never show the same sentence twice.
  */
 export function streamWorkingPartsForTurn(
   streamParts: readonly AgentPart[],
   index: TranscriptIndex,
-  startMsgIndex: number
+  startMsgIndex: number,
+  holdsClosingText = false
 ): AgentPart[] {
   const turnEndIndex = index.turnEnd[startMsgIndex] ?? -1
   const finalTextId = turnEndIndex >= 0 ? (index.finalTextId[turnEndIndex] ?? '') : ''
@@ -481,7 +512,14 @@ export function streamWorkingPartsForTurn(
   //   the previous form walked every earlier message on every render.
   return streamParts.filter((part) => {
     if (part.type === 'question' || isTodoToolPart(part)) return false
-    if (part.type === 'text' && finalTextId !== '' && finalTextId === part.id) return false
+    if (
+      !holdsClosingText &&
+      part.type === 'text' &&
+      finalTextId !== '' &&
+      finalTextId === part.id
+    ) {
+      return false
+    }
     const carriedAt = index.partIndexById.get(part.id)
     return carriedAt === undefined || carriedAt >= startMsgIndex
   })

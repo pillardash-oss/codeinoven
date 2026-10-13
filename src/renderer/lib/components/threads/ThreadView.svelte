@@ -314,8 +314,7 @@
   import {
     auditReportForTurn,
     buildTranscriptIndex,
-    getTurnProseParts,
-    getTurnProseText,
+    getTurnFinalText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
@@ -324,6 +323,7 @@
     pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
+    turnEndsOnQuestion,
     turnStartPromptsBefore,
     type SubagentPart
   } from './thread-turn-parts'
@@ -771,6 +771,26 @@
     )
     return [...leading, ...body]
   })
+  /**
+   * Whether the turn ending at `endIndex` may surface its closing statement in
+   * the transcript (see `getTurnFinalText`) instead of holding it in the working
+   * trace for the whole run.
+   *
+   * A turn that is over always may, and so does every turn older than the
+   * newest one. The newest turn may only once the agent has handed the floor
+   * back: it closed on a Codex `final_answer`, or it asked the reader a question
+   * and is sitting on the answer. Until then the newest text is the agent
+   * talking about work still in flight, so it stays in the trace with that work
+   * rather than flashing through the reading position and jumping back out.
+   */
+  function closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
+    const closing = getTurnFinalText(messages, endIndex)
+    if (!closing) return false
+    if (closing.phase === 'final_answer') return true
+    if (!conversationBusy || !isLastTurnEnd) return true
+    return turnEndsOnQuestion(messages, endIndex)
+  }
+
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
@@ -12273,10 +12293,26 @@
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
-                    {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
+                    {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
+                    {@const turnClosingText = getTurnFinalText(messages, turnEndIndex)}
+                    {@const turnClosingVisible = closingStatementVisible(
+                      turnEndIndex,
+                      turnEndIndex === messages.length - 1
+                    )}
+                    {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+                    {@const turnWorkingParts = getTurnWorkingParts(
+                      messages,
+                      absIndex,
+                      traceHoldsClosingText
+                    )}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
+                      : streamWorkingPartsForTurn(
+                          streamParts,
+                          transcriptIndex,
+                          absIndex,
+                          traceHoldsClosingText
+                        )}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
@@ -12298,10 +12334,13 @@
                         collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
-                      : // Everyone else reads the agent's text as prose in the
-                        // transcript: the trace holds only the machinery behind it,
-                        // so an explanation is never folded away by a later tool call.
-                        collectedTurnParts.filter((part) => part.type !== 'text')}
+                      : // The transcript is showing the agent's closing statement, so
+                        // the trace must not carry a second copy of that one part.
+                        // Every other text part stays: it is the commentary that
+                        // explains the work behind the answer.
+                        turnClosingVisible && turnClosingText
+                        ? collectedTurnParts.filter((part) => part.id !== turnClosingText.id)
+                        : collectedTurnParts}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
@@ -12402,9 +12441,9 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnProseParts = getTurnProseParts(messages, absIndex)}
-                      {@const turnProseText = getTurnProseText(messages, absIndex)}
-                      {#if turnProseParts.length > 0}
+                      {@const turnClosingText = getTurnFinalText(messages, absIndex)}
+                      {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
                           speechController.playback.messageId === msg.id &&
@@ -12431,18 +12470,15 @@
                               textClass="text-[0.8125rem]"
                             />
                           {:else}
-                            <!-- One block per streamed part: only the part still
-                                 growing re-renders, so a long turn never re-parses
-                                 its whole prose on every delta. -->
-                            {#each turnProseParts as part (part.id)}
-                              <MarkdownView
-                                text={part.text}
-                                class="mt-[0.625em] first:mt-0"
-                                citationThread={citationThreadContext}
-                                onCiteFile={openFileCitation}
-                                onOpenLocalFile={(url) => void openFilePart(url)}
-                              />
-                            {/each}
+                            <!-- The agent's closing statement is the turn's answer;
+                                 the running commentary it wrote between tool calls
+                                 lives in the trace above. -->
+                            <MarkdownView
+                              text={turnClosingText.text}
+                              citationThread={citationThreadContext}
+                              onCiteFile={openFileCitation}
+                              onOpenLocalFile={(url) => void openFilePart(url)}
+                            />
                           {/if}
                         </div>
                       {/if}
@@ -12471,7 +12507,7 @@
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg, turnProseText)}
+                                onclick={() => copyMessage(msg, turnClosingText?.text)}
                               >
                                 {#if copiedMessageId === msg.id}
                                   <Check size={12} class="text-success" />
@@ -12481,7 +12517,7 @@
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={turnProseText}
+                                markdown={turnClosingText?.text ?? messageText(msg)}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,
