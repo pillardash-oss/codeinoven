@@ -582,7 +582,14 @@ export class DesignService {
     const thread = await this.threads.getViaWorker(threadId)
     const kind = thread?.authoredWorkKind ?? current?.kind ?? 'design'
     const root = currentWorkRoot(kind)
-    const items = await this.listWorkFolders(storedProject.path, root)
+    // The listing reads disk, which knows nothing about authorship; the recorded
+    // creators are merged in here so the board can badge a folder as the viewed
+    // thread's own and send the user back to the thread that first wrote it.
+    const origins = await this.designs.originsViaWorker(projectId)
+    const items = (await this.listWorkFolders(storedProject.path, root)).map((item) => ({
+      ...item,
+      creatorThreadId: origins.get(item.directory) ?? null
+    }))
     return {
       projectId,
       threadId,

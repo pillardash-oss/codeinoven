@@ -42,6 +42,7 @@ import {
 import { runHistoryAppend } from './repositories/history-repo'
 import type { AgentMessage, UserMessageSummary } from '../../lib/types'
 import { buildBoundedQuery } from './bounded-query'
+import { backfillDesignOrigins } from './design-origins'
 
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
@@ -874,6 +875,7 @@ export class Database {
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
       this.migrateDesignRevisionMetadata(connection)
+      backfillDesignOrigins(connection)
     })()
   }
 

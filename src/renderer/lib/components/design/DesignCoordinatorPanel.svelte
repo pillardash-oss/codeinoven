@@ -16,6 +16,7 @@
     Presentation,
     RefreshCw,
     RotateCcw,
+    Target,
     Volume2,
     VolumeX,
     X
@@ -27,6 +28,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
@@ -199,14 +201,6 @@
 
   /** Every folder of this kind the project holds, newest first. */
   let items = $derived(designState?.items ?? [])
-  /**
-   * The folder this thread itself last previewed.
-   *
-   * Every other design in the list belongs to another thread of the project, so
-   * this is the one the dropdown badges as current: it is what the thread is
-   * working on, whichever design the board happens to be showing.
-   */
-  let threadDesignDirectory = $derived(designState?.current?.directory ?? '')
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
@@ -227,6 +221,33 @@
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
+  /**
+   * The thread that created the design in front, or an empty string when none is
+   * recorded.
+   *
+   * A design is created by one thread, and the board can send the user there, so
+   * this is the id the reveal control acts on. A folder that predates origin
+   * recording, or whose creating thread has been deleted, has none, and the
+   * control stays off rather than guessing.
+   */
+  let selectedCreatorThreadId = $derived(selectedItem?.creatorThreadId ?? '')
+  /**
+   * Whether there is another thread to reveal.
+   *
+   * False when no creator is recorded and false when the creator is this very
+   * thread: a control that would leave the user where they already are is not a
+   * control, so it stays disabled with a title that says why.
+   */
+  let canRevealCreator = $derived(
+    selectedCreatorThreadId !== '' && selectedCreatorThreadId !== threadId
+  )
+  /** What the reveal control says, whether it acts or explains why it cannot. */
+  let revealLabel = $derived.by(() => {
+    const name = selectedName === '' ? nounTitle : selectedName
+    if (canRevealCreator) return `Reveal the thread that created ${name}`
+    if (selectedCreatorThreadId === threadId) return `This thread created ${name}`
+    return `No thread is recorded as the creator of ${name}`
+  })
 
   /**
    * The two entries that are not screens, and the screens themselves.
@@ -420,6 +441,19 @@
   /** Pick a design from the dropdown, which the radio group reports as a string. */
   function handleDesignChange(directory: string): void {
     selectDesign(directory)
+  }
+
+  /**
+   * Show the thread that created the design in front.
+   *
+   * A design is often iterated in a later thread than the one that made it, and
+   * the user asks "where did this come from?" from the board. Revealing the
+   * creator opens that thread in its owning view, the same way an 'Open thread'
+   * notification does, so the question is answered without a search.
+   */
+  async function revealCreator(): Promise<void> {
+    if (!canRevealCreator) return
+    await openThreadById(projectId, selectedCreatorThreadId)
   }
 
   /** Serve the work and bring its tab to the user. Main reveals it; the
@@ -761,7 +795,7 @@
                   >
                     <WorkIcon size={12} class="shrink-0 text-dimmed" />
                     <span class="min-w-0 flex-1 truncate">{item.name}</span>
-                    {#if item.directory === threadDesignDirectory}
+                    {#if item.creatorThreadId === threadId}
                       <span
                         class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
                       >
@@ -823,6 +857,16 @@
             {/if}
           </button>
         {/if}
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={!canRevealCreator}
+          title={revealLabel}
+          aria-label={revealLabel}
+          onclick={() => void revealCreator()}
+        >
+          <Target size={12} />
+        </button>
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen

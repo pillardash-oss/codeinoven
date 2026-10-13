@@ -1,6 +1,5 @@
-import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { workspaceState } from '$lib/stores/workspace.svelte'
+import { openThreadById } from '$lib/threads/open-thread-by-id'
 
 /**
  * Open the memory panel on the proposal a toast announced, from wherever that
@@ -19,22 +18,8 @@ import { workspaceState } from '$lib/stores/workspace.svelte'
  * renderer alone, and both callers share this one implementation.
  */
 export async function openMemoryProposal(projectId: string, threadId: string): Promise<void> {
-  try {
-    const selected = workspaceState.selectedThread
-    if (selected?.projectId !== projectId || selected.id !== threadId) {
-      const [project, thread] = await Promise.all([
-        invoke('project:get', projectId),
-        invoke('thread:get', projectId, threadId)
-      ])
-      if (thread) {
-        const openFromNotification = workspaceState.openThreadFromNotification
-        if (project && openFromNotification) await openFromNotification(thread, project)
-        else workspaceState.openThread(thread, project)
-      }
-    }
-  } catch {
-    // A deleted thread or a failed lookup must not dead-end the button: the panel
-    // still opens for the project the proposal came from.
-  }
+  // A deleted thread or a failed lookup has already been swallowed by the helper,
+  // and the panel still opens for the project the proposal came from.
+  await openThreadById(projectId, threadId)
   contextSidebarState.openMemory(projectId, threadId, 'proposed')
 }

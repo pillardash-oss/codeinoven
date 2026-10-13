@@ -1048,6 +1048,32 @@ CREATE TABLE IF NOT EXISTS thread_designs (
 CREATE INDEX IF NOT EXISTS idx_thread_designs_project ON thread_designs(project_id);`
 
 /**
+ * Which thread created each authored-work folder.
+ *
+ * `thread_designs` says which folder a thread is showing *now*, and re-points that
+ * row every time the thread previews somewhere else, so it cannot answer who wrote
+ * a folder: a thread that created a design and moved on leaves no trace of it. This
+ * table is the durable answer. It is written the first time any thread previews a
+ * folder and never overwritten, so the creator survives the thread moving on, the
+ * folder being previewed by another thread, and a restart.
+ *
+ * The key is the folder, not the thread: a folder is created once and iterated by
+ * whoever opens it, and its origin is the first thread to show it. The foreign key
+ * makes the row follow the creating thread's deletion instead of pointing at a
+ * thread the user can no longer be sent to.
+ */
+const DESIGN_ORIGINS_SQL = `
+CREATE TABLE IF NOT EXISTS design_origins (
+  project_id TEXT NOT NULL,
+  directory  TEXT NOT NULL,
+  thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, directory)
+);
+
+CREATE INDEX IF NOT EXISTS idx_design_origins_thread ON design_origins(thread_id);`
+
+/**
  * What a thread decided about the experts its design or video session may use.
  *
  * The card that asks this question is shown once, before the first send of a
@@ -1164,6 +1190,7 @@ export const DATABASE_SCHEMA_SQL = [
   BROWSER_TAB_NOTES_SQL,
   STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
+  DESIGN_ORIGINS_SQL,
   THREAD_EXPERTS_SQL,
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,

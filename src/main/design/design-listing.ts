@@ -63,7 +63,10 @@ export async function listProjectWorkFolders(
       name: entry.name,
       hasEntry: indexFile?.isFile() === true,
       createdAt: stamps.createdAt,
-      updatedAt: stamps.updatedAt
+      updatedAt: stamps.updatedAt,
+      // Disk knows nothing about which thread wrote the folder; main merges the
+      // recorded creator in after the listing.
+      creatorThreadId: null
     })
   }
   return folders.sort((left, right) => right.updatedAt - left.updatedAt)
