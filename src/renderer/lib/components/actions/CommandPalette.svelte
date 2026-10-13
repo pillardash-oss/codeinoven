@@ -497,6 +497,8 @@
 {/snippet}
 
 {#if mode === 'dialog'}
+  <!-- Keep the query in one document: projected header changes can move the
+       focused input and interrupt typing before the native paint restores it. -->
   <Modal
     {open}
     {title}
@@ -504,6 +506,7 @@
     placement="palette"
     size="lg"
     chrome={false}
+    nativePresentation={false}
     onEscapeKeydown={handleEscapeKeydown}
     onCloseAutoFocus={(event) => {
       if (onRestoreFocus?.()) event.preventDefault()
