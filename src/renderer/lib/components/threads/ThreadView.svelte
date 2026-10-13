@@ -4001,6 +4001,18 @@
     return isAtLatest(el)
   }
 
+  /** The id of the first message in the mounted window   the reader's anchor
+   *  the moment they leave the tail. Every pin MUST use this and never a
+   *  tail-relative count: `mountedCount` and the turn-aligned window start can
+   *  disagree (a long turn spans more messages than one page), and pinning to
+   *  `messages.length - mountedCount` then points BELOW the real window start,
+   *  which silently unmounts messages the reader can see and collapses the
+   *  window toward the tail. That collapse is what threw the reader back to the
+   *  latest message when they clicked "Load earlier messages". */
+  function mountedWindowStartId(): string | null {
+    return messages[mountedStartIndex]?.id ?? null
+  }
+
   function onScroll(): void {
     if (!scrollEl) return
     const away = !isAtBottom(scrollEl)
@@ -4010,7 +4022,7 @@
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
-      windowStartId = visibleMessages[0]?.id ?? null
+      windowStartId = mountedWindowStartId()
     } else if (!away && userScrolledAway) {
       windowStartId = null
     }
@@ -4031,9 +4043,15 @@
     // button is the only trigger for the conversation-level history fetch.
   }
 
-  /** Release the tail-follow lock synchronously when the user starts scrolling up. */
+  /** Release the tail-follow lock synchronously when the user starts scrolling up.
+   *  A wheel tick arrives before the scroll it causes, so it also has to pin the
+   *  window here: setting `userScrolledAway` alone suppressed onScroll's own pin
+   *  (that branch is guarded on the flag being false), leaving the window
+   *  tail-relative until the reader happened to reload history. */
   function onWheel(event: WheelEvent): void {
-    if (event.deltaY < 0) userScrolledAway = true
+    if (event.deltaY >= 0) return
+    userScrolledAway = true
+    windowStartId ??= mountedWindowStartId()
   }
 
   let loadingOlderMessages = $state(false)
@@ -4049,8 +4067,12 @@
     userScrolledAway = true
     // Pin the window before anything prepends   with an anchor pinned, the
     // mounted content cannot change no matter what merges behind it, so the
-    // fetch loop needs no scroll compensation at all.
-    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
+    // fetch loop needs no scroll compensation at all. The pin is the window's
+    // CURRENT start, never a tail-relative count: the two differ on a long
+    // turn, and a count-based pin would start the window later than what is
+    // already mounted and destroy the reader's viewport before the fetch even
+    // begins.
+    windowStartId ??= mountedWindowStartId()
     try {
       // One click loads THREE turn-aligned pages: the store usually already
       // holds some of them, so fetch only while it does not   each fetch is a
