@@ -340,18 +340,26 @@ export interface BrowserScrollbarTheme {
 /**
  * What the injected inspector reports back to the app.
  *
- * `pick` is a fresh element selection, `open` is the user clicking an existing
- * pin to read or edit its comment, and `closed` is inspect mode ending on its
- * own (Escape, or the script giving up) so the surface showing the tab can
- * reset its toggle.
+ * `pick` is a fresh element selection. `open` is the user clicking an existing
+ * pin to read or edit its comment. `draft` is the in-progress text as it is
+ * typed, so the composer chip follows the page; `done` commits it; `remove`
+ * detaches the reference; `close` is the user dismissing the card without
+ * discarding what was typed. `closed` is inspect mode ending on its own
+ * (Escape, or the script giving up) so the surface showing the tab can reset
+ * its toggle.
  *
- * There is deliberately no `comment` event. A comment is written in the app's
- * own editor, which is the component the rest of the application already uses
- * for the same job, so the page never owns comment text and never reports one.
+ * The comment card is drawn by the page because a browser page is a native
+ * view the app cannot float DOM above. Main forwards each event unchanged and
+ * the renderer owns the reference list, so the page reports text rather than
+ * storing it.
  */
 export type BrowserInspectorEvent =
   | { kind: 'pick'; id: string; target: BrowserInspectorTarget }
   | { kind: 'open'; id: string }
+  | { kind: 'draft'; id: string; comment: string }
+  | { kind: 'done'; id: string; comment: string }
+  | { kind: 'remove'; id: string }
+  | { kind: 'close'; id: string }
   | { kind: 'closed' }
 
 /** DevTools open/closed state for a browser tab. */

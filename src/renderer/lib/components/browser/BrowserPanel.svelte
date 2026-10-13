@@ -17,7 +17,6 @@
   import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
-  import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -35,7 +34,6 @@
     openBrowserSiteMenu
   } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
@@ -160,15 +158,6 @@
     authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
   )
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
-  /** The comment currently open for editing on this tab, in composer order. */
-  let editingComment = $derived.by(() => {
-    const referenceId = browserInspector.editingId(tabId)
-    if (!referenceId) return null
-    const references = responseReferencesState.forThread(tabProjectId, tabThreadId)
-    const index = references.findIndex((reference) => reference.id === referenceId)
-    const reference = index < 0 ? null : references[index]
-    return reference ? { reference, number: index + 1 } : null
-  })
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
@@ -424,28 +413,6 @@
   function toggleInspect(): void {
     if (!inspectArmed && !pageState.design) return
     browserInspector.toggle(tabId)
-  }
-
-  /** Save the comment on the element being edited, and close its editor. */
-  function saveComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
-    browserInspector.closeComment(tabId)
-  }
-
-  function persistCommentDraft(referenceId: string, comment: string): void {
-    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
-  }
-
-  /** Remove a picked element from the chat, pins and all. */
-  function removeComment(referenceId: string): void {
-    responseReferencesState.setForThread(
-      tabProjectId,
-      tabThreadId,
-      responseReferencesState
-        .forThread(tabProjectId, tabThreadId)
-        .filter((reference) => reference.id !== referenceId)
-    )
-    browserInspector.closeComment(tabId)
   }
 
   // Publish the pin set whenever the reference list changes, so a pick, a
@@ -744,16 +711,4 @@
       />
     {/if}
   </div>
-  {#if panelVisible && editingComment}
-    <BrowserCommentEditor
-      reference={editingComment.reference}
-      number={editingComment.number}
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      onDraftChange={(comment) => persistCommentDraft(editingComment.reference.id, comment)}
-      onDone={(comment) => saveComment(editingComment.reference.id, comment)}
-      onRemove={() => removeComment(editingComment.reference.id)}
-      onClose={() => browserInspector.closeComment(tabId)}
-    />
-  {/if}
 </div>
