@@ -9,6 +9,9 @@
     Server,
     X
   } from '@lucide/svelte'
+  import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
+  import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -159,6 +162,44 @@
    * nothing typed is lost by collapsing it.
    */
   let docked = $state(false)
+  let iconDataUrl = $state<string | undefined>()
+  let readingIcon = $state(false)
+  let submitting = $state(false)
+  let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
+
+  async function chooseIcon(event: Event): Promise<void> {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    readingIcon = true
+    try {
+      if (!isCustomVendorIconType(file.type) || file.size > MAX_CUSTOM_VENDOR_ICON_BYTES) {
+        throw new Error('Choose an SVG, PNG, JPEG, WebP or GIF of at most 256 KiB.')
+      }
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () =>
+          typeof reader.result === 'string'
+            ? resolve(reader.result)
+            : reject(new Error('Cannot read image.'))
+        reader.onerror = () => reject(new Error('Cannot read image.'))
+        reader.readAsDataURL(file)
+      })
+      const image = new Image()
+      image.src = data
+      await image.decode()
+      if (image.naturalWidth > 2048 || image.naturalHeight > 2048) {
+        throw new Error('Choose an icon no larger than 2048 × 2048.')
+      }
+      iconDataUrl = data
+    } catch (error) {
+      reportError(error, 'Failed to read vendor icon.')
+    } finally {
+      readingIcon = false
+    }
+  }
 
   /**
    * The app's modal focus rule: the first field the user would type into, else
@@ -467,14 +508,19 @@
    */
   async function save(event: SubmitEvent): Promise<void> {
     event.preventDefault()
+    if (readingIcon || submitting) return
     if (draft.harnessIds.length === 0) {
       toast.error('Select at least one harness.')
       return
     }
+    const wasEditing = draft.id !== null
+    submitting = true
     try {
       const headers = parseHeaders(draft.headers)
       const models = await resolveModelsToSave(headers)
-      const currentHarnessIds = linkedProviders.map((p) => p.harnessId)
+      const currentHarnessIds = baseUrlProviderStore.providers
+        .filter((candidate) => candidate.id === draft.id)
+        .map((candidate) => candidate.harnessId)
       const toKeep = draft.harnessIds.filter((id) => currentHarnessIds.includes(id))
       const toRemove = currentHarnessIds.filter((id) => !draft.harnessIds.includes(id))
       const toAdd = draft.harnessIds.filter((id) => !currentHarnessIds.includes(id))
@@ -519,13 +565,17 @@
         }
         saved = await baseUrlProviderStore.create(input)
         groupId = saved.id
+        draft.id = saved.id
       }
 
       if (!saved) throw new Error('No harness selected to save.')
-      toast.success(draft.id ? 'Provider updated.' : 'Provider created.')
+      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl)
+      toast.success(wasEditing ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
       reportError(saveError, 'Failed to save provider.')
+    } finally {
+      submitting = false
     }
   }
 
@@ -619,7 +669,7 @@
   open
   title={provider ? 'Edit base URL provider' : 'Add base URL provider'}
   minimized={docked}
-  closable={!baseUrlProviderStore.saving}
+  closable={!baseUrlProviderStore.saving && !submitting}
   onMinimize={() => (docked = true)}
   {onClose}
   storageKey={PANEL_STORAGE_KEY}
@@ -653,6 +703,7 @@
           class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dockDismissLabel}
           title={dockDismissLabel}
+          disabled={submitting}
           onclick={onClose}
         >
           <X size={14} />
@@ -670,6 +721,7 @@
             type="button"
             data-modal-dismiss
             title="Back to Add provider"
+            disabled={submitting}
             onclick={onBack}
           >
             <ArrowLeft size={13} /> Back
@@ -682,6 +734,7 @@
           class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
           data-modal-dismiss
+          disabled={submitting}
           onclick={onClose}
         >
           Cancel
@@ -691,9 +744,12 @@
           type="submit"
           data-modal-primary
           form="base-url-provider-form"
-          disabled={baseUrlProviderStore.saving}
+          disabled={baseUrlProviderStore.saving || readingIcon || submitting}
         >
-          {#if baseUrlProviderStore.saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if baseUrlProviderStore.saving || submitting}<Loader2
+              size={13}
+              class="animate-spin"
+            />{/if}
           Save provider
         </button>
       </div>
@@ -755,6 +811,28 @@
           </button>
         </span>
       </div>
+    </div>
+
+    <div class="flex items-center gap-3 rounded-lg border bg-surface p-3">
+      <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
+        {#if iconPreview}
+          <img src={iconPreview} alt="Vendor icon preview" class="h-10 w-10 object-contain" />
+        {:else}
+          <VendorIcon name="CodeInOven" size={32} />
+        {/if}
+      </div>
+      <label class="min-w-0 flex-1 space-y-1 text-xs font-medium">
+        <span>Vendor icon</span>
+        <input
+          type="file"
+          accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
+          class="block w-full text-xs text-dimmed"
+          disabled={readingIcon || baseUrlProviderStore.saving || submitting}
+          onchange={(event) => void chooseIcon(event)}
+        />
+        <span class="block text-dimmed">SVG or image, up to 256 KiB. Saved with this provider.</span
+        >
+      </label>
     </div>
 
     <label class="block space-y-1 text-xs font-medium">

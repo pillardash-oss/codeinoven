@@ -1,12 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
   import { getVendorIconSvg } from './registry'
 
   interface Props {
     /** Vendor display name (e.g. "OpenAI", "Mistral AI"). */
     name: string
     /** Vendor/provider id when known (e.g. "cio-my-provider"). Ids are tried
-     *  before the display name so custom CodeInOven providers always render
-     *  the CodeInOven mark regardless of their display name. */
+     *  before the display name. Saved custom artwork overrides bundled marks. */
     id?: string
     /** Square icon edge in pixels. */
     size?: number
@@ -14,6 +15,11 @@
   }
 
   let { name, id, size = 14, class: className = '' }: Props = $props()
+  onMount(() => {
+    void customVendorIcons.load()
+  })
+  let customIcon = $derived(customVendorIcons.get(id))
+  let failedIcon = $state<string | undefined>()
   let svg = $derived(getVendorIconSvg(id) ?? getVendorIconSvg(name))
   let monogram = $derived(name.trim().charAt(0).toUpperCase() || '?')
 </script>
@@ -31,7 +37,16 @@
   style:font-size={`${size}px`}
   aria-hidden="true"
 >
-  {#if svg}
+  {#if customIcon && customIcon !== failedIcon}
+    <img
+      src={customIcon}
+      alt=""
+      class="h-full w-full object-contain"
+      onerror={() => {
+        failedIcon = customIcon
+      }}
+    />
+  {:else if svg}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -- vendor icons are trusted bundled SVGs -->
     {@html svg}
   {:else}
