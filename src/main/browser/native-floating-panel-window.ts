@@ -237,8 +237,20 @@ export class NativeFloatingPanelWindow {
   private synchronize(panel: Panel): void {
     const child = panel.window
     if (!child || child.isDestroyed() || this.parent.isDestroyed()) return
-    child.setBounds(this.screenBounds(panel.bounds), false)
-    child.webContents.setZoomFactor(this.parentContents.getZoomFactor())
+    // Hover mutations can republish unchanged geometry. Avoid resetting the
+    // native window and Chromium zoom underneath the header's CSS cursor.
+    const bounds = this.screenBounds(panel.bounds)
+    const current = child.getBounds()
+    if (
+      current.x !== bounds.x ||
+      current.y !== bounds.y ||
+      current.width !== bounds.width ||
+      current.height !== bounds.height
+    ) {
+      child.setBounds(bounds, false)
+    }
+    const zoom = this.parentContents.getZoomFactor()
+    if (child.webContents.getZoomFactor() !== zoom) child.webContents.setZoomFactor(zoom)
     if (panel.visible && this.parent.isVisible() && !this.parent.isMinimized()) {
       if (!child.isVisible()) child.showInactive()
     } else if (child.isVisible()) child.hide()
