@@ -184,13 +184,9 @@ export class NoteRepo {
   }
 
   createStickyNote(note: StickyNote): void {
-    const nextSortOrder =
-      this.db.get<{ next: number }>(
-        'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM sticky_notes'
-      )?.next ?? 0
     this.db.run(
       `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, image_path, color, body, sort_order, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?)`,
+       SELECT ?,?,?,?,?,?,?,COALESCE(MAX(sort_order), -1) + 1,?,? FROM sticky_notes`,
       note.id,
       note.title,
       note.iconType,
@@ -198,7 +194,6 @@ export class NoteRepo {
       note.imagePath,
       note.color,
       note.body,
-      nextSortOrder,
       note.createdAt,
       note.updatedAt
     )
