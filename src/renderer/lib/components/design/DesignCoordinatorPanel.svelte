@@ -693,7 +693,7 @@
     {@const onScreen = !video && screen.entry === selected.entry}
     {@const copyLabel = video
       ? `Copy the path of this ${noun}`
-      : `Copy the path of the ${noun} screen ${screen.name}`}
+      : `Copy ${noun} screen: ${screen.name}`}
     <ContextMenu.Root>
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
         <button
