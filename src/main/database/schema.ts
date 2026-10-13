@@ -1059,8 +1059,9 @@ CREATE INDEX IF NOT EXISTS idx_thread_designs_project ON thread_designs(project_
  *
  * The key is the folder, not the thread: a folder is created once and iterated by
  * whoever opens it, and its origin is the first thread to show it. The foreign key
- * makes the row follow the creating thread's deletion instead of pointing at a
- * thread the user can no longer be sent to.
+ * makes the row follow the creating thread's deletion, so a folder whose creator is
+ * gone carries no origin at all, which the board reports as an unavailable thread
+ * rather than offering to reveal a thread that no longer exists.
  */
 const DESIGN_ORIGINS_SQL = `
 CREATE TABLE IF NOT EXISTS design_origins (

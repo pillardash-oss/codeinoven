@@ -246,7 +246,7 @@
     const name = selectedName === '' ? nounTitle : selectedName
     if (canRevealCreator) return `Reveal the thread that created ${name}`
     if (selectedCreatorThreadId === threadId) return `This thread created ${name}`
-    return `No thread is recorded as the creator of ${name}`
+    return 'Thread unavailable'
   })
 
   /**
