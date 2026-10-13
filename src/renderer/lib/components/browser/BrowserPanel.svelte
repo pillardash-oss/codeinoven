@@ -11,6 +11,7 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
   import { designScreenEntryFromUrl } from '$shared/design/screens'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
@@ -357,6 +358,10 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
+    // Thread/design panels can be the first browser opened, without ever
+    // visiting the global Browser view. Wire the shared runtime before main
+    // publishes page state or inspector events for this surface.
+    await loadBrowser()
     const bounds = contentBounds()
     // Publish the frame before the visibility check: the store needs the current
     // rectangle even while the native view is detached, so the panel notices as
