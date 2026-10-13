@@ -50,10 +50,15 @@
    */
   function tableColumnResize(node: HTMLDivElement): (() => void) | undefined {
     // Every input is read before the early return, so the attachment re-runs when
-    // the rendered table is replaced or either toggle flips.
+    // the rendered table is replaced, either toggle flips, or the full screen
+    // reader opens and closes. That last one matters: both surfaces carry a
+    // session over the same widths, and closing the reader must rebuild the table
+    // behind it from the widths the reader just set rather than leave it showing
+    // the ones it had before.
     const rendered = html
     const resizable = unlocked
     const fitToWidth = wrapped
+    void expanded
     if (!rendered || !resizable) return
     const table = node.querySelector('table')
     if (!(table instanceof HTMLTableElement)) return
@@ -151,7 +156,10 @@
 </div>
 
 <!-- The same table, given the whole window so a grid too wide for the panel can
-     be read (and scrolled, or wrapped) without the message body around it. -->
+     be read (and scrolled, wrapped, or re-measured column by column) without the
+     message body around it. The padlock is here too: a column too narrow to read
+     is exactly the table the reader opened in the first place, and the widths it
+     produces are the same widths the table behind the modal is drawn with. -->
 <Modal
   open={expanded}
   title="Table"
@@ -162,9 +170,16 @@
 >
   <div class="markdown-body md-table-fullscreen">
     <div class="md-table-controls" role="group" aria-label="Table controls">
-      {@render tableControls(false, false)}
+      {@render tableControls(true, false)}
     </div>
-    <div class={['md-table-wrap md-table-fullscreen-scroll', wrapped && 'md-table-fit']}>
+    <div
+      class={[
+        'md-table-wrap md-table-fullscreen-scroll',
+        wrapped && 'md-table-fit',
+        unlocked && 'md-table-resizable'
+      ]}
+      {@attach tableColumnResize}
+    >
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
       {@html html}
     </div>
