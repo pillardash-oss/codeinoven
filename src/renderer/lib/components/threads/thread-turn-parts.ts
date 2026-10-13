@@ -318,16 +318,28 @@ export function pendingTurnAnchorIndex(messages: readonly AgentMessage[]): numbe
   return -1
 }
 
+type TurnTextPart = Extract<AgentPart, { type: 'text' }>
+
 /**
- * Find the last text part in a turn ending at the given message index.
- * Activity-only user messages are transparent to the turn span.
+ * Every prose part of the turn ending at `endMsgIndex`, in stream order.
+ *
+ * The agent's text is what it is saying to the reader, so the transcript
+ * renders all of it as one readable message. The working trace owns only the
+ * machinery behind that message (reasoning, tool calls, sub-agents, files);
+ * routing a paragraph into a collapsed trace just because the agent called
+ * another tool after writing it buries the agent's own words. Empty text
+ * placeholders emitted at each step start are dropped so a step boundary can
+ * never render as a blank paragraph.
+ *
+ * Activity-only user messages (compaction notices, sub-agent envelopes) are
+ * transparent to the turn span, exactly as they are for the trace.
  */
-export function getTurnFinalText(
+export function getTurnProseParts(
   messages: readonly AgentMessage[],
   endMsgIndex: number
-): AgentPart | null {
+): TurnTextPart[] {
   const turnStart = turnStartIndexForEnd(messages, endMsgIndex)
-  let finalText: AgentPart | null = null
+  const parts: TurnTextPart[] = []
   for (let i = turnStart; i <= endMsgIndex; i++) {
     if (i >= messages.length) break
     const message = messages[i]
@@ -338,10 +350,29 @@ export function getTurnFinalText(
       break
     }
     for (const part of message.parts) {
-      if (part.type === 'text') finalText = part
+      if (part.type === 'text' && part.text.trim().length > 0) parts.push(part)
     }
   }
-  return finalText
+  return parts
+}
+
+/**
+ * Find the last text part in a turn ending at the given message index.
+ * Activity-only user messages are transparent to the turn span.
+ */
+export function getTurnFinalText(
+  messages: readonly AgentMessage[],
+  endMsgIndex: number
+): AgentPart | null {
+  const parts = getTurnProseParts(messages, endMsgIndex)
+  return parts[parts.length - 1] ?? null
+}
+
+/** One turn's prose as the single message a reader sees and copies. */
+export function getTurnProseText(messages: readonly AgentMessage[], endMsgIndex: number): string {
+  return getTurnProseParts(messages, endMsgIndex)
+    .map((part) => part.text.trim())
+    .join('\n\n')
 }
 
 /**
@@ -350,7 +381,12 @@ export function getTurnFinalText(
  * precede the prompt, `body` holds the turn itself. They are kept apart
  * because the durable stream window can only supply the turn body: the leading
  * context must stay in front of it, while the body has to follow the log's
- * own order. Only the final text is rendered below the trace.
+ * own order.
+ *
+ * Text parts other than the turn's final one stay in `body` because the auditor
+ * transcript renders its own commentary from the trace. Every other surface
+ * drops text from the trace and renders it as the agent's prose instead (see
+ * `getTurnProseParts`), so prose is never buried by a collapsed trace.
  */
 export function getTurnWorkingParts(
   messages: readonly AgentMessage[],
