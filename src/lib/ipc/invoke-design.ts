@@ -1,4 +1,5 @@
 import type {
+  AuthoredWorkKind,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -6,6 +7,7 @@ import type {
   DesignRevisionCause,
   DesignScreenShot,
   DesignThumbnail,
+  ProjectWorkState,
   ScreenCanvasState,
   ThreadDesignState,
   WorkRootState
@@ -29,15 +31,32 @@ export const invokeDesignContract = {
    * thread's single tab, because its board holds one canvas.
    */
   'design:open': {} as Contract<
-    [projectId: string, threadId: string, directory: string, entry: string | null, reveal: boolean],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      entry: string | null,
+      reveal: boolean,
+      kind?: AuthoredWorkKind
+    ],
     DesignOpenResult
   >,
   /**
    * Capture the design as a small picture for the coordinator. Serves the
    * folder and loads it in the thread's tab when it is not already showing.
+   *
+   * `kind` is the project board's override: it opens a kind the thread is not in
+   * without recording that thread as being in it.
    */
   'design:thumbnail': {} as Contract<
-    [projectId: string, threadId: string, directory: string, entry: string | null, width: number],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      entry: string | null,
+      width: number,
+      kind?: AuthoredWorkKind
+    ],
     DesignThumbnail
   >,
   /**
@@ -112,5 +131,14 @@ export const invokeDesignContract = {
   'design:historyRestoreFile': {} as Contract<
     [projectId: string, threadId: string, directory: string, path: string, revisionId: string],
     DesignHistoryRestoreFileResult
-  >
+  >,
+  /**
+   * Every design and composition folder one project holds, by kind.
+   *
+   * Asked by the right rail before any thread is chosen, so the project-level
+   * design and video entries are there whether or not a session is open and
+   * whether or not the thread on screen has anything to do with the work. The
+   * two roots are read straight, so this needs no thread and no session.
+   */
+  'design:projectWork': {} as Contract<[projectId: string], ProjectWorkState>
 }

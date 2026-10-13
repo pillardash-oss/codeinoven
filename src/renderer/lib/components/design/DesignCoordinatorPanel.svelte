@@ -3,6 +3,7 @@
   import {
     Check,
     ChevronDown,
+    Copy,
     Ellipsis,
     Film,
     Frame,
@@ -21,12 +22,16 @@
     VolumeX,
     X
   } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import { toast } from 'svelte-sonner'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import { copyText } from '$lib/copy-text'
+  import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -79,9 +84,16 @@
   interface Props {
     projectId: string
     threadId: string
+    /**
+     * The kind this board shows, when the project's rail opened it rather than a
+     * session. A session board reads its kind from the thread; the rail's entry
+     * offers the project's designs or videos on whatever thread the user is on,
+     * so it sets the kind here.
+     */
+    kind?: AuthoredWorkKind
   }
 
-  let { projectId, threadId }: Props = $props()
+  let { projectId, threadId, kind: forcedKind }: Props = $props()
 
   /**
    * How wide a screen is pictured at.
@@ -157,8 +169,10 @@
   let canvasNotice = $state('')
 
   /** The session's words and icon: a design session and a video session share this
-   *  board, so nothing below hard-codes the word "design". */
-  let video = $derived(designState?.kind === 'video')
+   *  board, so nothing below hard-codes the word "design". A board the project's
+   *  rail opened carries its kind instead of reading it from the thread. */
+  let requestedKind = $derived<AuthoredWorkKind>(forcedKind ?? designState?.kind ?? 'design')
+  let video = $derived(requestedKind === 'video')
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
@@ -173,7 +187,7 @@
    * the value and reports what the move did, which is why the draft is saved
    * through the same channel the settings card uses.
    */
-  let kind = $derived<AuthoredWorkKind>(video ? 'video' : 'design')
+  let kind = $derived<AuthoredWorkKind>(requestedKind)
   let workRoots = $state<WorkRootState | null>(null)
   let editingRoot = $state(false)
   let rootDraft = $state('')
@@ -199,23 +213,39 @@
     tabRuntime.muted ? `Unmute the ${noun} preview` : `Mute the ${noun} preview`
   )
 
-  /** Every folder of this kind the project holds, newest first. */
-  let items = $derived(designState?.items ?? [])
+  /** Every folder of this kind the project holds, newest first.
+   *
+   * A rail-opened board lists the project's folders for its own kind, so the
+   * board shows the work whether or not the thread on screen has any; a session
+   * board keeps the listing main answered alongside its own record. */
+  let items = $derived(
+    forcedKind !== undefined
+      ? projectWorkState.itemsFor(projectId, forcedKind)
+      : (designState?.items ?? [])
+  )
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
   let switchLabel = $derived(
     `Switch ${noun}, ${otherCount} other ${otherCount === 1 ? noun : `${noun}s`} in this project`
   )
+  /** The folder this thread last previewed, when it belongs to the kind on screen.
+   *  A rail-opened board ignores a record that describes the other kind. */
+  let currentFolder = $derived.by(() => {
+    const current = designState?.current ?? null
+    if (current === null) return null
+    if (forcedKind !== undefined && current.kind !== forcedKind) return null
+    return current
+  })
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
-    const current = designState?.current ?? null
+    const current = currentFolder
     const picked =
       viewedDirectory !== '' && items.some((item) => item.directory === viewedDirectory)
         ? viewedDirectory
         : ''
     const directory =
-      picked !== '' ? picked : (current?.directory ?? designState?.defaultDirectory ?? '')
+      picked !== '' ? picked : (current?.directory ?? items[0]?.directory ?? workRoot)
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
@@ -394,7 +424,8 @@
           threadId,
           selected.directory,
           selected.entry,
-          SCREEN_SHOT_WIDTH
+          SCREEN_SHOT_WIDTH,
+          forcedKind
         )
         gallery = [
           {
@@ -462,7 +493,7 @@
   async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
     try {
-      await invoke('design:open', projectId, threadId, directory, entry, true)
+      await invoke('design:open', projectId, threadId, directory, entry, true, forcedKind)
       await loadState()
       await loadGallery()
       await loadCanvas()
@@ -583,6 +614,29 @@
   }
 
   /**
+   * Copy a design folder, or one screen inside it, in the form the asking agent
+   * can use.
+   *
+   * The decision lives in the copy helper: a tag when the board's thread shares
+   * the project, scope and machine the design lives on, an absolute path when it
+   * does not, and the way to reach another Oven when the design is on one.
+   */
+  async function copyDesignPath(directory: string, entry: string | null = null): Promise<void> {
+    if (directory === '') return
+    const payload = designCopyFor(directory, entry)
+    if (payload === null) {
+      toast.error('This design cannot be copied.')
+      return
+    }
+    try {
+      await copyText(payload.text, payload.message)
+    } catch (failure) {
+      logRendererError('The design path could not be copied.', failure)
+      toast.error('The design path could not be copied.')
+    }
+  }
+
+  /**
    * The folder moved along its history, so picture it as it now is.
    *
    * A restore rewrote the files, so the pictures the board holds are pictures of a
@@ -606,6 +660,9 @@
   })
 
   onMount(() => {
+    // A rail-opened board lists the project's folders itself, so the project's
+    // work is read here as well as by the dock; the store coalesces the two.
+    void projectWorkState.ensure(projectId)
     void loadState().then(async () => {
       await loadGallery()
       await loadCanvas()
@@ -634,47 +691,67 @@
       ? `Open the ${noun} in the in-app browser`
       : `Open the ${noun} screen ${screen.name} in the in-app browser`}
     {@const onScreen = !video && screen.entry === selected.entry}
-    <button
-      type="button"
-      class="group relative block overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {full
-        ? 'col-span-2'
-        : ''} {onScreen ? 'border-accent/60' : 'border-border'}"
-      title={cardLabel}
-      aria-label={cardLabel}
-      onclick={() => void openPreview(screen.entry)}
-    >
-      {#if screen.dataUrl}
-        <img
-          src={screen.dataUrl}
-          alt={video
-            ? `Preview of the ${noun} ${selectedName}`
-            : `Preview of the ${noun} screen ${screen.name}`}
-          class="block max-h-44 w-full object-cover object-top"
-        />
-      {:else}
-        <span
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+    {@const copyLabel = video
+      ? `Copy the path of this ${noun}`
+      : `Copy the path of the ${noun} screen ${screen.name}`}
+    <ContextMenu.Root>
+      <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
+        <button
+          type="button"
+          class="group relative block w-full overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {onScreen
+            ? 'border-accent/60'
+            : 'border-border'}"
+          title={cardLabel}
+          aria-label={cardLabel}
+          onclick={() => void openPreview(screen.entry)}
         >
-          {#if galleryBusy}
-            <LoaderCircle size={14} class="animate-spin" />
-            <span class="text-[0.625rem]">Capturing…</span>
+          {#if screen.dataUrl}
+            <img
+              src={screen.dataUrl}
+              alt={video
+                ? `Preview of the ${noun} ${selectedName}`
+                : `Preview of the ${noun} screen ${screen.name}`}
+              class="block max-h-44 w-full object-cover object-top"
+            />
           {:else}
-            <ImageOff size={14} />
-            <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
+            <span
+              class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+            >
+              {#if galleryBusy}
+                <LoaderCircle size={14} class="animate-spin" />
+                <span class="text-[0.625rem]">Capturing…</span>
+              {:else}
+                <ImageOff size={14} />
+                <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
+              {/if}
+            </span>
           {/if}
-        </span>
-      {/if}
-      <span
-        class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
-      >
-        <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
-      </span>
-      <span
-        class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-      >
-        <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
-      </span>
-    </button>
+          <span
+            class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
+          >
+            <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
+          </span>
+          <span
+            class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
+          </span>
+        </button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          class="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
+        >
+          <ContextMenu.Item
+            class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
+          >
+            <Copy size={13} class="shrink-0 text-muted" />
+            {copyLabel}
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   {/snippet}
 
   {#snippet entryCard(input: {
@@ -788,34 +865,49 @@
                       : updated === '' || created === updated
                         ? created
                         : `${created} · ${updated}`}
-                  <DropdownMenu.RadioItem
-                    value={item.directory}
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    title={designTooltip(item)}
-                  >
-                    <WorkIcon size={12} class="shrink-0 text-dimmed" />
-                    <span class="min-w-0 flex-1 truncate">{item.name}</span>
-                    {#if item.creatorThreadId === threadId}
-                      <span
-                        class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
-                      >
-                        Current
-                      </span>
-                    {/if}
-                    {#if stamp !== ''}
-                      <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-                        {stamp}
-                      </span>
-                    {/if}
-                    <Check
-                      size={12}
-                      class={[
-                        'shrink-0',
-                        item.directory === selected.directory ? 'text-primary' : 'invisible'
-                      ]}
-                      aria-hidden="true"
-                    />
-                  </DropdownMenu.RadioItem>
+                  <div class="flex items-center gap-0.5 rounded-lg pr-0.5">
+                    <DropdownMenu.RadioItem
+                      value={item.directory}
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      title={designTooltip(item)}
+                    >
+                      <WorkIcon size={12} class="shrink-0 text-dimmed" />
+                      <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                      {#if item.creatorThreadId === threadId}
+                        <span
+                          class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                        >
+                          Current
+                        </span>
+                      {/if}
+                      {#if stamp !== ''}
+                        <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
+                          {stamp}
+                        </span>
+                      {/if}
+                      <Check
+                        size={12}
+                        class={[
+                          'shrink-0',
+                          item.directory === selected.directory ? 'text-primary' : 'invisible'
+                        ]}
+                        aria-hidden="true"
+                      />
+                    </DropdownMenu.RadioItem>
+                    <button
+                      type="button"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title={`Copy the path of ${item.name}`}
+                      aria-label={`Copy the path of ${item.name}`}
+                      onclick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        void copyDesignPath(item.directory)
+                      }}
+                    >
+                      <Copy size={11} />
+                    </button>
+                  </div>
                 {/each}
               </DropdownMenu.RadioGroup>
             </DropdownMenu.Content>
@@ -916,6 +1008,14 @@
               >
                 <RefreshCw size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => void copyDesignPath(selected.directory)}
+              >
+                <Copy size={13} class="shrink-0 text-muted" />
+                Copy path
               </DropdownMenu.Item>
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item

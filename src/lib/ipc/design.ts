@@ -102,6 +102,22 @@ export interface ThreadDesignState {
 }
 
 /**
+ * Every folder of authored work one project holds, by kind.
+ *
+ * The rail shows a design or video entry for the project itself, and the question
+ * is asked before any thread is chosen, so the answer cannot come from a session:
+ * it is the two roots read straight. Each folder's `creatorThreadId` is the thread
+ * that first previewed it, or null when nothing recorded one.
+ */
+export interface ProjectWorkState {
+  projectId: string
+  /** Design folders in the project's design root, newest first. */
+  design: DesignEntry[]
+  /** Composition folders in the project's video root, newest first. */
+  video: DesignEntry[]
+}
+
+/**
  * What one changed work folder moved.
  *
  * A root is app-wide, so one change touches every project. This is the account of
