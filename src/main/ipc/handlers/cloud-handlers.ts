@@ -972,6 +972,62 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
   )
 
+  /**
+   * Reconnect an account in one step: optionally replace its secret and base
+   * URL, then make sure it is attached to the project and set active.
+   * Deliberately idempotent, so updating the API key of an account that is
+   * already attached updates it in place instead of failing on a duplicate
+   * attach   the renderer rotating a secret and then attaching as two calls is
+   * exactly what left a valid update reported as an error.
+   */
+  ipcMain.handle('cloudDeploy:reconnectAccount', async (_, input: unknown) => {
+    if (!isRecord(input)) throw new TypeError('Reconnect input must be an object')
+    const safeProjectId = validateEntityId(input.projectId, 'Project ID')
+    const kind = validateCloudDeploymentProviderKind(input.providerKind)
+    const safeAccountId = requireString(input.accountId, 'Account ID', true)
+
+    const registry = await storage.getCloudDeploymentAccounts()
+    const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+    if (!account) throw new TypeError('Provider account not found')
+    if (account.providerKind !== kind) {
+      throw new TypeError(`Account "${account.label}" is not a ${kind} account`)
+    }
+
+    // Both overrides are optional: a blank token keeps the stored secret, and a
+    // blank base URL keeps the stored one.
+    if (typeof input.token === 'string' && input.token.trim() !== '') {
+      account.secretRef = await vault.saveProviderToken(
+        safeAccountId,
+        validateProviderToken(input.token)
+      )
+      account.configured = true
+    }
+    if (typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '') {
+      account.baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
+    }
+    account.updatedAt = Date.now()
+    await storage.saveCloudDeploymentAccounts(registry)
+
+    const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+    const providerAccounts = config.project.providerAccounts ?? {}
+    const association = providerAccounts[kind] ?? {
+      attachedAccountIds: [],
+      activeAccountId: null
+    }
+    if (!association.attachedAccountIds.includes(safeAccountId)) {
+      association.attachedAccountIds = [...association.attachedAccountIds, safeAccountId]
+    }
+    association.activeAccountId = safeAccountId
+    config.project.providerAccounts = { ...providerAccounts, [kind]: association }
+    if (!config.project.providers.includes(kind)) {
+      config.project.providers = [...config.project.providers, kind]
+    }
+    config.updatedAt = Date.now()
+    const persisted = await persistCloudDeploymentConfig(safeProjectId, config)
+    // The secret never crosses back to the renderer.
+    return { account: { ...account, secretRef: '' }, config: persisted }
+  })
+
   ipcMain.handle(
     'cloudDeploy:detachAccount',
     async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {

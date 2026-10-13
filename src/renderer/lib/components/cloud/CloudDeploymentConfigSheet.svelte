@@ -463,26 +463,26 @@
           return
         }
         if (selectedExistingAccountId === '') {
-          error = 'Choose an existing provider account to attach.'
+          error = 'Choose an existing provider account to use.'
           return
         }
-        // A replacement token reconnects the account in place: the secret is
-        // rotated (update-only, never read back) before the account is attached.
-        if (reuseToken.trim() !== '') {
-          await cloudAccountsState.rotateSecret(selectedExistingAccountId, reuseToken.trim())
-        }
-        config = await cloudAccountsState.attachAccount(
+        // Reconnect in one call: it replaces the secret when one is given and
+        // attaches the account when it is not attached yet, so editing the API
+        // key of an already-attached account can never fail on a duplicate
+        // attach.
+        const replacedKey = reuseToken.trim() !== ''
+        const reconnected = await cloudAccountsState.reconnectAccount({
           projectId,
-          selectedKind,
-          selectedExistingAccountId
-        )
+          providerKind: selectedKind,
+          accountId: selectedExistingAccountId,
+          ...(replacedKey ? { token: reuseToken.trim() } : {})
+        })
+        config = reconnected.config
         savedAccountId = selectedExistingAccountId
-        const account = cloudAccountsState.accountById(selectedExistingAccountId)
-        toast.success(
-          reuseToken.trim() === ''
-            ? `Attached “${account?.label ?? 'provider account'}”.`
-            : `Reconnected “${account?.label ?? 'provider account'}” with a new token.`
-        )
+        const label =
+          cloudAccountsState.accountById(selectedExistingAccountId)?.label ??
+          reconnected.account.label
+        toast.success(replacedKey ? `Updated the API key for “${label}”.` : `Using “${label}”.`)
       }
       // Entered from the container flow to add an account: go straight back to
       // it with the new account selected and its containers loading.
@@ -865,7 +865,11 @@
             <Loader2 size={13} class="animate-spin" />
           {/if}
           {mode === 'provider'
-            ? 'Save provider'
+            ? createMode === 'reuse'
+              ? reuseToken.trim() === ''
+                ? 'Use account'
+                : 'Update account'
+              : 'Save provider'
             : selectedContainerIds.size > 1
               ? `Add ${selectedContainerIds.size} containers`
               : 'Add container'}
@@ -881,7 +885,7 @@
       <p class="text-xs font-medium">{mode === 'provider' ? 'Add provider' : 'Add container'}</p>
       <p class="text-[0.6875rem] text-muted">
         {mode === 'provider'
-          ? 'Create a reusable account or attach an existing one.'
+          ? 'Create a reusable account, or pick an existing one to use and update its API key.'
           : 'Attach a container to a configured provider.'}
       </p>
     </div>
@@ -960,7 +964,7 @@
                   error = ''
                 }}
               >
-                Use existing
+                Existing account
               </button>
             </div>
           {/if}
@@ -1007,7 +1011,7 @@
               </p>
             {:else}
               <label class="block space-y-1 text-xs font-medium">
-                <span>Existing {PROVIDER_DISPLAY_NAMES[selectedKind]} account</span>
+                <span>{PROVIDER_DISPLAY_NAMES[selectedKind]} account</span>
                 <select
                   class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                   bind:value={selectedExistingAccountId}
@@ -1020,19 +1024,22 @@
               </label>
               {#if selectedExistingAccountId !== ''}
                 <label class="block space-y-1 text-xs font-medium">
-                  <span>Replace API token</span>
+                  <span>API key</span>
                   <input
                     class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
                     type="password"
-                    placeholder="Leave blank to keep the stored token"
+                    placeholder={cloudAccountsState.accountById(selectedExistingAccountId)
+                      ?.configured
+                      ? 'Stored key kept   paste a new key to replace it'
+                      : 'Paste this account\u2019s API key'}
                     autocomplete="off"
                     spellcheck="false"
                     bind:value={reuseToken}
                   />
                 </label>
                 <p class="text-[0.6875rem] leading-snug text-dimmed">
-                  Showing unauthenticated? Paste a fresh token, run Test connection, then Save
-                  provider to reconnect this account.
+                  Update this account's API key here. Leave it blank to keep the stored key. Test
+                  connection verifies it before you save.
                 </p>
               {/if}
             {/if}

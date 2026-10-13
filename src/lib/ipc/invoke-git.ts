@@ -725,6 +725,27 @@ export const invokeGitContract = {
     ],
     import('../types').CloudDeploymentConfig
   >,
+  /**
+   * Reconnect a global provider account to a project in one idempotent step:
+   * optionally replace its secret and base URL, then attach it (if not already
+   * attached) and make it the active account. This is how an existing account's
+   * API key is updated from the provider sheet. The secret is never returned.
+   */
+  'cloudDeploy:reconnectAccount': {} as Contract<
+    [
+      input: {
+        projectId: string
+        providerKind: import('../types').CloudDeploymentProviderKind
+        accountId: string
+        token?: string
+        baseUrl?: string
+      }
+    ],
+    {
+      account: import('../types').CloudDeploymentProviderAccount
+      config: import('../types').CloudDeploymentConfig
+    }
+  >,
   /** Detach a global provider account from a project for a provider kind. */
   'cloudDeploy:detachAccount': {} as Contract<
     [

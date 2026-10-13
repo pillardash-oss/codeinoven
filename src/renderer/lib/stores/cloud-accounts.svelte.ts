@@ -92,6 +92,33 @@ class CloudAccountsState {
     }
   }
 
+  /**
+   * Reconnect an account to a project and, when a token is given, replace its
+   * stored secret. Idempotent server-side, so this is also the "update the API
+   * key" path for an account that is already attached.
+   */
+  async reconnectAccount(input: {
+    projectId: string
+    providerKind: CloudDeploymentProviderKind
+    accountId: string
+    token?: string
+    baseUrl?: string
+  }): Promise<{
+    account: CloudDeploymentProviderAccount
+    config: CloudDeploymentConfig
+  }> {
+    this.saving = true
+    try {
+      const result = await invoke('cloudDeploy:reconnectAccount', input)
+      this.accounts = this.accounts.map((account) =>
+        account.id === result.account.id ? result.account : account
+      )
+      return result
+    } finally {
+      this.saving = false
+    }
+  }
+
   async removeAccount(accountId: string): Promise<void> {
     this.saving = true
     try {
