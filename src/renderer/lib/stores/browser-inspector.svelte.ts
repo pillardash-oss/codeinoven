@@ -251,7 +251,7 @@ class BrowserInspectorSession {
    * comment whose reference is gone closes with it.
    */
   private onReferencesChanged(projectId: string, threadId: string): void {
-    for (const tab of contextSidebarState.tabs) {
+    for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (tab.projectId !== projectId || tab.threadId !== threadId) continue
       if (!this.designs.has(tab.id)) continue
@@ -268,7 +268,7 @@ class BrowserInspectorSession {
   private publishTheme(): void {
     const theme = this.themeTokens()
     if (!theme) return
-    for (const tab of contextSidebarState.tabs) {
+    for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (!this.armed.has(tab.id) && this.markersFor(tab.id).length === 0) continue
       void invoke('browser:inspectTheme', tab.id, theme).catch(() => {})
@@ -299,7 +299,7 @@ class BrowserInspectorSession {
   }
 
   private ownerOf(tabId: string): TabOwner | null {
-    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+    const tab = contextSidebarState.browserTabs.find((candidate) => candidate.id === tabId)
     if (!tab || tab.kind !== 'browser') return null
     return { projectId: tab.projectId, threadId: tab.threadId }
   }

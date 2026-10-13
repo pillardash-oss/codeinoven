@@ -882,7 +882,7 @@ export function inspectorInstallScript(key: string): string {
       const marker = id ? state.markers.get(id) : null;
       if (!marker) {
         closeCard(state.activeId);
-        return;
+        return id === null;
       }
       if (scroll) {
         const element = resolveElement(marker);
@@ -891,6 +891,7 @@ export function inspectorInstallScript(key: string): string {
         }
       }
       openCard(marker.id);
+      return true;
     }
 
     function apply(command) {
@@ -918,8 +919,7 @@ export function inspectorInstallScript(key: string): string {
         return true;
       }
       if (command.type === 'focus') {
-        focusMarker(typeof command.id === 'string' ? command.id : null, command.scroll === true);
-        return true;
+        return focusMarker(typeof command.id === 'string' ? command.id : null, command.scroll === true);
       }
       if (command.type === 'markers') {
         const incoming = Array.isArray(command.markers) ? command.markers : [];
@@ -1049,7 +1049,7 @@ export class BrowserInspector {
     record.contents = contents
     record.focus = { id: referenceId, scroll }
     this.arm(tabId)
-    this.command(tabId, { type: 'focus', id: referenceId, scroll })
+    void this.publishFocus(record).catch(() => undefined)
   }
 
   /** Replace the marker set the page draws. The renderer owns the truth. */
@@ -1119,6 +1119,17 @@ export class BrowserInspector {
     return record.desiredArmed || record.markers.length > 0
   }
 
+  /** Consume a focus request only after its marker exists in the installed page. */
+  private async publishFocus(record: ObservedTab): Promise<void> {
+    const focus = record.focus
+    if (!focus || record.contents.isDestroyed()) return
+    const applied: unknown = await record.contents.executeJavaScript(
+      inspectorCommandScript(record.key, { type: 'focus', id: focus.id, scroll: focus.scroll }),
+      false
+    )
+    if (applied === true && record.focus === focus) record.focus = null
+  }
+
   /** Fire a command without waiting, keeping failures off the event loop. */
   private command(tabId: string, command: unknown): void {
     const record = this.tabs.get(tabId)
@@ -1157,11 +1168,7 @@ export class BrowserInspector {
       })
       .then(() => (record.theme ? issue({ type: 'theme', theme: record.theme }) : undefined))
       .then(() => issue({ type: 'markers', markers: record.markers }))
-      .then(() =>
-        record.focus
-          ? issue({ type: 'focus', id: record.focus.id, scroll: record.focus.scroll })
-          : undefined
-      )
+      .then(() => this.publishFocus(record))
       .then(() => record.contents.executeJavaScript(inspectorWaitScript(record.key), false))
       .then((event: unknown) => {
         const current = this.tabs.get(tabId)
