@@ -183,20 +183,24 @@ export class NoteRepo {
     return row ? rowToStickyNote(row as unknown as StickyNoteRow) : null
   }
 
-  createStickyNote(note: StickyNote): void {
-    this.db.run(
+  async createStickyNote(note: StickyNote): Promise<void> {
+    const result = await this.db.executeViaWorker(
       `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, image_path, color, body, sort_order, created_at, updated_at)
        SELECT ?,?,?,?,?,?,?,COALESCE(MAX(sort_order), -1) + 1,?,? FROM sticky_notes`,
-      note.id,
-      note.title,
-      note.iconType,
-      note.customSvg,
-      note.imagePath,
-      note.color,
-      note.body,
-      note.createdAt,
-      note.updatedAt
+      [
+        note.id,
+        note.title,
+        note.iconType,
+        note.customSvg,
+        note.imagePath,
+        note.color,
+        note.body,
+        note.createdAt,
+        note.updatedAt
+      ],
+      { allowPrimaryFallback: false }
     )
+    if (!result.ok) throw new Error(result.error ?? 'Could not create sticky note')
   }
 
   updateStickyNoteAppearance(
