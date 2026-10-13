@@ -165,6 +165,7 @@
   let iconDataUrl = $state<string | undefined>()
   let readingIcon = $state(false)
   let submitting = $state(false)
+  let iconUploadDisabled = $derived(readingIcon || baseUrlProviderStore.saving || submitting)
   let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
 
   async function chooseIcon(event: Event): Promise<void> {
@@ -813,27 +814,34 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-3 rounded-lg border bg-surface p-3">
-      <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
+    <label
+      class={[
+        'flex items-center gap-3 rounded-lg border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
+        iconUploadDisabled
+          ? 'cursor-default opacity-60'
+          : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
+      ]}
+    >
+      <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
         {#if iconPreview}
           <img src={iconPreview} alt="Vendor icon preview" class="h-10 w-10 object-contain" />
         {:else}
           <VendorIcon name="CodeInOven" size={32} />
         {/if}
-      </div>
-      <label class="min-w-0 flex-1 space-y-1 text-xs font-medium">
+      </span>
+      <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
         <span>Vendor icon</span>
         <input
           type="file"
           accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
-          class="block w-full text-xs text-dimmed"
-          disabled={readingIcon || baseUrlProviderStore.saving || submitting}
+          class="block w-full cursor-pointer text-xs text-dimmed file:cursor-pointer disabled:cursor-default disabled:file:cursor-default"
+          disabled={iconUploadDisabled}
           onchange={(event) => void chooseIcon(event)}
         />
         <span class="block text-dimmed">SVG or image, up to 256 KiB. Saved with this provider.</span
         >
-      </label>
-    </div>
+      </span>
+    </label>
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>
