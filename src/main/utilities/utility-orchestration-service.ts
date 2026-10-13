@@ -60,6 +60,7 @@ import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn
 import { currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
+import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 import {
   cuaActionReference,
   cuaRefusal,
@@ -466,6 +467,7 @@ export interface AppControlContext {
   projectId: string
   projectPath: string | null
   threadId: string
+  permissionLevel: PermissionLevel
 }
 
 /**
@@ -566,6 +568,8 @@ export class UtilityOrchestrationService {
   /** Routes answered with a structured payload beside their content parts. */
   private readonly structuredRoutes: ReadonlySet<string>
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
+  /** Delivery-capable tools are discovered once per connection, including older drivers. */
+  private readonly backgroundInputTools = new WeakMap<McpClient, ReadonlySet<string>>()
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private artifactExecutor: DesignCapabilityExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
@@ -844,7 +848,8 @@ export class UtilityOrchestrationService {
     const context = {
       projectId: state.request.projectId,
       projectPath: state.request.projectPath,
-      threadId: state.request.threadId
+      threadId: state.request.threadId,
+      permissionLevel: state.request.permissionLevel
     }
     return operation === 'catalog'
       ? executor.catalog(input, context)
@@ -1109,6 +1114,7 @@ export class UtilityOrchestrationService {
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
+      BACKGROUND_AGENT_CONTROL_INSTRUCTION,
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
@@ -2102,6 +2108,25 @@ export class UtilityOrchestrationService {
     }
     const client = await this.mcpClient(state, utility)
     if (this.isComputerUseUtility(resolved)) {
+      const tools = await client.listTools()
+      this.backgroundInputTools.set(
+        client,
+        new Set(
+          tools
+            .filter((tool) => {
+              const properties = tool.inputSchema?.['properties']
+              if (!properties || typeof properties !== 'object' || Array.isArray(properties))
+                return false
+              const delivery = (properties as Record<string, unknown>)['delivery_mode']
+              if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery)) return false
+              const modes = (delivery as Record<string, unknown>)['enum']
+              return (
+                Array.isArray(modes) && modes.includes('background') && modes.includes('foreground')
+              )
+            })
+            .map((tool) => tool.name)
+        )
+      )
       await this.prepareComputerUseSession(state, utilityId, client)
     }
     return client
@@ -2649,7 +2674,24 @@ export class UtilityOrchestrationService {
     input: Record<string, unknown>
   ): Promise<unknown> {
     try {
-      return await client.callTool(operation, input)
+      const target = input['target']
+      const desktop =
+        input['scope'] === 'desktop' ||
+        (typeof target === 'object' &&
+          target !== null &&
+          (target as Record<string, unknown>)['kind'] === 'desktop')
+      const background =
+        this.backgroundInputTools.get(client)?.has(operation) &&
+        input['delivery_mode'] === undefined &&
+        !desktop
+      // Preserve explicit foreground requests and desktop-only operations. Never
+      // replay uncertain or partial input: the agent must observe those first.
+      const routed = background ? { ...input, delivery_mode: 'background' } : input
+      const result = await client.callTool(operation, routed)
+      if (background && cuaRefusal(result)?.code === 'background_unavailable') {
+        return await client.callTool(operation, { ...input, delivery_mode: 'foreground' })
+      }
+      return result
     } catch (error) {
       await this.dropUnusableTransport(state, resolved, client, error)
       throw error

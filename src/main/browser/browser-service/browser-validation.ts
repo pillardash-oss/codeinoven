@@ -1142,7 +1142,7 @@ export function validateViewportRequest(value: unknown, current: BrowserViewport
 
 /** Attention an agent asked for when it opened a page. */
 export function validateAttention(value: unknown): BrowserOpenAttention {
-  if (value === undefined || value === null) return 'focus'
+  if (value === undefined || value === null) return 'background'
   if (typeof value !== 'string' || (value !== 'focus' && value !== 'background')) {
     throw new TypeError('Browser attention must be "focus" or "background"')
   }

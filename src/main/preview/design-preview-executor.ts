@@ -63,7 +63,7 @@ export function createDesignPreviewExecutor(
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
-    const attention = input['attention'] === 'background' ? 'background' : 'focus'
+    const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openDesignPreview(
       { previews: options.previews, browser: options.browser },
       {

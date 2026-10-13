@@ -166,7 +166,7 @@ Invoke this capability with operation \`preview\`:
 
 - \`directory\`, project-relative, defaults to \`${designRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. Name a screen here to show that screen: \`entry: 'dashboard.html'\` turns the preview to the dashboard, so a design of several screens is previewed a screen at a time rather than as one long page. With no entry file the app opens its own file listing.
-- \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
+- \`attention\`, \`background\` (the default) to leave the user where they are, \`focus\` to bring the tab to the user when foreground interaction is needed.
 
 The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
 

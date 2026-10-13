@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { APP_NAME } from '../../lib/brand'
+import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 import {
   AGENT_BEHAVIOR_PROMPT_MAX_LENGTH,
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -212,7 +213,7 @@ export class PromptAssembler {
       MERMAID_OUTPUT_INSTRUCTION?: string
     }
   ): string {
-    const parts: string[] = []
+    const parts: string[] = [BACKGROUND_AGENT_CONTROL_INSTRUCTION]
     if (mode === 'implement' && constants?.SPEC_IMPLEMENT_SYSTEM_PROMPT) {
       parts.push(constants.SPEC_IMPLEMENT_SYSTEM_PROMPT)
     } else if (mode === 'brainstorm' && constants?.SPEC_BRAINSTORM_SYSTEM_PROMPT) {

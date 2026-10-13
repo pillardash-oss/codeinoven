@@ -90,7 +90,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Pass attention "background" to keep it offscreen without pulling the user to it.',
+      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -99,7 +99,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'string',
           enum: ['focus', 'background'],
           description:
-            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+            'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
         }
       },
       required: ['url'],
@@ -273,7 +273,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
             type: 'string',
             enum: ['focus', 'background'],
             description:
-              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+              'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
           }
         },
         additionalProperties: false
@@ -365,7 +365,7 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
             type: 'string',
             enum: ['focus', 'background'],
             description:
-              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+              'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
           }
         },
         additionalProperties: false
