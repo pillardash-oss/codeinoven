@@ -465,15 +465,24 @@ export class RoutineManager {
   /**
    * The moment a task's schedule became active. The scheduler uses it as the
    * floor below which a due slot was never really due: a schedule cannot have
-   * missed a fire that predates it. A task override anchors to the task's own
-   * creation; otherwise the routine's schedule clock applies, falling back to
-   * the routine's creation for rows written before that clock existed.
+   * missed a fire that predates it.
+   *
+   * A task with its own schedule override is anchored to its own creation: the
+   * override is the task's schedule, so the routine's schedule clock does not
+   * apply to it. A task that inherits its routine's schedule is anchored to the
+   * later of its own creation and the routine's schedule clock.
+   *
+   * The task's own creation is what keeps a thread the user creates *after* the
+   * routine was set up from inheriting every slot the routine already passed.
+   * Without it, a task created at 11:00 inside a routine that runs daily at
+   * 09:00 was immediately badged as having missed that morning's 09:00 fire   a
+   * run the task could never have produced, because it did not exist yet.
    */
   resolveTaskScheduleAnchor(task: Thread): number {
-    if (task.scheduleOverride) return task.createdAt
-    if (!task.routineId) return task.createdAt
+    if (!task.routineId || task.scheduleOverride) return task.createdAt
     const routine = this.routineRepo.get(task.routineId)
-    return routine?.scheduleUpdatedAt ?? routine?.createdAt ?? 0
+    const routineAnchor = routine?.scheduleUpdatedAt ?? routine?.createdAt ?? 0
+    return Math.max(task.createdAt, routineAnchor)
   }
 
   /**
