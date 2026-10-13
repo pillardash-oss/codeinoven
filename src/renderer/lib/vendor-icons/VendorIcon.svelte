@@ -9,16 +9,18 @@
     /** Vendor/provider id when known (e.g. "cio-my-provider"). Ids are tried
      *  before the display name. Saved custom artwork overrides bundled marks. */
     id?: string
+    /** Unsaved artwork preview, rendered with the same backing as saved vendor icons. */
+    imageSrc?: string
     /** Square icon edge in pixels. */
     size?: number
     class?: string
   }
 
-  let { name, id, size = 14, class: className = '' }: Props = $props()
+  let { name, id, imageSrc, size = 14, class: className = '' }: Props = $props()
   onMount(() => {
     void customVendorIcons.load()
   })
-  let customIcon = $derived(customVendorIcons.get(id))
+  let customIcon = $derived(imageSrc ?? customVendorIcons.get(id))
   let failedIcon = $state<string | undefined>()
   let svg = $derived(getVendorIconSvg(id) ?? getVendorIconSvg(name))
   let monogram = $derived(name.trim().charAt(0).toUpperCase() || '?')
@@ -41,7 +43,8 @@
     <img
       src={customIcon}
       alt=""
-      class="h-full w-full object-contain"
+      class="h-full w-full rounded-sm bg-white object-contain"
+      style:padding={`${size * 0.08}px`}
       onerror={() => {
         failedIcon = customIcon
       }}

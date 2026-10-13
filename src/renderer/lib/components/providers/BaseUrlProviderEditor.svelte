@@ -823,11 +823,7 @@
       ]}
     >
       <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
-        {#if iconPreview}
-          <img src={iconPreview} alt="Vendor icon preview" class="h-10 w-10 object-contain" />
-        {:else}
-          <VendorIcon name="CodeInOven" size={32} />
-        {/if}
+        <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
       </span>
       <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
         <span>Vendor icon</span>
