@@ -886,6 +886,19 @@ export class GlobalBrowserState {
     return [...this.groups].sort((a, b) => Number(b.pinned) - Number(a.pinned))
   }
 
+  /**
+   * Every tab in the order the strip draws it: the pinned block first, then
+   * each group's tabs in group order, then the ungrouped rest. A grouped tab
+   * keeps its stored position while its row moves into the fold, so this is
+   * not the stored list order, and it is what "the previous tab" means.
+   */
+  get stripOrder(): GlobalBrowserTab[] {
+    const ordered = [...this.pinnedTabs]
+    for (const group of this.orderedGroups) ordered.push(...this.tabsInGroup(group.id))
+    ordered.push(...this.tabsInGroup(null))
+    return ordered
+  }
+
   groupById(groupId: string): GlobalBrowserGroup | null {
     return this.groups.find((group) => group.id === groupId) ?? null
   }
@@ -1646,8 +1659,13 @@ export class GlobalBrowserState {
     const groupId = tab.groupId
     // Not a reopenable close: the page is deliberately coming back in another
     // box, so recording it would offer the user a tab that never left.
-    this.close(tabId, { recordForReopen: false })
-    return this.createTab(url, groupId, boxId)
+    // No focus handover for the tab in between: the new tab takes it below.
+    this.close(tabId, { recordForReopen: false, focusNeighbour: false })
+    const nextId = this.createTab(url, groupId, boxId)
+    if (!isBlankBrowserAddress(url)) {
+      void invoke('browser:focusPage', nextId).catch(() => {})
+    }
+    return nextId
   }
 
   /**
@@ -1658,7 +1676,7 @@ export class GlobalBrowserState {
    * really a replacement (a reopen in another box) or an eviction has no tab to
    * bring back, so recording it would only push a phantom onto the reopen stack.
    */
-  close(tabId: string, options: { recordForReopen?: boolean } = {}): void {
+  close(tabId: string, options: { recordForReopen?: boolean; focusNeighbour?: boolean } = {}): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
     const closing = this.tabs[index]
@@ -1674,9 +1692,30 @@ export class GlobalBrowserState {
     browserAudio.forget(tabId)
     this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
-      const neighbour = remaining[Math.min(index, remaining.length - 1)]
+      // Closing the active tab lands on the previous tab of the strip order,
+      // not the next one, so focus moves back through the tabs as the user
+      // sees them. The stored list order is not that: a grouped tab keeps its
+      // stored position while its row moves into the fold, so the neighbour
+      // is read off `stripOrder` instead. Closing the first row has no
+      // previous, so it falls through to what is now first.
+      const visualIndex = this.stripOrder.findIndex((tab) => tab.id === tabId)
+      const visuallyRemaining = this.stripOrder.filter((tab) => tab.id !== tabId)
+      const neighbour =
+        visuallyRemaining[visualIndex - 1] ??
+        visuallyRemaining[Math.min(visualIndex, visuallyRemaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
-      if (neighbour) neighbour.lastUsedAt = Date.now()
+      if (neighbour) {
+        neighbour.lastUsedAt = Date.now()
+        // The page held the keyboard through the native view, which dies with
+        // the tab: hand it to the tab landing on screen so a repeated close
+        // (or an undo) still reaches the browser instead of breaking the flow.
+        // A blank tab has no page, so there is nothing to hand over. A close
+        // that is really a step toward another tab (a reopen in another box)
+        // opts out and hands over to its own target instead.
+        if (options.focusNeighbour !== false && !isBlankBrowserAddress(neighbour.url)) {
+          void invoke('browser:focusPage', neighbour.id).catch(() => {})
+        }
+      }
     }
     if (this.tabs.length === 0 && !this.railToolNeedsNoTab) {
       // With no tab left the note and agent tools have no subject, so the rail
@@ -1757,6 +1796,11 @@ export class GlobalBrowserState {
     this.tabs = ordered
     this.setActiveTab(restored.id)
     this.persist()
+    // The reopened page takes the keyboard back, so repeated undos keep
+    // reaching the browser. A blank tab has no page to hand it to.
+    if (!isBlankBrowserAddress(restored.url)) {
+      void invoke('browser:focusPage', restored.id).catch(() => {})
+    }
     return restored.id
   }
 

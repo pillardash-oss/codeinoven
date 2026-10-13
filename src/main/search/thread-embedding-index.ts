@@ -93,6 +93,12 @@ export class ThreadEmbeddingIndex {
       expectedDimensions: number
       signal: AbortSignal
       onProgress?: (result: SweepResult) => void
+      onError?: (thread: SearchSummaryThread, error: unknown) => void
+      onThreadProgress?: (
+        thread: SearchSummaryThread,
+        stage: 'summarizing' | 'embedding',
+        chunks: number
+      ) => void
     }
   ): Promise<SweepResult> {
     const candidates = await this.listCandidates()
@@ -115,8 +121,13 @@ export class ThreadEmbeddingIndex {
       for (let offset = 0; offset < stale.length; offset += INDEX_BATCH_SIZE) {
         options.signal.throwIfAborted()
         const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
-        await this.indexBatch(batch, embed, options)
-        indexed += batch.length
+        try {
+          await this.indexBatch(batch, embed, options)
+          indexed += batch.length
+        } catch (error) {
+          if (options.signal.aborted) throw error
+          options.onError?.(batch[0], error)
+        }
         options.onProgress?.({ total, indexed, pending: pending - indexed })
         sinceLastPersist += batch.length
         if (sinceLastPersist >= PERSIST_EVERY) {
@@ -156,11 +167,22 @@ export class ThreadEmbeddingIndex {
       documentPrefix: string
       expectedDimensions: number
       signal: AbortSignal
+      onThreadProgress?: (
+        thread: SearchSummaryThread,
+        stage: 'summarizing' | 'embedding',
+        chunks: number
+      ) => void
     }
   ): Promise<void> {
     const texts: string[] = []
     for (const candidate of batch) {
-      const summary = await this.summaries.get(candidate, options.signal)
+      let chunks = 0
+      options.onThreadProgress?.(candidate, 'summarizing', chunks)
+      const summary = await this.summaries.get(candidate, options.signal, (count) => {
+        chunks = count
+        options.onThreadProgress?.(candidate, 'summarizing', chunks)
+      })
+      options.onThreadProgress?.(candidate, 'embedding', chunks)
       texts.push(composeDocument(options.documentPrefix, candidate.title, summary))
     }
     const vectors = await embed(texts)

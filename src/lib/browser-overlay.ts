@@ -109,9 +109,11 @@ export function browserStatusOverlayPlacement(
   }
 }
 
-/** The status a projected toast carries, which is sonner's own set minus the two
- *  shapes only a component can render. */
-export type ToastOverlayKind = 'default' | 'success' | 'error' | 'warning' | 'info' | 'loading'
+/** The status a projected toast carries: sonner's own set, plus `memory` for
+ *  the memory proposal, which the app raises as a component but the overlay
+ *  draws as a plain card with the memory icon. */
+export type ToastOverlayKind =
+  'default' | 'success' | 'error' | 'warning' | 'info' | 'loading' | 'memory'
 
 /**
  * One toast, reduced to what the overlay can draw.

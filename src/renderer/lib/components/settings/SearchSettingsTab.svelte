@@ -239,6 +239,19 @@
           </p>
         </div>
       </div>
+      <p class="mt-3 flex h-4 gap-2 text-xs text-muted" role="status">
+        <span class="min-w-0 truncate" title={status?.progress?.threadTitle}>
+          {#if status?.indexing && status.progress}
+            {status.progress.stage === 'summarizing' ? 'Summarizing' : 'Embedding'}
+            {status.progress.threadTitle}
+          {/if}
+        </span>
+        {#if status?.indexing && status.progress?.stage === 'summarizing'}
+          <span class="shrink-0 tabular-nums"
+            >{status.progress.completedChunks} chunks completed</span
+          >
+        {/if}
+      </p>
       <p class="mt-3 text-xs leading-relaxed text-dimmed">
         Indexing runs in the background in small batches, so it never blocks the app.
       </p>
