@@ -1,4 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
+import { logRendererError } from '$lib/system/renderer-logger'
 import type {
   BrowserDesignTab,
   BrowserInspectorEvent,
@@ -154,14 +156,25 @@ class BrowserInspectorSession {
    * does, and it is the mirror of the document annotation's jump to its passage.
    */
   focusComment(tabId: string, referenceId: string): void {
-    if (!this.armed.has(tabId)) this.setArmed(tabId, true)
-    void invoke('browser:inspectFocus', tabId, referenceId, true).catch(() => {})
+    void this.restoreAndFocus(tabId, referenceId).catch((failure: unknown) => {
+      logRendererError('The design annotation could not be focused.', failure)
+      toast.error('Could not focus this design annotation. Try opening its browser tab again.')
+    })
+  }
+
+  private async restoreAndFocus(tabId: string, referenceId: string): Promise<void> {
+    this.armed.add(tabId)
+    const theme = this.themeTokens()
+    await invoke('browser:inspectSetArmed', tabId, true, theme ?? undefined)
+    await invoke('browser:inspectMarkers', tabId, this.markersFor(tabId))
+    await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
   /** Mirror the design a tab is serving, and end the session when it stops. */
   private notePageState(tabId: string, design: BrowserDesignTab | null): void {
     if (design) {
       this.designs.set(tabId, design)
+      this.publishMarkers(tabId)
       return
     }
     if (!this.designs.delete(tabId)) return
@@ -206,7 +219,16 @@ class BrowserInspectorSession {
       )
       return
     }
-    if (event.kind === 'open' || event.kind === 'close') return
+    if (event.kind === 'open') {
+      void import('$lib/threads/open-thread-by-id')
+        .then(async ({ openThreadById }) => {
+          await openThreadById(projectId, threadId)
+          contextSidebarState.focus(tabId)
+        })
+        .catch(() => {})
+      return
+    }
+    if (event.kind === 'close') return
     const reference = designElementReference(
       event.id,
       event.target,

@@ -1048,14 +1048,16 @@ export class BrowserInspector {
     const record = this.record(tabId, contents)
     record.contents = contents
     record.focus = { id: referenceId, scroll }
+    this.arm(tabId)
     this.command(tabId, { type: 'focus', id: referenceId, scroll })
   }
 
   /** Replace the marker set the page draws. The renderer owns the truth. */
-  syncMarkers(tabId: string, markers: BrowserInspectorMarker[]): void {
-    const record = this.tabs.get(tabId)
-    if (!record) return
+  syncMarkers(tabId: string, contents: WebContents, markers: BrowserInspectorMarker[]): void {
+    const record = this.record(tabId, contents)
+    record.contents = contents
     record.markers = markers
+    this.arm(tabId)
     this.command(tabId, { type: 'markers', markers })
   }
 

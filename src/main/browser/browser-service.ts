@@ -1480,8 +1480,8 @@ export class BrowserService {
     })
     replaceHandler('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
       const tabId = validateTabId(rawTabId)
-      this.requireTab(tabId)
-      this.inspector.syncMarkers(tabId, validateInspectorMarkers(rawMarkers))
+      const tab = this.requireTab(tabId)
+      this.inspector.syncMarkers(tabId, tab.view.webContents, validateInspectorMarkers(rawMarkers))
     })
     replaceHandler('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
