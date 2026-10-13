@@ -5,6 +5,7 @@ import type { Database } from '../database/database'
 import type { IntentThreadMatch, ThreadEmbeddingRecord } from '../../lib/search/types'
 import { cosineSimilarity, decodeThreadIndex, encodeThreadIndex } from '../../lib/search/vector'
 import { Logger } from '../system/logger'
+import { paceIndexing } from './indexing-pacing'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/types/project'
 import { ThreadSearchSummaries, type SearchSummaryThread } from './thread-search-summary'
 
@@ -123,6 +124,7 @@ export class ThreadEmbeddingIndex {
     try {
       for (let offset = 0; offset < stale.length; offset += INDEX_BATCH_SIZE) {
         options.signal.throwIfAborted()
+        const startedAt = performance.now()
         const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
         try {
           await this.indexBatch(batch, embed, options)
@@ -137,8 +139,7 @@ export class ThreadEmbeddingIndex {
           sinceLastPersist = 0
           await this.persist()
         }
-        // Yield so a long backfill never monopolizes the event loop.
-        await new Promise((resolve) => setImmediate(resolve))
+        if (offset + INDEX_BATCH_SIZE < stale.length) await paceIndexing(startedAt, options.signal)
       }
       await this.pruneMissing(new Set(candidates.map((candidate) => candidate.id)))
       await this.summaries.prune(candidates)

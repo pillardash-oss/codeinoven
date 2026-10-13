@@ -1,6 +1,7 @@
 import { readFile, writeFile, rename, rm } from 'node:fs/promises'
 import type { Database } from '../database/database'
 import { Logger } from '../system/logger'
+import { paceIndexing } from './indexing-pacing'
 import { SEARCH_MODEL_CATALOG, searchModelsForRuntime } from '../../lib/search/model-catalog'
 import {
   clampSearchContextTokens,
@@ -604,6 +605,7 @@ export class SearchService {
       this.summaryJobs.delete(id)
       if (job.generation !== this.generation) continue
       const signal = this.summaryController.signal
+      const startedAt = performance.now()
       try {
         this.summaryDetail = {
           threadTitle: job.thread.title.slice(0, 100),
@@ -640,7 +642,8 @@ export class SearchService {
             error: error instanceof Error ? error.message : String(error)
           })
       }
-      await new Promise<void>((resolve) => setImmediate(resolve))
+      if (this.summaryJobs.size > 0 && !signal.aborted)
+        await paceIndexing(startedAt, signal).catch(() => undefined)
     }
   }
 

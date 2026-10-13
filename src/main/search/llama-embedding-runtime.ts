@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { constants, access, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { totalmem } from 'node:os'
 import type { EmbeddingRuntimeId } from '../../lib/search/types'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 
@@ -42,12 +43,23 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   private stderrTail = ''
   private ready: Promise<void> | null = null
   private tokenBudget = 0
+  private inferenceQueue: Promise<void> = Promise.resolve()
+  private idleTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Non-causal attention needs a complete physical batch. Bound that working
+  // set instead of allocating the entire configured window on small machines.
+  private readonly workingContext: number
 
   constructor(
     private readonly modelDirectory: string,
     private readonly contextTokens: number,
     private readonly host: EmbeddingRuntimeHost
-  ) {}
+  ) {
+    this.workingContext = Math.min(
+      contextTokens > 0 ? contextTokens : 8192,
+      totalmem() <= 8 * 1024 ** 3 ? 1024 : 2048
+    )
+  }
 
   async isAvailable(): Promise<boolean> {
     return this.host.llamaServerPath() !== null
@@ -66,6 +78,31 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   }
 
   async embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]> {
+    const result = this.inferenceQueue.then(async () => {
+      try {
+        return await this.embedSequential(texts, signal)
+      } finally {
+        if (this.child) {
+          if (this.idleTimer) clearTimeout(this.idleTimer)
+          this.idleTimer = setTimeout(() => {
+            void this.dispose()
+          }, 60_000)
+          this.idleTimer.unref()
+        }
+      }
+    })
+    this.inferenceQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+
+  private async embedSequential(
+    texts: readonly string[],
+    signal: AbortSignal
+  ): Promise<Float32Array[]> {
+    signal.throwIfAborted()
     if (texts.length === 0) return []
     await this.ensureServer()
     // Non-causal embeddings must fit in one physical batch. Process documents
@@ -143,6 +180,8 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   }
 
   async dispose(): Promise<void> {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = null
     const child = this.child
     this.child = null
     this.port = 0
@@ -152,6 +191,8 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
   }
 
   private async ensureServer(): Promise<void> {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = null
     if (this.child && this.tokenBudget > 0) return
     this.ready ??= this.start()
     try {
@@ -179,18 +220,22 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         '--port',
         '0',
         '--ctx-size',
-        // `0` lets llama.cpp adopt the model's own trained context, which is the
-        // only correct answer for an imported model whose window we cannot know.
-        this.contextTokens > 0 ? String(this.contextTokens) : '0',
+        String(this.workingContext),
         // Mean pooling cannot split a document across physical batches.
         '--batch-size',
-        String(this.contextTokens > 0 ? this.contextTokens : 8192),
+        String(this.workingContext),
         '--ubatch-size',
-        String(this.contextTokens > 0 ? this.contextTokens : 8192),
+        String(this.workingContext),
+        '--prio',
+        '-1',
+        '--poll',
+        '0',
+        '--poll-batch',
+        '0',
         '--threads',
-        '2',
+        '1',
         '--threads-batch',
-        '2',
+        '1',
         '--parallel',
         '1',
         // Serve the OpenAI-compatible /v1/embeddings endpoint. Pooling and
