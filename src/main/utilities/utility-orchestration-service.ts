@@ -1445,6 +1445,28 @@ export class UtilityOrchestrationService {
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
+    // Credential metadata and connected MCP clients are snapshots. A key
+    // collected mid-turn must replace both before the next utility call.
+    const boundUtilityIds = new Set(
+      resolution.secrets.flatMap((secret) => (secret.boundUtilityId ? [secret.boundUtilityId] : []))
+    )
+    for (const turn of this.turns.values()) {
+      const affected = [...boundUtilityIds].filter(
+        (utilityId) => turn.state.eligible.has(utilityId) || turn.state.activated.has(utilityId)
+      )
+      if (affected.length === 0) continue
+      for (const utilityId of affected) {
+        // Let a connection already being established settle before retiring
+        // it, so it cannot restore a client carrying the previous credential.
+        const connecting = turn.state.connecting.get(utilityId)
+        if (connecting) await connecting.catch(() => undefined)
+        turn.state.activated.delete(utilityId)
+        await this.releaseUtility(turn.state, utilityId)
+      }
+      // Preserve bank entries: the next invocation reconnects lazily using
+      // the updated definition without asking the agent to activate again.
+      await this.refreshEligible(turn.state, { force: true })
+    }
     const sharedNote = `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
     const secretEntries = resolution.secrets.map((secret) => ({
       label: secret.label,
