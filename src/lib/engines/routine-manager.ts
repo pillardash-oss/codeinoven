@@ -12,6 +12,7 @@ import { RoutineRepo } from '../../main/database/repositories/routine-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import {
   routineFirstHowToSave,
+  routineIsScheduled,
   type CreateRoutineInput,
   type Routine,
   type RoutineAgents,
@@ -94,14 +95,19 @@ export class RoutineManager {
 
   createRoutine(input: CreateRoutineInput): Routine {
     const now = this.now()
+    // An unscheduled routine has no schedule at all: the flag is authoritative,
+    // so a caller that passes both is read as unscheduled and its schedule is
+    // dropped rather than kept hidden behind the flag.
+    const scheduled = input.scheduled ?? true
     const routine: Routine = {
       id: generateId(),
       name: input.name.trim() || 'New Routine',
       description: input.description?.trim() || undefined,
+      scheduled,
       color: input.color ?? pickColorForSeed(input.name),
       iconType: input.iconType,
-      schedule: input.schedule ?? null,
-      scheduleUpdatedAt: input.schedule ? now : undefined,
+      schedule: scheduled ? (input.schedule ?? null) : null,
+      scheduleUpdatedAt: scheduled && input.schedule ? now : undefined,
       howTo: input.howTo ?? '',
       howToUpdatedAt: input.howTo ? now : undefined,
       connections: input.connections ?? [],
@@ -132,17 +138,32 @@ export class RoutineManager {
     // missed.
     const nextHowTo = input.howTo ?? existing.howTo
     const becameRunnable = routineFirstHowToSave(existing, { howTo: nextHowTo })
+    // The flag is the authority on whether a schedule exists. Turning it off
+    // clears the schedule outright, so nothing downstream can fire a slot the
+    // routine no longer has; turning it back on leaves the routine re-authored
+    // rather than silently restoring a cadence the user may have forgotten.
+    const scheduled = input.scheduled ?? routineIsScheduled(existing)
+    const nextSchedule = scheduled
+      ? input.schedule !== undefined
+        ? input.schedule
+        : existing.schedule
+      : null
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
       description:
         'description' in input ? input.description?.trim() || undefined : existing.description,
+      scheduled,
       color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,
       customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
-      schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
-      scheduleUpdatedAt: scheduleChanged || becameRunnable ? now : existing.scheduleUpdatedAt,
+      schedule: nextSchedule,
+      scheduleUpdatedAt: scheduled
+        ? scheduleChanged || becameRunnable
+          ? now
+          : existing.scheduleUpdatedAt
+        : undefined,
       howTo: nextHowTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
@@ -418,6 +439,24 @@ export class RoutineManager {
     return updated
   }
 
+  /**
+   * Turn one function's clock on or off independently of its routine. `true`
+   * schedules it even under an unscheduled routine, `false` keeps it off the
+   * clock even under a scheduled one, and `null` clears the override so the
+   * task follows its routine again.
+   */
+  setTaskScheduled(threadId: string, scheduled: boolean | null): Thread {
+    const existing = this.threadRepo.get(threadId)
+    if (!existing) throw new Error(`Thread not found: ${threadId}`)
+    const updated: Thread = {
+      ...existing,
+      scheduled: scheduled ?? undefined,
+      updatedAt: this.now()
+    }
+    this.threadRepo.upsert(updated)
+    return updated
+  }
+
   /** Record that a scheduled run fired on a task. */
   setTaskLastRun(threadId: string, at: number): Thread {
     const existing = this.threadRepo.get(threadId)
@@ -454,8 +493,25 @@ export class RoutineManager {
     return updated
   }
 
-  /** The schedule a task runs on: its override when set, else its routine's. */
+  /**
+   * Whether a task runs on a clock at all. The task's own override wins when
+   * set, so one function of a routine can be scheduled while another is not,
+   * and an unscheduled routine does not force its functions off. Absent, a task
+   * follows its routine's flag; a routine-less task is unscheduled unless it
+   * carries its own schedule.
+   */
+  resolveTaskScheduled(task: Thread): boolean {
+    if (task.scheduled !== undefined) return task.scheduled
+    if (!task.routineId) return task.scheduleOverride !== undefined
+    const routine = this.routineRepo.get(task.routineId)
+    if (!routine) return task.scheduleOverride !== undefined
+    return routineIsScheduled(routine)
+  }
+
+  /** The schedule a task runs on: its override when set, else its routine's. A
+   *  task that is not scheduled has none, so nothing fires for it. */
   resolveTaskSchedule(task: Thread): RoutineSchedule | null {
+    if (!this.resolveTaskScheduled(task)) return null
     if (task.scheduleOverride) return task.scheduleOverride
     if (!task.routineId) return null
     const routine = this.routineRepo.get(task.routineId)

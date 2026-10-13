@@ -4149,13 +4149,17 @@
   }
 
   /** Create a routine and seed its "Getting started" task, then open its panel. */
-  async function createAssistantRoutine(name: string, description: string): Promise<void> {
+  async function createAssistantRoutine(
+    name: string,
+    description: string,
+    scheduled = true
+  ): Promise<void> {
     if (!assistantProject) return
     // No model prompt: the primary is the model the user is already working on,
     // so creating a routine never blocks on a pick. Fallbacks are added later
     // from the panel's Agents tab, which the agent points the user at.
     const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
-    const routine = await assistantRoutines.createRoutine({ name, description, agents })
+    const routine = await assistantRoutines.createRoutine({ name, description, scheduled, agents })
     // The seed task is created already inside the routine: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, {

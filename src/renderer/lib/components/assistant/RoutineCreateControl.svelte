@@ -1,13 +1,15 @@
 <script lang="ts">
   import { Workflow } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
 
   interface Props {
     /**
-     * Create a routine with the given title and optional description; the host
-     * seeds the "Getting started" thread where the how-to is written.
+     * Create a routine with the given title, optional description, and whether
+     * it runs on a schedule; the host seeds the "Getting started" thread where
+     * the how-to is written.
      */
-    onCreate: (name: string, description: string) => void | Promise<void>
+    onCreate: (name: string, description: string, scheduled: boolean) => void | Promise<void>
     title?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
@@ -19,6 +21,8 @@
   let open = $state(false)
   let name = $state('')
   let description = $state('')
+  /** On by default: a new routine runs on a schedule unless the user opts out. */
+  let scheduled = $state(true)
   let busy = $state(false)
 
   /** Highest trigger value already handled. The control unmounts when the view
@@ -40,10 +44,11 @@
     if (!canSubmit) return
     busy = true
     try {
-      await onCreate(name.trim(), description.trim())
+      await onCreate(name.trim(), description.trim(), scheduled)
       open = false
       name = ''
       description = ''
+      scheduled = true
     } finally {
       busy = false
     }
@@ -99,6 +104,24 @@
         A note for you only, it is never sent to the agent. Next you describe the routine to the
         agent in its Getting started thread, and it writes the how-to with you.
       </p>
+    </div>
+
+    <div
+      class="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-2.5 py-2"
+    >
+      <div class="min-w-0">
+        <p class="text-[0.75rem] text-foreground">Run on a schedule</p>
+        <p class="text-[0.625rem] leading-relaxed text-dimmed">
+          {scheduled
+            ? 'The agent will agree a cadence with you, and the routine fires on the clock.'
+            : 'No schedule: this routine runs only when you ask it to. A single function can still be scheduled later.'}
+        </p>
+      </div>
+      <Switch
+        bind:checked={scheduled}
+        aria-label="Run this routine on a schedule"
+        title="Run on a schedule"
+      />
     </div>
   </div>
 

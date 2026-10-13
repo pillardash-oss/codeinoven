@@ -224,6 +224,7 @@
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
+    routineIsScheduled,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
   import type {
@@ -6663,7 +6664,11 @@
     if (!routine) return true
     if (draft.howTo.trim() !== routine.howTo.trim()) return true
     if (!plan) return false
-    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+    if (
+      routineIsScheduled(routine) &&
+      plan.schedule &&
+      describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)
+    ) {
       return true
     }
     if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
@@ -6811,12 +6816,15 @@
     routineSaving = true
     try {
       const plan = draft.plan
+      const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+      const scheduled = routine ? routineIsScheduled(routine) : true
       const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
-      if (plan?.schedule) patch.schedule = plan.schedule
+      // An on-demand routine has no schedule, so a plan that still carries one
+      // (an agent that did not know) can never re-schedule it here.
+      if (plan?.schedule && scheduled) patch.schedule = plan.schedule
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
-        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
         const catalog = await invoke('utilities:list').catch(() => null)
         patch.connections = connectionsFromPlan(
           plan.connections,
@@ -6825,7 +6833,7 @@
         )
       }
       await assistantRoutines.updateRoutine(routineId, patch)
-      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
       routineRecapDismissed = ''
       return true
     } catch (error) {
@@ -13181,6 +13189,7 @@
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
                     update={assistantHowToComplete}
+                    scheduled={assistantRoutine ? routineIsScheduled(assistantRoutine) : true}
                     existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}

@@ -3,7 +3,7 @@
   import { Popover } from 'bits-ui'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import type { Routine, Thread } from '$shared/types'
+  import { routineIsScheduled, type Routine, type Thread } from '$shared/types'
   import { routineGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
 
@@ -154,6 +154,14 @@
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
                   >{routine.name}</span
                 >
+                {#if !routineIsScheduled(routine)}
+                  <span
+                    class="shrink-0 rounded-full bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
+                    title="This routine runs only when you ask it to"
+                  >
+                    Unscheduled
+                  </span>
+                {/if}
                 {#if routineGap(routine)}
                   <span
                     class="flex shrink-0 items-center"

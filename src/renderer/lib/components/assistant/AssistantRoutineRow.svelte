@@ -18,7 +18,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
-  import type { Routine } from '$shared/types'
+  import { routineIsScheduled, type Routine } from '$shared/types'
   import { routineGap, routineNextRunLine, routineRunCountLabel } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
@@ -102,6 +102,7 @@
   const workingLabel = $derived(`${workingCount} ${workingCount === 1 ? 'task' : 'tasks'} working`)
   /** Line 2's next fire, beside the run count (see `routineNextRunLine`). */
   const nextRunLabel = $derived(routineNextRunLine(routine, nextRunAt, Date.now()))
+  const scheduled = $derived(routineIsScheduled(routine))
   const gapLabel = $derived(routineGap(routine) ?? '')
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
 
@@ -332,6 +333,16 @@
         {/if}
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span
+          class="shrink-0 rounded-full px-1.5 py-px text-[0.5rem] tracking-wide uppercase {scheduled
+            ? 'bg-elevated text-dimmed'
+            : 'bg-elevated text-accent'}"
+          title={scheduled
+            ? 'This routine runs on a schedule'
+            : 'This routine runs only when you ask it to'}
+        >
+          {scheduled ? 'Scheduled' : 'Unscheduled'}
+        </span>
         <span class="shrink-0">{routineRunCountLabel(runCount)}</span>
         {#if nextRunLabel}
           <span class="shrink-0" aria-hidden="true">·</span>
@@ -430,21 +441,23 @@
             Edit routine
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => (skipConfirm = 'next')}
-          >
-            <SkipForward size={14} class="text-muted" />
-            Skip next run
-          </DropdownMenu.Item>
-          {#if hasRunsToday}
+          {#if scheduled}
             <DropdownMenu.Item
               class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-              onSelect={() => (skipConfirm = 'today')}
+              onSelect={() => (skipConfirm = 'next')}
             >
-              <CalendarDays size={14} class="text-muted" />
-              Skip runs for today
+              <SkipForward size={14} class="text-muted" />
+              Skip next run
             </DropdownMenu.Item>
+            {#if hasRunsToday}
+              <DropdownMenu.Item
+                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                onSelect={() => (skipConfirm = 'today')}
+              >
+                <CalendarDays size={14} class="text-muted" />
+                Skip runs for today
+              </DropdownMenu.Item>
+            {/if}
           {/if}
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"

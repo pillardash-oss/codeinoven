@@ -374,6 +374,7 @@ import {
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
   routineHowToComplete,
+  routineIsScheduled,
   workerReportsToCoordinator
 } from '../../lib/types'
 import {
@@ -7930,7 +7931,7 @@ export class ChatEngine {
     ])
     const decisions = formatInterviewDecisions(messages, ROUTINE_AUTHORING_DECISION_LIMIT)
     return [
-      routineAuthoringContext(routine.name),
+      routineAuthoringContext(routine.name, routineIsScheduled(routine)),
       routineAuthoringProgressContext({ checkpoint, decisions })
     ]
       .filter(Boolean)

@@ -870,6 +870,7 @@ export class Database {
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateRoutineExecution(connection)
+      this.migrateRoutineScheduled(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
       this.migrateDesignRevisionMetadata(connection)
@@ -1048,6 +1049,23 @@ export class Database {
    * carry it, and the guarded `ALTER TABLE` is idempotent. An existing routine
    * keeps the column NULL, which means this computer.
    */
+  /**
+   * Add the routine schedule-enable column to databases created before a
+   * routine could be unscheduled. On by default, so every existing routine
+   * keeps firing. Fresh databases already carry it, and the guarded
+   * `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineScheduled(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('scheduled')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 1')
+    }
+  }
+
   private migrateRoutineExecution(connection: DatabaseType): void {
     const columns = new Set<string>(
       (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
@@ -1490,6 +1508,12 @@ export class Database {
     }
     if (!columns.has('schedule_override')) {
       connection.exec('ALTER TABLE threads ADD COLUMN schedule_override TEXT')
+    }
+    // A task's own schedule switch: 1 schedules it even when its routine is
+    // unscheduled, 0 keeps it off the clock even when its routine is scheduled,
+    // and NULL inherits the routine. Tasks predating it read back as inheriting.
+    if (!columns.has('scheduled')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN scheduled INTEGER')
     }
     if (!columns.has('last_run_at')) {
       connection.exec('ALTER TABLE threads ADD COLUMN last_run_at INTEGER')

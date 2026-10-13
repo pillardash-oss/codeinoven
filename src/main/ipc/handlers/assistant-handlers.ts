@@ -224,6 +224,7 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
     ...(typeof record.description === 'string'
       ? { description: record.description.slice(0, MAX_ROUTINE_DESCRIPTION) }
       : {}),
+    ...(typeof record.scheduled === 'boolean' ? { scheduled: record.scheduled } : {}),
     ...(typeof record.color === 'string' ? { color: record.color.slice(0, 32) } : {}),
     ...(typeof record.iconType === 'string' ? { iconType: record.iconType.slice(0, 64) } : {}),
     schedule: sanitizeSchedule(record.schedule),
@@ -260,6 +261,12 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
             0,
             MAX_ROUTINE_DESCRIPTION
           )
+  }
+  if (record.scheduled !== undefined) {
+    if (typeof record.scheduled !== 'boolean') {
+      throw new TypeError('Routine scheduled flag must be a boolean')
+    }
+    patch.scheduled = record.scheduled
   }
   if (record.color !== undefined) {
     patch.color =
@@ -421,6 +428,23 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:setTaskSchedule', (_, threadId: unknown, schedule: unknown) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     return routineManager.setTaskScheduleOverride(safeThreadId, sanitizeSchedule(schedule))
+  })
+
+  /**
+   * Turn one function's clock on or off independently of its routine: `true`
+   * schedules it even under an unscheduled routine, `false` keeps it off the
+   * clock even under a scheduled one, and `null` returns it to its routine's
+   * default. The fresh row is broadcast so every renderer reads the new state
+   * without a reload.
+   */
+  ipcMain.handle('assistant:setTaskScheduled', (_, threadId: unknown, scheduled: unknown) => {
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    if (scheduled !== null && typeof scheduled !== 'boolean') {
+      throw new TypeError('Task scheduled flag must be a boolean or null')
+    }
+    const thread = routineManager.setTaskScheduled(safeThreadId, scheduled)
+    broadcastThreadUpdate(thread)
+    return thread
   })
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())

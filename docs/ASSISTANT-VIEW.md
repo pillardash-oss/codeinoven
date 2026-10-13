@@ -673,6 +673,55 @@ thread record and filters the container file by it, so one routine can never
 receive another routine's memory, and a project-only or chat-only entry never
 reaches an assistant task.
 
+## Scheduled and on-demand
+
+A routine is scheduled by default and can be turned off, so an assistant can be
+a chat with connectors instead of a job on a clock. The flag is `Routine.scheduled`
+(absent means on, so every routine that predates it keeps firing) and it is set
+on create (`RoutineCreateControl.svelte`, a **Run on a schedule** switch that
+starts on) and on edit (`RoutineEditModal.svelte`). Turning it off clears the
+routine's schedule outright, so nothing downstream can fire a slot it no longer
+has; turning it back on leaves the routine re-authored rather than silently
+restoring a cadence the user may have forgotten. `routineIsScheduled`
+(`src/lib/types/routine.ts`) is the single rule every surface reads.
+
+What the flag changes:
+
+- **The authoring interview never asks for a schedule.** The chat engine passes
+  the flag into `routineAuthoringContext` (`src/lib/routine-authoring.ts`), which
+  replaces the cadence ask with an instruction that the routine is on demand, tells
+  the agent to leave `schedule` out of the plan (or set it to null), and drops the
+  schedule from the checkpoint, the recap and the confirm wording.
+  `routineHowToUpdateContext` does the same on a later tweak turn, and the plan
+  schema now allows a null schedule.
+- **The scheduler never fires it.** `RoutineManager.resolveTaskSchedule` returns
+  null for a task of an unscheduled routine, so `evaluateTask`, `nextDueAt`,
+  `pruneStaleMisses` and the skip helpers all see nothing to fire, exactly as they
+  already did for a routine with no cadence.
+- **Every surface says so.** A routine row, its hover popover, the panel's All
+  and Routine tabs, the search results and the recap card all read the flag: a row
+  wears a small **Scheduled** / **Unscheduled** badge, and the schedule line reads
+  **Runs on demand** instead of a cadence. The **Skip next run** menu items are
+  hidden for an on-demand routine, because it has nothing to skip.
+
+### Scheduling is per function
+
+A routine can hold several functions (its tasks), and each one can be scheduled
+independently. `Thread.scheduled` is a task's own override of its routine's
+flag: `true` schedules it even under an on-demand routine, `false` keeps it off
+the clock even under a scheduled one, and absent follows the routine. This is
+what lets one function fire on the cadence while another the user only drives by
+hand. `RoutineManager.resolveTaskScheduled` owns the rule, and the renderer
+store's `taskScheduled` mirrors it so the sidebar and the scheduler never
+disagree.
+
+A task row shows the state on its line (**On demand** when off) and reveals a
+calendar toggle on hover (`AssistantTaskRow.svelte`); the toggle calls
+`assistant:setTaskScheduled`, which persists the flag and broadcasts the fresh
+row. Turning a function off never touches its routine's schedule, and turning an
+on-demand routine's function on reuses the routine's saved cadence when it has
+one.
+
 ## How-to authoring
 
 Every routine has a required how-to. The UI **never** uses the term "system

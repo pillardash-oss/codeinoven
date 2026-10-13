@@ -35,6 +35,7 @@
     describeSchedule,
     routineAgentsComplete,
     routineHowToComplete,
+    routineIsScheduled,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
@@ -180,6 +181,12 @@
   const sections = $derived(routine ? parseHowToSections(routine.howTo) : [])
   const howToComplete = $derived(routine ? routineHowToComplete(routine) : false)
   const agentsComplete = $derived(routine ? routineAgentsComplete(routine) : false)
+  /** Whether this routine runs on a clock at all; drives the schedule copy. */
+  const scheduled = $derived(routine ? routineIsScheduled(routine) : true)
+  /** The schedule line everywhere in the panel: a cadence, or on-demand. */
+  const scheduleLabel = $derived(
+    scheduled ? describeSchedule(routine?.schedule ?? null) : 'Runs on demand'
+  )
 
   const collapsed = new SvelteSet<string>()
   let editingId = $state<string | null>(null)
@@ -874,7 +881,7 @@
           {@render summaryRow({
             title: 'Routine',
             detail: howToComplete
-              ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${describeSchedule(routine.schedule)}`
+              ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
               : 'No how-to yet. Describe the routine to the agent in its task.',
             target: 'routine',
             warn: !howToComplete
@@ -937,7 +944,7 @@
             </p>
           {/if}
           <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
-            Schedule: {describeSchedule(routine.schedule)}
+            Schedule: {scheduleLabel}
           </p>
 
           <div class="mb-1 flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">

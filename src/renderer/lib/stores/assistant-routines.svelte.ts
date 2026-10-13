@@ -3,6 +3,7 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { CustomIconImage } from '$shared/custom-icon'
 import {
   nextRunAtExcluding,
+  routineIsScheduled,
   type BackgroundRun,
   type CreateRoutineInput,
   type MissedRun,
@@ -203,8 +204,25 @@ class AssistantRoutinesState {
     return this.routines.find((routine) => routine.id === task.routineId) ?? null
   }
 
-  /** The schedule a task runs on: its override when set, else its routine's. */
+  /**
+   * Whether a task runs on a clock at all. The task's own flag wins when set,
+   * so one function of a routine can be scheduled and another not; absent, a
+   * task follows its routine, and a routine-less task is unscheduled unless it
+   * carries its own schedule. Mirrors RoutineManager.resolveTaskScheduled so
+   * the sidebar and the scheduler never disagree.
+   */
+  taskScheduled(task: Thread): boolean {
+    if (task.scheduled !== undefined) return task.scheduled
+    if (!task.routineId) return task.scheduleOverride !== undefined
+    const routine = this.routineForTask(task)
+    if (!routine) return task.scheduleOverride !== undefined
+    return routineIsScheduled(routine)
+  }
+
+  /** The schedule a task runs on: its override when set, else its routine's.
+   *  A task that is not scheduled has none. */
   scheduleForTask(task: Thread): RoutineSchedule | null {
+    if (!this.taskScheduled(task)) return null
     if (task.scheduleOverride) return task.scheduleOverride
     return this.routineForTask(task)?.schedule ?? null
   }
@@ -372,6 +390,11 @@ class AssistantRoutinesState {
 
   async setTaskSchedule(threadId: string, schedule: RoutineSchedule | null): Promise<Thread> {
     return invoke('assistant:setTaskSchedule', threadId, schedule)
+  }
+
+  /** Turn one function's clock on, off, or back to following its routine. */
+  async setTaskScheduled(threadId: string, scheduled: boolean | null): Promise<Thread> {
+    return invoke('assistant:setTaskScheduled', threadId, scheduled)
   }
 
   async dismissMissedRun(id: string): Promise<void> {
