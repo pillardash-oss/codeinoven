@@ -1168,7 +1168,10 @@
   }
 
   function updateOnboardingStep(step: number): void {
-    if (step === 4) navigate('chats')
+    // The first-run tour stays in Projects: the composer spotlight falls back
+    // to a centered callout there (its anchor only exists in Chats), and the
+    // Chats view owns its own tour when the user opens it for the first time.
+    // Adding a project therefore never yanks the user into the Chats view.
     onboardingStep = step
   }
 
