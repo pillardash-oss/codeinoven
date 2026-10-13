@@ -187,6 +187,8 @@ export const invokeProviderContract = {
     [harnessId: string, providerId: string, hidden: boolean],
     string[]
   >,
+  'customVendors:listIcons': {} as Contract<[], Record<string, string>>,
+  'customVendors:saveIcon': {} as Contract<[providerId: string, image: string], string>,
   'baseUrlProviders:list': {} as Contract<[], BaseUrlProvider[]>,
   'baseUrlProviders:create': {} as Contract<[input: BaseUrlProviderCreateRequest], BaseUrlProvider>,
   'baseUrlProviders:update': {} as Contract<

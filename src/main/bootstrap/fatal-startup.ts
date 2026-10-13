@@ -1,89 +1,86 @@
-/**
- * Fatal startup path: deterministically close resources and quit with a
- * nonzero diagnostic code so a failed boot never leaves a headless process.
- * Logs, flushes the durable log, closes the database (and any other
- * initialized resource), shows the error box, then exits(1), falling back to
- * process.exit if the Electron quit callback throws.
- */
-
-import { app, dialog } from 'electron'
+import { app, dialog, shell } from 'electron'
 import { APP_NAME } from '../../lib/brand'
 import type { Database } from '../database/database'
-import { handleFatalStartupFailure } from '../system/lifecycle-diagnostics'
+import type { StorageEngine } from '../storage/storage-engine'
+import { Logger } from '../system/logger'
 import { startupTelemetry } from '../system/startup-telemetry'
 import type { BootstrapState } from './bootstrap-state'
 import { closeSplash } from './splash-window'
+import { startStartupUpdater } from './startup-updater'
+import { signalNativeSplashReady } from '../system/native-splash-handoff'
 
 export interface FatalStartupContext {
   state: BootstrapState
-  database: Database
+  database?: Database
+  storage: StorageEngine
 }
 
+const recovering = new WeakSet<BootstrapState>()
+const DOWNLOAD_PAGE = 'https://codeinoven.com/downloads'
+
+/** Keep recovery independent of the database, app configuration and renderer. */
 export async function handleFatalStartup(
   error: unknown,
   context: FatalStartupContext
 ): Promise<void> {
-  const { state } = context
-  closeSplash()
-  await handleFatalStartupFailure({
-    error,
-    appName: APP_NAME,
-    resources: [
-      {
-        name: 'database',
-        close: () => context.database.close()
-      },
-      {
-        name: 'chatEngine',
-        close: () => void state.chatEngine?.dispose()
-      },
-      {
-        name: 'ptyService',
-        close: () => state.ptyService?.destroyAll()
-      },
-      {
-        name: 'updaterService',
-        close: () => state.updaterService?.stop()
-      },
-      {
-        name: 'skillUpdateService',
-        close: () => state.skillUpdateService?.stop()
-      },
-      {
-        name: 'notificationService',
-        close: () => state.notificationService?.stop()
-      },
-      {
-        name: 'powerWakeService',
-        close: () => state.powerWakeService?.stop()
-      },
-      {
-        name: 'retryScheduler',
-        close: () => state.retryScheduler?.dispose()
-      },
-      {
-        name: 'heartbeatScheduler',
-        close: () => state.heartbeatScheduler?.dispose()
-      },
-      {
-        name: 'routineScheduler',
-        close: () => state.routineScheduler?.dispose()
-      },
-      {
-        name: 'cioCleanup',
-        close: () => state.cioCleanup?.stop()
-      },
-      {
-        name: 'speechService',
-        close: () => void state.speechService?.dispose()
-      },
-      {
-        name: 'searchService',
-        close: () => void state.searchService?.dispose()
+  const { state, storage } = context
+  if (recovering.has(state)) return
+  recovering.add(state)
+  state.startupRecovery = true
+  Logger.error(`${APP_NAME} workspace startup failed; updates remain available`, error)
+  try {
+    signalNativeSplashReady()
+    closeSplash()
+    startupTelemetry.stopEventLoopMonitor()
+    startupTelemetry.report('startup recovery')
+  } catch (diagnosticError) {
+    Logger.error('Startup recovery diagnostics failed', diagnosticError)
+  }
+  void Logger.flush().catch(() => {})
+  await startStartupUpdater(state, storage).catch(() => {})
+
+  // Native asynchronous dialogs need no preload, renderer bundle, CSS, SQLite
+  // or parsed settings. Each action returns here, including network failures.
+  while (!state.quitCleanupStarted) {
+    const status = state.updaterService?.status
+    const action = !status?.canAutoUpdate
+      ? 'Open download page'
+      : status?.state === 'downloaded'
+        ? 'Install update'
+        : status?.state === 'available'
+          ? 'Download update'
+          : 'Check for updates'
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        title: `${APP_NAME} recovery`,
+        message: 'The workspace could not open. You can still update the application.',
+        detail: `${error instanceof Error ? error.message : String(error)}\n\nUpdate status: ${status?.state ?? 'unavailable'}${status?.availableVersion ? ` (${status.availableVersion})` : ''}${status?.errorMessage ? `\n${status.errorMessage}` : ''}`,
+        buttons: [action, 'Open download page', 'Restart', 'Quit'],
+        defaultId: 0,
+        cancelId: 3,
+        noLink: true
+      })
+      if (response === 1) {
+        await shell.openExternal(DOWNLOAD_PAGE)
+      } else if (response === 2 || response === 3) {
+        if (response === 2) app.relaunch()
+        app.quit()
+        return
+      } else if (!status?.canAutoUpdate) {
+        await shell.openExternal(DOWNLOAD_PAGE)
+      } else {
+        await startStartupUpdater(state, storage)
+        const updater = state.updaterService
+        if (!updater?.status.canAutoUpdate) await shell.openExternal(DOWNLOAD_PAGE)
+        else if (updater?.status.state === 'downloaded') updater.quitAndInstall()
+        else if (updater?.status.state === 'available') await updater.downloadUpdate()
+        else await updater?.checkForUpdates(true)
       }
-    ],
-    showErrorBox: (title, message) => dialog.showErrorBox(title, message),
-    quit: (code) => app.exit(code),
-    telemetry: startupTelemetry
-  })
+    } catch (recoveryError) {
+      Logger.error('Recovery action failed; keeping update recovery available', recoveryError)
+      // Yield before retrying, including when the native dialog itself fails.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000))
+    }
+  }
 }

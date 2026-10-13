@@ -56,6 +56,8 @@ interface PtySession {
   /** When set, the session is killed after this long with zero output or input. */
   idleTimeoutMs?: number
   lastActivityAt: number
+  /** A watchdog stop is a failure even if the shell reports a clean exit. */
+  exitCodeOverride?: number
 }
 
 /** How often the watchdog sweeps for idle sessions. */
@@ -563,6 +565,7 @@ export class PtyService {
     })
 
     proc.onExit(({ exitCode }) => {
+      exitCode = this.sessions.get(id)?.exitCodeOverride ?? exitCode
       this.sessions.delete(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
@@ -615,13 +618,26 @@ export class PtyService {
             (now - session.lastActivityAt) / 1000
           )}s   killing hung process`
         )
-        session.process.write(
+        sendToRenderer(
+          this.sender,
+          `pty:data:${session.id}`,
           `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
             session.idleTimeoutMs / 1000
           )}s   the process appears hung and was stopped automatically.\x1b[0m\r\n`
         )
         // Give the notice a moment to flush before the PTY goes away.
-        setTimeout(() => this.destroy(session.id), 300)
+        setTimeout(() => {
+          if (this.sessions.get(session.id) === session) {
+            session.exitCodeOverride = 1
+            session.idleTimeoutMs = undefined
+            try {
+              session.process.kill()
+            } catch {
+              this.sessions.delete(session.id)
+              sendToRenderer(this.sender, `pty:exit:${session.id}`, 1)
+            }
+          }
+        }, 300)
       }
     }, IDLE_WATCHDOG_INTERVAL_MS)
     // Never keep the Electron main process alive just for the watchdog.

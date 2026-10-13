@@ -622,6 +622,39 @@ body {
   outline: none;
 }
 
+/* ─── Full screen table reader ───────────────────────────────────────────── */
+/* The same table given the whole window, for a grid too wide for the panel it
+   was written in. The controls stay at the top; the table itself owns the
+   window's remaining height and scrolls inside it.
+
+   The selector is COMPOUND, not a descendant: the modal hands this element both
+   `markdown-body` (for the table type and cell rules) and `md-table-fullscreen`
+   itself, exactly like `markdown-body-card` above. Written as
+   `.markdown-body .md-table-fullscreen` it matches nothing, which is how the
+   padding and the fill-height scroll area went missing once already. */
+.markdown-body.md-table-fullscreen {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+  /* The horizontal step matches the modal's own `px-6` header, so the controls
+     and the table line up with the title instead of hugging the window edge. */
+  padding: 0.75rem 1.5rem 1.5rem;
+}
+
+/* The strip and the scroll area are spaced by the flex gap alone; the generic
+   `.markdown-body > * + *` rule would add a second, prose-sized gap here. */
+.markdown-body.md-table-fullscreen > * + * {
+  margin-top: 0;
+}
+
+.markdown-body .md-table-fullscreen-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .markdown-body hr {
   border: 0;
   border-top: 1px solid var(--color-border);

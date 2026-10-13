@@ -60,6 +60,7 @@ import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn
 import { currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
+import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 import {
   cuaActionReference,
   cuaRefusal,
@@ -466,6 +467,7 @@ export interface AppControlContext {
   projectId: string
   projectPath: string | null
   threadId: string
+  permissionLevel: PermissionLevel
 }
 
 /**
@@ -566,6 +568,8 @@ export class UtilityOrchestrationService {
   /** Routes answered with a structured payload beside their content parts. */
   private readonly structuredRoutes: ReadonlySet<string>
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
+  /** Delivery-capable tools are discovered once per connection, including older drivers. */
+  private readonly backgroundInputTools = new WeakMap<McpClient, ReadonlySet<string>>()
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private artifactExecutor: DesignCapabilityExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
@@ -844,7 +848,8 @@ export class UtilityOrchestrationService {
     const context = {
       projectId: state.request.projectId,
       projectPath: state.request.projectPath,
-      threadId: state.request.threadId
+      threadId: state.request.threadId,
+      permissionLevel: state.request.permissionLevel
     }
     return operation === 'catalog'
       ? executor.catalog(input, context)
@@ -1109,6 +1114,7 @@ export class UtilityOrchestrationService {
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
+      BACKGROUND_AGENT_CONTROL_INSTRUCTION,
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
@@ -1129,7 +1135,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus five operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus app operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasVideoCapability
@@ -1439,6 +1445,28 @@ export class UtilityOrchestrationService {
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
+    // Credential metadata and connected MCP clients are snapshots. A key
+    // collected mid-turn must replace both before the next utility call.
+    const boundUtilityIds = new Set(
+      resolution.secrets.flatMap((secret) => (secret.boundUtilityId ? [secret.boundUtilityId] : []))
+    )
+    for (const turn of this.turns.values()) {
+      const affected = [...boundUtilityIds].filter(
+        (utilityId) => turn.state.eligible.has(utilityId) || turn.state.activated.has(utilityId)
+      )
+      if (affected.length === 0) continue
+      for (const utilityId of affected) {
+        // Let a connection already being established settle before retiring
+        // it, so it cannot restore a client carrying the previous credential.
+        const connecting = turn.state.connecting.get(utilityId)
+        if (connecting) await connecting.catch(() => undefined)
+        turn.state.activated.delete(utilityId)
+        await this.releaseUtility(turn.state, utilityId)
+      }
+      // Preserve bank entries: the next invocation reconnects lazily using
+      // the updated definition without asking the agent to activate again.
+      await this.refreshEligible(turn.state, { force: true })
+    }
     const sharedNote = `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
     const secretEntries = resolution.secrets.map((secret) => ({
       label: secret.label,
@@ -2102,6 +2130,25 @@ export class UtilityOrchestrationService {
     }
     const client = await this.mcpClient(state, utility)
     if (this.isComputerUseUtility(resolved)) {
+      const tools = await client.listTools()
+      this.backgroundInputTools.set(
+        client,
+        new Set(
+          tools
+            .filter((tool) => {
+              const properties = tool.inputSchema?.['properties']
+              if (!properties || typeof properties !== 'object' || Array.isArray(properties))
+                return false
+              const delivery = (properties as Record<string, unknown>)['delivery_mode']
+              if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery)) return false
+              const modes = (delivery as Record<string, unknown>)['enum']
+              return (
+                Array.isArray(modes) && modes.includes('background') && modes.includes('foreground')
+              )
+            })
+            .map((tool) => tool.name)
+        )
+      )
       await this.prepareComputerUseSession(state, utilityId, client)
     }
     return client
@@ -2210,13 +2257,18 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // One capability, five operation groups with different owners: `preview`
+      // One capability, operation groups with different owners: `preview`
       // serves the design folder, `checkpoint` saves a named step, `delegate` runs
       // the model the user assigned to text work, `generate` produces media with the model assigned to a media
       // craft, and `save-media` brings a generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.designPreviewExecutor],
         ['checkpoint', this.designPreviewExecutor],
+        ['read-contract', this.designPreviewExecutor],
+        ['write-contract', this.designPreviewExecutor],
+        ['lint', this.designPreviewExecutor],
+        ['critique', this.designPreviewExecutor],
+        ['extract-reference', this.designPreviewExecutor],
         ['delegate', this.designAssignmentExecutor],
         ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
@@ -2649,7 +2701,24 @@ export class UtilityOrchestrationService {
     input: Record<string, unknown>
   ): Promise<unknown> {
     try {
-      return await client.callTool(operation, input)
+      const target = input['target']
+      const desktop =
+        input['scope'] === 'desktop' ||
+        (typeof target === 'object' &&
+          target !== null &&
+          (target as Record<string, unknown>)['kind'] === 'desktop')
+      const background =
+        this.backgroundInputTools.get(client)?.has(operation) &&
+        input['delivery_mode'] === undefined &&
+        !desktop
+      // Preserve explicit foreground requests and desktop-only operations. Never
+      // replay uncertain or partial input: the agent must observe those first.
+      const routed = background ? { ...input, delivery_mode: 'background' } : input
+      const result = await client.callTool(operation, routed)
+      if (background && cuaRefusal(result)?.code === 'background_unavailable') {
+        return await client.callTool(operation, { ...input, delivery_mode: 'foreground' })
+      }
+      return result
     } catch (error) {
       await this.dropUnusableTransport(state, resolved, client, error)
       throw error

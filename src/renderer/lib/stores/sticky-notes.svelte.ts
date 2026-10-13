@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 import { PROJECT_COLORS } from '$lib/project-colors'
 import type { StickyNoteAppearance, StickyNoteSummary } from '$shared/types'
 
@@ -88,6 +89,32 @@ class StickyNotesState {
     if (!this.notes.some((note) => note.id === id)) return
     this.activeId = id
     void this.loadBody(id)
+  }
+
+  /**
+   * Move one note beside another and persist the new strip order. The list
+   * reorders immediately, so the drag is never undone by a round trip, and
+   * falls back to the previous order if the write is refused.
+   */
+  move(id: string, targetId: string, position: 'before' | 'after'): void {
+    if (id === targetId) return
+    const from = this.notes.findIndex((note) => note.id === id)
+    const target = this.notes.findIndex((note) => note.id === targetId)
+    if (from < 0 || target < 0) return
+    const previous = this.notes
+    const moved = this.notes[from]
+    const remaining = this.notes.filter((note) => note.id !== id)
+    const anchor = remaining.findIndex((note) => note.id === targetId)
+    const insertAt = position === 'before' ? anchor : anchor + 1
+    const next = [...remaining.slice(0, insertAt), moved, ...remaining.slice(insertAt)]
+    this.notes = next
+    void invoke(
+      'sticky-note:reorder',
+      next.map((note) => note.id)
+    ).catch((error: unknown) => {
+      this.notes = previous
+      logRendererError('The sticky note order could not be saved', error)
+    })
   }
 
   async create(): Promise<StickyNoteEntry> {

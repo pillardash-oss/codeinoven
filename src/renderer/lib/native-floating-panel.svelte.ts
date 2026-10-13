@@ -37,6 +37,12 @@ export class NativeFloatingPanel {
 
   constructor(readonly id: string) {}
 
+  /** A newly opened editor in an already-live panel needs its caret activated. */
+  focusContent(): void {
+    this.focusPending = true
+    this.schedule()
+  }
+
   mount(root: HTMLElement): () => void {
     this.disposed = false
     this.failed = false
@@ -157,7 +163,7 @@ export class NativeFloatingPanel {
     const isContentTarget = (element: HTMLElement | null): element is HTMLElement =>
       element !== null &&
       root.contains(element) &&
-      !element.closest('[data-native-dock-handle]') &&
+      !element.closest('[data-native-dock-handle], [data-popover-drag-handle]') &&
       !element.matches(':disabled') &&
       isFocusableTarget(element)
     const active = this.focusedElement()
@@ -193,7 +199,7 @@ export class NativeFloatingPanel {
     const styles = document.createElement('div')
     nativeDocument.head.append(styles)
     const css = document.createElement('style')
-    css.textContent = `html,body{margin:0!important;width:100%;height:100%;overflow:hidden!important;background:transparent!important;pointer-events:auto!important} [data-native-floating-panel]{position:absolute!important;left:var(--floating-x,0px)!important;top:var(--floating-y,0px)!important;opacity:1!important} [data-native-floating-panel] button:not(:disabled){cursor:pointer} [data-native-floating-panel].invisible{visibility:hidden} @media(prefers-reduced-motion:no-preference){[data-native-floating-panel]{animation:native-floating-enter 140ms ease-out}} @keyframes native-floating-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}`
+    css.textContent = `html,body{margin:0!important;width:100%;height:100%;overflow:hidden!important;background:transparent!important;pointer-events:auto!important} [data-native-floating-panel]{position:absolute!important;left:var(--floating-x,0px)!important;top:var(--floating-y,0px)!important;opacity:1!important} [data-native-floating-panel] button:not(:disabled):not([data-popover-drag-handle]){cursor:pointer} [data-native-floating-panel].invisible{visibility:hidden} @media(prefers-reduced-motion:no-preference){[data-native-floating-panel]{animation:native-floating-enter 140ms ease-out}} @keyframes native-floating-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}`
     nativeDocument.head.append(css)
     let stylesheetFrame: ReturnType<typeof setTimeout> | null = null
     const syncStyles = (): void => {

@@ -477,5 +477,6 @@ export const invokeAgentContract = {
   'sticky-note:create': {} as Contract<[appearance: StickyNoteAppearance], StickyNote>,
   'sticky-note:update': {} as Contract<[id: string, appearance: StickyNoteAppearance], void>,
   'sticky-note:save': {} as Contract<[id: string, body: string], void>,
+  'sticky-note:reorder': {} as Contract<[ids: string[]], void>,
   'sticky-note:delete': {} as Contract<[id: string], void>
 }

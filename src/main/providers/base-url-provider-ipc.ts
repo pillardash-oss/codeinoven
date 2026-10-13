@@ -1,4 +1,6 @@
-import { clipboard } from 'electron'
+import { CustomVendorService } from './custom-vendor-service'
+import { BrowserWindow, clipboard } from 'electron'
+import { sendToRenderer } from '../ipc/renderer-delivery'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type {
   BaseUrlProviderCreateRequest,
@@ -58,6 +60,19 @@ export function registerBaseUrlProviderIpc(
   providers = new BaseUrlProviderService(storage),
   vault = new SecretVault(storage)
 ): void {
+  const customVendors = new CustomVendorService(storage)
+  ipcMain.handle('customVendors:listIcons', () => customVendors.list())
+  ipcMain.handle('customVendors:saveIcon', async (_, rawId: unknown, image: unknown) => {
+    const id = validateEntityId(rawId, 'Custom vendor provider ID', 256)
+    if (!(await providers.listProviders()).some((provider) => provider.id === id)) {
+      throw new Error('Custom vendor provider not found')
+    }
+    const icon = await customVendors.save(id, image)
+    for (const window of BrowserWindow.getAllWindows()) {
+      sendToRenderer(window.webContents, 'customVendors:iconChanged', { providerId: id, icon })
+    }
+    return icon
+  })
   const usageClient = new CustomProviderUsageClient()
   ipcMain.handle('baseUrlProviders:list', () => providers.listProviders())
 

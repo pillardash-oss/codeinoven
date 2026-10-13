@@ -224,6 +224,7 @@
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
+    routineIsScheduled,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
   import type {
@@ -322,6 +323,7 @@
     pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
+    turnEndsOnQuestion,
     turnStartPromptsBefore,
     type SubagentPart
   } from './thread-turn-parts'
@@ -769,6 +771,26 @@
     )
     return [...leading, ...body]
   })
+  /**
+   * Whether the turn ending at `endIndex` may surface its closing statement in
+   * the transcript (see `getTurnFinalText`) instead of holding it in the working
+   * trace for the whole run.
+   *
+   * A turn that is over always may, and so does every turn older than the
+   * newest one. The newest turn may only once the agent has handed the floor
+   * back: it closed on a Codex `final_answer`, or it asked the reader a question
+   * and is sitting on the answer. Until then the newest text is the agent
+   * talking about work still in flight, so it stays in the trace with that work
+   * rather than flashing through the reading position and jumping back out.
+   */
+  function closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
+    const closing = getTurnFinalText(messages, endIndex)
+    if (!closing) return false
+    if (closing.phase === 'final_answer') return true
+    if (!conversationBusy || !isLastTurnEnd) return true
+    return turnEndsOnQuestion(messages, endIndex)
+  }
+
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
@@ -3979,6 +4001,18 @@
     return isAtLatest(el)
   }
 
+  /** The id of the first message in the mounted window   the reader's anchor
+   *  the moment they leave the tail. Every pin MUST use this and never a
+   *  tail-relative count: `mountedCount` and the turn-aligned window start can
+   *  disagree (a long turn spans more messages than one page), and pinning to
+   *  `messages.length - mountedCount` then points BELOW the real window start,
+   *  which silently unmounts messages the reader can see and collapses the
+   *  window toward the tail. That collapse is what threw the reader back to the
+   *  latest message when they clicked "Load earlier messages". */
+  function mountedWindowStartId(): string | null {
+    return messages[mountedStartIndex]?.id ?? null
+  }
+
   function onScroll(): void {
     if (!scrollEl) return
     const away = !isAtBottom(scrollEl)
@@ -3988,7 +4022,7 @@
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
-      windowStartId = visibleMessages[0]?.id ?? null
+      windowStartId = mountedWindowStartId()
     } else if (!away && userScrolledAway) {
       windowStartId = null
     }
@@ -4009,9 +4043,15 @@
     // button is the only trigger for the conversation-level history fetch.
   }
 
-  /** Release the tail-follow lock synchronously when the user starts scrolling up. */
+  /** Release the tail-follow lock synchronously when the user starts scrolling up.
+   *  A wheel tick arrives before the scroll it causes, so it also has to pin the
+   *  window here: setting `userScrolledAway` alone suppressed onScroll's own pin
+   *  (that branch is guarded on the flag being false), leaving the window
+   *  tail-relative until the reader happened to reload history. */
   function onWheel(event: WheelEvent): void {
-    if (event.deltaY < 0) userScrolledAway = true
+    if (event.deltaY >= 0) return
+    userScrolledAway = true
+    windowStartId ??= mountedWindowStartId()
   }
 
   let loadingOlderMessages = $state(false)
@@ -4027,8 +4067,12 @@
     userScrolledAway = true
     // Pin the window before anything prepends   with an anchor pinned, the
     // mounted content cannot change no matter what merges behind it, so the
-    // fetch loop needs no scroll compensation at all.
-    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
+    // fetch loop needs no scroll compensation at all. The pin is the window's
+    // CURRENT start, never a tail-relative count: the two differ on a long
+    // turn, and a count-based pin would start the window later than what is
+    // already mounted and destroy the reader's viewport before the fetch even
+    // begins.
+    windowStartId ??= mountedWindowStartId()
     try {
       // One click loads THREE turn-aligned pages: the store usually already
       // holds some of them, so fetch only while it does not   each fetch is a
@@ -6663,7 +6707,11 @@
     if (!routine) return true
     if (draft.howTo.trim() !== routine.howTo.trim()) return true
     if (!plan) return false
-    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+    if (
+      routineIsScheduled(routine) &&
+      plan.schedule &&
+      describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)
+    ) {
       return true
     }
     if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
@@ -6811,12 +6859,15 @@
     routineSaving = true
     try {
       const plan = draft.plan
+      const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+      const scheduled = routine ? routineIsScheduled(routine) : true
       const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
-      if (plan?.schedule) patch.schedule = plan.schedule
+      // An on-demand routine has no schedule, so a plan that still carries one
+      // (an agent that did not know) can never re-schedule it here.
+      if (plan?.schedule && scheduled) patch.schedule = plan.schedule
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
-        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
         const catalog = await invoke('utilities:list').catch(() => null)
         patch.connections = connectionsFromPlan(
           plan.connections,
@@ -6825,7 +6876,7 @@
         )
       }
       await assistantRoutines.updateRoutine(routineId, patch)
-      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
       routineRecapDismissed = ''
       return true
     } catch (error) {
@@ -10733,9 +10784,9 @@
     }
   })
 
-  async function copyMessage(msg: AgentMessage): Promise<void> {
+  async function copyMessage(msg: AgentMessage, text = messageText(msg)): Promise<void> {
     try {
-      await copyText(messageText(msg), null)
+      await copyText(text, null)
       copiedMessageId = msg.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)
@@ -12264,10 +12315,26 @@
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
-                    {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
+                    {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
+                    {@const turnClosingText = getTurnFinalText(messages, turnEndIndex)}
+                    {@const turnClosingVisible = closingStatementVisible(
+                      turnEndIndex,
+                      turnEndIndex === messages.length - 1
+                    )}
+                    {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+                    {@const turnWorkingParts = getTurnWorkingParts(
+                      messages,
+                      absIndex,
+                      traceHoldsClosingText
+                    )}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
+                      : streamWorkingPartsForTurn(
+                          streamParts,
+                          transcriptIndex,
+                          absIndex,
+                          traceHoldsClosingText
+                        )}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
@@ -12283,10 +12350,19 @@
                             ...turnWorkingParts.body
                           ])}
                     {@const turnParts = isAssignmentAuditorThread
-                      ? collectedTurnParts.filter(
+                      ? // The auditor transcript renders its own commentary from the
+                        // trace and keeps its deliverable (the report card) out of
+                        // both, so its trace still holds commentary prose.
+                        collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
-                      : collectedTurnParts}
+                      : // The transcript is showing the agent's closing statement, so
+                        // the trace must not carry a second copy of that one part.
+                        // Every other text part stays: it is the commentary that
+                        // explains the work behind the answer.
+                        turnClosingVisible && turnClosingText
+                        ? collectedTurnParts.filter((part) => part.id !== turnClosingText.id)
+                        : collectedTurnParts}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
@@ -12387,12 +12463,9 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(messages, absIndex)}
-                      {@const finalAnswerReady =
-                        turnFinalText?.type === 'text' &&
-                        turnFinalText.text.trim().length > 0 &&
-                        (turnFinalText.phase === 'final_answer' || !conversationBusy || !isLatest)}
-                      {#if finalAnswerReady && turnFinalText}
+                      {@const turnClosingText = getTurnFinalText(messages, absIndex)}
+                      {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
                           speechController.playback.messageId === msg.id &&
@@ -12419,8 +12492,11 @@
                               textClass="text-[0.8125rem]"
                             />
                           {:else}
+                            <!-- The agent's closing statement is the turn's answer;
+                                 the running commentary it wrote between tool calls
+                                 lives in the trace above. -->
                             <MarkdownView
-                              text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              text={turnClosingText.text}
                               citationThread={citationThreadContext}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12453,7 +12529,7 @@
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg)}
+                                onclick={() => copyMessage(msg, turnClosingText?.text)}
                               >
                                 {#if copiedMessageId === msg.id}
                                   <Check size={12} class="text-success" />
@@ -12463,7 +12539,7 @@
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={messageText(msg)}
+                                markdown={turnClosingText?.text ?? messageText(msg)}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,
@@ -13181,6 +13257,7 @@
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
                     update={assistantHowToComplete}
+                    scheduled={assistantRoutine ? routineIsScheduled(assistantRoutine) : true}
                     existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}

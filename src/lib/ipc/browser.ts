@@ -301,14 +301,14 @@ export interface BrowserInspectorMarker {
  *
  * The overlay is injected page script, so it cannot read the application's
  * stylesheet. It is handed the resolved values of the app's design tokens
- * instead, which is what keeps a pin and the comment it belongs to the same
- * colour in light and dark mode rather than a hardcoded white box on a dark
- * application.
+ * instead, which is what keeps a pin and the hover label the same colour and the
+ * same type as the app in light and dark mode rather than a hardcoded white box
+ * on a dark application.
  */
 export interface BrowserInspectorTheme {
   /** Panel and pin background. */
   surface: string
-  /** Raised background (the comment field, hovered buttons). */
+  /** Raised background (the hovered pin). */
   elevated: string
   /** Hairline border. */
   border: string
@@ -318,6 +318,8 @@ export interface BrowserInspectorTheme {
   muted: string
   /** The app's accent, used for a pin that carries a comment. */
   accent: string
+  /** The app's own font stack, which the label is set in. */
+  font: string
 }
 
 /**
@@ -340,18 +342,19 @@ export interface BrowserScrollbarTheme {
 /**
  * What the injected inspector reports back to the app.
  *
- * `pick` is a fresh element selection, `open` is the user clicking an existing
- * pin to read or edit its comment, and `closed` is inspect mode ending on its
- * own (Escape, or the script giving up) so the surface showing the tab can
- * reset its toggle.
+ * `pick` is a fresh element selection, carrying the element's place in the app
+ * window's own coordinates (`anchor`) so the app can put its comment bubble next
+ * to it. `open` is the user clicking an existing pin to read or edit that
+ * comment. `closed` is inspect mode ending on its own (Escape, or the script
+ * giving up) so the surface showing the tab can reset its toggle.
  *
- * There is deliberately no `comment` event. A comment is written in the app's
- * own editor, which is the component the rest of the application already uses
- * for the same job, so the page never owns comment text and never reports one.
+ * The comment text is deliberately absent: the bubble is the app's own
+ * component, so the text is written and owned by the renderer and never travels
+ * through the page.
  */
 export type BrowserInspectorEvent =
-  | { kind: 'pick'; id: string; target: BrowserInspectorTarget }
-  | { kind: 'open'; id: string }
+  | { kind: 'pick'; id: string; target: BrowserInspectorTarget; anchor: BrowserInspectorRect }
+  | { kind: 'open'; id: string; anchor: BrowserInspectorRect }
   | { kind: 'closed' }
 
 /** DevTools open/closed state for a browser tab. */

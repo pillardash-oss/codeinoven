@@ -29,6 +29,17 @@
 
   const searchState = $derived(search.state)
   const status = $derived(searchState?.status ?? null)
+  const totalThreads = $derived(status?.totalThreads ?? null)
+  const completedThreads = $derived(
+    totalThreads === null
+      ? (status?.indexedThreads ?? 0)
+      : Math.max(0, totalThreads - (status?.pendingThreads ?? 0))
+  )
+  const indexingPercent = $derived(
+    totalThreads !== null && totalThreads > 0
+      ? Math.floor((completedThreads / totalThreads) * 100)
+      : 0
+  )
   const models = $derived(searchState?.models ?? [])
   const catalog = $derived(searchState?.catalog ?? [])
   const downloads = $derived(searchState?.downloads ?? {})
@@ -213,18 +224,22 @@
       <div class="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
         <div>
           <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Threads indexed</p>
-          <p class="text-sm font-medium tabular-nums">{status?.indexedThreads ?? 0}</p>
+          <p class="text-sm font-medium tabular-nums">
+            {completedThreads.toLocaleString()} / {totalThreads === null
+              ? '…'
+              : totalThreads.toLocaleString()}
+          </p>
         </div>
         <div>
-          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">
-            {status?.indexing ? 'Indexing' : 'Waiting'}
-          </p>
+          <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Progress</p>
           <p class="flex items-center gap-1.5 text-sm font-medium">
             {#if status?.indexing}
               <LoaderCircle size={13} class="animate-spin text-primary" aria-hidden="true" />
-              In progress
+              {totalThreads === null ? 'Counting threads…' : `${indexingPercent}%`}
             {:else}
-              <span class="tabular-nums">{status?.pendingThreads ?? 0}</span>
+              <span class="tabular-nums">
+                {totalThreads === null ? '…' : `${indexingPercent}%`}
+              </span>
             {/if}
           </p>
         </div>
@@ -241,15 +256,13 @@
       </div>
       <p class="mt-3 flex h-4 gap-2 text-xs text-muted" role="status">
         <span class="min-w-0 truncate" title={status?.progress?.threadTitle}>
-          {#if status?.indexing && status.progress}
+          {#if status?.progress}
             {status.progress.stage === 'summarizing' ? 'Summarizing' : 'Embedding'}
             {status.progress.threadTitle}
           {/if}
         </span>
-        {#if status?.indexing && status.progress?.stage === 'summarizing'}
-          <span class="shrink-0 tabular-nums"
-            >{status.progress.completedChunks} chunks completed</span
-          >
+        {#if status?.progress?.stage === 'summarizing'}
+          <span class="shrink-0">Optional summary</span>
         {/if}
       </p>
       <p class="mt-3 text-xs leading-relaxed text-dimmed">

@@ -67,6 +67,14 @@ export interface Routine {
    * part of the how-to.
    */
   description?: string
+  /**
+   * Whether this routine runs on a schedule. On by default, so a routine the
+   * user has always known about keeps firing. When off, the routine is
+   * on-demand only: it has no schedule, its tasks never fire on a clock, and
+   * the authoring agent never asks the user for a schedule. Absent means on, so
+   * rows written before this flag existed still read as scheduled.
+   */
+  scheduled?: boolean
   /** Accent colour from the project palette; rendered as the row's left border. */
   color?: string
   /** Filename of the routine's stored icon image, relative to its storage dir. */
@@ -182,6 +190,8 @@ export const ASSISTANT_SETUP_TITLE = 'Getting started'
 export interface CreateRoutineInput {
   name: string
   description?: string
+  /** Defaults to true: a routine runs on a schedule unless the user turns it off. */
+  scheduled?: boolean
   color?: string
   iconType?: string
   schedule?: RoutineSchedule | null
@@ -198,6 +208,8 @@ export interface UpdateRoutineInput {
   name?: string
   /** `null` clears the description. */
   description?: string | null
+  /** Turn the routine's schedule on or off; turning it off clears its schedule. */
+  scheduled?: boolean
   /** `null` clears the accent colour, restoring the neutral border. */
   color?: string | null
   icon?: string | null
@@ -216,6 +228,15 @@ export interface UpdateRoutineInput {
   /** `null` clears the target, moving the routine's runs back to this computer. */
   execution?: RoutineExecution | null
   paused?: boolean
+}
+
+/**
+ * Whether a routine runs on a schedule. Absent means scheduled, so every routine
+ * written before the flag existed keeps firing, and the flag is the single rule
+ * every surface reads instead of re-deriving `scheduled !== false`.
+ */
+export function routineIsScheduled(routine: Pick<Routine, 'scheduled'>): boolean {
+  return routine.scheduled !== false
 }
 
 /** A routine is complete only once its how-to exists; drives the amber badge. */

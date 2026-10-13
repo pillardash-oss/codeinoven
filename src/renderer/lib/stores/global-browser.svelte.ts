@@ -1453,6 +1453,7 @@ export class GlobalBrowserState {
     }
     if (!context.peek) this.enforceTabCap()
     const now = Date.now()
+    const sourceTab = context.sourceTabId ? this.tabById(context.sourceTabId) : null
     const newTab: GlobalBrowserTab = {
       id: tabId,
       title: browserTabTitleForUrl(url),
@@ -1460,7 +1461,7 @@ export class GlobalBrowserState {
       url,
       favicon: null,
       // A popup belongs beside the page that opened it.
-      groupId: this.activeTab?.groupId ?? null,
+      groupId: sourceTab?.groupId ?? this.activeTab?.groupId ?? null,
       // Main creates the tab in the opener's jar and hands back the box it
       // used, so the row and the session agree from the first show. Main is the
       // only side that knows the true owner when a background tab opens the
@@ -1510,9 +1511,24 @@ export class GlobalBrowserState {
         .catch(() => {})
       return
     }
-    this.tabs = [...this.tabs, newTab]
+    this.tabs = this.insertTabBeside(newTab, context.sourceTabId)
     if (context.reveal) this.activate(tabId)
     this.persist()
+  }
+
+  /**
+   * Place a tab the main process created beside the page that opened it, so a
+   * link opened in a new tab lands next to the tab in use rather than after
+   * every other row. A tab with no known source keeps the old end-of-strip
+   * behaviour.
+   */
+  private insertTabBeside(newTab: GlobalBrowserTab, sourceTabId?: string): GlobalBrowserTab[] {
+    if (!sourceTabId) return [...this.tabs, newTab]
+    const index = this.tabs.findIndex((candidate) => candidate.id === sourceTabId)
+    if (index === -1) return [...this.tabs, newTab]
+    const ordered = [...this.tabs]
+    ordered.splice(index + 1, 0, newTab)
+    return ordered
   }
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
@@ -1653,15 +1669,38 @@ export class GlobalBrowserState {
    * new tab id, or null when the source tab is gone or already in the box.
    */
   reopenInBox(tabId: string, boxId: string | null): string | null {
-    const tab = this.tabById(tabId)
-    if (!tab || tab.boxId === boxId) return null
+    const index = this.tabs.findIndex((candidate) => candidate.id === tabId)
+    if (index < 0) return null
+    const tab = this.tabs[index]
+    if (tab.boxId === boxId) return null
     const url = tab.url
     const groupId = tab.groupId
+    const appearance = {
+      customTitle: tab.customTitle,
+      color: tab.color,
+      iconType: tab.iconType,
+      customSvg: tab.customSvg,
+      imagePath: tab.imagePath
+    }
+    const pinned = tab.pinned
+    const pinnedAt = tab.pinnedAt
     // Not a reopenable close: the page is deliberately coming back in another
     // box, so recording it would offer the user a tab that never left.
     // No focus handover for the tab in between: the new tab takes it below.
     this.close(tabId, { recordForReopen: false, focusNeighbour: false })
     const nextId = this.createTab(url, groupId, boxId)
+    this.updateTab(nextId, appearance)
+    if (pinned) this.updateTab(nextId, { pinned, pinnedAt })
+    // A reopen is a replacement, not a new row: the tab keeps the position of
+    // the page it replaces instead of moving to the end of the strip.
+    const currentIndex = this.tabs.findIndex((candidate) => candidate.id === nextId)
+    if (currentIndex >= 0 && currentIndex !== Math.min(index, this.tabs.length - 1)) {
+      const ordered = [...this.tabs]
+      const [replacement] = ordered.splice(currentIndex, 1)
+      ordered.splice(Math.min(index, ordered.length), 0, replacement)
+      this.tabs = ordered
+      this.persist()
+    }
     if (!isBlankBrowserAddress(url)) {
       void invoke('browser:focusPage', nextId).catch(() => {})
     }

@@ -141,7 +141,7 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('sticky-note:get', (_, rawId: unknown) =>
     noteRepo.getStickyNoteViaWorker(validateEntityId(rawId, 'Sticky note ID'))
   )
-  ipcMain.handle('sticky-note:create', (_, rawAppearance: unknown) => {
+  ipcMain.handle('sticky-note:create', async (_, rawAppearance: unknown) => {
     const appearance = validateStickyNoteAppearance(rawAppearance)
     const now = Date.now()
     const note = {
@@ -151,7 +151,7 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
       createdAt: now,
       updatedAt: now
     }
-    noteRepo.createStickyNote(note)
+    await noteRepo.createStickyNote(note)
     return note
   })
   ipcMain.handle('sticky-note:update', (_, rawId: unknown, rawAppearance: unknown) => {
@@ -163,6 +163,12 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     const id = validateEntityId(rawId, 'Sticky note ID')
     const body = validateBoundedString(rawBody, 'Sticky note body', 0, NOTE_BODY_MAX)
     noteRepo.saveStickyNoteBody(id, body, Date.now())
+  })
+  ipcMain.handle('sticky-note:reorder', (_, rawIds: unknown) => {
+    const ids = validateStringArray(rawIds, 'Sticky note order').map((id, index) =>
+      validateEntityId(id, `Sticky note order[${index}]`)
+    )
+    noteRepo.reorderStickyNotes(ids)
   })
   ipcMain.handle('sticky-note:delete', (_, rawId: unknown) =>
     noteRepo.deleteStickyNote(validateEntityId(rawId, 'Sticky note ID'))

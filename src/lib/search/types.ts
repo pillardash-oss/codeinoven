@@ -134,6 +134,8 @@ export interface SearchIndexStatus {
   /** An installed model is selected and resident. */
   modelReady: boolean
   activeModelId: string | null
+  /** Eligible threads in the latest sweep, or null before discovery. */
+  totalThreads: number | null
   indexedThreads: number
   pendingThreads: number
   indexing: boolean
@@ -164,6 +166,8 @@ export type SearchProgressEvent =
 
 /** A vector persisted for one thread, with the content hash that produced it. */
 export interface ThreadEmbeddingRecord {
+  /** Raw corpus fingerprint, retained when optional summaries replace the vector. */
+  sourceHash?: string
   threadId: string
   contentHash: string
   dimensions: number

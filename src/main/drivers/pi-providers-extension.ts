@@ -62,9 +62,9 @@ ${registrations}
 `
 }
 
-/** Deterministic env var name carrying a provider's resolved API key. */
+/** Pi config reference to the env var carrying a provider's resolved API key. */
 function envRef(apiKeyEnvVar: string): string {
-  return apiKeyEnvVar.replace(/[^a-zA-Z0-9]/gu, '_')
+  return `$${apiKeyEnvVar.replace(/[^a-zA-Z0-9]/gu, '_')}`
 }
 
 function json(value: unknown): string {

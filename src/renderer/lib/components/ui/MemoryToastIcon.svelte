@@ -5,9 +5,11 @@
    * The memory proposal's card icon, as svelte-sonner draws it.
    *
    * Sonner renders a per-toast `icon` component with no props, so the size
-   * lives here rather than at the call site. It matches the stack's other
-   * icons (`ToastStack.svelte` renders those at 15 / 2.25).
+   * lives here rather than at the call site. It is the same icon at the same
+   * size the app's own memory card leads with (`MemoryToast.svelte`), because
+   * this chip is what tells the memory proposal apart from every other card in
+   * the stack.
    */
 </script>
 
-<BrainCircuit size={15} stroke-width={2.25} />
+<BrainCircuit size={18} />

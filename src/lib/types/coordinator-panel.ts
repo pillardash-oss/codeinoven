@@ -1,5 +1,6 @@
 import type { AssignmentPlan, AssignmentTask } from './assignment'
 import type { ProviderCatalog, ThreadSettings } from './agent'
+import type { AuthoredWorkKind } from '../ipc/design'
 import type { Thread } from './thread'
 
 /** Props for the Assignment coordinator board. */
@@ -94,7 +95,7 @@ export interface IndependentAuditCoordinatorPanelProps {
 /**
  * Props for the design coordinator board.
  *
- * Deliberately just the two ids: the panel loads its own state from the design
+ * Deliberately just the ids: the panel loads its own state from the design
  * service and owns its thumbnail, so nothing has to thread a design's data
  * through the workspace. What the thread's live turn knows is irrelevant here,
  * which is the point   a design session stays usable after the turn that made
@@ -103,4 +104,14 @@ export interface IndependentAuditCoordinatorPanelProps {
 export interface DesignCoordinatorPanelProps {
   projectId: string
   threadId: string
+  /**
+   * The kind this board shows, when the project's rail opened it rather than a
+   * session.
+   *
+   * A session board derives its kind from the thread. The rail's entry offers the
+   * project's designs or videos on whatever thread the user happens to be, so it
+   * sets the kind here; the board then lists that kind from the project and does
+   * not record the viewing thread as being in it.
+   */
+  kind?: AuthoredWorkKind
 }

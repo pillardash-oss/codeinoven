@@ -358,6 +358,9 @@ export interface GradeTurnOptions extends AuxiliaryCandidateOverride {
  * generation, turn grading, speech lessons, memory proposals, …).
  */
 export interface CheapModelRequest extends AuxiliaryCandidateOverride {
+  /** Optional model-specific input budget and response validation for specialized tasks. */
+  preparePrompt?: (candidate: { providerId?: string; modelId?: string }) => string
+  validateResponse?: (raw: string) => string | null
   settings: ThreadSettings
   /** Short scenario label used as the disposable session title. */
   purpose: string

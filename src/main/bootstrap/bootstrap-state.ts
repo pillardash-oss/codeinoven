@@ -67,6 +67,9 @@ export interface BootstrapState {
    * instead of being swallowed by background mode's close-to-menu-bar path.
    */
   quitForUpdate: boolean
+  /** Workspace startup failed; the independent recovery/update surface owns quit. */
+  startupRecovery: boolean
+  startupServicesFailed: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
 
   // Renderer readiness and startup milestones.
@@ -169,6 +172,8 @@ export function createBootstrapState(): BootstrapState {
     quitCleanupStarted: false,
     quitConfirmed: false,
     quitForUpdate: false,
+    startupRecovery: false,
+    startupServicesFailed: false,
     shutdownFailsafe: null,
     rendererReadyReported: false,
     packagedSmokeProofStarted: false,

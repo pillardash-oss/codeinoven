@@ -24,6 +24,11 @@
     /** True when this recap revises a routine that is already saved. */
     update?: boolean
     /**
+     * Whether this routine runs on a schedule. An on-demand routine has no
+     * schedule to agree, so the card says so instead of asking for one.
+     */
+    scheduled?: boolean
+    /**
      * The connection labels the routine already has. A revision keeps the ones
      * its plan does not name, so the recap lists them too instead of reading as
      * if they were being dropped.
@@ -39,6 +44,7 @@
     howTo,
     plan,
     update = false,
+    scheduled = true,
     existingConnections = [],
     saving,
     onSave,
@@ -47,12 +53,16 @@
 
   // A routine that is already saved keeps everything the revision does not name,
   // so a plan that omits the schedule or the connections is not an empty one.
+  // An on-demand routine has no schedule at all, so it never reads as one left
+  // unset.
   const scheduleLabel = $derived(
-    plan?.schedule
-      ? describeSchedule(plan.schedule)
-      : update
-        ? 'Kept as saved'
-        : 'No schedule agreed yet'
+    !scheduled
+      ? 'Runs on demand'
+      : plan?.schedule
+        ? describeSchedule(plan.schedule)
+        : update
+          ? 'Kept as saved'
+          : 'No schedule agreed yet'
   )
   const sectionCount = $derived(parseHowToSections(howTo).length)
   /** The connections the routine has once this recap is saved. */
@@ -130,9 +140,10 @@
         <button
           type="button"
           class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          title={update
-            ? "Save the routine's revised instructions, schedule, and connections"
-            : "Save the routine's instructions, schedule, and connections"}
+          title={(update ? "Save the routine's revised " : "Save the routine's ") +
+            (scheduled
+              ? 'instructions, schedule, and connections'
+              : 'instructions and connections')}
           aria-label={update ? 'Update the routine' : 'Save the routine'}
           disabled={saving}
           onclick={onSave}

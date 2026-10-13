@@ -3,6 +3,7 @@
   import {
     Check,
     ChevronDown,
+    Copy,
     Ellipsis,
     Film,
     Frame,
@@ -16,19 +17,28 @@
     Presentation,
     RefreshCw,
     RotateCcw,
+    Target,
     Volume2,
     VolumeX,
     X
   } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import { toast } from 'svelte-sonner'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import { copyText } from '$lib/copy-text'
+  import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { designContractRequest } from '$shared/design/design-contract'
+  import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import {
@@ -77,9 +87,16 @@
   interface Props {
     projectId: string
     threadId: string
+    /**
+     * The kind this board shows, when the project's rail opened it rather than a
+     * session. A session board reads its kind from the thread; the rail's entry
+     * offers the project's designs or videos on whatever thread the user is on,
+     * so it sets the kind here.
+     */
+    kind?: AuthoredWorkKind
   }
 
-  let { projectId, threadId }: Props = $props()
+  let { projectId, threadId, kind: forcedKind }: Props = $props()
 
   /**
    * How wide a screen is pictured at.
@@ -155,8 +172,10 @@
   let canvasNotice = $state('')
 
   /** The session's words and icon: a design session and a video session share this
-   *  board, so nothing below hard-codes the word "design". */
-  let video = $derived(designState?.kind === 'video')
+   *  board, so nothing below hard-codes the word "design". A board the project's
+   *  rail opened carries its kind instead of reading it from the thread. */
+  let requestedKind = $derived<AuthoredWorkKind>(forcedKind ?? designState?.kind ?? 'design')
+  let video = $derived(requestedKind === 'video')
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
@@ -171,7 +190,7 @@
    * the value and reports what the move did, which is why the draft is saved
    * through the same channel the settings card uses.
    */
-  let kind = $derived<AuthoredWorkKind>(video ? 'video' : 'design')
+  let kind = $derived<AuthoredWorkKind>(requestedKind)
   let workRoots = $state<WorkRootState | null>(null)
   let editingRoot = $state(false)
   let rootDraft = $state('')
@@ -197,36 +216,71 @@
     tabRuntime.muted ? `Unmute the ${noun} preview` : `Mute the ${noun} preview`
   )
 
-  /** Every folder of this kind the project holds, newest first. */
-  let items = $derived(designState?.items ?? [])
-  /**
-   * The folder this thread itself last previewed.
+  /** Every folder of this kind the project holds, newest first.
    *
-   * Every other design in the list belongs to another thread of the project, so
-   * this is the one the dropdown badges as current: it is what the thread is
-   * working on, whichever design the board happens to be showing.
-   */
-  let threadDesignDirectory = $derived(designState?.current?.directory ?? '')
+   * A rail-opened board lists the project's folders for its own kind, so the
+   * board shows the work whether or not the thread on screen has any; a session
+   * board keeps the listing main answered alongside its own record. */
+  let items = $derived(
+    forcedKind !== undefined
+      ? projectWorkState.itemsFor(projectId, forcedKind)
+      : (designState?.items ?? [])
+  )
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
   let switchLabel = $derived(
     `Switch ${noun}, ${otherCount} other ${otherCount === 1 ? noun : `${noun}s`} in this project`
   )
+  /** The folder this thread last previewed, when it belongs to the kind on screen.
+   *  A rail-opened board ignores a record that describes the other kind. */
+  let currentFolder = $derived.by(() => {
+    const current = designState?.current ?? null
+    if (current === null) return null
+    if (forcedKind !== undefined && current.kind !== forcedKind) return null
+    return current
+  })
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
-    const current = designState?.current ?? null
+    const current = currentFolder
     const picked =
       viewedDirectory !== '' && items.some((item) => item.directory === viewedDirectory)
         ? viewedDirectory
         : ''
     const directory =
-      picked !== '' ? picked : (current?.directory ?? designState?.defaultDirectory ?? '')
+      picked !== '' ? picked : (current?.directory ?? items[0]?.directory ?? workRoot)
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
+  /**
+   * The thread that created the design in front, or an empty string when none is
+   * recorded.
+   *
+   * A design is created by one thread, and the board can send the user there, so
+   * this is the id the reveal control acts on. A folder that predates origin
+   * recording, or whose creating thread has been deleted, has none, and the
+   * control stays off rather than guessing.
+   */
+  let selectedCreatorThreadId = $derived(selectedItem?.creatorThreadId ?? '')
+  /**
+   * Whether there is another thread to reveal.
+   *
+   * False when no creator is recorded and false when the creator is this very
+   * thread: a control that would leave the user where they already are is not a
+   * control, so it stays disabled with a title that says why.
+   */
+  let canRevealCreator = $derived(
+    selectedCreatorThreadId !== '' && selectedCreatorThreadId !== threadId
+  )
+  /** What the reveal control says, whether it acts or explains why it cannot. */
+  let revealLabel = $derived.by(() => {
+    const name = selectedName === '' ? nounTitle : selectedName
+    if (canRevealCreator) return `Reveal the thread that created ${name}`
+    if (selectedCreatorThreadId === threadId) return `This thread created ${name}`
+    return 'Thread unavailable'
+  })
 
   /**
    * The two entries that are not screens, and the screens themselves.
@@ -373,7 +427,8 @@
           threadId,
           selected.directory,
           selected.entry,
-          SCREEN_SHOT_WIDTH
+          SCREEN_SHOT_WIDTH,
+          forcedKind
         )
         gallery = [
           {
@@ -422,13 +477,26 @@
     selectDesign(directory)
   }
 
+  /**
+   * Show the thread that created the design in front.
+   *
+   * A design is often iterated in a later thread than the one that made it, and
+   * the user asks "where did this come from?" from the board. Revealing the
+   * creator opens that thread in its owning view, the same way an 'Open thread'
+   * notification does, so the question is answered without a search.
+   */
+  async function revealCreator(): Promise<void> {
+    if (!canRevealCreator) return
+    await openThreadById(projectId, selectedCreatorThreadId)
+  }
+
   /** Serve the work and bring its tab to the user. Main reveals it; the
    *  workspace opens and focuses the sidebar tab from that event, so this panel
    *  never has to know how the browser is laid out. */
   async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
     try {
-      await invoke('design:open', projectId, threadId, directory, entry, true)
+      await invoke('design:open', projectId, threadId, directory, entry, true, forcedKind)
       await loadState()
       await loadGallery()
       await loadCanvas()
@@ -532,6 +600,52 @@
     }
   }
 
+  async function requestDesignAction(
+    action: 'contract' | 'critique' | 'reference' | 'tweaks'
+  ): Promise<void> {
+    if (!selected.directory || canvasBusy) return
+    canvasBusy = action
+    try {
+      const text =
+        action === 'contract'
+          ? designContractRequest(selected.directory)
+          : action === 'critique'
+            ? `@cio-design Review the design in ${JSON.stringify(selected.directory)}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
+            : action === 'reference'
+              ? `@cio-design Extract a lightweight brand contract from the reference site I name for the design in ${JSON.stringify(selected.directory)}. If no reference URL is attached or supplied, ask me for it. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
+              : `@cio-design Add lightweight live review controls to the design in ${JSON.stringify(selected.directory)} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
+      const delivery = await sendOrQueueThreadMessage(projectId, threadId, {
+        text
+      })
+      canvasNotice =
+        delivery === 'queued'
+          ? 'Design action queued.'
+          : action === 'contract'
+            ? 'Asked the agent to generate DESIGN.md.'
+            : action === 'critique'
+              ? 'Asked the agent to review this design.'
+              : action === 'reference'
+                ? 'Asked the agent to extract the reference brand.'
+                : 'Asked the agent to add live review controls.'
+    } catch (failure: unknown) {
+      error = failure instanceof Error ? failure.message : 'Could not request this design action.'
+    } finally {
+      canvasBusy = ''
+    }
+  }
+
+  function startExport(entry: string | null, format: DesignExportFormat): void {
+    const directory = selected.directory
+    const exportProjectId = projectId
+    void import('$lib/stores/design-export.svelte')
+      .then(({ designExportState }) =>
+        designExportState.start(exportProjectId, directory, entry, format)
+      )
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : 'Could not start export.'
+      })
+  }
+
   /** Re-read the canvas once the agent settles, and picture it when it appeared. */
   async function refreshCanvas(): Promise<void> {
     const before = canvasState
@@ -546,6 +660,29 @@
   function refreshBoard(): void {
     void loadGallery(true)
     void loadCanvas()
+  }
+
+  /**
+   * Copy a design folder, or one screen inside it, in the form the asking agent
+   * can use.
+   *
+   * The decision lives in the copy helper: a tag when the board's thread shares
+   * the project, scope and machine the design lives on, an absolute path when it
+   * does not, and the way to reach another Oven when the design is on one.
+   */
+  async function copyDesignPath(directory: string, entry: string | null = null): Promise<void> {
+    if (directory === '') return
+    const payload = designCopyFor(directory, entry)
+    if (payload === null) {
+      toast.error('This design cannot be copied.')
+      return
+    }
+    try {
+      await copyText(payload.text, payload.message)
+    } catch (failure) {
+      logRendererError('The design path could not be copied.', failure)
+      toast.error('The design path could not be copied.')
+    }
   }
 
   /**
@@ -572,6 +709,9 @@
   })
 
   onMount(() => {
+    // A rail-opened board lists the project's folders itself, so the project's
+    // work is read here as well as by the dock; the store coalesces the two.
+    void projectWorkState.ensure(projectId)
     void loadState().then(async () => {
       await loadGallery()
       await loadCanvas()
@@ -600,47 +740,76 @@
       ? `Open the ${noun} in the in-app browser`
       : `Open the ${noun} screen ${screen.name} in the in-app browser`}
     {@const onScreen = !video && screen.entry === selected.entry}
-    <button
-      type="button"
-      class="group relative block overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {full
-        ? 'col-span-2'
-        : ''} {onScreen ? 'border-accent/60' : 'border-border'}"
-      title={cardLabel}
-      aria-label={cardLabel}
-      onclick={() => void openPreview(screen.entry)}
-    >
-      {#if screen.dataUrl}
-        <img
-          src={screen.dataUrl}
-          alt={video
-            ? `Preview of the ${noun} ${selectedName}`
-            : `Preview of the ${noun} screen ${screen.name}`}
-          class="block max-h-44 w-full object-cover object-top"
-        />
-      {:else}
-        <span
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+    {@const copyLabel = video
+      ? `Copy the path of this ${noun}`
+      : `Copy ${noun} screen: ${screen.name}`}
+    <ContextMenu.Root>
+      <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
+        <button
+          type="button"
+          class="group relative block w-full overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {onScreen
+            ? 'border-accent/60'
+            : 'border-border'}"
+          title={cardLabel}
+          aria-label={cardLabel}
+          onclick={() => void openPreview(screen.entry)}
         >
-          {#if galleryBusy}
-            <LoaderCircle size={14} class="animate-spin" />
-            <span class="text-[0.625rem]">Capturing…</span>
+          {#if screen.dataUrl}
+            <img
+              src={screen.dataUrl}
+              alt={video
+                ? `Preview of the ${noun} ${selectedName}`
+                : `Preview of the ${noun} screen ${screen.name}`}
+              class="block max-h-44 w-full object-cover object-top"
+            />
           {:else}
-            <ImageOff size={14} />
-            <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
+            <span
+              class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+            >
+              {#if galleryBusy}
+                <LoaderCircle size={14} class="animate-spin" />
+                <span class="text-[0.625rem]">Capturing…</span>
+              {:else}
+                <ImageOff size={14} />
+                <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
+              {/if}
+            </span>
           {/if}
-        </span>
-      {/if}
-      <span
-        class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
-      >
-        <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
-      </span>
-      <span
-        class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-      >
-        <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
-      </span>
-    </button>
+          <span
+            class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
+          >
+            <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
+          </span>
+          <span
+            class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
+          </span>
+        </button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          class="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
+        >
+          <ContextMenu.Item
+            class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
+          >
+            <Copy size={13} class="shrink-0 text-muted" />
+            {copyLabel}
+          </ContextMenu.Item>
+          {#if !video}
+            {#each DESIGN_EXPORT_FORMATS as format (format)}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => startExport(screen.entry, format)}
+                >Export screen as {format.toUpperCase()}</ContextMenu.Item
+              >
+            {/each}
+          {/if}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   {/snippet}
 
   {#snippet entryCard(input: {
@@ -754,34 +923,49 @@
                       : updated === '' || created === updated
                         ? created
                         : `${created} · ${updated}`}
-                  <DropdownMenu.RadioItem
-                    value={item.directory}
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    title={designTooltip(item)}
-                  >
-                    <WorkIcon size={12} class="shrink-0 text-dimmed" />
-                    <span class="min-w-0 flex-1 truncate">{item.name}</span>
-                    {#if item.directory === threadDesignDirectory}
-                      <span
-                        class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
-                      >
-                        Current
-                      </span>
-                    {/if}
-                    {#if stamp !== ''}
-                      <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-                        {stamp}
-                      </span>
-                    {/if}
-                    <Check
-                      size={12}
-                      class={[
-                        'shrink-0',
-                        item.directory === selected.directory ? 'text-primary' : 'invisible'
-                      ]}
-                      aria-hidden="true"
-                    />
-                  </DropdownMenu.RadioItem>
+                  <div class="flex items-center gap-0.5 rounded-lg pr-0.5">
+                    <DropdownMenu.RadioItem
+                      value={item.directory}
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      title={designTooltip(item)}
+                    >
+                      <WorkIcon size={12} class="shrink-0 text-dimmed" />
+                      <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                      {#if item.creatorThreadId === threadId}
+                        <span
+                          class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                        >
+                          Current
+                        </span>
+                      {/if}
+                      {#if stamp !== ''}
+                        <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
+                          {stamp}
+                        </span>
+                      {/if}
+                      <Check
+                        size={12}
+                        class={[
+                          'shrink-0',
+                          item.directory === selected.directory ? 'text-primary' : 'invisible'
+                        ]}
+                        aria-hidden="true"
+                      />
+                    </DropdownMenu.RadioItem>
+                    <button
+                      type="button"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title={`Copy the path of ${item.name}`}
+                      aria-label={`Copy the path of ${item.name}`}
+                      onclick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        void copyDesignPath(item.directory)
+                      }}
+                    >
+                      <Copy size={11} />
+                    </button>
+                  </div>
                 {/each}
               </DropdownMenu.RadioGroup>
             </DropdownMenu.Content>
@@ -823,6 +1007,16 @@
             {/if}
           </button>
         {/if}
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={!canRevealCreator}
+          title={revealLabel}
+          aria-label={revealLabel}
+          onclick={() => void revealCreator()}
+        >
+          <Target size={12} />
+        </button>
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
@@ -873,6 +1067,58 @@
                 <RefreshCw size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => void copyDesignPath(selected.directory)}
+              >
+                <Copy size={13} class="shrink-0 text-muted" />
+                Copy path
+              </DropdownMenu.Item>
+              {#if !video}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('contract')}
+                >
+                  <Pencil size={13} class="shrink-0 text-muted" />
+                  Generate DESIGN.md
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('critique')}
+                  >Review design quality</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('reference')}
+                  >Extract brand from reference</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('tweaks')}
+                  >Add live controls</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
+                  onSelect={() =>
+                    void openInBrowser(
+                      'https://github.com/nexu-io/open-design/tree/main/design-templates'
+                    )}>Browse Open Design prompts</DropdownMenu.Item
+                >
+                {#each DESIGN_EXPORT_FORMATS as format (format)}
+                  <DropdownMenu.Item
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                    disabled={selected.directory === ''}
+                    onSelect={() => startExport(null, format)}
+                    >Export design as {format.toUpperCase()}</DropdownMenu.Item
+                  >
+                {/each}
+              {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"

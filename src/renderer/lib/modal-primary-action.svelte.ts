@@ -68,16 +68,29 @@ const NOT_DISMISS = `:not([${DISMISS_BUTTON_ATTRIBUTE}])`
 
 export const PRIMARY_BUTTON_SELECTOR = `button.bg-primary:not([disabled])${NOT_DISMISS}, button.bg-danger:not([disabled])${NOT_DISMISS}`
 
-export function isFocusableTarget(element: HTMLElement): boolean {
-  return (
-    element.getAttribute('aria-disabled') !== 'true' &&
-    !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
-    element.checkVisibility()
-  )
+export function isFocusableTarget(element: HTMLElement, boundary?: HTMLElement): boolean {
+  if (element.getAttribute('aria-disabled') === 'true') return false
+  // Hidden or inert between the element and its boundary disqualifies it. The
+  // boundary is the panel whose own actions are being resolved: a natively
+  // projected modal marks its DOM source `inert` (the overlay window owns the
+  // pointer and keyboard), yet those very elements are still the owners of the
+  // actions the overlay forwards presses to, so the shell's own inertness above
+  // the panel must not hide them. Without a boundary the walk reaches the
+  // document, exactly like `closest`.
+  for (
+    let node: HTMLElement | null = element;
+    node && node !== boundary;
+    node = node.parentElement
+  ) {
+    if (node.matches('[hidden], [inert], [aria-hidden="true"]')) return false
+  }
+  return element.checkVisibility()
 }
 
 function firstFocusable(panel: HTMLElement, selector: string): HTMLElement | undefined {
-  return Array.from(panel.querySelectorAll<HTMLElement>(selector)).find(isFocusableTarget)
+  return Array.from(panel.querySelectorAll<HTMLElement>(selector)).find((element) =>
+    isFocusableTarget(element, panel)
+  )
 }
 
 /** A button that only dismisses the modal is never a primary action. */
@@ -101,7 +114,7 @@ export function findFirstTextField(panel: HTMLElement): HTMLElement | undefined 
 export function findPanelPrimaryAction(panel: HTMLElement): HTMLElement | undefined {
   const footerActions = Array.from(
     panel.querySelectorAll<HTMLElement>('[data-modal-footer] button:not([disabled])')
-  ).filter((button) => isFocusableTarget(button) && !isDismissButton(button))
+  ).filter((button) => isFocusableTarget(button, panel) && !isDismissButton(button))
 
   return (
     firstFocusable(panel, '[data-modal-primary]:not([disabled])') ??

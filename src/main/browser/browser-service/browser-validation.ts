@@ -379,12 +379,15 @@ const INSPECTOR_THEME_KEYS = [
   'border',
   'foreground',
   'muted',
-  'accent'
+  'accent',
+  'font'
 ] as const satisfies readonly (keyof BrowserInspectorTheme)[]
 
-/** Ceiling on one token. A CSS colour or a `var()` reference is short; anything
- *  longer is not a colour, and the value ends up in an injected page script. */
-const MAX_INSPECTOR_THEME_VALUE_LENGTH = 120
+/** Ceiling on one token. A CSS colour or a `var()` reference is short; the one
+ *  token that is not a colour, the app's font stack, is a list of families, so
+ *  the ceiling is sized for that and still far below anything that could carry
+ *  script into the injected page script these values end up in. */
+const MAX_INSPECTOR_THEME_VALUE_LENGTH = 240
 
 /**
  * Validate the application theme pushed for a tab's page overlay.
@@ -1142,7 +1145,7 @@ export function validateViewportRequest(value: unknown, current: BrowserViewport
 
 /** Attention an agent asked for when it opened a page. */
 export function validateAttention(value: unknown): BrowserOpenAttention {
-  if (value === undefined || value === null) return 'focus'
+  if (value === undefined || value === null) return 'background'
   if (typeof value !== 'string' || (value !== 'focus' && value !== 'background')) {
     throw new TypeError('Browser attention must be "focus" or "background"')
   }

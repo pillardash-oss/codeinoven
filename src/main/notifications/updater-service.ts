@@ -144,6 +144,7 @@ export class UpdaterService {
   private installFailure: InstallFailureState | null = null
   /** True between handing the payload to the platform installer and its exit. */
   private installDispatched = false
+  private installRecoveryPending = false
   /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
    * Skill freshness rides this cadence instead of running a timer of its own.
@@ -386,11 +387,22 @@ export class UpdaterService {
 
   start(): void {
     if (this.timer || !this._status.canAutoUpdate) return
+    this.installRecoveryPending = true
+    // Install bookkeeping is optional. Slow or damaged storage must not hold
+    // the first network check behind reconciliation.
+    void this.checkForUpdates().catch((error: unknown) =>
+      Logger.error('Updater: initial check failed', error)
+    )
     void (async () => {
-      await this.reconcileInstallDispatch()
-      await this.resumePendingInstall()
-      await this.checkForUpdates()
-    })()
+      try {
+        await this.reconcileInstallDispatch()
+        await this.resumePendingInstall()
+      } catch (error: unknown) {
+        Logger.error('Updater: install recovery failed; continuing update checks', error)
+      } finally {
+        this.installRecoveryPending = false
+      }
+    })().catch((error: unknown) => Logger.error('Updater: install recovery failed', error))
     this.timer = setInterval(() => {
       void this.checkForUpdates()
     }, UPDATE_CHECK_INTERVAL_MS)
@@ -429,7 +441,7 @@ export class UpdaterService {
     this.checkInFlight = true
     try {
       await this.applyConfiguredChannel()
-      autoUpdater
+      await autoUpdater
         .checkForUpdates()
         .catch((error: unknown) => {
           Logger.error('Updater: check failed', error)
@@ -472,7 +484,18 @@ export class UpdaterService {
    */
   private async applyConfiguredChannel(): Promise<void> {
     try {
-      const config = await this.storage.getConfig()
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const config = await Promise.race([
+        this.storage.getConfig(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('Update channel settings read timed out')),
+            2_000
+          )
+        })
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout)
+      })
       const nightly = config.updateChannel === 'nightly'
       const channel = nightly ? 'nightly' : null
       this.activeChannel = nightly ? 'nightly' : 'stable'
@@ -882,8 +905,22 @@ export class UpdaterService {
       // decision below acts on it, so it is re-read here instead of trusted from
       // before the await.
       if (!this.installPending) return
+      if (
+        !this.installApproved &&
+        !this.forceUpdateInBackground &&
+        !this.installRecoveryPending &&
+        !this.installPermittedForTarget()
+      )
+        return
 
-      const activeCount = this.activeSessionCount()
+      // Fetching the feed can run ahead of disk recovery, but unattended
+      // installation must still observe the previous failed-install guard.
+      // An explicit recovery install can proceed even if that disk read hangs.
+      const activeCount =
+        this.activeSessionCount() +
+        (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground
+          ? 1
+          : 0)
       if (activeCount === 0) {
         this.quitAndInstallNow()
         return

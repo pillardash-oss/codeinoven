@@ -18,6 +18,7 @@
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     TASK_RUN_PREVIEW,
     assistantForeignThread,
@@ -94,6 +95,20 @@
     onMoveRoutine,
     onAssignTask
   }: Props = $props()
+
+  /**
+   * Toggle one function's clock independently of its routine. The change is
+   * persisted and broadcast, so the fresh row flows back through `tasks` and
+   * the row re-renders without a local list to keep in sync.
+   */
+  async function toggleTaskScheduled(task: Thread): Promise<void> {
+    const next = !assistantRoutines.taskScheduled(task)
+    try {
+      await assistantRoutines.setTaskScheduled(task.id, next)
+    } catch (caught) {
+      reportError(caught, 'Could not change this function’s schedule')
+    }
+  }
 
   /**
    * The open/fold call the user made on a routine row, keyed by routine id. With
@@ -441,6 +456,8 @@
     active={task.id === selectedThreadId}
     missed={missedThreadIds.has(task.id)}
     nextRunAt={assistantRoutines.nextRunForTask(task)}
+    scheduled={assistantRoutines.taskScheduled(task)}
+    onToggleScheduled={(t) => void toggleTaskScheduled(t)}
     runWorking={nestRuns && taskRunWorking(task.id)}
     onSelect={select}
     onRename={onRenameTask}

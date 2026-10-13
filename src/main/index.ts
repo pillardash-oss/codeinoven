@@ -1,7 +1,6 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
-import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
@@ -51,6 +50,8 @@ import { BackgroundLifecycleService } from './system/background-lifecycle-servic
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import { computeAttention, hasUpcomingWork } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
+import { startStartupUpdater } from './bootstrap/startup-updater'
+import { getMainBundleDirectory } from './bootstrap/bundle-directory'
 import {
   installAppFilePreviewProtocol,
   installRendererSessionGuards
@@ -60,7 +61,7 @@ declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
 declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
-const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
+const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
 app.setName(APP_NAME)
 // Naming the app is not enough on its own: Chromium still advertises
@@ -450,6 +451,24 @@ function createWindow(): BrowserWindow {
     }
   })
   state.mainWindow = window
+  window.webContents.on('did-fail-load', (_event, code, description, _url, mainFrame) => {
+    if (mainFrame && code !== -3) {
+      void handleFatalStartup(new Error(`Workspace document could not load: ${description}`), {
+        state,
+        database,
+        storage
+      })
+    }
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    if (!state.quitCleanupStarted) {
+      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+        state,
+        database,
+        storage
+      })
+    }
+  })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
   if (isProduction) {
@@ -624,9 +643,9 @@ function createWindow(): BrowserWindow {
   })
 
   if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    void window.loadURL(process.env['ELECTRON_RENDERER_URL']).catch(() => {})
   } else {
-    void window.loadFile(join(mainBundleDirectory, '../renderer/index.html'))
+    void window.loadFile(join(mainBundleDirectory, '../renderer/index.html')).catch(() => {})
   }
 
   // A window exists again: restore the Dock icon and let the menu bar reflect
@@ -661,9 +680,21 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
   revealAndSend()
 }
 
+let startupRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+
 void app
   .whenReady()
   .then(async () => {
+    // Do not await checks or the optional graph before making updates available.
+    void startStartupUpdater(state, storage).catch(() => {})
+    // A hung asynchronous initializer must leave a usable update surface too.
+    startupRecoveryTimer = setTimeout(() => {
+      void handleFatalStartup(new Error('Workspace initialization did not finish.'), {
+        state,
+        database,
+        storage
+      })
+    }, 60_000)
     startupTelemetry.mark('electron:ready')
     // Register this process in the instance registry before any window exists so
     // the close gate can later tell whether other live instances can keep a
@@ -739,6 +770,7 @@ void app
       // serializing behind the heavier startup work.
       warmTrafficLightDetection()
     ])
+    if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.
     usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
     startupTelemetry.mark('storage:ready')
@@ -747,7 +779,10 @@ void app
     // Load the background preferences, apply the login item, and publish the
     // instance role before any window exists.
     await backgroundLifecycle.start()
+    if (state.startupRecovery) return
     Logger.info(`${APP_NAME} main process initialized`)
+    await startStartupUpdater(state, storage)
+    if (state.startupRecovery) return
 
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;
@@ -797,6 +832,7 @@ void app
       // are live. Window-bound services (browser, PTY) attach the first time a
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
+        state.startupServicesFailed = true
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -829,6 +865,7 @@ void app
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
+        state.startupServicesFailed = true
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
@@ -841,6 +878,13 @@ void app
           'Visual startup milestone timed out; starting optional services in fallback mode'
         )
         startPostVisualServices(true)
+      }
+      if (!visualReady) {
+        void handleFatalStartup(new Error('Workspace renderer did not become ready.'), {
+          state,
+          database,
+          storage
+        })
       }
     }, 60_000)
     window.webContents.once('did-finish-load', () => {
@@ -876,12 +920,18 @@ void app
     })
   })
   .catch(async (error: unknown) => {
-    // Deterministically close resources and quit with a nonzero diagnostic
-    // code so a failed boot never leaves a headless process.
-    await handleFatalStartup(error, { state, database })
+    if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer)
+    startupRecoveryTimer = null
+    // Keep the updater and a renderer-independent recovery surface alive.
+    await handleFatalStartup(error, { state, database, storage })
+  })
+  .finally(() => {
+    if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer)
+    startupRecoveryTimer = null
   })
 
 app.on('window-all-closed', () => {
+  if (state.startupRecovery) return
   // Background mode keeps the backend alive in the menu bar; a real quit is the
   // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
   // else quits as before. An update install is a real quit too: parking on it
@@ -895,6 +945,9 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   if (state.quitCleanupStarted) return
+  // Recovery's native Quit/Restart action is explicit consent; it cannot wait
+  // on a renderer confirmation or a database-backed working-thread query.
+  if (state.startupRecovery) state.quitConfirmed = true
 
   // An update install is a real quit, and background mode must not park on it.
   // The flag is read once and cleared here so a restart the user declines leaves

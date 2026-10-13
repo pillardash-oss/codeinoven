@@ -4,12 +4,13 @@
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import PanelTabStrip from '$lib/components/workspace/PanelTabStrip.svelte'
   import { motionDuration, slideWidth } from '$lib/motion'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
-  import { Eye, Maximize2, Plus, Redo2, SquarePen, StickyNotes, Undo2, X } from '@lucide/svelte'
+  import { Eye, Maximize2, Redo2, SquarePen, StickyNotes, Undo2 } from '@lucide/svelte'
   import { tick } from 'svelte'
   import { cubicOut } from 'svelte/easing'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
@@ -155,6 +156,55 @@
   {/if}
 {/snippet}
 
+{#snippet tabIcon(tab: { id: string; title: string })}
+  {@const note = stickyNotes.note(tab.id)}
+  {@const icon = note ? noteIcon(note) : null}
+  {#if icon}
+    <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
+  {:else}
+    <StickyNotes size={13} class="shrink-0" />
+  {/if}
+{/snippet}
+
+{#snippet stripActions()}
+  {#if activeNote?.loaded && activeIsEditing && canUndo}
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Undo"
+      aria-label="Undo sticky note edit"
+      onclick={() => historyController?.undo()}
+      in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+      out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+      style="width: 1.75rem"
+    >
+      <Undo2 size={14} />
+    </button>
+  {/if}
+  {#if activeNote?.loaded && activeIsEditing && canRedo}
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Redo"
+      aria-label="Redo sticky note edit"
+      onclick={() => historyController?.redo()}
+      in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+      out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+      style="width: 1.75rem"
+    >
+      <Redo2 size={14} />
+    </button>
+  {/if}
+  <VoiceInputButton
+    targetId={speechTargetId}
+    getTarget={getSpeechTarget}
+    scope={speechScope}
+    disabled={speechDisabled}
+    class="h-7 w-7 text-dimmed"
+  />
+  {@render noteActions()}
+{/snippet}
+
 {#snippet noteBody(note: StickyNoteEntry)}
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-app">
     {#if note.loading}
@@ -207,155 +257,87 @@
   </div>
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col bg-surface">
-  {#if stickyNotes.isLoading && !stickyNotes.isLoaded}
-    <div class="flex min-h-0 flex-1 items-center justify-center px-6 text-sm text-muted">
-      Loading sticky notes…
-    </div>
-  {:else if stickyNotes.error && !stickyNotes.isLoaded}
-    <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <StickyNotes size={22} class="text-dimmed" />
-      <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
-      <button
-        type="button"
-        class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
-        title="Retry loading sticky notes"
-        aria-label="Retry loading sticky notes"
-        onclick={() => void stickyNotes.load().catch(() => {})}
-      >
-        Retry
-      </button>
-    </div>
-  {:else if stickyNotes.entries.length === 0}
-    <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <StickyNotes size={22} class="text-dimmed" />
-      <div class="space-y-1">
-        <h2 class="text-sm font-medium text-foreground">No sticky notes yet</h2>
-        <p class="text-xs text-muted">Create a note to keep it handy across the app.</p>
+<!--
+  The inline rail and the full screen surface are mutually exclusive, exactly as
+  the assistant panel is: the note body renders once, in one of the two. Painting
+  the body in both at once mounted two `RichMarkdownEditor`s that shared one
+  element id, so `focusEditor` reached the hidden inline copy and typing in full
+  screen went nowhere.
+-->
+{#if !fullscreen}
+  <div class="flex h-full min-h-0 flex-col bg-surface">
+    {#if stickyNotes.isLoading && !stickyNotes.isLoaded}
+      <div class="flex min-h-0 flex-1 items-center justify-center px-6 text-sm text-muted">
+        Loading sticky notes…
       </div>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
-        title="Create a sticky note"
-        aria-label="Create a sticky note"
-        disabled={!stickyNotes.isLoaded}
-        onclick={() => void createNote()}
-      >
-        <StickyNotes size={13} />
-        New sticky note
-      </button>
-      {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
-    </div>
-  {:else}
-    <div class="flex h-10 shrink-0 items-center border-b border-border">
-      <div class="min-w-0 flex-1 overflow-x-auto" role="list" aria-label="Sticky note tabs">
-        <div class="flex h-10 min-w-max items-stretch">
-          {#each stickyNotes.entries as note (note.id)}
-            {@const icon = noteIcon(note)}
-            <div
-              class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {stickyNotes.activeNoteId ===
-              note.id
-                ? 'bg-app text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'}"
-              role="listitem"
-            >
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
-                aria-current={stickyNotes.activeNoteId === note.id ? 'page' : undefined}
-                data-active-tab={stickyNotes.activeNoteId === note.id ? 'true' : undefined}
-                title={note.title}
-                onclick={() => selectNote(note.id)}
-                oncontextmenu={(event) => {
-                  event.preventDefault()
-                  selectNote(note.id)
-                  editNote(note)
-                }}
-              >
-                {#if icon}
-                  <img src={icon} alt="" class="h-3 w-3 shrink-0 object-contain" />
-                {:else}
-                  <StickyNotes size={12} class="shrink-0" />
-                {/if}
-                <span class="truncate text-[0.6875rem] font-medium">{note.title}</span>
-              </button>
-              <button
-                type="button"
-                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                aria-label={`Close ${note.title}`}
-                title={`Close ${note.title}`}
-                onclick={() => requestDelete(note.id)}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          {/each}
-        </div>
-      </div>
-      <div class="flex shrink-0 items-center border-l border-border px-1">
-        {#if activeNote?.loaded && activeIsEditing && canUndo}
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            title="Undo"
-            aria-label="Undo sticky note edit"
-            onclick={() => historyController?.undo()}
-            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
-            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
-            style="width: 1.75rem"
-          >
-            <Undo2 size={14} />
-          </button>
-        {/if}
-        {#if activeNote?.loaded && activeIsEditing && canRedo}
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            title="Redo"
-            aria-label="Redo sticky note edit"
-            onclick={() => historyController?.redo()}
-            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
-            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
-            style="width: 1.75rem"
-          >
-            <Redo2 size={14} />
-          </button>
-        {/if}
-        <VoiceInputButton
-          targetId={speechTargetId}
-          getTarget={getSpeechTarget}
-          scope={speechScope}
-          disabled={speechDisabled}
-          class="h-7 w-7 text-dimmed"
-        />
-        {@render noteActions()}
+    {:else if stickyNotes.error && !stickyNotes.isLoaded}
+      <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <StickyNotes size={22} class="text-dimmed" />
+        <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="New sticky note"
-          title="New sticky note"
+          class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
+          title="Retry loading sticky notes"
+          aria-label="Retry loading sticky notes"
+          onclick={() => void stickyNotes.load().catch(() => {})}
+        >
+          Retry
+        </button>
+      </div>
+    {:else if stickyNotes.entries.length === 0}
+      <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <StickyNotes size={22} class="text-dimmed" />
+        <div class="space-y-1">
+          <h2 class="text-sm font-medium text-foreground">No sticky notes yet</h2>
+          <p class="text-xs text-muted">Create a note to keep it handy across the app.</p>
+        </div>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+          title="Create a sticky note"
+          aria-label="Create a sticky note"
+          disabled={!stickyNotes.isLoaded}
           onclick={() => void createNote()}
         >
-          <Plus size={13} />
+          <StickyNotes size={13} />
+          New sticky note
         </button>
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Fullscreen"
-          title="Fullscreen"
-          onclick={() => (fullscreen = true)}
-        >
-          <Maximize2 size={13} />
-        </button>
+        {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
       </div>
-    </div>
+    {:else}
+      <PanelTabStrip
+        {tabs}
+        activeTabId={stickyNotes.activeNoteId}
+        newLabel="New sticky note"
+        trailingLabel="Fullscreen"
+        onTrailingAction={() => (fullscreen = true)}
+        onSelect={selectNote}
+        onNew={() => void createNote()}
+        onCloseTab={requestDelete}
+        onMoveTab={(id, targetId, position) => stickyNotes.move(id, targetId, position)}
+        onTabContextMenu={(id) => {
+          const note = stickyNotes.note(id)
+          if (!note) return
+          selectNote(id)
+          editNote(note)
+        }}
+        {tabIcon}
+      >
+        {#snippet actions()}{@render stripActions()}{/snippet}
+        {#snippet trailingIcon()}
+          <Maximize2 size={13} />
+        {/snippet}
+      </PanelTabStrip>
 
-    {#if activeNote}
-      {@render noteBody(activeNote)}
+      {#if activeNote}
+        {@render noteBody(activeNote)}
+      {/if}
+      {#if createError}<p class="px-3.5 pb-2 text-xs text-danger" role="alert">
+          {createError}
+        </p>{/if}
     {/if}
-    {#if createError}<p class="px-3.5 pb-2 text-xs text-danger" role="alert">{createError}</p>{/if}
-  {/if}
-</div>
+  </div>
+{/if}
 
 {#if activeNote?.loaded && fullscreen}
   <FullscreenPanelDialog
@@ -367,17 +349,16 @@
     onMinimize={() => (fullscreen = false)}
     onSelect={selectNote}
     onCloseTab={requestDelete}
+    onMoveTab={(id, targetId, position) => stickyNotes.move(id, targetId, position)}
+    onTabContextMenu={(id) => {
+      const note = stickyNotes.note(id)
+      if (!note) return
+      selectNote(id)
+      editNote(note)
+    }}
+    {tabIcon}
   >
-    {#snippet actions()}{@render noteActions()}{/snippet}
-    {#snippet tabIcon(tab)}
-      {@const note = stickyNotes.note(tab.id)}
-      {@const icon = note ? noteIcon(note) : null}
-      {#if icon}
-        <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
-      {:else}
-        <StickyNotes size={13} class="shrink-0" />
-      {/if}
-    {/snippet}
+    {#snippet actions()}{@render stripActions()}{/snippet}
     {#if activeNote}{@render noteBody(activeNote)}{/if}
   </FullscreenPanelDialog>
 {/if}

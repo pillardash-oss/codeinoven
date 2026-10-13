@@ -239,7 +239,7 @@ export default defineConfig(({ mode }) => {
           // package inside node_modules in the packaged app.
           external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
           input: {
-            index: resolve(__dirname, 'src/main/index.ts')
+            index: resolve(__dirname, 'src/main/entry.ts')
           },
           output: {
             format: 'es',

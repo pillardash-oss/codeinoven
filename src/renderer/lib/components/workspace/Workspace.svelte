@@ -25,6 +25,11 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
+  import {
+    AUTHORED_WORK_ICON_BY_KIND,
+    AUTHORED_WORK_NAME_BY_KIND
+  } from '$lib/authored-work-presentation'
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -834,6 +839,11 @@
     // Read as a dependency: a new message on this thread re-runs the refresh.
     void thread.lastActivity
     void designCoordinatorState.refresh(thread.projectId, thread.id)
+    // The project's own design and video folders are a project-level fact the rail
+    // shows on any thread: read once when this thread comes up, and again as it
+    // settles so work the agent just wrote appears. The store coalesces the reads.
+    void projectWorkState.ensure(thread.projectId)
+    if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId)
   })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
@@ -921,6 +931,20 @@
       coordinator.threadId,
       coordinator.label
     )
+  }
+
+  /**
+   * Show the project's authored work on the thread the user is already on.
+   *
+   * The rail's design or video entry belongs to the project, not to a session, so
+   * it opens the board for the kind the user picked even though this thread is not
+   * in that session. The user reviews the work without hunting for the thread that
+   * made it.
+   */
+  function openAuthoredWork(kind: 'design' | 'video'): void {
+    const thread = selectedThread
+    if (!thread) return
+    designCoordinatorState.openBoard(thread.projectId, thread.id, kind)
   }
 
   /** Terminals toggle their own region: the bottom dock when docked there,
@@ -1209,6 +1233,25 @@
 
     // The coordinator sits alone at the bottom, below its own hairline: it is
     // the thread's own supervision surface, not a general workspace tool.
+    //
+    // A thread with no session still offers the project's own designs and videos.
+    // The work belongs to the project, not to the thread the user happens to be
+    // on, so the entry is there whether or not a session is open and opens the
+    // board for the kind it names.
+    const authoredWork: ContextDockItem[] = []
+    if (!coordinator && selectedThread) {
+      const work = projectWorkState.stateFor(selectedThread.projectId)
+      for (const kind of ['design', 'video'] as const) {
+        if ((work?.[kind].length ?? 0) === 0) continue
+        authoredWork.push({
+          id: `authored-work-${kind}`,
+          label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
+          icon: AUTHORED_WORK_ICON_BY_KIND[kind],
+          active: dockKindActive('coordinator'),
+          onSelect: () => openAuthoredWork(kind)
+        })
+      }
+    }
     const coordination: ContextDockItem[] = coordinator
       ? [
           {
@@ -1221,7 +1264,7 @@
             onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
           }
         ]
-      : []
+      : authoredWork
 
     // The thread-note indicator sits below its own hairline. It's always
     // present   not just once a note exists   so it also doubles as the "add a
@@ -4149,13 +4192,17 @@
   }
 
   /** Create a routine and seed its "Getting started" task, then open its panel. */
-  async function createAssistantRoutine(name: string, description: string): Promise<void> {
+  async function createAssistantRoutine(
+    name: string,
+    description: string,
+    scheduled = true
+  ): Promise<void> {
     if (!assistantProject) return
     // No model prompt: the primary is the model the user is already working on,
     // so creating a routine never blocks on a pick. Fallbacks are added later
     // from the panel's Agents tab, which the agent points the user at.
     const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
-    const routine = await assistantRoutines.createRoutine({ name, description, agents })
+    const routine = await assistantRoutines.createRoutine({ name, description, scheduled, agents })
     // The seed task is created already inside the routine: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, {

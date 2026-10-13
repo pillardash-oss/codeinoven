@@ -144,6 +144,14 @@ export interface Thread {
   assistantIcon?: string
   /** Per-task schedule override; falls back to the routine schedule when undefined. */
   scheduleOverride?: RoutineSchedule | null
+  /**
+   * Explicitly whether this task runs on a schedule, overriding its routine.
+   * Absent inherits the routine's `scheduled` flag, so a routine can hold one
+   * function that fires on the clock and another the user only drives by hand.
+   * A routine-less task defaults to unscheduled unless it carries its own
+   * schedule.
+   */
+  scheduled?: boolean
   /** Epoch ms of the last scheduled run fired on this task. */
   lastRunAt?: number
   /**
@@ -381,6 +389,7 @@ export interface CreateThreadInput {
   assistantIconType?: string
   assistantIcon?: string
   scheduleOverride?: RoutineSchedule | null
+  scheduled?: boolean
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */
   assistantTaskId?: string

@@ -81,11 +81,14 @@ function registerHandlers(): void {
 /** Owns live about:blank hosts opened by one renderer, never serialized UI copies. */
 export class NativeFloatingPanelWindow {
   private readonly panels = new Map<string, Panel>()
+  /** Held once because re-reading `parent.webContents` throws after the window is destroyed. */
+  private readonly parentContents: WebContents
 
   constructor(private readonly parent: BrowserWindow) {
     registerHandlers()
-    managers.set(parent.webContents, this)
-    parent.webContents.on('did-create-window', (child, details) => {
+    this.parentContents = parent.webContents
+    managers.set(this.parentContents, this)
+    this.parentContents.on('did-create-window', (child, details) => {
       const entry = [...this.panels.entries()].find(
         ([, panel]) => panel.token === details.frameName
       )
@@ -108,8 +111,8 @@ export class NativeFloatingPanelWindow {
       child.webContents.on('before-input-event', (event, input) => {
         if (isCloseShortcut(input)) {
           event.preventDefault()
-          if (!parent.isDestroyed() && !parent.webContents.isDestroyed()) {
-            sendToRenderer(parent.webContents, 'window:closeShortcut')
+          if (!parent.isDestroyed() && !this.parentContents.isDestroyed()) {
+            sendToRenderer(this.parentContents, 'window:closeShortcut')
           }
         }
       })
@@ -127,14 +130,14 @@ export class NativeFloatingPanelWindow {
     parent.on('hide', sync)
     parent.on('minimize', sync)
     parent.on('restore', sync)
-    parent.webContents.on('zoom-changed', sync)
-    parent.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => {
+    this.parentContents.on('zoom-changed', sync)
+    this.parentContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => {
       if (mainFrame) this.dispose()
     })
-    parent.webContents.on('render-process-gone', () => this.dispose())
+    this.parentContents.on('render-process-gone', () => this.dispose())
     parent.on('closed', () => {
       this.dispose()
-      managers.delete(parent.webContents)
+      managers.delete(this.parentContents)
     })
   }
 
@@ -220,7 +223,7 @@ export class NativeFloatingPanelWindow {
 
   private screenBounds(bounds: NativeFloatingPanelBounds): NativeFloatingPanelBounds {
     const content = this.parent.getContentBounds()
-    const zoom = this.parent.webContents.getZoomFactor()
+    const zoom = this.parentContents.getZoomFactor()
     const width = Math.max(1, Math.min(content.width, Math.round(bounds.width * zoom)))
     const height = Math.max(1, Math.min(content.height, Math.round(bounds.height * zoom)))
     return {
@@ -234,8 +237,20 @@ export class NativeFloatingPanelWindow {
   private synchronize(panel: Panel): void {
     const child = panel.window
     if (!child || child.isDestroyed() || this.parent.isDestroyed()) return
-    child.setBounds(this.screenBounds(panel.bounds), false)
-    child.webContents.setZoomFactor(this.parent.webContents.getZoomFactor())
+    // Hover mutations can republish unchanged geometry. Avoid resetting the
+    // native window and Chromium zoom underneath the header's CSS cursor.
+    const bounds = this.screenBounds(panel.bounds)
+    const current = child.getBounds()
+    if (
+      current.x !== bounds.x ||
+      current.y !== bounds.y ||
+      current.width !== bounds.width ||
+      current.height !== bounds.height
+    ) {
+      child.setBounds(bounds, false)
+    }
+    const zoom = this.parentContents.getZoomFactor()
+    if (child.webContents.getZoomFactor() !== zoom) child.webContents.setZoomFactor(zoom)
     if (panel.visible && this.parent.isVisible() && !this.parent.isMinimized()) {
       if (!child.isVisible()) child.showInactive()
     } else if (child.isVisible()) child.hide()

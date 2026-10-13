@@ -86,6 +86,40 @@ export class DesignRepo {
       input.kind,
       Date.now()
     )
+    // The first thread to preview a folder is the one that created it, because the
+    // agent writes a folder before showing it. The insert is ignored once the
+    // folder has an origin, so a second thread previewing someone else's design,
+    // and the same thread previewing it again, both leave the creator alone.
+    this.db.run(
+      `INSERT OR IGNORE INTO design_origins (project_id, directory, thread_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+      input.projectId,
+      input.directory,
+      input.threadId,
+      Date.now()
+    )
+  }
+
+  /**
+   * The creator of each of a project's folders, by project-relative directory.
+   *
+   * Read on the worker's connection: the board draws a creator badge and a reveal
+   * control for every folder it lists, so this sits on an interaction path and must
+   * not touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`). A
+   * directory with no row is simply absent from the map.
+   */
+  async originsViaWorker(projectId: string): Promise<Map<string, string>> {
+    const result = await this.db.queryViaWorker(
+      'SELECT directory, thread_id FROM design_origins WHERE project_id = ?',
+      [projectId],
+      0
+    )
+    const origins = new Map<string, string>()
+    if (!result.ok) return origins
+    for (const row of result.rows as unknown as Array<{ directory: string; thread_id: string }>) {
+      origins.set(row.directory, row.thread_id)
+    }
+    return origins
   }
 
   /**
@@ -142,10 +176,23 @@ export class DesignRepo {
       )
       updated += 1
     }
+    // Origins name the same folders, so they have to move with them or the board
+    // would look for a creator under a directory that no longer exists.
+    this.db.run(
+      `UPDATE design_origins
+          SET directory = ? || SUBSTR(directory, ?)
+        WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
+      input.to,
+      input.from.length + 1,
+      input.projectId,
+      input.from,
+      `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
+    )
     return updated
   }
 
   deleteProject(projectId: string): void {
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)
+    this.db.run('DELETE FROM design_origins WHERE project_id = ?', projectId)
   }
 }

@@ -31,6 +31,7 @@ import {
   layerSize,
   normalizeLayerContent
 } from '../../src/main/chat/prompt-assembler'
+import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../src/lib/agent-control-policy'
 import { MemoryService } from '../../src/main/chat/memory-service'
 
 const validContent = {
@@ -355,7 +356,12 @@ describe('prompt assembly owns planning and implementation layers', () => {
       'chat'
     )
     const appLayer = layers.find((layer) => layer.title.startsWith('Application: CodeInOven'))
-    expect(appLayer?.content).toBe('No application prompts configured.')
+    // The background-first control policy is always part of the application
+    // layer, so chat mode's application layer is never empty. What it must not
+    // carry is the planning or implementation prompt.
+    expect(appLayer?.content).toContain(BACKGROUND_AGENT_CONTROL_INSTRUCTION)
+    expect(appLayer?.content).not.toContain(SPEC_BRAINSTORM_SYSTEM_PROMPT)
+    expect(appLayer?.content).not.toContain(SPEC_IMPLEMENT_SYSTEM_PROMPT)
   })
 
   it('attaches normalized-hash and character/token accounting to every layer', async () => {

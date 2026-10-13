@@ -357,6 +357,7 @@ export class ThreadManager {
       // The repository stores an absent override as NULL and reads it back as
       // `undefined`, so the in-memory row must use the same shape.
       scheduleOverride: input.scheduleOverride ?? undefined,
+      scheduled: input.scheduled,
       createdAt: now,
       updatedAt: now,
       lastActivity: now,
@@ -697,6 +698,7 @@ export class ThreadManager {
         | 'assistantGettingStarted'
         | 'lastRunAt'
         | 'scheduleOverride'
+        | 'scheduled'
       >
     >
   ): Promise<Thread> {
@@ -739,6 +741,7 @@ export class ThreadManager {
       lastRunAt: input.lastRunAt ?? existing.lastRunAt,
       scheduleOverride:
         input.scheduleOverride !== undefined ? input.scheduleOverride : existing.scheduleOverride,
+      scheduled: input.scheduled !== undefined ? input.scheduled : existing.scheduled,
       scopeSortOrder:
         input.scopeBucketId !== undefined &&
         input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)

@@ -1,12 +1,27 @@
 <script lang="ts">
-  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, RefreshCw, X } from '@lucide/svelte'
+  import {
+    ArrowLeft,
+    ClipboardPaste,
+    Copy,
+    Loader2,
+    Plus,
+    RefreshCw,
+    Server,
+    X
+  } from '@lucide/svelte'
+  import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
+  import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { APP_SLUG } from '$shared/brand'
+  import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import Switch from '../ui/Switch.svelte'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import {
@@ -132,6 +147,80 @@
   let { provider, harnesses, defaultHarnessId, onClose, onSaved, onBack }: Props = $props()
 
   /**
+   * Owns the panel's remembered placement, shared with the dock row below so a
+   * minimized editor reopens on the edge the user left it on.
+   */
+  const PANEL_STORAGE_KEY = `${APP_SLUG}.baseUrlProviderPanel.v1`
+
+  /**
+   * Whether the panel is collapsed into its dock chip.
+   *
+   * Docking is what makes this editor usable while the app stays in reach: the
+   * user can minimize it and watch the provider appear in the model picker, or
+   * copy a base URL from a document, instead of being held inside a blocking
+   * dialog. The draft lives here, so the panel stays mounted while docked and
+   * nothing typed is lost by collapsing it.
+   */
+  let docked = $state(false)
+  let iconDataUrl = $state<string | undefined>()
+  let readingIcon = $state(false)
+  let submitting = $state(false)
+  let iconUploadDisabled = $derived(readingIcon || baseUrlProviderStore.saving || submitting)
+  let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
+
+  async function chooseIcon(event: Event): Promise<void> {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    readingIcon = true
+    try {
+      if (!isCustomVendorIconType(file.type) || file.size > MAX_CUSTOM_VENDOR_ICON_BYTES) {
+        throw new Error('Choose an SVG, PNG, JPEG, WebP or GIF of at most 256 KiB.')
+      }
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () =>
+          typeof reader.result === 'string'
+            ? resolve(reader.result)
+            : reject(new Error('Cannot read image.'))
+        reader.onerror = () => reject(new Error('Cannot read image.'))
+        reader.readAsDataURL(file)
+      })
+      const image = new Image()
+      image.src = data
+      await image.decode()
+      if (image.naturalWidth > 2048 || image.naturalHeight > 2048) {
+        throw new Error('Choose an icon no larger than 2048 × 2048.')
+      }
+      iconDataUrl = data
+    } catch (error) {
+      reportError(error, 'Failed to read vendor icon.')
+    } finally {
+      readingIcon = false
+    }
+  }
+
+  /**
+   * The app's modal focus rule: the first field the user would type into, else
+   * the primary action. `ui/Modal.svelte` applied this on open, so the panel
+   * claims it explicitly rather than letting the switch to `DockableModal`
+   * quietly drop it.
+   */
+  function claimPanelInitialFocus(panel: HTMLElement): boolean {
+    const field = findFirstTextField(panel)
+    if (field) {
+      field.focus()
+      return true
+    }
+    const action = findPanelPrimaryAction(panel)
+    if (!action) return false
+    action.focus()
+    return true
+  }
+
+  /**
    * Harnesses whose driver consumes custom base-URL providers. When the prop
    * is empty (e.g. the panel mounted before provider discovery finished), fall
    * back to the live provider store so the section is never blank.
@@ -154,6 +243,16 @@
   )
 
   let draft = $state<ProviderDraft>(createDraft())
+
+  /**
+   * What the dock chip says. The panel keeps the draft alive while it is
+   * collapsed, so the chip names the provider the user is working on instead of
+   * letting a bare "base URL provider" chip lose track of which of several
+   * drafts is docked.
+   */
+  const dockStatus = $derived(draft.name.trim() || 'Untitled provider')
+  const dockRestoreLabel = $derived(`Show the base URL provider form (${dockStatus})`)
+  const dockDismissLabel = $derived(`Close the base URL provider form (${dockStatus})`)
   let apiKeyConfigured = $derived(
     linkedProviders.some((p) => p.apiKeyConfigured === true || p.apiKeyRef !== undefined)
   )
@@ -410,14 +509,19 @@
    */
   async function save(event: SubmitEvent): Promise<void> {
     event.preventDefault()
+    if (readingIcon || submitting) return
     if (draft.harnessIds.length === 0) {
       toast.error('Select at least one harness.')
       return
     }
+    const wasEditing = draft.id !== null
+    submitting = true
     try {
       const headers = parseHeaders(draft.headers)
       const models = await resolveModelsToSave(headers)
-      const currentHarnessIds = linkedProviders.map((p) => p.harnessId)
+      const currentHarnessIds = baseUrlProviderStore.providers
+        .filter((candidate) => candidate.id === draft.id)
+        .map((candidate) => candidate.harnessId)
       const toKeep = draft.harnessIds.filter((id) => currentHarnessIds.includes(id))
       const toRemove = currentHarnessIds.filter((id) => !draft.harnessIds.includes(id))
       const toAdd = draft.harnessIds.filter((id) => !currentHarnessIds.includes(id))
@@ -462,13 +566,17 @@
         }
         saved = await baseUrlProviderStore.create(input)
         groupId = saved.id
+        draft.id = saved.id
       }
 
       if (!saved) throw new Error('No harness selected to save.')
-      toast.success(draft.id ? 'Provider updated.' : 'Provider created.')
+      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl)
+      toast.success(wasEditing ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
       reportError(saveError, 'Failed to save provider.')
+    } finally {
+      submitting = false
     }
   }
 
@@ -558,12 +666,53 @@
   }
 </script>
 
-<Modal
+<DockableModal
   open
-  size="lg"
   title={provider ? 'Edit base URL provider' : 'Add base URL provider'}
+  minimized={docked}
+  closable={!baseUrlProviderStore.saving && !submitting}
+  onMinimize={() => (docked = true)}
   {onClose}
+  storageKey={PANEL_STORAGE_KEY}
+  dragLabel="Drag to move the base URL provider panel"
+  defaultHeight={640}
+  claimInitialFocus={claimPanelInitialFocus}
 >
+  {#snippet dock()}
+    <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked base URL provider">
+      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+        <button
+          type="button"
+          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          title={dockRestoreLabel}
+          aria-label={dockRestoreLabel}
+          onclick={() => (docked = false)}
+        >
+          <Server size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <span class="flex min-w-0 flex-col">
+            <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
+              {provider ? 'Edit base URL provider' : 'Add base URL provider'}
+            </span>
+            <span class="max-w-40 truncate text-[0.625rem] leading-tight text-muted">
+              {dockStatus}
+            </span>
+          </span>
+        </button>
+        <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={dockDismissLabel}
+          title={dockDismissLabel}
+          disabled={submitting}
+          onclick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </DockRow>
+  {/snippet}
+
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
       <div class="flex items-center gap-3">
@@ -571,7 +720,9 @@
           <button
             class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
             type="button"
+            data-modal-dismiss
             title="Back to Add provider"
+            disabled={submitting}
             onclick={onBack}
           >
             <ArrowLeft size={13} /> Back
@@ -583,6 +734,8 @@
         <button
           class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
+          data-modal-dismiss
+          disabled={submitting}
           onclick={onClose}
         >
           Cancel
@@ -590,10 +743,14 @@
         <button
           class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
+          data-modal-primary
           form="base-url-provider-form"
-          disabled={baseUrlProviderStore.saving}
+          disabled={baseUrlProviderStore.saving || readingIcon || submitting}
         >
-          {#if baseUrlProviderStore.saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if baseUrlProviderStore.saving || submitting}<Loader2
+              size={13}
+              class="animate-spin"
+            />{/if}
           Save provider
         </button>
       </div>
@@ -656,6 +813,31 @@
         </span>
       </div>
     </div>
+
+    <label
+      class={[
+        'flex items-center gap-3 rounded-lg border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
+        iconUploadDisabled
+          ? 'cursor-default opacity-60'
+          : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
+      ]}
+    >
+      <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
+        <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
+      </span>
+      <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
+        <span>Vendor icon</span>
+        <input
+          type="file"
+          accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
+          class="block w-full cursor-pointer text-xs text-dimmed file:cursor-pointer disabled:cursor-default disabled:file:cursor-default"
+          disabled={iconUploadDisabled}
+          onchange={(event) => void chooseIcon(event)}
+        />
+        <span class="block text-dimmed">SVG or image, up to 256 KiB. Saved with this provider.</span
+        >
+      </span>
+    </label>
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>
@@ -918,4 +1100,4 @@
       {/each}
     </div>
   </form>
-</Modal>
+</DockableModal>

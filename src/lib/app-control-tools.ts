@@ -74,11 +74,12 @@ const CALL_INPUT_SCHEMA: Record<string, unknown> = {
     action: {
       type: 'string',
       description:
-        'Renderer UI action id from cio_app_catalog, e.g. app.navigate, settings.open, panel.open, browser.open. Use this for effects that have no IPC channel.'
+        'Renderer UI action id from cio_app_catalog, e.g. app.navigate, settings.open, panel.open, browser.open. Prefer background IPC/data operations first; UI-only navigation remains available when needed. browser.open defaults to a background tab owned by this thread.'
     },
     params: {
       type: 'object',
-      description: 'Named parameters for the UI action, as listed by cio_app_catalog.',
+      description:
+        'Named parameters for the UI action, as listed by cio_app_catalog. browser.open accepts attention "background" (default) or "focus" for foreground fallback.',
       additionalProperties: true
     },
     destructiveConfirmed: {

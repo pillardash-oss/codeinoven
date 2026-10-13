@@ -65,10 +65,42 @@ class DesignCoordinatorState {
   private activeKey: string | null = null
   /** The latest coordinates per thread, for a trailing read that only has a key. */
   private readonly refs = new Map<string, { projectId: string; threadId: string }>()
+  /**
+   * Boards the project's rail opened, and the kind each shows.
+   *
+   * Such a board has no session behind it, so a refresh that finds the thread
+   * inactive must leave it alone rather than withdraw the very panel the user
+   * just opened. A session that appears later takes the board over and the marker
+   * is dropped.
+   */
+  private readonly projectBoards = new Map<string, AuthoredWorkKind>()
 
   /** The last answer for a thread, or null before the first one arrives. */
   stateFor(projectId: string, threadId: string): ThreadDesignState | null {
     return this.states.get(threadKey(projectId, threadId)) ?? null
+  }
+
+  /**
+   * Show the project's authored work on the thread the user is already on.
+   *
+   * The right rail offers the project's designs and videos on any thread, so this
+   * opens the coordinator board for the kind the user picked even though the
+   * thread is not in that session. The board is marked as the rail's, which is
+   * what stops the next refresh from withdrawing a panel with no session behind
+   * it. A session that later starts on the thread takes the board over.
+   */
+  openBoard(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+    const key = threadKey(projectId, threadId)
+    this.projectBoards.set(key, kind)
+    const label = COORDINATOR_LABEL_BY_KIND[kind]
+    coordinatorDockState.register({
+      projectId,
+      threadId,
+      label,
+      icon: COORDINATOR_ICON_BY_KIND[kind],
+      panel: { component: 'design', props: { projectId, threadId, kind } }
+    })
+    contextSidebarState.openCoordinator(projectId, threadId, label)
   }
 
   /**
@@ -144,12 +176,15 @@ class DesignCoordinatorState {
       const existing = coordinatorDockState.forThread(projectId, threadId)
       const ownsRow = existing === null || existing.panel.component === 'design'
       if (!state.active) {
-        if (ownsRow && existing !== null) {
+        if (ownsRow && existing !== null && !this.projectBoards.has(key)) {
           coordinatorDockState.withdraw(projectId, threadId, ['design'])
         }
         return
       }
       if (!ownsRow) return
+      // A session has this thread now, so it owns the board: the rail's own
+      // marker is dropped and the board is registered for the session's kind.
+      this.projectBoards.delete(key)
       const label = COORDINATOR_LABEL_BY_KIND[state.kind]
       coordinatorDockState.register({
         projectId,

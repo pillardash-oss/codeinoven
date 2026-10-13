@@ -1,8 +1,11 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
+import { logRendererError } from '$lib/system/renderer-logger'
 import type {
   BrowserDesignTab,
   BrowserInspectorEvent,
   BrowserInspectorMarker,
+  BrowserInspectorRect,
   BrowserInspectorTheme
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -23,10 +26,10 @@ import { mergeReferenceById, responseReferencesState } from './response-referenc
  * The session owns:
  *
  *   - which tabs are armed, and the pins each one draws
- *   - which comment is open for editing on each tab
  *   - the application theme the injected overlay is drawn with
- *   - the event loop back from the page: a pick becomes a composer reference, a
- *     pin click opens that comment, Escape ends the session
+ *   - the event loop back from the page: a pick becomes a composer reference and
+ *     opens its comment bubble, and a pin click or a jump from the composer
+ *     reopens the bubble on the element it belongs to
  *
  * Pushing the pins and the theme from here rather than from a panel is what
  * makes the session survive a surface switch: main holds the last set it was
@@ -41,7 +44,8 @@ const INSPECTOR_THEME_TOKENS = {
   border: '--color-border',
   foreground: '--color-foreground',
   muted: '--color-muted',
-  accent: '--color-accent'
+  accent: '--color-accent',
+  font: '--font-app'
 } as const satisfies Record<keyof BrowserInspectorTheme, string>
 
 const THEME_KEYS = Object.keys(INSPECTOR_THEME_TOKENS) as (keyof BrowserInspectorTheme)[]
@@ -54,11 +58,22 @@ interface TabOwner {
 class BrowserInspectorSession {
   /** Tabs whose page is armed for picking. */
   private readonly armed = new SvelteSet<string>()
-  /** The comment open for editing on each tab. */
-  private readonly editing = new SvelteMap<string, string>()
   /** The design each tab is serving, mirrored from `browser:state`. A tab that
    *  is not serving a design is not inspectable, and never gets pins. */
   private readonly designs = new SvelteMap<string, BrowserDesignTab>()
+  /**
+   * The comment bubble each tab has open: the reference it belongs to, and where
+   * the element was when the reader picked or reopened it.
+   *
+   * The bubble is the app's own component, so this session owns what the page
+   * used to own outright: which comment is open, and where it sits. The anchor is
+   * the place main resolved for the element, in the app window's coordinates,
+   * which is the only space the bubble can be positioned in.
+   */
+  private readonly editing = new SvelteMap<
+    string,
+    { referenceId: string; anchor: BrowserInspectorRect }
+  >()
   /** Last theme read from the stylesheet, reused while a token is unavailable. */
   private themeCache: BrowserInspectorTheme | null = null
 
@@ -105,11 +120,6 @@ class BrowserInspectorSession {
     return this.armed.has(tabId)
   }
 
-  /** The comment open for editing on this tab, or null. */
-  editingId(tabId: string): string | null {
-    return this.editing.get(tabId) ?? null
-  }
-
   /** The pins this tab's page draws, in the composer's own numbering. */
   markersFor(tabId: string): BrowserInspectorMarker[] {
     const owner = this.ownerOf(tabId)
@@ -134,6 +144,16 @@ class BrowserInspectorSession {
     this.setArmed(tabId, !this.armed.has(tabId))
   }
 
+  /** The comment bubble this tab has open, and where the element sits. */
+  editingFor(tabId: string): { referenceId: string; anchor: BrowserInspectorRect } | null {
+    return this.editing.get(tabId) ?? null
+  }
+
+  /** Close this tab's comment bubble. The comment itself is left alone. */
+  closeComment(tabId: string): void {
+    this.editing.delete(tabId)
+  }
+
   /**
    * Arm or disarm picking on one tab.
    *
@@ -144,10 +164,11 @@ class BrowserInspectorSession {
    */
   setArmed(tabId: string, armed: boolean): void {
     if (armed) this.armed.add(tabId)
-    else {
-      this.armed.delete(tabId)
-      this.closeComment(tabId)
-    }
+    else this.armed.delete(tabId)
+    // Leaving inspect mode takes the bubble with it: the mode is what the bubble
+    // belongs to, and a bubble left behind would float over a page that is no
+    // longer being inspected.
+    if (!armed) this.editing.delete(tabId)
     const theme = this.themeTokens()
     void invoke('browser:inspectSetArmed', tabId, armed, theme ?? undefined)
       .then(() => {
@@ -157,17 +178,6 @@ class BrowserInspectorSession {
       .catch(() => this.armed.delete(tabId))
   }
 
-  /** Open one reference's comment for editing on the tab it was picked from. */
-  openComment(tabId: string, referenceId: string): void {
-    this.editing.set(tabId, referenceId)
-    void invoke('browser:inspectFocus', tabId, referenceId, false).catch(() => {})
-  }
-
-  closeComment(tabId: string): void {
-    if (!this.editing.delete(tabId)) return
-    void invoke('browser:inspectFocus', tabId, null, false).catch(() => {})
-  }
-
   /**
    * Put one commented element back in front of the reader: arm the tab if the
    * session is not already running on it, highlight the element, scroll it into
@@ -175,15 +185,25 @@ class BrowserInspectorSession {
    * does, and it is the mirror of the document annotation's jump to its passage.
    */
   focusComment(tabId: string, referenceId: string): void {
-    if (!this.armed.has(tabId)) this.setArmed(tabId, true)
-    this.editing.set(tabId, referenceId)
-    void invoke('browser:inspectFocus', tabId, referenceId, true).catch(() => {})
+    void this.restoreAndFocus(tabId, referenceId).catch((failure: unknown) => {
+      logRendererError('The design annotation could not be focused.', failure)
+      toast.error('Could not focus this design annotation. Try opening its browser tab again.')
+    })
+  }
+
+  private async restoreAndFocus(tabId: string, referenceId: string): Promise<void> {
+    this.armed.add(tabId)
+    const theme = this.themeTokens()
+    await invoke('browser:inspectSetArmed', tabId, true, theme ?? undefined)
+    await invoke('browser:inspectMarkers', tabId, this.markersFor(tabId))
+    await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
   /** Mirror the design a tab is serving, and end the session when it stops. */
   private notePageState(tabId: string, design: BrowserDesignTab | null): void {
     if (design) {
       this.designs.set(tabId, design)
+      this.publishMarkers(tabId)
       return
     }
     if (!this.designs.delete(tabId)) return
@@ -196,8 +216,10 @@ class BrowserInspectorSession {
    * One report from the page's inspector.
    *
    * `pick` is a fresh element, which becomes a composer reference and opens its
-   * comment; `open` is a click on an existing pin, which opens that comment;
-   * `closed` is the page ending the session on its own.
+   * comment bubble; `open` is a click on an existing pin, or a jump to one from
+   * the composer, which reopens that element's bubble. `closed` is inspect mode
+   * ending on the page's own terms. The bubble is the app's own component, so the
+   * comment text never travels through the page at all.
    */
   private onPageEvent(tabId: string, event: BrowserInspectorEvent): void {
     if (event.kind === 'closed') {
@@ -207,8 +229,17 @@ class BrowserInspectorSession {
     }
     const owner = this.ownerOf(tabId)
     if (!owner) return
+    const { projectId, threadId } = owner
     if (event.kind === 'open') {
-      this.openComment(tabId, event.id)
+      // The bubble is drawn beside the element, and the element is in the tab the
+      // reader is looking at, so reveal that tab and the thread it belongs to.
+      this.editing.set(tabId, { referenceId: event.id, anchor: event.anchor })
+      void import('$lib/threads/open-thread-by-id')
+        .then(async ({ openThreadById }) => {
+          await openThreadById(projectId, threadId)
+          contextSidebarState.focus(tabId)
+        })
+        .catch(() => {})
       return
     }
     const reference = designElementReference(
@@ -221,14 +252,11 @@ class BrowserInspectorSession {
     // only ever name one reference. Folding it in by id keeps a repeated report
     // of one pick from adding a second entry with the same key.
     responseReferencesState.setForThread(
-      owner.projectId,
-      owner.threadId,
-      mergeReferenceById(
-        responseReferencesState.forThread(owner.projectId, owner.threadId),
-        reference
-      )
+      projectId,
+      threadId,
+      mergeReferenceById(responseReferencesState.forThread(projectId, threadId), reference)
     )
-    this.openComment(tabId, event.id)
+    this.editing.set(tabId, { referenceId: event.id, anchor: event.anchor })
   }
 
   /**
@@ -238,15 +266,17 @@ class BrowserInspectorSession {
    */
   private onReferencesChanged(projectId: string, threadId: string): void {
     const references = responseReferencesState.forThread(projectId, threadId)
-    for (const tab of contextSidebarState.tabs) {
+    for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (tab.projectId !== projectId || tab.threadId !== threadId) continue
       if (!this.designs.has(tab.id)) continue
-      this.publishMarkers(tab.id)
+      // An open bubble whose reference is gone (removed from the composer) closes
+      // with it, exactly as the page's own card used to.
       const editing = this.editing.get(tab.id)
-      if (editing && !references.some((reference) => reference.id === editing)) {
-        this.closeComment(tab.id)
+      if (editing && !references.some((reference) => reference.id === editing.referenceId)) {
+        this.editing.delete(tab.id)
       }
+      this.publishMarkers(tab.id)
     }
   }
 
@@ -259,7 +289,7 @@ class BrowserInspectorSession {
   private publishTheme(): void {
     const theme = this.themeTokens()
     if (!theme) return
-    for (const tab of contextSidebarState.tabs) {
+    for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (!this.armed.has(tab.id) && this.markersFor(tab.id).length === 0) continue
       void invoke('browser:inspectTheme', tab.id, theme).catch(() => {})
@@ -290,7 +320,7 @@ class BrowserInspectorSession {
   }
 
   private ownerOf(tabId: string): TabOwner | null {
-    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+    const tab = contextSidebarState.browserTabs.find((candidate) => candidate.id === tabId)
     if (!tab || tab.kind !== 'browser') return null
     return { projectId: tab.projectId, threadId: tab.threadId }
   }

@@ -37,6 +37,14 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:transferInstanceControl',
   'app:rendererReady',
   'app:waitForFeatures',
+  // Independently registered before navigation, even if optional engines fail.
+  'updater:check',
+  'updater:getStatus',
+  'updater:getChangelog',
+  'updater:download',
+  'updater:install',
+  'updater:blockers',
+  'updater:forceInstall',
   // Native panel hosts are registered with the parent before navigation.
   'app:prepareFloatingPanel',
   'app:updateFloatingPanel',

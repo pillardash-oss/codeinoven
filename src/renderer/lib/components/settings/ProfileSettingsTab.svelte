@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import DesignQualityRankings from './DesignQualityRankings.svelte'
   import { SvelteDate } from 'svelte/reactivity'
   import { Brain, Check, ChevronDown, Loader2, RefreshCw, Sparkles, Trash2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
@@ -1131,6 +1132,9 @@
     </section>
   </div>
 
+  {#key usage}
+    <DesignQualityRankings startAt={usage.range.startAt} endAt={usage.range.endAt} />
+  {/key}
   <section class="mt-4 rounded-xl border" aria-labelledby="model-ranking-heading">
     <div class="border-b px-4 py-3">
       <h2 id="model-ranking-heading" class="text-sm font-semibold">Model rankings</h2>

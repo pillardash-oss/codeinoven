@@ -144,7 +144,11 @@ export const ROUTINE_PLAN_JSON_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   description: 'The machine-readable half of a routine: when it runs and what it needs.',
   properties: {
-    schedule: ROUTINE_SCHEDULE_JSON_SCHEMA,
+    schedule: {
+      anyOf: [ROUTINE_SCHEDULE_JSON_SCHEMA, { type: 'null' }],
+      description:
+        'When the routine runs, or null for a routine that has no schedule and runs only on demand. Use local wall-clock times; the app fires against the machine clock.'
+    },
     connections: {
       type: 'array',
       items: ROUTINE_CONNECTION_JSON_SCHEMA,
