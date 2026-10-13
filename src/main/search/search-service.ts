@@ -73,7 +73,7 @@ export class SearchService {
   private runtime: EmbeddingRuntime | null = null
   private runtimeModelId: string | null = null
   private sweep: Promise<void> | null = null
-  private sweepTotals: { total: number; pending: number } = { total: 0, pending: 0 }
+  private sweepTotals: { total: number | null; pending: number } = { total: null, pending: 0 }
   private indexing = false
   /** Loaded or partially built records are unusable until a full sweep succeeds. */
   private intentReady = false
@@ -234,7 +234,7 @@ export class SearchService {
     // index is meaningless. Drop it and rebuild.
     await this.disposeRuntime()
     await this.index.reset()
-    this.sweepTotals = { total: 0, pending: 0 }
+    this.sweepTotals = { total: null, pending: 0 }
     if (this.settings.enabled && modelId && this.canEmbed()) await this.runSweep('model-changed')
     this.emitStatus()
   }
@@ -253,7 +253,7 @@ export class SearchService {
     await this.saveSettings()
     await this.disposeRuntime()
     await this.index.reset()
-    this.sweepTotals = { total: 0, pending: 0 }
+    this.sweepTotals = { total: null, pending: 0 }
     if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       await this.runSweep('context-changed')
     }
@@ -264,7 +264,7 @@ export class SearchService {
     this.intentReady = false
     await this.stopSweep()
     await this.index.reset()
-    this.sweepTotals = { total: 0, pending: 0 }
+    this.sweepTotals = { total: null, pending: 0 }
     if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       await this.runSweep('rebuild')
     }
@@ -347,6 +347,7 @@ export class SearchService {
       activeModelId: model?.id ?? null,
       indexedThreads: this.index.size,
       pendingThreads: this.sweepTotals.pending,
+      totalThreads: this.sweepTotals.total,
       indexing: this.indexing,
       dimensions: model?.dimensions ?? 0,
       lastIndexedAt: this.index.lastIndexedAt,

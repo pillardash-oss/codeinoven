@@ -134,6 +134,8 @@ export interface SearchIndexStatus {
   /** An installed model is selected and resident. */
   modelReady: boolean
   activeModelId: string | null
+  /** Eligible threads in the latest sweep, or null before discovery. */
+  totalThreads: number | null
   indexedThreads: number
   pendingThreads: number
   indexing: boolean
