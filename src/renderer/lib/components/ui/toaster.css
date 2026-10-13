@@ -169,6 +169,21 @@
   margin-top: 1px;
 }
 
+/* The memory proposal's card leads with the app's own BrainCircuit, and that
+   chip is the one thing that tells it apart from a plain notice.
+   svelte-sonner sizes every icon slot at 16px for its own status glyphs and
+   its rule outranks the chip above (it carries `data-styled`), so the memory
+   card re-states the chip's geometry with a selector that outranks it back and
+   keeps the glyph centred in a chip the size of the app's own memory icon.
+   Only a `default`-type card that carries an icon matches this, and the memory
+   proposal is the only plain toast in the app that asks for one. */
+html[data-native-toasts] [data-sonner-toast][data-type='default'] [data-icon] {
+  width: 1.75rem !important;
+  height: 1.75rem !important;
+  display: grid !important;
+  place-items: center !important;
+}
+
 /* ─── The native toast document keeps the desktop geometry ────────────────
    Every toast in this app is drawn by `NativeToastSurface.svelte`, and it is
    drawn in a bounded native view whose width is capped at one card plus its
