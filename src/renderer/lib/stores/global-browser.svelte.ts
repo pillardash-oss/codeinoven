@@ -1453,6 +1453,7 @@ export class GlobalBrowserState {
     }
     if (!context.peek) this.enforceTabCap()
     const now = Date.now()
+    const sourceTab = context.sourceTabId ? this.tabById(context.sourceTabId) : null
     const newTab: GlobalBrowserTab = {
       id: tabId,
       title: browserTabTitleForUrl(url),
@@ -1460,7 +1461,7 @@ export class GlobalBrowserState {
       url,
       favicon: null,
       // A popup belongs beside the page that opened it.
-      groupId: this.activeTab?.groupId ?? null,
+      groupId: sourceTab?.groupId ?? this.activeTab?.groupId ?? null,
       // Main creates the tab in the opener's jar and hands back the box it
       // used, so the row and the session agree from the first show. Main is the
       // only side that knows the true owner when a background tab opens the
@@ -1510,9 +1511,24 @@ export class GlobalBrowserState {
         .catch(() => {})
       return
     }
-    this.tabs = [...this.tabs, newTab]
+    this.tabs = this.insertTabBeside(newTab, context.sourceTabId)
     if (context.reveal) this.activate(tabId)
     this.persist()
+  }
+
+  /**
+   * Place a tab the main process created beside the page that opened it, so a
+   * link opened in a new tab lands next to the tab in use rather than after
+   * every other row. A tab with no known source keeps the old end-of-strip
+   * behaviour.
+   */
+  private insertTabBeside(newTab: GlobalBrowserTab, sourceTabId?: string): GlobalBrowserTab[] {
+    if (!sourceTabId) return [...this.tabs, newTab]
+    const index = this.tabs.findIndex((candidate) => candidate.id === sourceTabId)
+    if (index === -1) return [...this.tabs, newTab]
+    const ordered = [...this.tabs]
+    ordered.splice(index + 1, 0, newTab)
+    return ordered
   }
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
