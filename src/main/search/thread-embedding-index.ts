@@ -11,8 +11,8 @@ import { ThreadSearchSummaries, type SearchSummaryThread } from './thread-search
 
 /** Process one thread at a time, including provider summaries and embeddings. */
 const INDEX_BATCH_SIZE = 1
-/** Hard ceiling on threads considered by one sweep. */
-const MAX_THREADS = 20_000
+/** Page metadata without loading conversations or blocking the main process. */
+const CATALOG_PAGE_SIZE = 256
 /** Cosine floor below which a semantic hit is treated as noise. */
 const MIN_INTENT_SCORE = 0.2
 /** Persist the on-disk index every this many embedded threads. */
@@ -37,6 +37,10 @@ export interface SweepResult {
  * and is persisted as one compact blob so it survives restart.
  */
 export class ThreadEmbeddingIndex {
+  readonly candidates = new Map<string, CandidateThread>()
+  private readonly pendingIds = new Set<string>()
+  private removed = new Set<string>()
+  private removalTimer: ReturnType<typeof setTimeout> | null = null
   private readonly records = new Map<string, ThreadEmbeddingRecord>()
   private lastPersistedAt = 0
   private persistence: Promise<void> = Promise.resolve()
@@ -74,9 +78,49 @@ export class ThreadEmbeddingIndex {
     }
   }
 
+  async initializeCorpus(): Promise<void> {
+    for (const thread of await this.listCandidates()) {
+      if (!this.removed.has(thread.id) && !this.candidates.has(thread.id)) this.updateThread(thread)
+    }
+    await this.pruneMissing(new Set(this.candidates.keys()))
+    await this.persist()
+  }
+
+  removeThread(id: string): void {
+    this.candidates.delete(id)
+    this.pendingIds.delete(id)
+    this.removed.add(id)
+    if (!this.records.delete(id)) return
+    if (this.removalTimer) clearTimeout(this.removalTimer)
+    this.removalTimer = setTimeout(() => {
+      this.removalTimer = null
+      void this.persist()
+    }, 250)
+    this.removalTimer.unref()
+  }
+
+  updateThread(thread: CandidateThread): void {
+    this.removed.delete(thread.id)
+    this.candidates.set(thread.id, thread)
+    const record = this.records.get(thread.id)
+    if (!record || record.updatedAt < thread.stamp) this.pendingIds.add(thread.id)
+    else this.pendingIds.delete(thread.id)
+  }
+
+  get pending(): number {
+    return this.pendingIds.size
+  }
+
+  async dispose(): Promise<void> {
+    if (this.removalTimer) clearTimeout(this.removalTimer)
+    this.removalTimer = null
+    await this.persist()
+  }
+
   async reset(): Promise<void> {
     await this.persistence.catch(() => undefined)
     this.records.clear()
+    for (const id of this.candidates.keys()) this.pendingIds.add(id)
     this.lastPersistedAt = 0
     await rm(this.indexPath, { force: true }).catch(() => undefined)
   }
@@ -105,7 +149,7 @@ export class ThreadEmbeddingIndex {
       ) => void
     }
   ): Promise<SweepResult> {
-    const candidates = await this.listCandidates()
+    const candidates = [...this.candidates.values()]
     if (candidates.length === 0) {
       await this.pruneMissing(new Set())
       await this.summaries.prune([])
@@ -141,7 +185,7 @@ export class ThreadEmbeddingIndex {
         }
         if (offset + INDEX_BATCH_SIZE < stale.length) await paceIndexing(startedAt, options.signal)
       }
-      await this.pruneMissing(new Set(candidates.map((candidate) => candidate.id)))
+      await this.pruneMissing(new Set(this.candidates.keys()))
       await this.summaries.prune(candidates)
       return { total, indexed, pending: pending - indexed }
     } finally {
@@ -226,6 +270,7 @@ export class ThreadEmbeddingIndex {
         throw new Error('The embedding model returned an unexpected vector dimension.')
       }
       const candidate = batch[index]
+      if (this.removed.has(candidate.id) || !this.candidates.has(candidate.id)) continue
       this.records.set(candidate.id, {
         threadId: candidate.id,
         contentHash: contentHashOf(options.modelSignature, texts[index]),
@@ -233,6 +278,8 @@ export class ThreadEmbeddingIndex {
         updatedAt: candidate.stamp,
         vector
       })
+      if ((this.candidates.get(candidate.id)?.stamp ?? Infinity) <= candidate.stamp)
+        this.pendingIds.delete(candidate.id)
       if (oversized[index])
         options.onOversized?.(candidate, contentHashOf(options.modelSignature, texts[index]))
     }
@@ -245,19 +292,25 @@ export class ThreadEmbeddingIndex {
   }
 
   private async listCandidates(): Promise<CandidateThread[]> {
-    const result = await this.db.queryViaWorker(
-      `SELECT id, project_id, title,
-          MAX(COALESCE(last_activity, 0), COALESCE(updated_at, 0)) AS stamp
-        FROM threads
-        WHERE drafting = 0 AND project_id != ?
-        ORDER BY last_activity DESC
-        LIMIT ?`,
-      [GLOBAL_BROWSER_PROJECT_ID, MAX_THREADS],
-      MAX_THREADS
-    )
-    if (!result.ok) throw new Error('The threads could not be read for search indexing.')
+    const rows: Record<string, unknown>[] = []
+    let cursor = ''
+    while (true) {
+      const result = await this.db.queryViaWorker(
+        `SELECT id, project_id, title,
+            MAX(COALESCE(last_activity, 0), COALESCE(updated_at, 0)) AS stamp
+          FROM threads WHERE drafting = 0 AND project_id != ? AND id > ?
+          ORDER BY id LIMIT ?`,
+        [GLOBAL_BROWSER_PROJECT_ID, cursor, CATALOG_PAGE_SIZE],
+        CATALOG_PAGE_SIZE
+      )
+      if (!result.ok) throw new Error('The threads could not be read for search indexing.')
+      rows.push(...result.rows)
+      if (result.rows.length < CATALOG_PAGE_SIZE) break
+      cursor = String(result.rows[result.rows.length - 1]['id'])
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
     const candidates: CandidateThread[] = []
-    for (const row of result.rows) {
+    for (const row of rows) {
       const id = row['id']
       if (typeof id !== 'string' || id.length === 0) continue
       candidates.push({

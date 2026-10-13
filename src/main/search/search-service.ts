@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, rm } from 'node:fs/promises'
 import type { Database } from '../database/database'
 import { Logger } from '../system/logger'
 import { paceIndexing } from './indexing-pacing'
+import { GLOBAL_BROWSER_PROJECT_ID, type Thread } from '../../lib/types'
 import { SEARCH_MODEL_CATALOG, searchModelsForRuntime } from '../../lib/search/model-catalog'
 import {
   clampSearchContextTokens,
@@ -40,6 +41,11 @@ interface PersistedModelIndex {
 }
 
 export interface SearchServiceHost {
+  subscribeCorpus?: (listener: {
+    updated(thread: Thread): void
+    deleted(thread: Pick<Thread, 'projectId' | 'id'>): void
+    draftUpdated(projectId: string, threadId: string, drafting: boolean): void
+  }) => () => void
   summarizeThread: SearchSummaryExecutor
   llamaServerPath: () => string | null
   /**
@@ -78,6 +84,8 @@ export class SearchService {
   /** Loaded or partially built records are unusable until a full sweep succeeds. */
   private intentReady = false
   private periodicTimer: ReturnType<typeof setInterval> | null = null
+  private corpusTimer: ReturnType<typeof setTimeout> | null = null
+  private unsubscribeCorpus: (() => void) | null = null
   private disposed = false
   private sweepController: AbortController | null = null
   private indexingError: string | null = null
@@ -113,6 +121,18 @@ export class SearchService {
   }
 
   async initialize(): Promise<void> {
+    this.unsubscribeCorpus =
+      this.host.subscribeCorpus?.({
+        updated: (thread) => this.updateCorpusThread(thread),
+        deleted: (thread) => this.removeCorpusThread(thread.id),
+        draftUpdated: (projectId, threadId, drafting) => {
+          if (drafting) this.removeCorpusThread(threadId)
+          else
+            void this.reloadCorpusThread(projectId, threadId).catch((error) => {
+              Logger.error('Search corpus draft update failed:', error)
+            })
+        }
+      }) ?? null
     await this.storage.initialize()
     const platform = process.platform as SearchPlatform
     const architecture = process.arch as SearchArchitecture
@@ -120,6 +140,7 @@ export class SearchService {
     await this.loadSettings()
     await this.loadModelIndex()
     await this.index.load()
+    await this.index.initializeCorpus()
     if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       void this.runSweep('startup')
     }
@@ -130,6 +151,57 @@ export class SearchService {
     }, PERIODIC_SWEEP_MS)
     // Never keep the process alive solely for the sweep timer.
     this.periodicTimer.unref?.()
+  }
+
+  private updateCorpusThread(thread: Thread): void {
+    if (thread.drafting || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      this.removeCorpusThread(thread.id)
+      return
+    }
+    const isNew = !this.index.candidates.has(thread.id)
+    this.index.updateThread({
+      id: thread.id,
+      projectId: thread.projectId,
+      title: thread.title,
+      stamp: Math.max(thread.lastActivity ?? 0, thread.updatedAt ?? 0)
+    })
+    this.emitStatus()
+    if (isNew) this.requestCorpusSweep()
+  }
+
+  private requestCorpusSweep(): void {
+    if (this.corpusTimer || this.disposed) return
+    this.corpusTimer = setTimeout(() => {
+      this.corpusTimer = null
+      if (!this.settings.enabled || !this.activeModel() || !this.canEmbed()) return
+      if (this.sweep) this.requestCorpusSweep()
+      else void this.runSweep('thread-created')
+    }, 3000)
+    this.corpusTimer.unref()
+  }
+
+  private removeCorpusThread(id: string): void {
+    this.index.removeThread(id)
+    this.summaryJobs.delete(id)
+    this.emitStatus()
+  }
+
+  private async reloadCorpusThread(projectId: string, id: string): Promise<void> {
+    const result = await this.db.queryViaWorker(
+      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ? AND drafting = 0',
+      [id, projectId],
+      1
+    )
+    const row = result.rows[0]
+    if (!result.ok || !row || this.disposed || projectId === GLOBAL_BROWSER_PROJECT_ID) return
+    this.index.updateThread({
+      id,
+      projectId,
+      title: String(row['title'] ?? ''),
+      stamp: Math.max(Number(row['last_activity'] ?? 0), Number(row['updated_at'] ?? 0))
+    })
+    this.emitStatus()
+    this.requestCorpusSweep()
   }
 
   onProgress(listener: (event: SearchProgressEvent) => void): () => void {
@@ -308,12 +380,17 @@ export class SearchService {
 
   async dispose(): Promise<void> {
     this.disposed = true
+    if (this.corpusTimer) clearTimeout(this.corpusTimer)
+    this.corpusTimer = null
+    this.unsubscribeCorpus?.()
+    this.unsubscribeCorpus = null
     this.sweepController?.abort()
     this.cancelSummaries()
     if (this.periodicTimer) clearInterval(this.periodicTimer)
     this.periodicTimer = null
     this.downloader.abortAll()
     await this.disposeRuntime()
+    await this.index.dispose()
   }
 
   // ─── Internals ────────────────────────────────────────────────────────────
@@ -346,8 +423,8 @@ export class SearchService {
       modelReady: Boolean(model) && runtimeAvailable && runtimeSupported,
       activeModelId: model?.id ?? null,
       indexedThreads: this.index.size,
-      pendingThreads: this.sweepTotals.pending,
-      totalThreads: this.sweepTotals.total,
+      pendingThreads: this.index.pending,
+      totalThreads: this.index.candidates.size,
       indexing: this.indexing,
       dimensions: model?.dimensions ?? 0,
       lastIndexedAt: this.index.lastIndexedAt,
@@ -558,7 +635,7 @@ export class SearchService {
       )
       this.sweepTotals = { total: result.total, pending: result.pending }
       this.intentReady =
-        !controller.signal.aborted && result.pending === 0 && this.indexingError === null
+        !controller.signal.aborted && this.index.pending === 0 && this.indexingError === null
       Logger.dev(`Thread embedding index swept (${reason})`, result)
     } catch (error) {
       if (controller.signal.aborted) return

@@ -19,6 +19,20 @@ interface BackgroundAttentionPort {
   requestAttentionRefresh: () => void
 }
 
+interface ThreadCorpusListener {
+  updated(thread: Thread): void
+  deleted(thread: Pick<Thread, 'projectId' | 'id'>): void
+  draftUpdated(projectId: string, threadId: string, drafting: boolean): void
+}
+const corpusListeners = new Set<ThreadCorpusListener>()
+
+export function subscribeThreadCorpus(listener: ThreadCorpusListener): () => void {
+  corpusListeners.add(listener)
+  return () => {
+    corpusListeners.delete(listener)
+  }
+}
+
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
 let _backgroundAttention: BackgroundAttentionPort | null = null
@@ -59,6 +73,7 @@ export function dismissThreadNotifications(projectId: string, threadId: string):
  * then fire an OS notification if the app is backgrounded.
  */
 export function broadcastThreadUpdate(thread: Thread): void {
+  for (const listener of corpusListeners) listener.updated(thread)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:updated', thread)
   }
@@ -86,6 +101,7 @@ export function broadcastThreadDraftUpdated(
   drafting: boolean,
   draftJson: string | null
 ): void {
+  for (const listener of corpusListeners) listener.draftUpdated(projectId, threadId, drafting)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
   }
@@ -115,6 +131,7 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
 
 /** Push permanent task deletion so every renderer view drops it. */
 export function broadcastThreadDeleted(thread: Pick<Thread, 'projectId' | 'id'>): void {
+  for (const listener of corpusListeners) listener.deleted(thread)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:deleted', thread.projectId, thread.id)
   }
