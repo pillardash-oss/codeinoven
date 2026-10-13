@@ -1,4 +1,4 @@
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { requireLocalProject, requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { BrowserService } from '../browser/browser-service'
 import { openDesignPreview } from '../design/design-preview-session'
@@ -6,6 +6,9 @@ import { currentWorkRoot } from '../design/work-roots-state'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
+import { readDesignContracts, writeDesignContract } from '../design/design-contract-service'
+import { runDesignReview } from '../design/design-review-service'
+import { extractDesignReference } from '../design/design-reference-service'
 
 /**
  * What the design capability needs from the app.
@@ -55,6 +58,15 @@ export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
 ): DesignCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation === 'lint' || operation === 'critique')
+      return runDesignReview(options.database, context, input, operation === 'critique')
+    if (operation === 'extract-reference') return extractDesignReference(input['url'])
+    if (operation === 'read-contract' || operation === 'write-contract') {
+      const project = await requireLocalProjectViaWorker(options.database, context.projectId)
+      return operation === 'read-contract'
+        ? readDesignContracts(project.path)
+        : writeDesignContract(project.path, input['markdown'])
+    }
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
     if (operation !== 'preview') {

@@ -9,6 +9,7 @@ import {
   SCREEN_CANVAS_RUNTIME_STYLE_PATH
 } from '../../lib/design/screen-canvas'
 import { mimeTypeForPath } from '../../lib/mime-types'
+import { designTweaksRuntimeScript } from '../design/design-tweaks-runtime'
 import {
   screenCanvasRuntimeScript,
   screenCanvasRuntimeStyle
@@ -652,6 +653,15 @@ export class DirectoryPreviewServer {
       // so its two reserved paths are answered before any filesystem
       // resolution. They deliberately shadow a real `__cio` directory in a
       // served folder, and they never reach the change watcher or a listing.
+      if (parsed.pathname === '/__cio/tweaks.js') {
+        sendCanvasAsset(
+          response,
+          'text/javascript; charset=utf-8',
+          designTweaksRuntimeScript(),
+          head
+        )
+        return
+      }
       if (parsed.pathname === SCREEN_CANVAS_RUNTIME_SCRIPT_PATH) {
         sendCanvasAsset(
           response,

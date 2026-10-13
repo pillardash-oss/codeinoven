@@ -40,7 +40,8 @@ const STORE_INFO: Record<LocalUsageRecordStore, UsageClearTargetInfo> = {
   },
   modelRankings: {
     label: 'Model rankings',
-    description: 'Graded one-shot and multi-shot results, and any conversation still to be graded.'
+    description:
+      'One-shot, multi-shot and design-quality results, plus conversations awaiting grading.'
   }
 }
 
@@ -101,7 +102,7 @@ export function usageRecordSummary(
     return `${recordClause(counts.utilities, 'record', 'records')} · ${formatDateRange(range)}`
   }
   return [
-    recordClause(counts.modelRankings, 'ranked configuration', 'ranked configurations'),
+    recordClause(counts.modelRankings, 'ranking record', 'ranking records'),
     recordClause(
       counts.pendingGrades,
       'conversation awaiting grading',
@@ -155,7 +156,7 @@ function scopeParts(
     return [
       quoted('You are about to start from a clean slate for '),
       emphasised(STORE_INFO.modelRankings.label),
-      quoted(', which are kept all time and carry no dates.')
+      quoted(', including design-quality results. This clears ranking records across all dates.')
     ]
   }
   const windowParts = rangeParts(range)
@@ -221,9 +222,7 @@ function removalClauses(target: UsageClearTarget, counts: LocalUsageRecordCounts
     clauses.push(recordClause(counts.utilities, 'utility record', 'utility records'))
   }
   if (target === 'all' || target === 'modelRankings') {
-    clauses.push(
-      recordClause(counts.modelRankings, 'ranked configuration', 'ranked configurations')
-    )
+    clauses.push(recordClause(counts.modelRankings, 'ranking record', 'ranking records'))
     clauses.push(
       recordClause(
         counts.pendingGrades,

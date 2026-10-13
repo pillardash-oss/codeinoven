@@ -1174,6 +1174,21 @@ CREATE TABLE IF NOT EXISTS design_history_heads (
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS design_reviews (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    rubric TEXT NOT NULL,
+    score REAL NOT NULL CHECK(score >= 0 AND score <= 10),
+    passed INTEGER NOT NULL CHECK(passed IN (0,1)),
+    report TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_design_reviews_created ON design_reviews(created_at);
+  CREATE INDEX IF NOT EXISTS idx_design_reviews_model ON design_reviews(rubric,harness,provider,model);`,
   SCHEMA_SQL,
   PROJECT_FTS_SQL,
   THREADS_SQL,

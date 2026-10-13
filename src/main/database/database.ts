@@ -532,7 +532,8 @@ export class Database {
   async queryViaWorker(
     sql: string,
     params: unknown[],
-    maxRows: number
+    maxRows: number,
+    options: { allowPrimaryFallback?: boolean } = {}
   ): Promise<{ ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
@@ -540,6 +541,13 @@ export class Database {
       if (response.ok) {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
+      if (options.allowPrimaryFallback === false)
+        return {
+          ok: false,
+          rows: [],
+          truncated: false,
+          error: response.error ?? 'Database worker query failed'
+        }
       if (response.error) {
         Logger.error(
           'Database worker query failed; falling back to primary connection',
@@ -547,6 +555,8 @@ export class Database {
         )
       }
     }
+    if (options.allowPrimaryFallback === false)
+      return { ok: false, rows: [], truncated: false, error: 'Database worker is unavailable' }
     return runLocalBoundedQuery(this, sql, params, maxRows)
   }
 
@@ -618,11 +628,17 @@ export class Database {
   }
 
   /** Single write statement on the worker's connection; primary fallback. */
-  async executeViaWorker(sql: string, params: unknown[]): Promise<{ ok: boolean; error?: string }> {
+  async executeViaWorker(
+    sql: string,
+    params: unknown[],
+    options: { allowPrimaryFallback?: boolean } = {}
+  ): Promise<{ ok: boolean; error?: string }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
       const response = await worker.execute(sql, params)
       if (response.ok) return { ok: true }
+      if (options.allowPrimaryFallback === false)
+        return { ok: false, error: response.error ?? 'Database worker execution failed' }
       if (response.error) {
         Logger.error(
           'Database worker execute failed; falling back to primary connection',
@@ -630,6 +646,8 @@ export class Database {
         )
       }
     }
+    if (options.allowPrimaryFallback === false)
+      return { ok: false, error: 'Database worker is unavailable' }
     try {
       this.run(sql, ...params)
       return { ok: true }

@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs'
+import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
 import { isAbsolute, relative, sep } from 'node:path'
 import {
   DEFAULT_WORK_ROOTS,
@@ -216,6 +217,39 @@ export class DesignService {
   }
 
   registerIpc(): void {
+    ipcMain.handle('design:rankings', async (_event, startAt, endAt) => {
+      if (
+        typeof startAt !== 'number' ||
+        typeof endAt !== 'number' ||
+        !Number.isFinite(startAt) ||
+        !Number.isFinite(endAt) ||
+        startAt < 0 ||
+        endAt <= startAt
+      )
+        throw new Error('Invalid design ranking date range')
+      if (!this.options.database.hasMaintenanceWorker())
+        throw new Error(
+          'Design rankings are temporarily unavailable while the database worker is offline'
+        )
+      const result = await this.options.database.queryViaWorker(
+        `SELECT harness, provider, model, COUNT(*) AS samples, ROUND(AVG(score),2) AS score FROM design_reviews WHERE created_at >= ? AND created_at < ? GROUP BY rubric,harness,provider,model ORDER BY score DESC,samples DESC LIMIT 50`,
+        [startAt, endAt],
+        50,
+        { allowPrimaryFallback: false }
+      )
+      if (!result.ok) throw new Error(result.error ?? 'Could not read design rankings')
+      return result.rows
+    })
+    ipcMain.handle('design:export', async (_event, rawProjectId, directory, entry, format) => {
+      if (!DESIGN_EXPORT_FORMATS.some((value) => value === format))
+        throw new Error('Unsupported design export format')
+      const project = await requireLocalProjectViaWorker(
+        this.options.database,
+        requireId(rawProjectId, 'project id')
+      )
+      const { exportDesign } = await import('./design-export-service')
+      return exportDesign(project.path, directory, entry, format, this.options.previews)
+    })
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
     )

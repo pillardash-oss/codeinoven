@@ -36,6 +36,9 @@
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { designContractRequest } from '$shared/design/design-contract'
+  import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import {
@@ -597,6 +600,52 @@
     }
   }
 
+  async function requestDesignAction(
+    action: 'contract' | 'critique' | 'reference' | 'tweaks'
+  ): Promise<void> {
+    if (!selected.directory || canvasBusy) return
+    canvasBusy = action
+    try {
+      const text =
+        action === 'contract'
+          ? designContractRequest(selected.directory)
+          : action === 'critique'
+            ? `@cio-design Review the design in ${JSON.stringify(selected.directory)}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
+            : action === 'reference'
+              ? `@cio-design Extract a lightweight brand contract from the reference site I name for the design in ${JSON.stringify(selected.directory)}. If no reference URL is attached or supplied, ask me for it. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
+              : `@cio-design Add lightweight live review controls to the design in ${JSON.stringify(selected.directory)} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
+      const delivery = await sendOrQueueThreadMessage(projectId, threadId, {
+        text
+      })
+      canvasNotice =
+        delivery === 'queued'
+          ? 'Design action queued.'
+          : action === 'contract'
+            ? 'Asked the agent to generate DESIGN.md.'
+            : action === 'critique'
+              ? 'Asked the agent to review this design.'
+              : action === 'reference'
+                ? 'Asked the agent to extract the reference brand.'
+                : 'Asked the agent to add live review controls.'
+    } catch (failure: unknown) {
+      error = failure instanceof Error ? failure.message : 'Could not request this design action.'
+    } finally {
+      canvasBusy = ''
+    }
+  }
+
+  function startExport(entry: string | null, format: DesignExportFormat): void {
+    const directory = selected.directory
+    const exportProjectId = projectId
+    void import('$lib/stores/design-export.svelte')
+      .then(({ designExportState }) =>
+        designExportState.start(exportProjectId, directory, entry, format)
+      )
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : 'Could not start export.'
+      })
+  }
+
   /** Re-read the canvas once the agent settles, and picture it when it appeared. */
   async function refreshCanvas(): Promise<void> {
     const before = canvasState
@@ -749,6 +798,15 @@
             <Copy size={13} class="shrink-0 text-muted" />
             {copyLabel}
           </ContextMenu.Item>
+          {#if !video}
+            {#each DESIGN_EXPORT_FORMATS as format (format)}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => startExport(screen.entry, format)}
+                >Export screen as {format.toUpperCase()}</ContextMenu.Item
+              >
+            {/each}
+          {/if}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
@@ -1017,6 +1075,50 @@
                 <Copy size={13} class="shrink-0 text-muted" />
                 Copy path
               </DropdownMenu.Item>
+              {#if !video}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('contract')}
+                >
+                  <Pencil size={13} class="shrink-0 text-muted" />
+                  Generate DESIGN.md
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('critique')}
+                  >Review design quality</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('reference')}
+                  >Extract brand from reference</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestDesignAction('tweaks')}
+                  >Add live controls</DropdownMenu.Item
+                >
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
+                  onSelect={() =>
+                    void openInBrowser(
+                      'https://github.com/nexu-io/open-design/tree/main/design-templates'
+                    )}>Browse Open Design prompts</DropdownMenu.Item
+                >
+                {#each DESIGN_EXPORT_FORMATS as format (format)}
+                  <DropdownMenu.Item
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                    disabled={selected.directory === ''}
+                    onSelect={() => startExport(null, format)}
+                    >Export design as {format.toUpperCase()}</DropdownMenu.Item
+                  >
+                {/each}
+              {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
