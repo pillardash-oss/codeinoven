@@ -70,6 +70,8 @@ export class SearchService {
   private sweep: Promise<void> | null = null
   private sweepTotals: { total: number; pending: number } = { total: 0, pending: 0 }
   private indexing = false
+  /** Loaded or partially built records are unusable until a full sweep succeeds. */
+  private intentReady = false
   private periodicTimer: ReturnType<typeof setInterval> | null = null
   private disposed = false
   private sweepController: AbortController | null = null
@@ -184,6 +186,7 @@ export class SearchService {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
+    this.intentReady = false
     this.settings.enabled = enabled
     if (!enabled) this.sweepController?.abort()
     await this.saveSettings()
@@ -204,6 +207,7 @@ export class SearchService {
     }
     const previous = this.settings.activeModelId
     if (previous === modelId) return
+    this.intentReady = false
     await this.stopSweep()
     this.settings.activeModelId = modelId
     await this.saveSettings()
@@ -224,6 +228,7 @@ export class SearchService {
   async setContextTokens(tokens: number): Promise<void> {
     const next = clampSearchContextTokens(tokens)
     if (this.settings.contextTokens === next) return
+    this.intentReady = false
     await this.stopSweep()
     this.settings.contextTokens = next
     await this.saveSettings()
@@ -237,6 +242,7 @@ export class SearchService {
   }
 
   async rebuildIndex(): Promise<void> {
+    this.intentReady = false
     await this.stopSweep()
     await this.index.reset()
     this.sweepTotals = { total: 0, pending: 0 }
@@ -254,6 +260,7 @@ export class SearchService {
   async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
     if (!this.settings.enabled || !model) return []
+    if (!this.intentReady || this.indexing) return []
     if (!this.canEmbed()) return []
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
@@ -265,6 +272,14 @@ export class SearchService {
         `${model.queryPrefix}${trimmed}`,
         controller.signal
       )
+      // A rebuild, disable, or model change may have started during embedding.
+      if (
+        !this.intentReady ||
+        this.indexing ||
+        !this.settings.enabled ||
+        this.settings.activeModelId !== model.id
+      )
+        return []
       return this.index.search(vector, Math.max(1, limit))
     } catch (error) {
       Logger.dev('Intent search failed; falling back to keyword results.', error)
@@ -298,7 +313,13 @@ export class SearchService {
     // fails loudly if it cannot handle the architecture.
     const runtimeSupported = runtimeBuild === null || runtimeBuild >= SEARCH_MIN_RUNTIME_BUILD
     return {
-      active: this.settings.enabled && Boolean(model) && runtimeAvailable && runtimeSupported,
+      active:
+        this.settings.enabled &&
+        this.intentReady &&
+        !this.indexing &&
+        Boolean(model) &&
+        runtimeAvailable &&
+        runtimeSupported,
       runtimeAvailable,
       runtimeSupported,
       runtimeBuild,
@@ -460,6 +481,7 @@ export class SearchService {
   }
 
   private async performSweep(reason: string): Promise<void> {
+    this.intentReady = false
     const model = this.activeModel()
     if (!model) return
     if (!this.canEmbed()) return
@@ -502,6 +524,8 @@ export class SearchService {
         }
       )
       this.sweepTotals = { total: result.total, pending: result.pending }
+      this.intentReady =
+        !controller.signal.aborted && result.pending === 0 && this.indexingError === null
       Logger.dev(`Thread embedding index swept (${reason})`, result)
     } catch (error) {
       if (controller.signal.aborted) return
