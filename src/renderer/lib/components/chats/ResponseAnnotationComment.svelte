@@ -1,8 +1,6 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
-  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
-  import AnnotationCommentForm from './AnnotationCommentForm.svelte'
+  import CommentBubble from './CommentBubble.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
 
   interface Props {
@@ -37,29 +35,13 @@
 ></button>
 
 <div
-  class="fixed z-50 rounded-xl border border-border bg-surface p-3 shadow-lg"
+  class="fixed z-50"
   style:width={`${POPOVER_WIDTH}px`}
-  role="dialog"
-  aria-label="Comment on selection"
-  data-voice-trigger-root
   {@attach draggablePopover({ x: preferredLeft, y: preferredTop })}
 >
-  <div class="mb-2 flex items-center justify-between gap-2">
-    <span class="flex min-w-0 items-center gap-1">
-      <PopoverDragHandle title="Move selection comment" />
-      <span class="truncate text-xs font-semibold text-foreground">Comment on selection</span>
-    </span>
-    <button
-      type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Close comment"
-      aria-label="Close comment"
-      onclick={onClose}
-    >
-      <X size={13} />
-    </button>
-  </div>
-  <AnnotationCommentForm
+  <CommentBubble
+    title="Comment on selection"
+    dragHandleTitle="Move selection comment"
     {initialComment}
     {targetId}
     {scope}

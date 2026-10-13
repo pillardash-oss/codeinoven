@@ -5,6 +5,7 @@ import type {
   BrowserDesignTab,
   BrowserInspectorEvent,
   BrowserInspectorMarker,
+  BrowserInspectorRect,
   BrowserInspectorTheme
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -26,9 +27,9 @@ import { mergeReferenceById, responseReferencesState } from './response-referenc
  *
  *   - which tabs are armed, and the pins each one draws
  *   - the application theme the injected overlay is drawn with
- *   - the event loop back from the page: a pick becomes a composer reference, a
- *     pin click opens that element's comment, and the comment text the page
- *     reports as it is written lands on the reference the pick created
+ *   - the event loop back from the page: a pick becomes a composer reference and
+ *     opens its comment bubble, and a pin click or a jump from the composer
+ *     reopens the bubble on the element it belongs to
  *
  * Pushing the pins and the theme from here rather than from a panel is what
  * makes the session survive a surface switch: main holds the last set it was
@@ -43,7 +44,8 @@ const INSPECTOR_THEME_TOKENS = {
   border: '--color-border',
   foreground: '--color-foreground',
   muted: '--color-muted',
-  accent: '--color-accent'
+  accent: '--color-accent',
+  font: '--font-app'
 } as const satisfies Record<keyof BrowserInspectorTheme, string>
 
 const THEME_KEYS = Object.keys(INSPECTOR_THEME_TOKENS) as (keyof BrowserInspectorTheme)[]
@@ -59,6 +61,19 @@ class BrowserInspectorSession {
   /** The design each tab is serving, mirrored from `browser:state`. A tab that
    *  is not serving a design is not inspectable, and never gets pins. */
   private readonly designs = new SvelteMap<string, BrowserDesignTab>()
+  /**
+   * The comment bubble each tab has open: the reference it belongs to, and where
+   * the element was when the reader picked or reopened it.
+   *
+   * The bubble is the app's own component, so this session owns what the page
+   * used to own outright: which comment is open, and where it sits. The anchor is
+   * the place main resolved for the element, in the app window's coordinates,
+   * which is the only space the bubble can be positioned in.
+   */
+  private readonly editing = new SvelteMap<
+    string,
+    { referenceId: string; anchor: BrowserInspectorRect }
+  >()
   /** Last theme read from the stylesheet, reused while a token is unavailable. */
   private themeCache: BrowserInspectorTheme | null = null
 
@@ -129,6 +144,16 @@ class BrowserInspectorSession {
     this.setArmed(tabId, !this.armed.has(tabId))
   }
 
+  /** The comment bubble this tab has open, and where the element sits. */
+  editingFor(tabId: string): { referenceId: string; anchor: BrowserInspectorRect } | null {
+    return this.editing.get(tabId) ?? null
+  }
+
+  /** Close this tab's comment bubble. The comment itself is left alone. */
+  closeComment(tabId: string): void {
+    this.editing.delete(tabId)
+  }
+
   /**
    * Arm or disarm picking on one tab.
    *
@@ -140,6 +165,10 @@ class BrowserInspectorSession {
   setArmed(tabId: string, armed: boolean): void {
     if (armed) this.armed.add(tabId)
     else this.armed.delete(tabId)
+    // Leaving inspect mode takes the bubble with it: the mode is what the bubble
+    // belongs to, and a bubble left behind would float over a page that is no
+    // longer being inspected.
+    if (!armed) this.editing.delete(tabId)
     const theme = this.themeTokens()
     void invoke('browser:inspectSetArmed', tabId, armed, theme ?? undefined)
       .then(() => {
@@ -186,40 +215,25 @@ class BrowserInspectorSession {
   /**
    * One report from the page's inspector.
    *
-   * `pick` is a fresh element, which becomes a composer reference; `open` is a
-   * click on an existing pin, whose card the page has already opened; `draft`
-   * and `done` are the text as it is written and committed; `remove` detaches
-   * the reference; `close` is the user dismissing the card. The page owns the
-   * card and the text, so this session only lands what it reports on the
-   * reference list, which is the app's truth.
+   * `pick` is a fresh element, which becomes a composer reference and opens its
+   * comment bubble; `open` is a click on an existing pin, or a jump to one from
+   * the composer, which reopens that element's bubble. `closed` is inspect mode
+   * ending on the page's own terms. The bubble is the app's own component, so the
+   * comment text never travels through the page at all.
    */
   private onPageEvent(tabId: string, event: BrowserInspectorEvent): void {
     if (event.kind === 'closed') {
       this.armed.delete(tabId)
+      this.editing.delete(tabId)
       return
     }
     const owner = this.ownerOf(tabId)
     if (!owner) return
     const { projectId, threadId } = owner
-    if (event.kind === 'draft') {
-      responseReferencesState.updateCommentDraft(projectId, threadId, event.id, event.comment)
-      return
-    }
-    if (event.kind === 'done') {
-      responseReferencesState.updateComment(projectId, threadId, event.id, event.comment)
-      return
-    }
-    if (event.kind === 'remove') {
-      responseReferencesState.setForThread(
-        projectId,
-        threadId,
-        responseReferencesState
-          .forThread(projectId, threadId)
-          .filter((reference) => reference.id !== event.id)
-      )
-      return
-    }
     if (event.kind === 'open') {
+      // The bubble is drawn beside the element, and the element is in the tab the
+      // reader is looking at, so reveal that tab and the thread it belongs to.
+      this.editing.set(tabId, { referenceId: event.id, anchor: event.anchor })
       void import('$lib/threads/open-thread-by-id')
         .then(async ({ openThreadById }) => {
           await openThreadById(projectId, threadId)
@@ -228,7 +242,6 @@ class BrowserInspectorSession {
         .catch(() => {})
       return
     }
-    if (event.kind === 'close') return
     const reference = designElementReference(
       event.id,
       event.target,
@@ -243,6 +256,7 @@ class BrowserInspectorSession {
       threadId,
       mergeReferenceById(responseReferencesState.forThread(projectId, threadId), reference)
     )
+    this.editing.set(tabId, { referenceId: event.id, anchor: event.anchor })
   }
 
   /**
@@ -251,10 +265,17 @@ class BrowserInspectorSession {
    * comment whose reference is gone closes with it.
    */
   private onReferencesChanged(projectId: string, threadId: string): void {
+    const references = responseReferencesState.forThread(projectId, threadId)
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (tab.projectId !== projectId || tab.threadId !== threadId) continue
       if (!this.designs.has(tab.id)) continue
+      // An open bubble whose reference is gone (removed from the composer) closes
+      // with it, exactly as the page's own card used to.
+      const editing = this.editing.get(tab.id)
+      if (editing && !references.some((reference) => reference.id === editing.referenceId)) {
+        this.editing.delete(tab.id)
+      }
       this.publishMarkers(tab.id)
     }
   }

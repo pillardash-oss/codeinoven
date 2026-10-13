@@ -19,12 +19,14 @@
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
+  import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import {
     browserSiteHost,
     browserSiteOrigin,
@@ -158,6 +160,29 @@
     authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
   )
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
+  /**
+   * The comment bubble this tab has open, and what it takes to draw it.
+   *
+   * The bubble is the app's own component, placed beside the element in the app
+   * window's coordinates, so this is the element's short name (the first line of
+   * its descriptor) together with the place main resolved for the element and
+   * the comment already written.
+   */
+  const designComment = $derived.by(() => {
+    const editing = browserInspector.editingFor(tabId)
+    if (!editing) return null
+    const reference = responseReferencesState
+      .forThread(tabProjectId, tabThreadId)
+      .find((candidate) => candidate.id === editing.referenceId)
+    if (!reference) return null
+    const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
+    return {
+      referenceId: reference.id,
+      anchor: editing.anchor,
+      elementName: named || reference.label,
+      comment: reference.comment ?? ''
+    }
+  })
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
@@ -413,6 +438,29 @@
   function toggleInspect(): void {
     if (!inspectArmed && !pageState.design) return
     browserInspector.toggle(tabId)
+  }
+
+  /** Persist the in-progress text, so a closed bubble cannot discard a draft. */
+  function draftDesignComment(referenceId: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+  }
+
+  /** Land the comment on the element it was written for, and close the bubble. */
+  function commitDesignComment(referenceId: string, comment: string): void {
+    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    browserInspector.closeComment(tabId)
+  }
+
+  /** Detach the element, and the comment it carries, from the conversation. */
+  function removeDesignComment(referenceId: string): void {
+    responseReferencesState.setForThread(
+      tabProjectId,
+      tabThreadId,
+      responseReferencesState
+        .forThread(tabProjectId, tabThreadId)
+        .filter((reference) => reference.id !== referenceId)
+    )
+    browserInspector.closeComment(tabId)
   }
 
   // Publish the pin set whenever the reference list changes, so a pick, a
@@ -711,4 +759,22 @@
       />
     {/if}
   </div>
+  <!--
+    The design element's comment bubble, drawn by the app.
+
+    It lives here so one host serves every comment this tab opens, and it is
+    positioned in the app window's own coordinates: the same bubble in the same
+    place whether the app window draws it or the shared native host moves it above
+    the page.
+  -->
+  <DesignElementCommentPopover
+    hostId={`design-comment-${surface}-${tabId}`}
+    comment={panelVisible && browserVisibility.ownsSurface(tabId, surface) ? designComment : null}
+    targetId={`design-comment-${tabId}-${designComment?.referenceId ?? 'none'}`}
+    scope={{ kind: 'project', projectId: tabProjectId }}
+    onDraftChange={draftDesignComment}
+    onDone={commitDesignComment}
+    onRemove={removeDesignComment}
+    onClose={() => browserInspector.closeComment(tabId)}
+  />
 </div>
