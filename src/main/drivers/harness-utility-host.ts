@@ -83,7 +83,9 @@ class UtilityHostChild extends ChildProcess {
     this.spawnfile = request.argv[0] ?? 'utility'
     this.spawnargs = request.argv.slice()
 
-    this.stdin.on('data', (chunk: Buffer) => this.safePost({ t: 'stdin-data', b64: chunk.toString('base64') }))
+    this.stdin.on('data', (chunk: Buffer) =>
+      this.safePost({ t: 'stdin-data', b64: chunk.toString('base64') })
+    )
     this.stdin.on('end', () => this.safePost({ t: 'stdin-end' }))
 
     helper.on('message', (message: unknown) => this.consumeHelperMessage(message))
@@ -133,7 +135,8 @@ class UtilityHostChild extends ChildProcess {
       return
     }
     if (record['t'] === 'error') {
-      const detail = typeof record['message'] === 'string' ? record['message'] : 'Unknown utility bridge error'
+      const detail =
+        typeof record['message'] === 'string' ? record['message'] : 'Unknown utility bridge error'
       this.stderr.push(Buffer.from(`${detail}\n`))
       return
     }
@@ -155,16 +158,21 @@ class UtilityHostChild extends ChildProcess {
   }
 }
 
-/** Spawn a bundled harness module in-process inside an Electron utility helper. */
+/** Run Windows with native pipes; other platforms use an Electron utility helper. */
 export function spawnInUtilityHost(
   prepared: Pick<PreparedHarnessInvocation, 'command' | 'args' | 'cwd' | 'env' | 'shell'>
 ): ChildProcess {
-  const bridge = utilityBridgePath()
+  // The utility bridge replaces process.stdin/stdout/stderr. Windows helpers
+  // can expose non-configurable stdio properties, so that replacement throws
+  // before Pi starts. Native pipes avoid replacing those properties, and
+  // Windows does not need the macOS Dock-icon workaround.
+  const bridge = process.platform === 'win32' ? null : utilityBridgePath()
   if (!bridge) {
     return spawn(prepared.command, prepared.args, {
       ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
       env: prepared.env,
       shell: prepared.shell,
+      windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     })
   }
