@@ -401,8 +401,8 @@
   }
 
   function firstTextField(panel: HTMLElement): HTMLElement | undefined {
-    return Array.from(panel.querySelectorAll<HTMLElement>(INPUT_FIELD_SELECTOR)).find(
-      isFocusableTarget
+    return Array.from(panel.querySelectorAll<HTMLElement>(INPUT_FIELD_SELECTOR)).find((element) =>
+      isFocusableTarget(element, panel)
     )
   }
 </script>

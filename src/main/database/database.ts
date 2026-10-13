@@ -867,6 +867,7 @@ export class Database {
       this.migrateCustomSvgIcons(connection)
       this.migrateProjectOvenColumn(connection)
       this.migrateStickyNoteImagePath(connection)
+      this.migrateStickyNoteSortOrder(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateRoutineExecution(connection)
@@ -915,6 +916,35 @@ export class Database {
     if (columns.size > 0 && !columns.has('image_path')) {
       connection.exec('ALTER TABLE sticky_notes ADD COLUMN image_path TEXT')
     }
+  }
+
+  /**
+   * Add the tab-strip order the sticky notes rail reorders by. Databases that
+   * predate it read as all-zero, which sorts by `created_at` exactly as before;
+   * the backfill seeds each row from that same order so the first drag starts
+   * from what the user already sees. Idempotent: the predicate stops matching
+   * once the column exists.
+   */
+  private migrateStickyNoteSortOrder(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('sort_order')) {
+      connection.exec('ALTER TABLE sticky_notes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+      connection.exec(`
+        UPDATE sticky_notes SET sort_order = (
+          SELECT COUNT(*) FROM sticky_notes AS earlier
+          WHERE earlier.created_at < sticky_notes.created_at
+             OR (earlier.created_at = sticky_notes.created_at AND earlier.rowid < sticky_notes.rowid)
+        )
+      `)
+    }
+    // The index is created here rather than in the schema block: a database
+    // that predates the column would fail to create it before this migration
+    // added it, so the schema runs first and the index must follow the column.
+    connection.exec('CREATE INDEX IF NOT EXISTS idx_sticky_notes_sort ON sticky_notes(sort_order)')
   }
 
   /** Remove the obsolete required name column while preserving saved SVGs. */

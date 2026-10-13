@@ -164,6 +164,12 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     const body = validateBoundedString(rawBody, 'Sticky note body', 0, NOTE_BODY_MAX)
     noteRepo.saveStickyNoteBody(id, body, Date.now())
   })
+  ipcMain.handle('sticky-note:reorder', (_, rawIds: unknown) => {
+    const ids = validateStringArray(rawIds, 'Sticky note order').map((id, index) =>
+      validateEntityId(id, `Sticky note order[${index}]`)
+    )
+    noteRepo.reorderStickyNotes(ids)
+  })
   ipcMain.handle('sticky-note:delete', (_, rawId: unknown) =>
     noteRepo.deleteStickyNote(validateEntityId(rawId, 'Sticky note ID'))
   )
