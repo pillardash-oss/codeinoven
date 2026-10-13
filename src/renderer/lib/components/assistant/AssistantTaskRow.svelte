@@ -3,6 +3,8 @@
     AlertTriangle,
     AppWindow,
     ArrowRightLeft,
+    CalendarClock,
+    CalendarOff,
     Clock1,
     Hammer,
     Loader2,
@@ -62,6 +64,13 @@
     /** Human-readable schedule label (schedule override or owning routine). */
     scheduleLabel?: string | null
     /**
+     * Whether this function runs on a clock. False renders "On demand" and
+     * offers the toggle that turns its schedule back on.
+     */
+    scheduled?: boolean
+    /** Toggle this function's schedule independently of its routine. */
+    onToggleScheduled?: (task: Thread) => void
+    /**
      * The task a hoisted run belongs to, shown on the run's line. A run lifted to
      * its routine's own level has no parent row above it, so without this its
      * line would name only a time and no run would be tellable from another.
@@ -98,6 +107,8 @@
     nextRunAt,
     scheduleLabel = null,
     contextLabel = null,
+    scheduled = true,
+    onToggleScheduled,
     onSelect,
     onRename,
     onTogglePin,
@@ -141,7 +152,7 @@
     }
     if (howToThread) return 'How-to conversation'
     subscribeMinute()
-    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now())
+    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
@@ -470,6 +481,27 @@
           <Loader2 size={13} class="animate-spin" aria-hidden="true" />
         {:else}
           <ArrowRightLeft size={13} aria-hidden="true" />
+        {/if}
+      </button>
+    {/if}
+    {#if !isRun && task.routineId && onToggleScheduled}
+      <button
+        type="button"
+        class="flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-elevated {scheduled
+          ? 'text-muted'
+          : 'text-dimmed'}"
+        title={scheduled
+          ? 'Stop running this function on a schedule'
+          : 'Run this function on its routine\u2019s schedule'}
+        aria-label={scheduled
+          ? 'Stop running this function on a schedule'
+          : 'Run this function on its routine\u2019s schedule'}
+        onclick={() => onToggleScheduled?.(task)}
+      >
+        {#if scheduled}
+          <CalendarClock size={13} aria-hidden="true" />
+        {:else}
+          <CalendarOff size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}

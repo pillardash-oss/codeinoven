@@ -68,6 +68,14 @@ export const invokeAssistantContract = {
     Thread
   >,
   /**
+   * Turn one function's clock on or off independently of its routine: `true`
+   * schedules it, `false` keeps it off the clock, `null` follows the routine.
+   */
+  'assistant:setTaskScheduled': {} as Contract<
+    [threadId: string, scheduled: boolean | null],
+    Thread
+  >,
+  /**
    * Post the routine's saved-how-to next-steps message into its Getting started
    * thread. Sent as a hidden internal turn, so the user sees only the agent's
    * prose list and never a user bubble. Best-effort: a hidden or missing

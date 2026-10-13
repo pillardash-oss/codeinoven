@@ -118,6 +118,8 @@
   // mode it opens in.
   let configSheetOpen = $state(false)
   let configSheetMode = $state<'provider' | 'container'>('provider')
+  /** Provider the sheet should open preselected on, set by Reconnect. */
+  let configSheetProviderKind = $state<CloudDeploymentProviderKind | null>(null)
   /** Container being edited (pre-filled into the config sheet), or null to add. */
   let editingContainer = $state<CloudDeploymentContainer | null>(null)
   /** Container awaiting delete confirmation (destructive action). */
@@ -135,9 +137,19 @@
    */
   const monitoredContainers = $derived((config?.project.containers ?? []).map(toMonitorTarget))
 
-  function openConfigSheet(mode: 'provider' | 'container'): void {
+  function openConfigSheet(
+    mode: 'provider' | 'container',
+    targetProviderKind: CloudDeploymentProviderKind | null = null
+  ): void {
     configSheetMode = mode
+    configSheetProviderKind = mode === 'provider' ? targetProviderKind : null
     configSheetOpen = true
+  }
+
+  /** The first configured provider reporting an access error, so an empty
+   *  board can reconnect it directly. */
+  function firstAccessErrorKind(): CloudDeploymentProviderKind | null {
+    return providers.find((kind) => accessErrors[kind] !== undefined) ?? null
   }
 
   async function handleConfigSaved(): Promise<void> {
@@ -738,7 +750,7 @@ ${fence}`
             <button
               type="button"
               class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-              onclick={() => openConfigSheet('provider')}
+              onclick={() => openConfigSheet('provider', firstAccessErrorKind())}
             >
               Reconnect account
             </button>
@@ -805,7 +817,7 @@ ${fence}`
                   aria-label="Reconnect the {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind
                   ]} account"
-                  onclick={() => openConfigSheet('provider')}
+                  onclick={() => openConfigSheet('provider', kind as CloudDeploymentProviderKind)}
                 >
                   Reconnect
                 </button>
@@ -1011,10 +1023,12 @@ ${fence}`
   open={configSheetOpen}
   {projectId}
   initialMode={configSheetMode}
+  initialProviderKind={configSheetProviderKind}
   {editingContainer}
   onClose={() => {
     configSheetOpen = false
     editingContainer = null
+    configSheetProviderKind = null
   }}
   onSaved={() => void handleConfigSaved()}
 />

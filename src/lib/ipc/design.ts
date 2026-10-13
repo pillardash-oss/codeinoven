@@ -39,6 +39,17 @@ export interface DesignEntry {
   createdAt: number
   /** Latest modification time inside the folder (ms), for newest-first ordering. */
   updatedAt: number
+  /**
+   * The thread that created this folder, or null when nothing recorded it.
+   *
+   * Recorded the first time any thread previews the folder, because the agent
+   * writes a folder before showing it, so the first previewer is the thread the
+   * work belongs to. The board uses it to reveal that thread and to badge the
+   * folder as the viewed thread's own, rather than badging whatever folder the
+   * thread happened to open last. A folder found on disk that nothing has
+   * previewed yet, or one whose creating thread has been deleted, has none.
+   */
+  creatorThreadId: string | null
 }
 
 /** The folder a thread last previewed, if it has one. */

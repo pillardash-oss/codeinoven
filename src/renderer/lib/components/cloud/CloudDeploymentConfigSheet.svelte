@@ -23,6 +23,9 @@
     onClose: () => void
     /** The flow the sheet opens in. */
     initialMode?: Mode
+    /** Provider to preselect, for a flow that opens straight into a provider
+     *  that is failing (the panel's Reconnect action). */
+    initialProviderKind?: CloudDeploymentProviderKind | null
     /** Container being edited (pre-filled), or null to add new. */
     editingContainer?: CloudDeploymentContainer | null
     /** Called after a successful save so the caller can refresh its view. */
@@ -34,6 +37,7 @@
     projectId,
     onClose,
     initialMode = 'provider',
+    initialProviderKind = null,
     editingContainer = null,
     onSaved
   }: Props = $props()
@@ -72,6 +76,9 @@
   let token = $state('')
   // "reuse" path: pick an existing global account to attach.
   let selectedExistingAccountId = $state('')
+  /** Optional replacement API token for the existing account being reconnected.
+   *  Blank keeps the stored secret; a value rotates it on save. */
+  let reuseToken = $state('')
   let containerProviderKind = $state<CloudDeploymentProviderKind | ''>('')
   /** The attached account the container flow browses (multi-account same kind). */
   let containerAccountId = $state('')
@@ -236,6 +243,7 @@
     baseUrl = ''
     token = ''
     selectedExistingAccountId = ''
+    reuseToken = ''
     if (editingContainer) {
       containerProviderKind = editingContainer.providerKind
       containerId = editingContainer.id
@@ -259,20 +267,53 @@
     testing = false
     testResult = ''
     saving = false
+    // Open straight into the provider that is failing, with its accounts shown,
+    // instead of dropping the user back on the provider list.
+    if (
+      initialProviderKind !== null &&
+      !CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(initialProviderKind)
+    ) {
+      selectedKind = initialProviderKind
+      createMode = hasProject ? 'reuse' : 'create'
+    }
   }
 
   $effect(() => {
     if (!open) return
     resetSheet()
-    void cloudAccountsState.load()
+    void cloudAccountsState.load().then(() => preselectReconnectAccount())
     if (projectId) {
       void invoke('cloudDeploy:getConfig', projectId)
         .then((loaded) => {
           config = loaded
+          preselectReconnectAccount()
         })
         .catch(() => undefined)
     }
   })
+
+  /**
+   * When the sheet was opened to reconnect a failing provider, land on the
+   * account most likely to be the one failing: the project's active account,
+   * else an attached one, else the kind's only account. Without this the user
+   * lands on the provider list and has to re-pick what they already picked.
+   */
+  function preselectReconnectAccount(): void {
+    if (initialProviderKind === null) return
+    if (mode !== 'provider' || selectedKind !== initialProviderKind) return
+    const existing = cloudAccountsState.accountsByProvider(initialProviderKind)
+    if (existing.length === 0) return
+    if (createMode !== 'reuse') createMode = hasProject ? 'reuse' : 'create'
+    if (selectedExistingAccountId !== '') return
+    const association = config?.project.providerAccounts?.[initialProviderKind]
+    const activeId = association?.activeAccountId ?? null
+    const attachedIds = association?.attachedAccountIds ?? []
+    const preferred =
+      existing.find((account) => account.id === activeId) ??
+      existing.find((account) => attachedIds.includes(account.id)) ??
+      existing[0]
+    selectedExistingAccountId = preferred.id
+  }
 
   function selectProvider(kind: CloudDeploymentProviderKind): void {
     error = ''
@@ -294,6 +335,7 @@
     accountLabel = ''
     baseUrl = ''
     token = ''
+    reuseToken = ''
   }
 
   function emptyConfig(projectIdValue: string): CloudDeploymentConfig {
@@ -312,6 +354,7 @@
     baseUrl = ''
     token = ''
     selectedExistingAccountId = ''
+    reuseToken = ''
     containerProviderKind = ''
     containerAccountId = ''
     returnToContainer = false
@@ -353,7 +396,8 @@
           return
         }
         const result = await invoke('cloudDeploy:testAccount', {
-          accountId: selectedExistingAccountId
+          accountId: selectedExistingAccountId,
+          ...(reuseToken.trim() === '' ? {} : { token: reuseToken.trim() })
         })
         testResult = `Connected   ${result.containerCount} container${result.containerCount === 1 ? '' : 's'} reachable.`
       } else {
@@ -419,17 +463,26 @@
           return
         }
         if (selectedExistingAccountId === '') {
-          error = 'Choose an existing provider account to attach.'
+          error = 'Choose an existing provider account to use.'
           return
         }
-        config = await cloudAccountsState.attachAccount(
+        // Reconnect in one call: it replaces the secret when one is given and
+        // attaches the account when it is not attached yet, so editing the API
+        // key of an already-attached account can never fail on a duplicate
+        // attach.
+        const replacedKey = reuseToken.trim() !== ''
+        const reconnected = await cloudAccountsState.reconnectAccount({
           projectId,
-          selectedKind,
-          selectedExistingAccountId
-        )
+          providerKind: selectedKind,
+          accountId: selectedExistingAccountId,
+          ...(replacedKey ? { token: reuseToken.trim() } : {})
+        })
+        config = reconnected.config
         savedAccountId = selectedExistingAccountId
-        const account = cloudAccountsState.accountById(selectedExistingAccountId)
-        toast.success(`Attached “${account?.label ?? 'provider account'}”.`)
+        const label =
+          cloudAccountsState.accountById(selectedExistingAccountId)?.label ??
+          reconnected.account.label
+        toast.success(replacedKey ? `Updated the API key for “${label}”.` : `Using “${label}”.`)
       }
       // Entered from the container flow to add an account: go straight back to
       // it with the new account selected and its containers loading.
@@ -764,10 +817,15 @@
   }
 </script>
 
-<SideSheet {open} title={mode === 'provider' ? 'Add provider' : 'Add container'} {onClose}>
+<SideSheet
+  {open}
+  title={mode === 'provider' ? 'Add provider' : 'Add container'}
+  size="lg"
+  {onClose}
+>
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
-      <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed">
+      <p class="min-w-0 flex-1 text-[0.6875rem] leading-snug text-dimmed">
         {#if mode === 'provider'}
           Accounts are stored securely in your system keychain and can be reused across projects.
         {:else}
@@ -807,7 +865,11 @@
             <Loader2 size={13} class="animate-spin" />
           {/if}
           {mode === 'provider'
-            ? 'Save provider'
+            ? createMode === 'reuse'
+              ? reuseToken.trim() === ''
+                ? 'Use account'
+                : 'Update account'
+              : 'Save provider'
             : selectedContainerIds.size > 1
               ? `Add ${selectedContainerIds.size} containers`
               : 'Add container'}
@@ -823,7 +885,7 @@
       <p class="text-xs font-medium">{mode === 'provider' ? 'Add provider' : 'Add container'}</p>
       <p class="text-[0.6875rem] text-muted">
         {mode === 'provider'
-          ? 'Create a reusable account or attach an existing one.'
+          ? 'Create a reusable account, or pick an existing one to use and update its API key.'
           : 'Attach a container to a configured provider.'}
       </p>
     </div>
@@ -902,7 +964,7 @@
                   error = ''
                 }}
               >
-                Use existing
+                Existing account
               </button>
             </div>
           {/if}
@@ -949,7 +1011,7 @@
               </p>
             {:else}
               <label class="block space-y-1 text-xs font-medium">
-                <span>Existing {PROVIDER_DISPLAY_NAMES[selectedKind]} account</span>
+                <span>{PROVIDER_DISPLAY_NAMES[selectedKind]} account</span>
                 <select
                   class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                   bind:value={selectedExistingAccountId}
@@ -960,6 +1022,26 @@
                   {/each}
                 </select>
               </label>
+              {#if selectedExistingAccountId !== ''}
+                <label class="block space-y-1 text-xs font-medium">
+                  <span>API key</span>
+                  <input
+                    class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+                    type="password"
+                    placeholder={cloudAccountsState.accountById(selectedExistingAccountId)
+                      ?.configured
+                      ? 'Stored key kept   paste a new key to replace it'
+                      : 'Paste this account\u2019s API key'}
+                    autocomplete="off"
+                    spellcheck="false"
+                    bind:value={reuseToken}
+                  />
+                </label>
+                <p class="text-[0.6875rem] leading-snug text-dimmed">
+                  Update this account's API key here. Leave it blank to keep the stored key. Test
+                  connection verifies it before you save.
+                </p>
+              {/if}
             {/if}
           {/if}
 

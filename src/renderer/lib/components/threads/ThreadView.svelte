@@ -224,6 +224,7 @@
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
+    routineIsScheduled,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
   import type {
@@ -313,7 +314,8 @@
   import {
     auditReportForTurn,
     buildTranscriptIndex,
-    getTurnFinalText,
+    getTurnProseParts,
+    getTurnProseText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
@@ -6663,7 +6665,11 @@
     if (!routine) return true
     if (draft.howTo.trim() !== routine.howTo.trim()) return true
     if (!plan) return false
-    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+    if (
+      routineIsScheduled(routine) &&
+      plan.schedule &&
+      describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)
+    ) {
       return true
     }
     if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
@@ -6811,12 +6817,15 @@
     routineSaving = true
     try {
       const plan = draft.plan
+      const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+      const scheduled = routine ? routineIsScheduled(routine) : true
       const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
-      if (plan?.schedule) patch.schedule = plan.schedule
+      // An on-demand routine has no schedule, so a plan that still carries one
+      // (an agent that did not know) can never re-schedule it here.
+      if (plan?.schedule && scheduled) patch.schedule = plan.schedule
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
-        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
         const catalog = await invoke('utilities:list').catch(() => null)
         patch.connections = connectionsFromPlan(
           plan.connections,
@@ -6825,7 +6834,7 @@
         )
       }
       await assistantRoutines.updateRoutine(routineId, patch)
-      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
       routineRecapDismissed = ''
       return true
     } catch (error) {
@@ -10733,9 +10742,9 @@
     }
   })
 
-  async function copyMessage(msg: AgentMessage): Promise<void> {
+  async function copyMessage(msg: AgentMessage, text = messageText(msg)): Promise<void> {
     try {
-      await copyText(messageText(msg), null)
+      await copyText(text, null)
       copiedMessageId = msg.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)
@@ -12283,10 +12292,16 @@
                             ...turnWorkingParts.body
                           ])}
                     {@const turnParts = isAssignmentAuditorThread
-                      ? collectedTurnParts.filter(
+                      ? // The auditor transcript renders its own commentary from the
+                        // trace and keeps its deliverable (the report card) out of
+                        // both, so its trace still holds commentary prose.
+                        collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
-                      : collectedTurnParts}
+                      : // Everyone else reads the agent's text as prose in the
+                        // transcript: the trace holds only the machinery behind it,
+                        // so an explanation is never folded away by a later tool call.
+                        collectedTurnParts.filter((part) => part.type !== 'text')}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
@@ -12387,12 +12402,9 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(messages, absIndex)}
-                      {@const finalAnswerReady =
-                        turnFinalText?.type === 'text' &&
-                        turnFinalText.text.trim().length > 0 &&
-                        (turnFinalText.phase === 'final_answer' || !conversationBusy || !isLatest)}
-                      {#if finalAnswerReady && turnFinalText}
+                      {@const turnProseParts = getTurnProseParts(messages, absIndex)}
+                      {@const turnProseText = getTurnProseText(messages, absIndex)}
+                      {#if turnProseParts.length > 0}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
                           speechController.playback.messageId === msg.id &&
@@ -12419,12 +12431,18 @@
                               textClass="text-[0.8125rem]"
                             />
                           {:else}
-                            <MarkdownView
-                              text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
-                              citationThread={citationThreadContext}
-                              onCiteFile={openFileCitation}
-                              onOpenLocalFile={(url) => void openFilePart(url)}
-                            />
+                            <!-- One block per streamed part: only the part still
+                                 growing re-renders, so a long turn never re-parses
+                                 its whole prose on every delta. -->
+                            {#each turnProseParts as part (part.id)}
+                              <MarkdownView
+                                text={part.text}
+                                class="mt-[0.625em] first:mt-0"
+                                citationThread={citationThreadContext}
+                                onCiteFile={openFileCitation}
+                                onOpenLocalFile={(url) => void openFilePart(url)}
+                              />
+                            {/each}
                           {/if}
                         </div>
                       {/if}
@@ -12453,7 +12471,7 @@
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg)}
+                                onclick={() => copyMessage(msg, turnProseText)}
                               >
                                 {#if copiedMessageId === msg.id}
                                   <Check size={12} class="text-success" />
@@ -12463,7 +12481,7 @@
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={messageText(msg)}
+                                markdown={turnProseText}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,
@@ -13181,6 +13199,7 @@
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
                     update={assistantHowToComplete}
+                    scheduled={assistantRoutine ? routineIsScheduled(assistantRoutine) : true}
                     existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}

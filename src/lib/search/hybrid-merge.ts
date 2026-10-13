@@ -4,15 +4,9 @@ import type { ThreadSearchResult } from '../types'
  * Merge keyword (title + FTS) results with semantic (intent) results into one
  * ordered list, deduped by thread.
  *
- * Ranking intent, in order:
- * 1. Keyword **title** matches first, keeping their closeness order (exact >
- *    prefix > contains). A literal title hit is the strongest signal there is.
- * 2. Semantic matches next, in descending similarity. These carry the recall
- *    that keyword search misses, which is the whole point of enabling intent.
- * 3. Keyword **message** matches last, keeping their bm25 order.
- *
- * A thread surfaced by more than one signal keeps its strongest placement, so a
- * semantic hit never demotes a keyword title match. Pure and deterministic.
+ * Preserve every keyword result's order and snippet. Semantic matches fill
+ * remaining space, so enabling intent cannot demote or displace a full-text
+ * match. A thread found by both signals keeps its keyword result.
  */
 export function mergeHybridThreadSearchResults(
   keyword: readonly ThreadSearchResult[],
@@ -27,12 +21,7 @@ export function mergeHybridThreadSearchResults(
     seen.add(id)
     merged.push(result)
   }
-  for (const result of keyword) {
-    if (result.kind === 'title') push(result)
-  }
+  for (const result of keyword) push(result)
   for (const result of intent) push(result)
-  for (const result of keyword) {
-    if (result.kind !== 'title') push(result)
-  }
   return merged.slice(0, Math.max(1, limit))
 }

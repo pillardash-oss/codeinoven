@@ -14,6 +14,7 @@ interface RoutineRow {
   id: string
   name: string
   description: string | null
+  scheduled: number
   color: string | null
   icon: string | null
   icon_type: string | null
@@ -144,6 +145,7 @@ function rowToRoutine(row: RoutineRow): Routine {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    scheduled: row.scheduled !== 0,
     color: row.color ?? undefined,
     icon: row.icon ?? undefined,
     iconType: row.icon_type ?? undefined,
@@ -172,13 +174,14 @@ export class RoutineRepo {
   upsert(routine: Routine): void {
     this.db.run(
       `INSERT INTO routines(
-        id, name, description, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, how_to,
+        id, name, description, scheduled, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, how_to,
         how_to_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
         pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
+        scheduled = excluded.scheduled,
         color = excluded.color,
         icon = excluded.icon,
         icon_type = excluded.icon_type,
@@ -201,6 +204,7 @@ export class RoutineRepo {
       routine.id,
       routine.name,
       routine.description ?? null,
+      routine.scheduled === false ? 0 : 1,
       routine.color ?? null,
       routine.icon ?? null,
       routine.iconType ?? null,

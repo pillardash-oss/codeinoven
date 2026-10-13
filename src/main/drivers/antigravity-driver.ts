@@ -401,6 +401,21 @@ interface AntigravityTurnState {
    * merged into this turn's message.
    */
   firstStepIndex: number | undefined
+  /**
+   * The error agy reported for this conversation's previous turn, when known.
+   *
+   * agy's final `result` record reports the CONVERSATION's last recorded error
+   * rather than the outcome of the run that just finished, so a conversation
+   * whose earlier turn failed keeps returning `status: "ERROR"` with that same
+   * text on every later turn - including runs that produced a complete
+   * response. Seeding the previous verdict per conversation is what lets a
+   * repeat be recognized as the echo it is.
+   */
+  previousError: string | undefined
+  /** The error this turn's own `result` record carried, before echo handling. */
+  resultError: string | undefined
+  /** True once this turn's `result` record has been consumed. */
+  resultSeen: boolean
   turnIndex: number
   messageId: string
   createdAt: number
@@ -553,7 +568,7 @@ export function mapAntigravityRecord(
     if (!result) return base
     const status = stringValue(result['status']) ?? 'ERROR'
     const response = stringValue(result['response'])
-    let error =
+    const rawError =
       status === 'SUCCESS'
         ? undefined
         : (stringValue(result['error']) ??
@@ -562,6 +577,17 @@ export function mapAntigravityRecord(
     if (response) {
       state.text = response
       upsertPart(state, textPart(state))
+    }
+    state.resultSeen = true
+    state.resultError = rawError
+    let error = rawError
+    // agy's `result` carries the conversation's last recorded error, not this
+    // run's outcome. A run that produced its response has not failed, so an
+    // error that merely repeats the previous turn's verdict is an echo of it
+    // and must not mark a finished turn as failed.
+    if (error && error === state.previousError && response?.trim()) {
+      Logger.dev('Antigravity dropped a stale conversation error echoed by agy:', error)
+      error = undefined
     }
     const events: SessionAgentEvent[] = []
     if (state.started) {
@@ -763,6 +789,13 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   private turnStates = new Map<string, AntigravityTurnState>()
+  /**
+   * The last error agy reported per conversation. agy's `result` reports the
+   * conversation's last recorded error rather than the run's own outcome, so
+   * remembering it is the only way to tell a fresh failure from a replay of the
+   * previous turn's one.
+   */
+  private conversationErrors = new Map<string, string>()
   private brainTraceWatchers = new Map<string, AntigravityBrainTraceWatcher>()
   private modelVariants = new Map<string, Map<ThinkingLevel, string>>()
   private modelVariantsAttempted = false
@@ -890,6 +923,23 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   /**
+   * The error agy last reported for this conversation, used to recognize the
+   * echo: agy's `result` reports the conversation's last recorded error rather
+   * than the run's own outcome. The live map is authoritative within an app
+   * session; the session transcript is the fallback that survives a restart,
+   * because the echo persists for the whole life of the conversation.
+   */
+  private previousConversationError(session: PersistentCliSession): string | undefined {
+    const remembered = session.nativeSessionId
+      ? this.conversationErrors.get(session.nativeSessionId)
+      : undefined
+    if (remembered) return remembered
+    return [...session.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.error)?.error
+  }
+
+  /**
    * Populate the effort-variant map on first use so bare effort model ids
    * (`gemini-3.6-flash`) resolve to an effort-suffixed slug before being sent
    * to agy. Discovery may serve the catalog from the persisted snapshot without
@@ -961,6 +1011,9 @@ export class AntigravityDriver extends PersistentCliDriver {
       conversationId: session.nativeSessionId,
       brainThinking: new Map(),
       firstStepIndex: undefined,
+      previousError: session.nativeSessionId ? this.previousConversationError(session) : undefined,
+      resultError: undefined,
+      resultSeen: false,
       timelineAnchor: 0,
       elapsedMs: 0
     }
@@ -1004,7 +1057,14 @@ export class AntigravityDriver extends PersistentCliDriver {
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const state = this.turnStates.get(context.sessionId)
     if (!state) return null
-    return mapAntigravityRecord(value, context, state)
+    const parsed = mapAntigravityRecord(value, context, state)
+    // Remember what agy said about the conversation so the next turn can tell a
+    // fresh failure from a replay of this one.
+    if (state.resultSeen && state.conversationId) {
+      if (state.resultError) this.conversationErrors.set(state.conversationId, state.resultError)
+      else this.conversationErrors.delete(state.conversationId)
+    }
+    return parsed
   }
 
   /**
@@ -1127,6 +1187,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     }
     this.brainTraceWatchers.clear()
     this.turnStates.clear()
+    this.conversationErrors.clear()
     this.modelVariants.clear()
     super.dispose()
   }

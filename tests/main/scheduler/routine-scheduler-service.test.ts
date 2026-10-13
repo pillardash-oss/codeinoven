@@ -9,6 +9,7 @@ import { ProjectManager } from '../../../src/lib/engines/project-manager'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { RoutineSchedulerService } from '../../../src/main/scheduler/routine-scheduler-service'
 import { MissedRunStore } from '../../../src/main/scheduler/missed-run-store'
+import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { ASSISTANT_SPACE_ID, type Routine, type Thread } from '../../../src/lib/types'
 
 /** Local-time epoch for a fixed wall clock so tests never depend on TZ. */
@@ -52,7 +53,8 @@ describe('RoutineSchedulerService', () => {
     // under test, so a due slot after that is a real fire or miss rather than a
     // slot that predates the schedule.
     const moment = clock
-    clock = moment - 2 * 60 * 60 * 1000
+    const inception = moment - 2 * 60 * 60 * 1000
+    clock = inception
     const routine = routines.createRoutine({ name: 'Routine', schedule, howTo })
     clock = moment
     const task = await threads.createThread({
@@ -60,6 +62,12 @@ describe('RoutineSchedulerService', () => {
       providerId: 'pi',
       title
     })
+    // A task's schedule anchor is the later of its own creation and its
+    // routine's schedule clock, and the thread manager stamps `createdAt` from
+    // the real clock. Pin it to the routine's inception so this fixture models
+    // a task that has belonged to the routine from the start, which is what
+    // every test below is about.
+    new ThreadRepo(db).upsert({ ...task, createdAt: inception, lastActivity: inception })
     // Return the regrouped row: the scheduler reads a task's routine from the
     // thread it is handed, exactly as the app hands it a fresh row.
     const grouped = routines.setTaskRoutine(task.id, routine.id)

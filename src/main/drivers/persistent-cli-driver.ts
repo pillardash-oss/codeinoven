@@ -230,7 +230,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     candidates: TitleModelCandidate[],
     promptText: string,
     validate: (raw: string) => string | null,
-    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
+    preparePrompt?: CheapModelRequest['preparePrompt']
   ): Promise<OneShotOutcome> {
     return runOneShotWithCandidates(
       {
@@ -248,7 +249,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       candidates,
       promptText,
       validate,
-      timeoutMs
+      timeoutMs,
+      preparePrompt
     )
   }
 
@@ -318,8 +320,9 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       },
       candidates,
       request.prompt,
-      sanitizeAuxiliaryText,
-      request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS
+      request.validateResponse ?? sanitizeAuxiliaryText,
+      request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS,
+      request.preparePrompt
     )
     return {
       text: outcome.value,

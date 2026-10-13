@@ -1,11 +1,12 @@
 <script lang="ts">
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import type { CustomIcon, Routine } from '$shared/types'
+  import { routineIsScheduled, type CustomIcon, type Routine } from '$shared/types'
 
   interface Props {
     /** Routine being edited; null closes the modal. */
@@ -30,6 +31,7 @@
 
   let name = $state('')
   let description = $state('')
+  let scheduled = $state(true)
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
   let customSvg = $state<string | undefined>(undefined)
@@ -44,6 +46,7 @@
     if (!routine) return
     name = routine.name
     description = routine.description ?? ''
+    scheduled = routineIsScheduled(routine)
     color = routine.color
     iconType = routine.iconType
     customSvg = routine.customSvg
@@ -90,6 +93,7 @@
       const appearance = {
         name: name.trim(),
         description: description.trim() || null,
+        scheduled,
         color: color ?? null,
         iconType: iconType ?? null,
         customSvg: customSvg ?? null
@@ -185,6 +189,22 @@
       <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
         For you only, it is never sent to the agent.
       </p>
+    </div>
+
+    <div class="flex items-center justify-between gap-3 rounded-lg border bg-elevated px-3 py-2">
+      <div class="min-w-0">
+        <p class="text-sm text-foreground">Run on a schedule</p>
+        <p class="text-[0.625rem] leading-relaxed text-dimmed">
+          {scheduled
+            ? 'The routine fires on its agreed cadence. Turn this off to keep it on demand.'
+            : 'No schedule: the routine runs only when you ask it to. Turning this on clears its saved cadence, so the agent agrees a new one with you.'}
+        </p>
+      </div>
+      <Switch
+        bind:checked={scheduled}
+        aria-label="Run this routine on a schedule"
+        title="Run on a schedule"
+      />
     </div>
 
     {#if error}

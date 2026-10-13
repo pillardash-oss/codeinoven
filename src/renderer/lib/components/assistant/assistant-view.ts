@@ -4,6 +4,7 @@ import {
   isAssistantSetupThread,
   routineAgentsComplete,
   routineHowToComplete,
+  routineIsScheduled,
   type AgentCapabilityCatalog,
   type BackgroundRun,
   type BackgroundRunOutcome,
@@ -209,13 +210,16 @@ export function taskHasMissed(runs: readonly MissedRun[]): boolean {
 
 /**
  * Line 2 of a task row: the next intended run for a scheduled task, else the
- * last run, else "Not scheduled".
+ * last run, else "Not scheduled". `onDemand` marks a function the user drives
+ * by hand, which reads "On demand" rather than the ambiguous "Not scheduled".
  */
 export function taskRunLine(
   task: Pick<Thread, 'lastRunAt'>,
   nextRunAt: number | null,
-  now: number
+  now: number,
+  onDemand = false
 ): string {
+  if (onDemand) return 'On demand'
   if (nextRunAt !== null) return `Next run ${describeRelativeTime(nextRunAt, now)}`
   if (task.lastRunAt !== undefined) return `Last run ${describeRelativeTime(task.lastRunAt, now)}`
   return 'Not scheduled'
@@ -267,10 +271,11 @@ export function routineRunCountLabel(count: number): string {
  * must not advertise a time for either.
  */
 export function routineNextRunLine(
-  routine: Pick<Routine, 'paused' | 'howTo'>,
+  routine: Pick<Routine, 'paused' | 'howTo' | 'scheduled'>,
   nextRunAt: number | null,
   now: number
 ): string | null {
+  if (!routineIsScheduled(routine)) return null
   if (nextRunAt === null || routine.paused || !routineHowToComplete(routine)) return null
   return `Next run ${describeRelativeTime(nextRunAt, now)}`
 }

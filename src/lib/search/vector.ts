@@ -38,8 +38,8 @@ export function cosineSimilarity(left: Float32Array, right: Float32Array): numbe
 }
 
 const INDEX_MAGIC = 0x43494f53 // "CIOS"
-// Version 2 replaces raw thread documents with cached search summaries.
-const INDEX_VERSION = 2
+// Version 3 indexes raw/truncated text first; summaries are optional refinements.
+const INDEX_VERSION = 3
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()

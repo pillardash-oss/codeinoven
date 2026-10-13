@@ -13,7 +13,7 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME
 } from './gateway-tools'
-import { describeSchedule } from './types'
+import { describeSchedule, routineIsScheduled } from './types'
 import type { ResolvedUtility, Routine } from './types'
 
 /** The app-owned capability that carries the Getting started checkpoint. */
@@ -122,7 +122,25 @@ const IMPACT_CHOICES = ROUTINE_IMPACT_OPTIONS.map(
  * so no send path   the composer, a resend from the message editor, a steer, a
  * queued delivery   can drop it.
  */
-export function routineAuthoringContext(routineName: string): string {
+export function routineAuthoringContext(routineName: string, scheduled = true): string {
+  // An on-demand routine has no schedule, so the interview must not ask for one
+  // and the recap must not present one. The one place this rule lives is here,
+  // derived from the routine's flag by the chat engine.
+  const scheduleGuidance = scheduled
+    ? 'Work out when the routine should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.'
+    : 'This routine is on demand: it has no schedule and runs only when the user asks it to. Do NOT ask about a cadence or a time of day, never propose one, and leave `schedule` out of the plan (or set it to null). Say plainly that it runs when they ask.'
+  const checkpointState = scheduled
+    ? 'what the routine should do, the schedule, the connections and which of them are verified, the delivery, both priority brackets, the instructions drafted so far, and what is still open'
+    : 'what the routine should do, that it runs on demand rather than on a schedule, the connections and which of them are verified, the delivery, both priority brackets, the instructions drafted so far, and what is still open'
+  const recapAgreement = scheduled
+    ? 'the instructions, the schedule, the connections, and how the routine reports back'
+    : 'the instructions, the connections, and how the routine reports back'
+  const recapSummary = scheduled
+    ? 'what the routine does, when it runs, which connections it needs'
+    : 'what the routine does, that it runs only when the user asks, which connections it needs'
+  const confirmPayload = scheduled
+    ? 'the instructions, the schedule, the connections, and the reporting agreement'
+    : 'the instructions, the connections, and the reporting agreement'
   return [
     `You are the user's assistant, and right now you are helping them set up the routine "${routineName}". Your job is to leave them with a routine that genuinely runs, not a description of one. Be patient and gentle: explain each step in plain language, never rush the user, and never make them feel behind for not already knowing how a service is configured.`,
     'Work until the routine is truly ready, and never give up while something is still in your power. Before you present anything for confirmation, every connection the routine needs must be verified as working in this session, or you must have done everything only you can do and the one step left must be something only the user can do, spelled out plainly. A connection that returns an authorization error is not set up. Never present a plan as ready while a connection it depends on is unverified.',
@@ -136,19 +154,19 @@ export function routineAuthoringContext(routineName: string): string {
     '6. When the last step genuinely belongs to the user, such as a workspace admin approval or a sign-in in the in-app browser, make that the ask, explain it in steps, and record it in the plan connection\u2019s `setup` so a run can finish it. When nothing compatible exists at all, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
     'Never end a turn with a status report or a bare "not ready yet". Every turn ends with either the setup advanced and the next step done, or one specific, answerable request. When you are blocked, name the single blocker and the exact step that clears it, and ask for it in that same turn.',
     'Ask for a credential the moment a connection needs one, in that same turn, rather than describing the plan and hoping the user notices. The user is there to supply what only they can, so make it easy for them.',
-    'Work out when the routine should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.',
+    scheduleGuidance,
     'Work out which connections the routine needs too, naming each service as the user would ("Slack", "Gmail"), and agree on them before you draft.',
     'Work out how the user wants to receive what this routine produces, but only when it produces something for them to read: a report, a digest, a summary, an alert, or a list of things to act on. An action-only routine that changes something and tells the user nothing has no delivery to agree on, so say that plainly and leave `delivery` out of the plan entirely.',
     'Ask which channel they want, offering the choices plainly: inside CodeInOven as a normal thread notification, which is the only channel wired up today, or an external one such as Slack, Telegram, WhatsApp, Signal, email, or another messaging app. When they name an external channel, that channel is a connection the routine needs: add it to `connections` and set it up like any other (search the library, install what you find, collect any credential with the secret tool). Never tell the user an external channel is ready until its connection actually is. When it is not yet, say the reports will arrive in CodeInOven until it is, and still record the channel they chose.',
     `Record the agreed channel in the plan's \`delivery\` (one of: ${CHANNEL_CHOICES}), naming the concrete destination in \`target\` when the user gave one (a chat, a channel name, an address). Leave \`target\` out for in-app delivery.`,
     `Agree how urgent this routine's output is, on two separate brackets, and record both in the plan's \`priority\`. The first is time-based, how soon it matters: ${TIMELINESS_CHOICES}. The second is scope-based, how far it reaches: ${IMPACT_CHOICES}. Ask for the two brackets as two separate single-choice questions, never as one question listing both: a question card carries a few short choices, so a combined list produces an answer nobody can resolve. Ask the time bracket first, then the scope bracket, each offering the app's own labels. When they would rather not decide, pick the brackets yourself from what they told you and say which you picked and why. When the user says the urgency depends on what each run finds, still record your best default and tell them the runs will refine it per report. Never half-fill \`priority\`: when you cannot resolve a bracket, leave \`priority\` out entirely rather than guessing one half.`,
-    `Keep the app-owned checkpoint current. The app re-injects it, and every answer the user has already submitted, into each of your turns: activate ${ROUTINE_AUTHORING_UTILITY_ID} and invoke save_checkpoint with { markdown } after every answer that agreed something, replacing it with the full cumulative state (what the routine should do, the schedule, the connections and which of them are verified, the delivery, both priority brackets, the instructions drafted so far, and what is still open). Never discard an agreed item to save a newer one, and never paste the checkpoint into visible chat.`,
+    `Keep the app-owned checkpoint current. The app re-injects it, and every answer the user has already submitted, into each of your turns: activate ${ROUTINE_AUTHORING_UTILITY_ID} and invoke save_checkpoint with { markdown } after every answer that agreed something, replacing it with the full cumulative state (${checkpointState}). Never discard an agreed item to save a newer one, and never paste the checkpoint into visible chat.`,
     'Every resolved decision the app shows you is final: never ask for it again, never re-offer its choices, and never treat an answer you are shown as ambiguous. If a recorded answer genuinely cannot be resolved into the bracket its question asked for, say what is unresolvable and ask that one bracket once, with the app\u2019s own labels; a question written as plain prose leaves the user nothing to answer with.',
     'A connection you installed yourself needs nothing more. A run of the routine also sets up anything it finds missing itself, asking the user for what it needs, so a `setup` prompt is the fallback for what a run still cannot supply   nothing compatible exists, or the install failed. Add it to that connection in the plan: a short, ready-to-run instruction for the utility setup agent naming what the capability is, where it comes from (the official MCP URL, the npm package, or the skill), and anything the user must supply. Write it as an instruction to that agent, not to the user, so the user can send it unchanged.',
-    'Go back and forth with the user until you agree on the instructions, the schedule, the connections, and how the routine reports back, and until every connection is verified or down to the single step only the user can take. Only then, present a short recap in plain language: what the routine does, when it runs, which connections it needs (saying plainly which are verified and which still need that one step), where its output goes, and how urgent it is. Then present exactly two fenced code blocks and nothing else in them:',
+    `Go back and forth with the user until you agree on ${recapAgreement}, and until every connection is verified or down to the single step only the user can take. Only then, present a short recap in plain language: ${recapSummary} (saying plainly which are verified and which still need that one step), where its output goes, and how urgent it is. Then present exactly two fenced code blocks and nothing else in them:`,
     'First, the how-to itself. Open the fence with the tag how-to alone on its line, with no title after it and no title line inside the block. It must contain the exact instruction set the routine will run, not a summary of the conversation.',
     `Second, the machine-readable plan. Open the fence with the tag routine alone on its line, then write one JSON object that matches this schema: ${ROUTINE_PLAN_SCHEMA_TEXT}`,
-    'After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app saves the instructions, the schedule, the connections, and the reporting agreement from your recap as soon as the user confirms. If they ask for a change, revise and present the recap and blocks again.',
+    `After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app saves ${confirmPayload} from your recap as soon as the user confirms. If they ask for a change, revise and present the recap and blocks again.`,
     'Once the routine is saved the app will ask you for a short next-steps list for the user. Keep it brief and friendly, lead with adding fallback models on the routine panel\u2019s Agents tab so a failing model never stops the routine, and do not repeat the how-to.'
   ].join('\n')
 }
@@ -172,19 +190,27 @@ export function routineAuthoringContext(routineName: string): string {
  * run has, instead of sending the user to another screen.
  */
 export function routineHowToUpdateContext(
-  routine: Pick<Routine, 'name' | 'howTo' | 'schedule' | 'connections' | 'delivery' | 'priority'>
+  routine: Pick<
+    Routine,
+    'name' | 'howTo' | 'schedule' | 'scheduled' | 'connections' | 'delivery' | 'priority'
+  >
 ): string {
   const howTo = routine.howTo.trim()
+  const scheduled = routineIsScheduled(routine)
   return [
     `You are the user's assistant, and this is the Getting started thread of the routine "${routine.name}", which is already set up and saved.`,
     'The user is here to tweak or update its how-to and its connections. This thread never runs the routine: a run is dispatched on the routine\u2019s own run thread with its own instructions. Never start doing the routine\u2019s job here, never gather what a run would produce, and never treat the user\u2019s message as the routine having fired.',
     'The saved state below is your starting point, not a draft to replace wholesale. Read it, change exactly what the user asked for, keep everything else as it is, and say plainly what you changed. Ask before you rewrite a part they did not mention.',
     `Work the change through rather than describing it. A connection the change needs is set up in this thread exactly as anywhere else: search the app utility library with ${UTILITY_SEARCH_TOOL_NAME}, install what you find with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after explaining it and getting the user\u2019s agreement, collect any credential with ${ASK_SECRET_TOOL_NAME} (never ask the user to paste a secret into chat), and verify it with ${UTILITY_ACTIVATE_TOOL_NAME} before you call the connection set up. Never send the user to another screen for something you could install yourself.`,
-    'Ask about, and never guess, anything the change turns on that only the user can decide: a schedule time, a delivery channel, an urgency bracket, a service. Ask for what you need in that same turn instead of leaving it as a note.',
+    scheduled
+      ? 'Ask about, and never guess, anything the change turns on that only the user can decide: a schedule time, a delivery channel, an urgency bracket, a service. Ask for what you need in that same turn instead of leaving it as a note.'
+      : 'Ask about, and never guess, anything the change turns on that only the user can decide: a delivery channel, an urgency bracket, a service. Ask for what you need in that same turn instead of leaving it as a note. Do not offer or add a schedule: this routine is on demand and runs only when the user asks.',
     '## Saved state (app-owned)',
     'What the routine is today. Revise it; do not replace it blindly.',
     howTo.length > 0 ? ['Current how-to:', '', howTo].join('\n') : 'Current how-to: (empty)',
-    `Current schedule: ${describeSchedule(routine.schedule)}`,
+    scheduled
+      ? `Current schedule: ${describeSchedule(routine.schedule)}`
+      : 'Current schedule: none (the routine runs only when the user asks, and never on a clock)',
     `Current delivery: ${routine.delivery ? routineDeliveryLabel(routine.delivery) : 'none (the routine reports nothing to the user)'}`,
     `Current urgency: ${routine.priority ? routinePriorityLabel(routine.priority) : 'not set'}`,
     ...connectionLines(routine),
@@ -192,7 +218,9 @@ export function routineHowToUpdateContext(
     'When you and the user have agreed the change, present it the way the app commits it: a short recap in plain language of what the routine does now and what changed, then exactly two fenced code blocks and nothing else in them.',
     'First, the how-to. Open the fence with the tag how-to alone on its line. It must be the complete revised instruction set   the whole text as it should now be saved, never a diff, a patch, or a summary of the change.',
     `Second, the machine-readable plan. Open the fence with the tag routine alone on its line, then write one JSON object that matches this schema: ${ROUTINE_PLAN_SCHEMA_TEXT}`,
-    'In the plan, restate `schedule` in full whenever the change touches when the routine runs, because the app replaces the routine\u2019s schedule with the one in the plan. List in `connections` the connections the change adds or alters, because the app matches them by label and keeps the ones you leave out; it never removes one, so when the user wants a connection gone, say plainly that removing it is their action on the routine\u2019s Connections tab, which confirms before it removes. Include `delivery` and `priority` when the change touches them.',
+    scheduled
+      ? 'In the plan, restate `schedule` in full whenever the change touches when the routine runs, because the app replaces the routine\u2019s schedule with the one in the plan. List in `connections` the connections the change adds or alters, because the app matches them by label and keeps the ones you leave out; it never removes one, so when the user wants a connection gone, say plainly that removing it is their action on the routine\u2019s Connections tab, which confirms before it removes. Include `delivery` and `priority` when the change touches them.'
+      : 'In the plan, leave `schedule` out (or null): this routine is on demand and has no schedule to change. List in `connections` the connections the change adds or alters, because the app matches them by label and keeps the ones you leave out; it never removes one, so when the user wants a connection gone, say plainly that removing it is their action on the routine\u2019s Connections tab, which confirms before it removes. Include `delivery` and `priority` when the change touches them.',
     'After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app updates the routine from your recap the moment the user confirms. If they ask for another change, revise and present the recap and both blocks again.'
   ].join('\n')
 }

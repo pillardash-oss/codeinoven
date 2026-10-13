@@ -9,7 +9,7 @@
     Sparkles
   } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
-  import { describeSchedule, type Routine } from '$shared/types'
+  import { describeSchedule, routineIsScheduled, type Routine } from '$shared/types'
   import { routineGap } from './assistant-view'
 
   interface Props {
@@ -29,8 +29,13 @@
 
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
-  const scheduleLabel = $derived(describeSchedule(routine.schedule ?? null))
-  const scheduleAt = $derived(nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`)
+  const scheduled = $derived(routineIsScheduled(routine))
+  const scheduleLabel = $derived(
+    scheduled ? describeSchedule(routine.schedule ?? null) : 'Runs on demand'
+  )
+  const scheduleAt = $derived(
+    !scheduled || nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`
+  )
   const howToPreview = $derived.by(() => {
     const text = routine.howTo.trim().replace(/\s+/g, ' ')
     if (text.length === 0) return 'No how-to written yet.'
@@ -45,13 +50,15 @@
       ? 'Paused'
       : incomplete
         ? gapLabel
-        : missed
-          ? 'Missed run'
-          : working
-            ? 'Working'
-            : nextRunAt
-              ? 'Scheduled'
-              : 'Ready'
+        : !scheduled
+          ? 'On demand'
+          : missed
+            ? 'Missed run'
+            : working
+              ? 'Working'
+              : nextRunAt
+                ? 'Scheduled'
+                : 'Ready'
   )
   const statusColor = $derived(
     routine.paused
