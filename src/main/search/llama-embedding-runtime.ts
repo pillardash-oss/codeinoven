@@ -6,6 +6,14 @@ import { totalmem } from 'node:os'
 import type { EmbeddingRuntimeId } from '../../lib/search/types'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 
+/** Bound physical attention allocation independently of the user's upper limit. */
+export function embeddingWorkingContext(contextTokens: number): number {
+  return Math.min(
+    contextTokens > 0 ? contextTokens : 8192,
+    totalmem() <= 8 * 1024 ** 3 ? 1024 : 2048
+  )
+}
+
 /**
  * A local embedding runtime: turns text into vectors without leaving the
  * machine. Implementations are selected per installed model's runtime id, so
@@ -55,10 +63,7 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
     private readonly contextTokens: number,
     private readonly host: EmbeddingRuntimeHost
   ) {
-    this.workingContext = Math.min(
-      contextTokens > 0 ? contextTokens : 8192,
-      totalmem() <= 8 * 1024 ** 3 ? 1024 : 2048
-    )
+    this.workingContext = embeddingWorkingContext(contextTokens)
   }
 
   async isAvailable(): Promise<boolean> {
@@ -226,6 +231,9 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         String(this.workingContext),
         '--ubatch-size',
         String(this.workingContext),
+        // Keep background inference off the GPU to avoid contending with UI rendering.
+        '--gpu-layers',
+        '0',
         '--prio',
         '-1',
         '--poll',

@@ -22,7 +22,7 @@ import {
 import { normalizeInPlace } from '../../lib/search/vector'
 import { SearchModelDownloader } from './embedding-model-downloader'
 import type { EmbeddingRuntime } from './llama-embedding-runtime'
-import { LlamaEmbeddingRuntime } from './llama-embedding-runtime'
+import { LlamaEmbeddingRuntime, embeddingWorkingContext } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
@@ -584,6 +584,11 @@ export class SearchService {
     const model = this.activeModel()
     if (!model) return
     if (!this.canEmbed()) return
+    if (this.index.pending === 0) {
+      this.intentReady = true
+      this.emitStatus()
+      return
+    }
     this.indexing = true
     this.indexingError = null
     this.emitStatus()
@@ -591,7 +596,10 @@ export class SearchService {
     this.sweepController = controller
     try {
       const runtime = await this.ensureRuntime(model)
-      const documentChars = Math.min(262_144, (await runtime.contextBudget()) * 8)
+      const documentChars = Math.min(
+        262_144,
+        (embeddingWorkingContext(this.settings.contextTokens) - 1) * 8
+      )
       const result = await this.index.sweep(
         async (texts) => {
           const vectors = await runtime.embed(texts, controller.signal)

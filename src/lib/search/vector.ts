@@ -57,7 +57,9 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
   let size = 12
   for (const record of records) {
     const idBytes = textEncoder.encode(record.threadId)
-    const hashBytes = textEncoder.encode(record.contentHash)
+    const hashBytes = textEncoder.encode(
+      record.sourceHash ? `${record.sourceHash}:${record.contentHash}` : record.contentHash
+    )
     size += 4 + idBytes.length + 4 + hashBytes.length + 4 + 8 + record.vector.length * 4
   }
   const buffer = new ArrayBuffer(size)
@@ -71,7 +73,9 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
   offset += 4
   for (const record of records) {
     const idBytes = textEncoder.encode(record.threadId)
-    const hashBytes = textEncoder.encode(record.contentHash)
+    const hashBytes = textEncoder.encode(
+      record.sourceHash ? `${record.sourceHash}:${record.contentHash}` : record.contentHash
+    )
     view.setUint32(offset, idBytes.length, false)
     offset += 4
     offset = writeBytes(view, offset, idBytes)
@@ -110,7 +114,10 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
     const hashLength = view.getUint32(offset, false)
     offset += 4
     if (offset + hashLength > buffer.byteLength) return null
-    const contentHash = textDecoder.decode(buffer.subarray(offset, offset + hashLength))
+    const storedHash = textDecoder.decode(buffer.subarray(offset, offset + hashLength))
+    const [sourceHash, contentHash] = storedHash.includes(':')
+      ? storedHash.split(':', 2)
+      : [storedHash, storedHash]
     offset += hashLength
     if (offset + 12 > buffer.byteLength) return null
     const dimensions = view.getUint32(offset, false)
@@ -123,7 +130,7 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
       vector[index] = view.getFloat32(offset, false)
       offset += 4
     }
-    records.push({ threadId, contentHash, dimensions, updatedAt, vector })
+    records.push({ threadId, sourceHash, contentHash, dimensions, updatedAt, vector })
   }
   return records
 }
