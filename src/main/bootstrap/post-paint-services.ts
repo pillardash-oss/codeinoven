@@ -169,7 +169,7 @@ export interface PostPaintBootContext {
 
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
-  if (state.updaterService) return
+  if (state.chatEngine || state.featuresReady) return
   const [
     { registerIpcHandlers },
     { ProjectManager },
@@ -180,7 +180,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ScopeWorktreeService },
     { HarnessManifestService },
     { ComputerUsePipService },
-    { UpdaterService },
     { PowerWakeService },
     { RetrySchedulerService },
     { HeartbeatSchedulerService },
@@ -213,7 +212,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../git/scope-worktree-service'),
     import('../agents/harness-manifest-service'),
     import('../utilities/computer-use-pip-service'),
-    import('../notifications/updater-service'),
     import('../system/power-wake-service'),
     import('../system/retry-scheduler-service'),
     import('../system/heartbeat-scheduler-service'),
@@ -303,28 +301,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   await syncOpenCodeLeanAgents().catch((error) =>
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
-  state.updaterService = new UpdaterService(storage)
-  // An update install owns its quit: background mode would otherwise park on the
-  // `app.quit()` the updater triggers and the update would never apply. The flag
-  // is cleared again if the install cannot proceed, so the app stays parkable.
-  state.updaterService.attachUpdateQuitHooks({
-    begin: () => {
-      state.quitForUpdate = true
-    },
-    end: () => {
-      state.quitForUpdate = false
-    }
-  })
-  // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
-  // where the updater is born, so the tray item is live the moment the updater is.
-  state.backgroundLifecycle?.setUpdater({
-    updateInBackground: async () => {
-      await state.updaterService?.updateInBackground()
-    },
-    status: () => state.updaterService?.status ?? { canAutoUpdate: false, state: 'idle' },
-    onStatusChange: (callback) =>
-      state.updaterService?.onStatusChange(callback) ?? (() => undefined)
-  })
+  const { startStartupUpdater } = await import('./startup-updater')
+  await startStartupUpdater(state, storage).catch((error: unknown) =>
+    Logger.error('Updater initialization failed; optional services continue', error)
+  )
   // One vault and one GitHub auth for the whole app: the skill updater reads the
   // same token the IPC layer does, so a check is authenticated exactly like an
   // install instead of running against the anonymous rate limit.
@@ -370,7 +350,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     listProjectIds: async () => (await projectManager.listProjects()).map((project) => project.id)
   })
   state.skillUpdateService = skillUpdateService
-  state.updaterService.setCheckCycleHook((explicit) =>
+  state.updaterService?.setCheckCycleHook((explicit) =>
     skillUpdateService.scheduleCheck({ explicit })
   )
   state.powerWakeService = new PowerWakeService(storage, database)
@@ -756,7 +736,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // The engine counts the working sessions but cannot name them; the shared
   // report is what the close gate lists too, so an install prompt and a quit
   // prompt describe the same work the same way.
-  state.updaterService.setChatEngine(state.chatEngine, () => getActiveThreadProjects(database))
+  state.updaterService?.setChatEngine(state.chatEngine, () => getActiveThreadProjects(database))
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
   // reclaimed without ever touching a harness the user runs outside the app.
@@ -771,7 +751,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch (error) {
     Logger.error('Orphaned harness process reaping failed at startup:', error)
   }
-  registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
+  registerIpcHandlers(storage, database, state.updaterService ?? undefined, state.chatEngine, {
     searchService: state.searchService ?? undefined,
     projectManager,
     projectFilesService,
