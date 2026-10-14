@@ -24,6 +24,10 @@
    * Every option may carry a `hint`, shown under its label, which is what makes
    * this useful for a choice the user has to understand (a priority bracket, a
    * delivery channel) instead of only recognise.
+   *
+   * One value at a time, so picking one closes the menu; nothing here keeps it
+   * open. The menu is also sized to its own trigger, so it can never spill past
+   * the field (and the panel) it belongs to.
    */
   import { Check, ChevronDown } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
@@ -40,7 +44,6 @@
     disabled?: boolean
     /** Compact height for toolbar placement. */
     compact?: boolean
-    closeOnSelect?: boolean
     /** Render short choices in the owning panel, so native projection keeps every action. */
     inline?: boolean
     /** Layout classes for the trigger, e.g. a flex sizing class. */
@@ -56,7 +59,6 @@
     title,
     disabled = false,
     compact = false,
-    closeOnSelect = false,
     inline = false,
     class: className = ''
   }: Props = $props()
@@ -124,16 +126,14 @@
         side="bottom"
         align="start"
         sideOffset={6}
-        class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+        collisionPadding={8}
+        class="z-60 w-[var(--bits-dropdown-menu-anchor-width)] rounded-xl border border-border bg-surface p-1 shadow-lg"
       >
         {#each options as option (option.id)}
           <DropdownMenu.Item
             class="flex items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
             textValue={option.label}
-            onSelect={(event) => {
-              if (!closeOnSelect) event.preventDefault()
-              onChange(option.id)
-            }}
+            onSelect={() => onChange(option.id)}
           >
             {#if option.iconUrl}
               <img

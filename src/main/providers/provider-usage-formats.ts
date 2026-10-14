@@ -7,8 +7,8 @@
  * - `auto` (the default) walks whatever the body contains and maps every
  *   object that looks like a quota, tolerating snake_case keys, 0..1 ratios,
  *   raw amount/limit pairs, several reset-time spellings, and duration fields.
- * - The named formats (`command-code`, `open-design`, `zai`, `kimi`, ...) know
- *   the exact envelope one provider family returns.
+ * - The named formats (`command-code`, `zai`, `kimi`, ...) know the exact
+ *   envelope one provider family returns.
  *
  * A named format that recognizes nothing falls back to `auto`, so a wrong pick
  * degrades to a best-effort read instead of showing no bars. A body that parses
@@ -513,65 +513,6 @@ function parseCommandCode(body: unknown): ParsedProviderUsage | null {
   return { rateLimits: assemble(candidates, 0), ...(credits ? { credits } : {}) }
 }
 
-const OPEN_DESIGN_WINDOW_KEYS = ['codingPlan', 'coding_plan'] as const
-
-/** Open Design: daemon coding-plan windows, or a wallet/billing balance. */
-function parseOpenDesign(body: unknown): ParsedProviderUsage | null {
-  const plan = findObject(body, OPEN_DESIGN_WINDOW_KEYS, 5)
-  const candidates: QuotaCandidate[] = []
-  if (plan) {
-    const windows = Array.isArray(plan['windows']) ? plan['windows'] : []
-    for (const rawWindow of windows) {
-      const window = record(rawWindow)
-      if (!window) continue
-      const seconds = num(window['durationSeconds'] ?? window['duration_seconds'])
-      const policyId = pickString(window, ['policyId', 'policy_id'])
-      const label =
-        policyId ??
-        (seconds === undefined
-          ? 'Coding plan'
-          : seconds === 18000
-            ? '5-hour session'
-            : seconds === 604800
-              ? 'Weekly'
-              : `${Math.round(seconds / 3600)}-hour`)
-      const candidate = quotaFromObject(window, titleCase(label))
-      if (!candidate) continue
-      candidates.push({
-        ...candidate,
-        label: titleCase(label),
-        ...(seconds === undefined ? {} : { windowMinutes: candidate.windowMinutes ?? seconds / 60 })
-      })
-    }
-  }
-  const credits = openDesignCredits(body)
-  if (candidates.length === 0 && !credits) return null
-  return {
-    rateLimits: assemble(candidates, 0),
-    ...(credits ? { credits } : {})
-  }
-}
-
-function openDesignCredits(body: unknown): AgentUsageCredits | undefined {
-  const balances = findObject(body, ['balances', 'workspaceBalance', 'workspace_balance'], 5)
-  const root = record(body)
-  const balance =
-    (balances ? pickNumber(balances, BALANCE_KEYS) : undefined) ??
-    (root ? pickNumber(root, ['balanceUsd', 'balance_usd', 'availableCredits']) : undefined)
-  const plan = findObject(body, ['codingPlan', 'coding_plan'], 5)
-  const rawPlan =
-    (balances ? pickString(balances, PLAN_KEYS) : undefined) ??
-    (plan ? pickString(plan, ['tier']) : undefined) ??
-    (root ? pickString(root, PLAN_KEYS) : undefined)
-  const planType = rawPlan === undefined ? undefined : humanizePlan(rawPlan)
-  if (balance === undefined && planType === undefined) return undefined
-  return {
-    hasCredits: true,
-    ...(balance === undefined ? {} : { balance }),
-    ...(planType === undefined ? {} : { planType })
-  }
-}
-
 /** new-api / one-api `/status`: `data.quota` is the cap, `data.used_quota` the spend. */
 function parseNewApi(body: unknown): ParsedProviderUsage | null {
   const root = record(body)
@@ -687,7 +628,6 @@ const ADAPTERS: Partial<
 > = {
   'new-api': parseNewApi,
   'command-code': parseCommandCode,
-  'open-design': parseOpenDesign,
   zai: parseZai,
   kimi: parseKimi
 }

@@ -41,12 +41,6 @@ export const PROVIDER_USAGE_FORMATS: readonly ProviderUsageFormatOption[] = [
     endpoint: 'https://api.commandcode.ai/alpha/billing/credits'
   },
   {
-    value: 'open-design',
-    label: 'Open Design',
-    hint: 'Wallet balance from the cloud API, or the 5-hour and weekly coding-plan windows from the desktop daemon billing route.',
-    endpoint: 'https://amr-api.open-design.ai/api/v1/wallet/balance'
-  },
-  {
     value: 'zai',
     label: 'Z.ai / GLM',
     hint: '`data.limits[]` percentage windows with `unit` / `number` durations.',

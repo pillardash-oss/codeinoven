@@ -10,7 +10,7 @@ import type { ThinkingPreset } from './agent'
  * recognizes nothing, so a wrong pick degrades instead of showing no bars.
  */
 export type BaseUrlProviderUsageFormat =
-  'auto' | 'openai' | 'new-api' | 'command-code' | 'open-design' | 'zai' | 'kimi'
+  'auto' | 'openai' | 'new-api' | 'command-code' | 'zai' | 'kimi'
 
 /** A model exposed by a custom base-URL provider. */
 export interface BaseUrlProviderModel {

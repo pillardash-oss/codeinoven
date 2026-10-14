@@ -225,7 +225,6 @@
     {#if !history?.gitBacked}
       <EnumSelect
         compact
-        closeOnSelect
         class="min-w-0 flex-1"
         options={scopeOptions}
         value={scope}
