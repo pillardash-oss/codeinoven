@@ -6,10 +6,11 @@ import type { PromptReference } from '$shared/types'
  * A composer can carry six kinds of reference: an excerpt selected from an
  * assistant response, an element picked from a design in the in-app browser, a
  * passage annotated in a project document, a moment noted on a video
- * composition's timeline, a freehand mark drawn on a picture the agent rendered,
- * and an element picked inside an inline SVG artifact. The strip and its popover
- * both show a count, so the count's noun has to agree with what is actually
- * attached rather than always saying "selections".
+ * composition's timeline, a freehand mark drawn on a picture the agent rendered
+ * (a still, or one frame of a video), and an element picked inside an inline SVG
+ * artifact. The strip and its popover both show a count, so the count's noun has
+ * to agree with what is actually attached rather than always saying
+ * "selections".
  */
 export interface ComposerReferenceSummary {
   total: number
@@ -19,7 +20,8 @@ export interface ComposerReferenceSummary {
   annotations: number
   /** How many references are moments noted on a video composition's timeline. */
   notes: number
-  /** How many references are freehand marks drawn on a rendered picture. */
+  /** How many references are freehand marks drawn on a rendered picture, still or
+   *  video frame. */
   marks: number
   /** How many references are response selections. */
   selections: number

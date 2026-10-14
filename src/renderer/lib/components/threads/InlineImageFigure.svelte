@@ -58,27 +58,33 @@
 <div
   class="group relative block max-w-full overflow-hidden rounded-lg border border-border bg-elevated transition-shadow hover:shadow-md"
 >
-  <img
-    src={imageUrls.getUrl(url)}
-    alt={filename}
-    class="block max-h-80 w-auto max-w-full object-contain"
-    loading="lazy"
-    onerror={handleImageError}
-    onload={clearRetryTimer}
-  />
-  <!-- The expand affordance is a real button laid over the picture rather than
-       the box itself, so a caller's overlay can sit above it and take its own
-       clicks. -->
-  <button
-    type="button"
-    class="absolute inset-0"
-    title="Expand {filename}"
-    aria-label="Expand {filename}"
-    onclick={onExpand}
-  ></button>
-  {#if overlay}
-    {@render overlay()}
-  {/if}
+  <!-- The picture, its expand affordance and a caller's overlay live in one box
+       sized to the picture rather than to the card. The card fills the message
+       column, so a narrow picture would otherwise leave a wider box behind it,
+       and a mark normalized to that box lands off the picture it was drawn on. -->
+  <div class="relative w-fit max-w-full">
+    <img
+      src={imageUrls.getUrl(url)}
+      alt={filename}
+      class="block max-h-80 w-auto max-w-full object-contain"
+      loading="lazy"
+      onerror={handleImageError}
+      onload={clearRetryTimer}
+    />
+    <!-- The expand affordance is a real button laid over the picture rather than
+         the box itself, so a caller's overlay can sit above it and take its own
+         clicks. -->
+    <button
+      type="button"
+      class="absolute inset-0"
+      title="Expand {filename}"
+      aria-label="Expand {filename}"
+      onclick={onExpand}
+    ></button>
+    {#if overlay}
+      {@render overlay()}
+    {/if}
+  </div>
   <span
     class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-black/0 px-2 py-1 text-[0.6875rem] font-medium text-white opacity-0 transition-all group-hover:bg-black/50 group-hover:opacity-100"
   >

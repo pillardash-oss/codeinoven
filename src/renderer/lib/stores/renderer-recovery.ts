@@ -7,7 +7,7 @@ import type {
   UserMessagePresentation
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
-import { MAX_IMAGE_MARK_POINTS, type ImageMarkPoint } from '$lib/image-annotation'
+import { MAX_MARK_POINTS, type MarkPoint } from '$lib/annotation-marks'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -103,10 +103,16 @@ export interface QueuedResponseReference extends PromptReference {
   seconds?: number
   /** Video notes: the project-relative composition folder the moment belongs to. */
   directory?: string
-  /** Image marks: the artifact image part the stroke was drawn on. */
-  imageUrl?: string
-  /** Image marks: the freehand stroke, normalized to 0..1 of the image box. */
-  points?: ImageMarkPoint[]
+  /** Media marks: the artifact part the stroke was drawn on, a still or a video. */
+  mediaUrl?: string
+  /** Media marks: the freehand stroke, normalized to 0..1 of the picture box. */
+  points?: MarkPoint[]
+  /** Media marks drawn on a video: the second whose frame was annotated. */
+  markSeconds?: number
+  /** Media marks: the colour the stroke was drawn in. */
+  markColor?: string
+  /** Media marks: the stroke's width in CSS pixels. */
+  markStrokeWidth?: number
   /** SVG element picks: the artifact card the element was picked in. */
   artifactKey?: string
 }
@@ -316,16 +322,23 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
   if (value.directory !== undefined && typeof value.directory !== 'string') return false
-  if (value.imageUrl !== undefined && typeof value.imageUrl !== 'string') return false
+  if (value.mediaUrl !== undefined && typeof value.mediaUrl !== 'string') return false
+  if (value.markSeconds !== undefined && typeof value.markSeconds !== 'number') return false
+  if (value.markColor !== undefined && typeof value.markColor !== 'string') return false
+  if (
+    value.markStrokeWidth !== undefined &&
+    (typeof value.markStrokeWidth !== 'number' || !Number.isFinite(value.markStrokeWidth))
+  )
+    return false
   if (value.artifactKey !== undefined && typeof value.artifactKey !== 'string') return false
-  if (value.points !== undefined && !isImageMarkPoints(value.points)) return false
+  if (value.points !== undefined && !isMarkPoints(value.points)) return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
 }
 
 /** A restored freehand stroke: every point a finite pair inside the unit square. */
-function isImageMarkPoints(value: unknown): value is ImageMarkPoint[] {
-  if (!Array.isArray(value) || value.length > MAX_IMAGE_MARK_POINTS) return false
+function isMarkPoints(value: unknown): value is MarkPoint[] {
+  if (!Array.isArray(value) || value.length > MAX_MARK_POINTS) return false
   return value.every(
     (point) =>
       isRecord(point) &&

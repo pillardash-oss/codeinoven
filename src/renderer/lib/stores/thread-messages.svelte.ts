@@ -11,7 +11,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
-import { composeImageMarkAttachments } from '$lib/image-annotation-composite'
+import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
@@ -41,22 +41,23 @@ import type {
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
 
 /**
- * Add the annotated screenshots a message's image marks need.
+ * Add the annotated pictures a message's media marks need.
  *
- * A mark is stored as coordinates over a picture the agent rendered, which the
+ * A mark is stored as coordinates over a picture the agent published, which the
  * model cannot see. The picture is rebuilt with the marks drawn on it exactly
  * once, here, so every path into a send   the composer, a queued message, a
  * headless delivery   carries the same annotated attachment without each caller
- * having to remember to build it.
+ * having to remember to build it. A mark on a video frame composes that second's
+ * frame, so a frame annotation costs the caller nothing extra either.
  */
-async function withImageMarkAttachments(
+async function withMarkAttachments(
   projectId: string,
   threadId: string,
   attachments: PromptAttachment[],
   references: readonly PromptReference[] | undefined
 ): Promise<PromptAttachment[]> {
   if (!references?.some((reference) => reference.kind === 'image')) return attachments
-  const composed = await composeImageMarkAttachments({
+  const composed = await composeMarkAttachments({
     projectId,
     scope: { kind: 'project', projectId, threadId },
     references
@@ -559,14 +560,9 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
-    // The annotated screenshot is built before the optimistic message, so the
+    // The annotated picture is built before the optimistic message, so the
     // message the user sees is carrying exactly what the agent receives.
-    const outgoing = await withImageMarkAttachments(
-      projectId,
-      threadId,
-      attachments,
-      promptReferences
-    )
+    const outgoing = await withMarkAttachments(projectId, threadId, attachments, promptReferences)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
@@ -617,12 +613,7 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
-    const outgoing = await withImageMarkAttachments(
-      projectId,
-      threadId,
-      attachments,
-      promptReferences
-    )
+    const outgoing = await withMarkAttachments(projectId, threadId, attachments, promptReferences)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,

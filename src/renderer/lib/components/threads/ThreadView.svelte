@@ -87,6 +87,7 @@
   import InlineMediaFigure from './InlineMediaFigure.svelte'
   import InlineImageFigure from './InlineImageFigure.svelte'
   import ArtifactImageAnnotator from './ArtifactImageAnnotator.svelte'
+  import ArtifactVideoAnnotator from './ArtifactVideoAnnotator.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -2723,15 +2724,16 @@
   }
 
   /**
-   * The marks drawn on one inline artifact picture, in composer order.
+   * The marks drawn on one inline artifact part, in composer order.
    *
-   * A mark names the picture it belongs to by its part URL, so a picture is
-   * pinned only by the marks actually drawn on it and two artifacts in the same
-   * conversation can never share a mark.
+   * A mark names the media part it belongs to by its URL, so a picture is pinned
+   * only by the marks actually drawn on it and two artifacts in the same
+   * conversation can never share a mark. A video frame annotation is the same
+   * reference, so it is found the same way.
    */
-  function imageMarksFor(imageUrl: string): ResponseReferenceAnchor[] {
+  function marksFor(mediaUrl: string): ResponseReferenceAnchor[] {
     return responseReferences.filter(
-      (reference) => reference.kind === 'image' && reference.imageUrl === imageUrl
+      (reference) => reference.kind === 'image' && reference.mediaUrl === mediaUrl
     )
   }
 
@@ -2740,9 +2742,11 @@
    *
    * A picture outside the mounted window has no badge to anchor an editor to, so
    * the message is scrolled to first and the mark is handed to the picture's own
-   * surface, which opens the editor once its badge is measured.
+   * surface, which opens the editor once its badge is measured. A frame mark's
+   * surface also seeks its video to the mark's second before the editor opens,
+   * because a comment about a moment has to be written over that moment.
    */
-  async function editImageMark(reference: ResponseReferenceAnchor): Promise<void> {
+  async function editMediaMark(reference: ResponseReferenceAnchor): Promise<void> {
     if (reference.messageId) await jumpToMessage(reference.messageId)
     if (!alive) return
     imageMarkEditorId = reference.id
@@ -2824,7 +2828,7 @@
     // edit action brings that picture back on screen and lets the surface open
     // the comment: the reference has no text range to jump to.
     if (reference.kind === 'image') {
-      await editImageMark(reference)
+      await editMediaMark(reference)
       return
     }
     // An element picked inside an inline SVG is pinned by the artifact card that
@@ -12581,17 +12585,31 @@
                       filename={part.filename ?? 'Image'}
                       {imageUrls}
                       messageId={msg.id}
-                      marks={imageMarksFor(part.url)}
+                      marks={marksFor(part.url)}
                       editingId={imageMarkEditorId}
                       onExpand={() => openMessageViewer(msg, part)}
                       onEditClosed={() => {
                         if (imageMarkEditorId) imageMarkEditorId = null
                       }}
                     />
-                  {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
+                  {:else if part.type === 'file' && isVideoMime(part.mime)}
+                    <ArtifactVideoAnnotator
+                      projectId={thread.projectId}
+                      threadId={thread.id}
+                      url={part.url}
+                      filename={part.filename ?? 'Video'}
+                      messageId={msg.id}
+                      marks={marksFor(part.url)}
+                      editingId={imageMarkEditorId}
+                      onExpand={() => openMessageViewer(msg, part)}
+                      onEditClosed={() => {
+                        if (imageMarkEditorId) imageMarkEditorId = null
+                      }}
+                    />
+                  {:else if part.type === 'file' && isAudioMime(part.mime)}
                     <InlineMediaFigure
                       src={part.url}
-                      kind={isVideoMime(part.mime) ? 'video' : 'audio'}
+                      kind="audio"
                       filename={part.filename ?? 'Media'}
                       onExpand={() => openMessageViewer(msg, part)}
                     />

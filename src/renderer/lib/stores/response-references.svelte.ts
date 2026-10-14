@@ -1,5 +1,5 @@
 import type { PromptReference } from '$shared/types'
-import type { ImageMarkPoint } from '$lib/image-annotation'
+import type { MarkPoint } from '$lib/annotation-marks'
 import { rendererRecovery } from './renderer-recovery.svelte'
 
 const MAX_REFERENCES_PER_THREAD = 20
@@ -31,14 +31,25 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Video notes: the project-relative composition folder the moment belongs
    *  to, so a note names its file the way a document annotation names its path. */
   directory?: string
-  /** Image marks: the artifact image part the stroke was drawn on. The
-   *  conversation pins the mark to that picture, and the send renders the
-   *  annotated screenshot from the same source, so the mark can never land on
-   *  a different image than the one the user circled. */
-  imageUrl?: string
-  /** Image marks: the freehand stroke, every point normalized to 0..1 of the
-   *  image box. A single point is a tap. */
-  points?: ImageMarkPoint[]
+  /** Media marks: the artifact part the stroke was drawn on, whether that part
+   *  is a still picture or a video. The conversation pins the mark to that media
+   *  part, and the send renders the annotated picture from the same source, so
+   *  the mark can never land on a different picture than the one the user
+   *  circled. */
+  mediaUrl?: string
+  /** Media marks: the freehand stroke, every point normalized to 0..1 of the
+   *  picture box. A single point is a tap. */
+  points?: MarkPoint[]
+  /** Media marks drawn on a video: the second whose frame was on screen when the
+   *  stroke was drawn. Its presence is what makes a mark a frame annotation: the
+   *  send composes the picture from that second rather than from a still, and the
+   *  descriptor names the timecode so the agent knows which moment to change. */
+  markSeconds?: number
+  /** Media marks: the colour the stroke was drawn in. Absent on a mark whose
+   *  drawer left the colour to the app's accent. */
+  markColor?: string
+  /** Media marks: the stroke's width in CSS pixels. Absent means the default. */
+  markStrokeWidth?: number
   /** SVG element picks: a stable key for the artifact card the element was
    *  picked in, so the card that drew the element is the one that pins it. */
   artifactKey?: string
@@ -165,9 +176,10 @@ class ResponseReferencesState {
           // A response selection is named by its position, and so is a picked
           // design element: both are shown as a number by the popover, and the
           // number has to agree with the surface that pins them (a highlight
-          // bubble, a page pin). A mark drawn on an image is the same deal: its
-          // number is drawn onto the screenshot the agent receives, so it must be
-          // the number the composer shows. A document annotation keeps the label
+          // bubble, a page pin). A mark drawn on a picture is the same deal:
+          // still or a video frame, its number is drawn onto the composed
+          // picture the agent receives   so it must be the number the composer
+          // shows. A document annotation keeps the label
           // it was created with instead: its path names it on the document pin
           // and in the prompt, and it is what the model needs to find the
           // passage.
