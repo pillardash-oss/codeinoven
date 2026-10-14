@@ -67,6 +67,10 @@ export type TurnStreamEvent =
  * segment may pull earlier turns' parts into the newest trace; callers derive
  * `minTs` from the mirror's newest real user message, the start of the current
  * logical turn.
+ *
+ * `maxTs`, when supplied, closes the fold at the next turn's boundary. Together
+ * the pair describes one closed turn of the log, which is what lets a turn a
+ * steer interrupted stay readable after the fold moved past it.
  */
 /** A folded turn stream, with the wall-clock time each surviving part last moved. */
 export interface FoldedTurnStream {
@@ -78,9 +82,10 @@ export interface FoldedTurnStream {
 export function foldTurnStreamEvents(
   events: TurnStreamEvent[],
   turnId?: string,
-  minTs?: number
+  minTs?: number,
+  maxTs?: number
 ): AgentPart[] {
-  return foldTurnStreamDetailed(events, turnId, minTs).parts
+  return foldTurnStreamDetailed(events, turnId, minTs, maxTs).parts
 }
 
 /**
@@ -92,7 +97,8 @@ export function foldTurnStreamEvents(
 export function foldTurnStreamDetailed(
   events: TurnStreamEvent[],
   turnId?: string,
-  minTs?: number
+  minTs?: number,
+  maxTs?: number
 ): FoldedTurnStream {
   const parts: AgentPart[] = []
   const indexById = new Map<string, number>()
@@ -107,6 +113,10 @@ export function foldTurnStreamDetailed(
 
   for (const event of events) {
     if (turnId !== undefined && event.turnId !== turnId && event.turnId !== '') continue
+    // An upper bound closes the fold at a boundary between turns: the events at
+    // or after it belong to the turn that boundary opened, so neither their
+    // snapshots nor their deltas may reach this one.
+    if (maxTs !== undefined && event.ts >= maxTs) continue
     if (event.kind === 'part.updated') {
       const part = event.part
       const existingIndex = indexById.get(part.id)

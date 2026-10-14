@@ -360,6 +360,7 @@ import type {
   TurnStreamPartsChange,
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
+  TurnStreamCompletedTurns,
   ThinkingLevel,
   UsageEventCost,
   UsageEventDetails,
@@ -399,7 +400,7 @@ import {
 import { readTurnStreamLog } from './turn-stream-log'
 import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
-import { pageTurnStreamParts } from './turn-stream-page'
+import { pageTurnStreamParts, completedTurnWindow } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
 import { nextRoutineModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import {
@@ -545,6 +546,7 @@ import type {
   TemporaryChatDisplayHistory,
   TemporaryChatSession,
   TurnStreamCacheEntry,
+  CompletedTurnFold,
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import {
@@ -24322,27 +24324,20 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     query: TurnStreamPartsQuery = {}
-  ): Promise<TurnStreamPartsPage | TurnStreamPartsChange> {
+  ): Promise<TurnStreamPartsPage | TurnStreamPartsChange | TurnStreamCompletedTurns> {
     if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
       // Repair settled browser history before the trace loader can compact old
       // turns out of the only record that still holds their assistant messages.
       await this.threadManager.loadMessagePage(projectId, threadId, undefined, 1)
     }
+    // A turn the transcript has not mirrored yet lives only in the log, and once
+    // the fold moved past it (a steer opens its own turn) nothing else can reach
+    // it. This is the read that keeps that work auditable.
+    if (query.completedTurns === true || query.turnEndTs !== undefined) {
+      return this.loadCompletedTurnStreamParts(projectId, threadId, query)
+    }
     const streamPath = turnStreamPath(projectId, threadId)
-    const entry = this.turnStreamCache.get(streamPath) ?? {
-      consumedBytes: 0,
-      events: [],
-      latestTurnId: '',
-      foldKey: null,
-      folded: null
-    }
-    this.turnStreamCache.delete(streamPath)
-    this.turnStreamCache.set(streamPath, entry)
-    while (this.turnStreamCache.size > ChatEngine.TURN_STREAM_CACHE_LIMIT) {
-      const oldest = this.turnStreamCache.keys().next().value
-      if (oldest === undefined || oldest === streamPath) break
-      this.turnStreamCache.delete(oldest)
-    }
+    const entry = this.turnStreamEntry(streamPath)
 
     const size = await this.storage.rawSize(streamPath)
     if (size === null) {
@@ -24360,6 +24355,9 @@ export class ChatEngine {
       entry.latestTurnId = ''
       entry.foldKey = null
       entry.folded = null
+      entry.completedKey = null
+      entry.completed = null
+      entry.retainFromTs = null
     }
 
     if (entry.consumedBytes === 0) {
@@ -24396,12 +24394,15 @@ export class ChatEngine {
       entry.consumedBytes = tail.nextByte
     }
 
-    // Bound the retained log to the current turn before folding. The parse above
-    // only ever appends, and a streaming turn keeps landing past the boundary
-    // between polls, so this folds those into the same retained set. Compaction
-    // keeps the fold identical while collapsing history to one snapshot per part
-    // the current turn still touches.
-    const compacted = compactTurnStreamEvents(entry.events, turnStartTs)
+    // Bound the retained log before folding. The parse above only ever appends,
+    // and a streaming turn keeps landing past the boundary between polls, so this
+    // folds those into the same retained set. Compaction keeps the fold identical
+    // while collapsing history to one snapshot per part the current turn still
+    // touches. A run whose closed turns the transcript has not mirrored yet is
+    // retained from its oldest prompt, so a steer can never make the log forget
+    // the work it interrupted.
+    const retainFromTs = entry.retainFromTs ?? turnStartTs
+    const compacted = compactTurnStreamEvents(entry.events, retainFromTs)
     if (compacted !== entry.events) {
       entry.events = compacted
       entry.foldKey = null
@@ -24412,7 +24413,7 @@ export class ChatEngine {
     // load already parsed. The rewrite itself decides whether the trim is worth
     // it, so a log that is already just the current turn is left alone.
     if (size >= ChatEngine.TURN_STREAM_COMPACT_BYTES) {
-      void this.compactTurnStream(streamPath, entry.consumedBytes, entry.events, turnStartTs)
+      void this.compactTurnStream(streamPath, entry.consumedBytes, entry.events, retainFromTs)
     }
 
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
@@ -24425,6 +24426,189 @@ export class ChatEngine {
       entry.foldKey = foldKey
     }
     return pageTurnStreamParts(folded, entry.events, query, turnStartTs ?? null)
+  }
+
+  /** The most recently used parse cache for a stream log, trimmed to its bound. */
+  private turnStreamEntry(streamPath: string): TurnStreamCacheEntry {
+    const entry = this.turnStreamCache.get(streamPath) ?? {
+      consumedBytes: 0,
+      events: [],
+      latestTurnId: '',
+      foldKey: null,
+      folded: null,
+      completedKey: null,
+      completed: null,
+      retainFromTs: null
+    }
+    this.turnStreamCache.delete(streamPath)
+    this.turnStreamCache.set(streamPath, entry)
+    while (this.turnStreamCache.size > ChatEngine.TURN_STREAM_CACHE_LIMIT) {
+      const oldest = this.turnStreamCache.keys().next().value
+      if (oldest === undefined || oldest === streamPath) break
+      this.turnStreamCache.delete(oldest)
+    }
+    return entry
+  }
+
+  /**
+   * The durable record of every turn the transcript has not mirrored yet.
+   *
+   * A run in flight is a chain of turns: the prompt, then a steer's turn, then
+   * the next steer's. Each closes where the next opens, and the provider
+   * transcript only reaches the mirror in batches at sync points, so a closed
+   * turn can have no assistant row at all for minutes while the log holds its
+   * entire trace. This returns those turns, oldest first, so the transcript can
+   * render them above the message that closed them instead of losing them.
+   *
+   * A single completed turn is served when `turnEndTs` names it, paged with
+   * `beforeId`, so a very long one is read a window at a time.
+   */
+  private async loadCompletedTurnStreamParts(
+    projectId: string,
+    threadId: string,
+    query: TurnStreamPartsQuery
+  ): Promise<TurnStreamCompletedTurns | TurnStreamPartsPage> {
+    const turns = await this.completedTurnFolds(projectId, threadId)
+    if (query.turnEndTs !== undefined) {
+      const turn = turns.find((candidate) => candidate.endTs === query.turnEndTs)
+      if (!turn) {
+        // The turn left the log (compaction) or never had any entries: an empty
+        // window is the honest answer, and the transcript then shows whatever the
+        // mirror itself carries.
+        return {
+          kind: 'window',
+          parts: [],
+          total: 0,
+          totalSteps: 0,
+          start: 0,
+          hasOlder: false,
+          cursor: 0,
+          todoParts: [],
+          turnStartTs: null,
+          completedTurn: true
+        }
+      }
+      const window = completedTurnWindow(turn, query)
+      return {
+        kind: 'window',
+        parts: window.parts,
+        total: window.total,
+        totalSteps: window.totalSteps,
+        start: window.start,
+        hasOlder: window.hasOlder,
+        // A completed turn is not the live poll's coordinate space: its own start
+        // is what identifies it, and the cursor belongs to the newest turn.
+        cursor: 0,
+        todoParts: [],
+        turnStartTs: turn.startTs,
+        completedTurn: true
+      }
+    }
+    return {
+      kind: 'completedTurns',
+      turns: turns.map((turn) => completedTurnWindow(turn, query))
+    }
+  }
+
+  /**
+   * The completed turns of the run in flight, folded out of the durable log.
+   *
+   * The boundaries come from the mirror: consecutive real prompts with no
+   * assistant row between them are a turn the transcript never mirrored. Anything
+   * further back than the first such pair is left alone, because the provider's
+   * own transcript already carries it.
+   *
+   * The log is read once for the whole span and folded once, then split by each
+   * entry's last activity, which is the same boundary rule the newest turn's
+   * fold uses: work that kept streaming after the steer belongs to the turn the
+   * steer opened.
+   */
+  private async completedTurnFolds(
+    projectId: string,
+    threadId: string
+  ): Promise<CompletedTurnFold[]> {
+    const boundaries = await this.completedTurnBoundaries(projectId, threadId)
+    const streamPath = turnStreamPath(projectId, threadId)
+    const entry = this.turnStreamEntry(streamPath)
+    // What the log must keep: the whole run while a closed turn is unmirrored,
+    // and only the newest turn once the transcript carries the rest. A narrowed
+    // range re-opens the fold so the trimmed entries cannot linger in memory.
+    const retainFromTs = boundaries.length > 0 ? boundaries[0].startTs : null
+    if (entry.retainFromTs !== retainFromTs) {
+      entry.retainFromTs = retainFromTs
+      entry.foldKey = null
+      entry.folded = null
+    }
+    if (boundaries.length === 0) return []
+    const oldest = boundaries[0].startTs
+    const newest = boundaries[boundaries.length - 1].endTs
+    const key = `${oldest}:${newest}:${boundaries.length}`
+    if (entry.completedKey === key && entry.completed) return entry.completed
+
+    const size = await this.storage.rawSize(streamPath)
+    if (size === null || size === 0) return []
+    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, oldest, newest)
+    if (hydrated.events.length === 0) return []
+    const folded = foldTurnStreamDetailed(hydrated.events, undefined, oldest)
+    if (folded.parts.length === 0) return []
+
+    const turns: CompletedTurnFold[] = boundaries.map((boundary) => ({
+      startTs: boundary.startTs,
+      endTs: boundary.endTs,
+      parts: []
+    }))
+    for (const part of folded.parts) {
+      const touched = folded.lastActivityTs.get(part.id) ?? 0
+      const index = boundaries.findLastIndex((boundary) => boundary.startTs <= touched)
+      if (index < 0) continue
+      turns[index].parts.push(part)
+    }
+    const kept = turns.filter((turn) => turn.parts.length > 0)
+    entry.completedKey = key
+    entry.completed = kept
+    return kept
+  }
+
+  /**
+   * The real prompts of the newest run that no assistant row separates, as the
+   * spans between them: `[startTs, endTs)` per completed turn, oldest first.
+   *
+   * Walks the newest prompts backwards and stops at the first pair the transcript
+   * already mirrors, so a settled thread resolves to nothing and costs no log
+   * read at all.
+   */
+  private async completedTurnBoundaries(
+    projectId: string,
+    threadId: string
+  ): Promise<Array<{ startTs: number; endTs: number }>> {
+    const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 120)
+    const messages = page.messages
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
+    const prompts: Array<{ index: number; ts: number }> = []
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]
+      if (!message || message.role !== 'user') continue
+      if (!isTurnBoundaryPrompt(message)) continue
+      if (heldSteerIds.has(message.id)) continue
+      if (!message.createdAt) continue
+      prompts.push({ index, ts: message.createdAt })
+    }
+    if (prompts.length < 2) return []
+    const boundaries: Array<{ startTs: number; endTs: number }> = []
+    for (let i = prompts.length - 1; i >= 1; i--) {
+      const start = prompts[i - 1]
+      const end = prompts[i]
+      const mirrored = messages
+        .slice(start.index + 1, end.index)
+        .some(
+          (message) =>
+            message?.role === 'assistant' &&
+            (message.visibility === undefined || message.visibility === 'conversation')
+        )
+      if (mirrored) break
+      boundaries.push({ startTs: start.ts, endTs: end.ts })
+    }
+    return boundaries.reverse()
   }
 
   /**

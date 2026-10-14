@@ -333,6 +333,13 @@ export interface ThreadMessagePage {
 export const WORKING_TRACE_PAGE_SIZE = 15
 
 /**
+ * Trace entries a completed turn ships at once. Higher than the live window
+ * because a reader opens a settled trace to read its steps, and the rows render
+ * folded; a turn with more than this pages its older entries in on scroll.
+ */
+export const COMPLETED_TURN_PAGE_SIZE = 400
+
+/**
  * Bounded window request over a thread's durable working-trace stream.
  *
  * The stream log folds to one ordered, first-seen list of parts for the newest
@@ -355,12 +362,55 @@ export interface TurnStreamPartsQuery {
    *  Ignored by a change request, whose size is whatever the log streamed
    *  between the two reads and is never silently truncated. */
   limit?: number
+  /**
+   * Return the completed turns of the run in flight: every turn a prompt closed
+   * without the transcript ever mirroring its work, oldest first.
+   *
+   * A steer (or a message sent into a running turn) opens a turn of its own, so
+   * the fold moves to it and the work before it leaves the newest-turn window.
+   * The provider transcript only reaches the mirror in batches at sync points,
+   * so an interrupted turn can have no assistant row at all while its work is
+   * still the only record of it. This asks for that record directly. Mutually
+   * exclusive with `turnEndTs` and `changedSince`. */
+  completedTurns?: boolean
+  /**
+   * Fold the one completed turn that ended at this timestamp (the prompt that
+   * closed it) instead of the newest turn, and page through its entries with
+   * `beforeId`. `turnStartTs` on the page is then that turn's own start.
+   */
+  turnEndTs?: number
+}
+
+/** One completed turn of the run in flight, folded from the durable log. */
+export interface TurnStreamCompletedTurn {
+  /** Timestamp of the prompt that opened it. */
+  startTs: number
+  /** Timestamp of the prompt that closed it (the steer that interrupted it). */
+  endTs: number
+  /** This turn's newest window of trace entries, oldest to newest. */
+  parts: AgentPart[]
+  /** Total trace entries the turn holds, whether or not all are mounted. */
+  total: number
+  /** Of `total`, the thinking and tool steps (text excluded). */
+  totalSteps: number
+  /** Index of `parts[0]` inside the turn's full folded list. */
+  start: number
+  /** True when the turn holds entries older than this window. */
+  hasOlder: boolean
+}
+
+/**
+ * Every completed turn of the run in flight, oldest first, each with its own
+ * newest window of entries.
+ */
+export interface TurnStreamCompletedTurns {
+  kind: 'completedTurns'
+  turns: TurnStreamCompletedTurn[]
 }
 
 /** One bounded page of a thread's durable working-trace parts. */
 export interface TurnStreamPartsPage {
-  kind: 'window'
-  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
+  kind: 'window'  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
    *  they drive the task card (`todoParts`), never the trace window. */
   parts: AgentPart[]
   /** Total trace parts the durable log currently folds for the turn. */
@@ -384,6 +434,10 @@ export interface TurnStreamPartsPage {
    *  snapshot from an older turn must never override the fresher message state
    *  once the transcript has moved on. */
   turnStartTs: number | null
+  /** True when this window describes the completed turn selected by
+   *  `turnEndTs` rather than the newest turn: `turnStartTs` is that turn's own
+   *  start, and the cursor/counts describe the same fold. */
+  completedTurn?: true
 }
 
 /**

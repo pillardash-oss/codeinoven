@@ -194,7 +194,9 @@ export const invokeThreadContract = {
   >,
   'thread:loadStreamParts': {} as Contract<
     [projectId: string, threadId: string, query?: import('../types').TurnStreamPartsQuery],
-    import('../types').TurnStreamPartsPage | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamPartsPage
+    | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamCompletedTurns
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
   'thread:markUnread': {} as Contract<[projectId: string, threadId: string], Thread>,

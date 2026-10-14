@@ -16,25 +16,28 @@ import type { TurnStreamEvent } from './turn-stream'
  * chunk plus the events the current turn actually needs) and the event loop is
  * handed back between chunks, so a large log costs latency, never a frozen app.
  *
- * Only the current turn's events are retained. The fold (`foldTurnStreamEvents`)
- * keeps only events of the newest logical turn and filters parts by their last
- * activity at or after the turn boundary, so every event streamed before that
- * boundary is dead weight except one: the newest snapshot of a part the current
- * turn still touches, which seeds the deltas that continue into this turn (a
- * steered turn moves the boundary mid-turn and must not erase the trace built up
- * before it). Those seeds are kept, in first-seen order with their last value,
- * and dropped when no live part references them, so the retained set is exactly
- * what `compactTurnStreamEvents` would have produced from the whole log.
+ * Only the events of one window are retained. The fold (`foldTurnStreamEvents`)
+ * keeps only events inside the requested turn and filters parts by their last
+ * activity at or after the window's start, so every event streamed before that
+ * start is dead weight except one: the newest snapshot of a part the window
+ * still touches, which seeds the deltas that continue into it (a steered turn
+ * moves the boundary mid-turn and must not erase the trace built up before it).
+ * Those seeds are kept, in first-seen order with their last value, and dropped
+ * when no live part references them, so the retained set is exactly what
+ * `compactTurnStreamEvents` would have produced from the whole log.
+ *
+ * The window is a closed range when `windowEndTs` is supplied, which is how a
+ * turn that a later prompt closed is read back out of the log: from the prompt
+ * that opened it up to the prompt that ended it, with nothing after it.
  */
 
 /** Bytes read per chunk. Large enough that a big log is few syscalls, small
  *  enough that one chunk's decode and parse is a few milliseconds. */
 const READ_CHUNK_BYTES = 2 * 1024 * 1024
-
 const NEWLINE = 0x0a
 
 export interface TurnStreamLogRead {
-  /** Current-turn events plus the pre-boundary snapshots that seed them. */
+  /** The window's events plus the pre-window snapshots that seed them. */
   events: TurnStreamEvent[]
   /** Newest non-empty turn anchor seen, so the fold can select the last turn. */
   latestTurnId: string
@@ -83,22 +86,24 @@ function parseEvent(line: string): TurnStreamEvent | null {
 
 /**
  * Read a stream log from `fromByte` to `size`, chunk by chunk, retaining only
- * what the current turn's fold needs.
+ * the window's events plus the snapshots that seed them.
  *
- * `turnStartTs` is the boundary from `ChatEngine.currentTurnStartTs`; when it is
- * undefined (a fresh thread with no user message yet) the whole log belongs to
- * the current turn and nothing is dropped.
+ * `windowStartTs` is the boundary the caller folds from (the start of the turn
+ * it wants); when it is undefined (a fresh thread with no user message yet) the
+ * whole log belongs to the window and nothing is dropped. `windowEndTs`, when
+ * supplied, closes the window: events at or after it belong to the next turn.
  */
 export async function readTurnStreamLog(
   storage: StorageEngine,
   relativePath: string,
   fromByte: number,
   size: number,
-  turnStartTs: number | undefined
+  windowStartTs: number | undefined,
+  windowEndTs?: number
 ): Promise<TurnStreamLogRead> {
   const events: TurnStreamEvent[] = []
-  // Pre-boundary snapshots, in first-seen order with their last value, kept only
-  // for the parts the current turn turns out to touch.
+  // Pre-window snapshots, in first-seen order with their last value, kept only
+  // for the parts the window turns out to touch.
   const seedOrder: string[] = []
   const seedSnapshots = new Map<string, TurnStreamEvent>()
   let latestTurnId = ''
@@ -106,34 +111,38 @@ export async function readTurnStreamLog(
   // Bytes of a line whose terminating newline has not been read yet.
   let carry = Buffer.alloc(0)
 
+  /** Absorb one pre-window line: only a snapshot can still seed the window, and
+   *  only for a part the window touches. Everything else is dropped without
+   *  paying for a full parse of its payload. */
+  const absorbSeed = (line: string): void => {
+    if (!line.includes('"kind":"part.updated"')) return
+    const event = parseEvent(line)
+    if (!event || event.kind !== 'part.updated') return
+    const id = event.part.id
+    if (!seedSnapshots.has(id)) seedOrder.push(id)
+    seedSnapshots.set(id, event)
+    if (event.turnId) latestTurnId = event.turnId
+  }
+
   const absorb = (raw: string): void => {
     // Match the loader's tolerance for a stray carriage return or padding.
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
     if (line.length === 0) return
     const ts = cheapTs(line)
-    if (turnStartTs !== undefined && ts !== null && ts < turnStartTs) {
-      // Pre-boundary: only a snapshot can still seed the current turn, and only
-      // for a part the current turn touches. Everything else is dropped without
-      // paying for a full parse of its payload.
-      if (!line.includes('"kind":"part.updated"')) return
-      const event = parseEvent(line)
-      if (!event || event.kind !== 'part.updated') return
-      const id = event.part.id
-      if (!seedSnapshots.has(id)) seedOrder.push(id)
-      seedSnapshots.set(id, event)
-      if (event.turnId) latestTurnId = event.turnId
+    // Past the window's end the next turn owns the work outright: neither its
+    // snapshots nor its deltas may describe this one, so nothing is kept.
+    if (windowEndTs !== undefined && ts !== null && ts >= windowEndTs) return
+    if (windowStartTs !== undefined && ts !== null && ts < windowStartTs) {
+      absorbSeed(line)
       return
     }
     const event = parseEvent(line)
     if (!event) return
-    if (turnStartTs !== undefined && event.ts < turnStartTs) {
+    if (windowEndTs !== undefined && event.ts >= windowEndTs) return
+    if (windowStartTs !== undefined && event.ts < windowStartTs) {
       // The cheap timestamp probe did not apply (a record it could not read):
       // fall back to the parsed value, which is authoritative.
-      if (event.kind !== 'part.updated') return
-      const id = event.part.id
-      if (!seedSnapshots.has(id)) seedOrder.push(id)
-      seedSnapshots.set(id, event)
-      if (event.turnId) latestTurnId = event.turnId
+      absorbSeed(line)
       return
     }
     events.push(event)
@@ -163,7 +172,7 @@ export async function readTurnStreamLog(
 
   if (seedOrder.length === 0) return { events, latestTurnId, nextByte: offset - carry.length }
 
-  // Drop seed snapshots no live part references: a part the current turn never
+  // Drop seed snapshots no windowed part references: a part the window never
   // touches needs no baseline.
   const liveParts = new Set<string>()
   for (const event of events) {
@@ -176,7 +185,8 @@ export async function readTurnStreamLog(
     if (snapshot) retained.push(snapshot)
   }
   if (retained.length === 0) return { events, latestTurnId, nextByte: offset - carry.length }
-  // A seed precedes every in-turn event, which is where `compactTurnStreamEvents`
-  // leaves it too, so the fold's first-seen order is unchanged.
+  // A seed precedes every windowed event, which is where
+  // `compactTurnStreamEvents` leaves it too, so the fold's first-seen order is
+  // unchanged.
   return { events: [...retained, ...events], latestTurnId, nextByte: offset - carry.length }
 }

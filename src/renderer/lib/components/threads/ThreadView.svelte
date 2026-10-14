@@ -45,7 +45,8 @@
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
-  import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
+  import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
+  import type { ComposerIdentity } from '../chats/ComposerIdentity.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
   import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
@@ -169,6 +170,7 @@
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
     connectionsFromPlan,
     extractHowToDraft,
@@ -229,12 +231,15 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
   import {
+    ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
+    GLOBAL_BROWSER_PROJECT_ID,
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
     routineIsScheduled,
-    WORKING_TRACE_PAGE_SIZE
+    WORKING_TRACE_PAGE_SIZE,
+    COMPLETED_TURN_PAGE_SIZE
   } from '$shared/types'
   import type {
     Thread,
@@ -294,6 +299,7 @@
     ImageDescriptorReplyAction,
     TurnStreamPartsChange,
     TurnStreamPartsPage,
+    TurnStreamCompletedTurn,
     AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
@@ -1232,13 +1238,6 @@
    *  delivered it. The boundary moves when the harness takes a steer, and that
    *  move is the signal that the turn on screen is over and a new one opened. */
   let streamTurnStartTs = $state<number | null>(null)
-  /** The turn the reader was watching when the boundary moved, kept as its own
-   *  settled trace. It renders just before the message that opened the new turn,
-   *  so the work the steer interrupted keeps its place above the message instead
-   *  of vanishing with the fold it streamed through. */
-  let completedTurnTrace = $state<{ parts: AgentPart[]; totalSteps: number } | null>(null)
-  /** Message id the completed turn's trace renders in front of. */
-  let completedTurnAnchorId = $state<string | null>(null)
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
@@ -1250,8 +1249,8 @@
     streamTodoTurnStart = null
     streamCursor = null
     streamTurnStartTs = null
-    completedTurnTrace = null
-    completedTurnAnchorId = null
+    completedTurns = []
+    completedTurnsGeneration += 1
   }
 
   /** True when a read landed on a different logical turn than the one mounted:
@@ -1263,41 +1262,118 @@
   }
 
   /**
-   * The fold moved to a new turn: the steer was delivered.
+   * The fold moved to a new turn: the harness took the steer.
    *
-   * The turn that was running keeps the work that was on screen as its own
-   * settled trace, anchored in front of the message that opens the new turn
-   * (the steered message). The new turn mounts its own fold, so its step list
-   * starts from its own first step instead of continuing the interrupted
-   * turn's count.
-   *
-   * The frozen copy is skipped when the interrupted turn has an assistant row of
-   * its own: that row already renders the turn's trace from the mirror, and a
-   * second copy would show the same work twice.
+   * The turn that was running closes here. Its trace is re-read from the durable
+   * log as a completed turn, so the work stays on screen above the message that
+   * closed it and stays readable after a reload, and the new turn mounts its own
+   * fold with its own first step.
    */
   async function handleFoldBoundaryMove(
     nextTurnStartTs: number,
     generation: number
   ): Promise<void> {
-    const previous = streamTurnStartTs
     streamTurnStartTs = nextTurnStartTs
-    if (previous !== null && previous !== nextTurnStartTs) {
-      const anchor = structureMessages.find(
-        (message) => message.role === 'user' && (message.createdAt ?? 0) >= nextTurnStartTs
-      )
-      const previousTurnHasAssistantRow = structureMessages.some(
-        (message) =>
-          message.role === 'assistant' &&
-          (message.createdAt ?? 0) >= previous &&
-          (message.createdAt ?? 0) < nextTurnStartTs
-      )
-      if (!previousTurnHasAssistantRow && latestWorkingTraceParts(streamParts).length > 0) {
-        completedTurnTrace = { parts: streamParts, totalSteps: streamTotalSteps }
-        completedTurnAnchorId = anchor?.id ?? null
-      }
-    }
+    void loadCompletedTurns()
     await remountNewestStreamParts(generation)
   }
+
+  /**
+   * Turns a prompt closed whose work the transcript has not mirrored, oldest
+   * first: what the durable log holds of a run in flight.
+   *
+   * A steer opens a turn of its own, so the fold moves to it and the work before
+   * it leaves the newest-turn window. The provider transcript only reaches the
+   * mirror in batches at sync points, so until that lands the interrupted turn
+   * has no assistant row at all and this record is the only copy of its trace.
+   * Reading it is what keeps that work auditable across a reload.
+   */
+  let completedTurns = $state<TurnStreamCompletedTurn[]>([])
+  let completedTurnsGeneration = 0
+
+  async function loadCompletedTurns(): Promise<void> {
+    const { projectId, id } = thread
+    const generation = ++completedTurnsGeneration
+    try {
+      const result = await invoke('thread:loadStreamParts', projectId, id, {
+        completedTurns: true
+      })
+      if (!alive || generation !== completedTurnsGeneration) return
+      if (result.kind !== 'completedTurns') return
+      completedTurns = result.turns
+    } catch {
+      // Best-effort: the transcript still renders whatever the mirror carries.
+    }
+  }
+
+  /**
+   * Page a closed turn's older entries.
+   *
+   * A closed turn can hold hundreds of steps, so it ships its newest window and
+   * reads the rest only when the reader opens it, exactly as the live trace
+   * does.
+   */
+  async function loadOlderCompletedTurnParts(endTs: number): Promise<void> {
+    const turn = completedTurns.find((candidate) => candidate.endTs === endTs)
+    const oldest = turn?.parts[0]
+    if (!turn || !turn.hasOlder || !oldest) return
+    const generation = completedTurnsGeneration
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        turnEndTs: endTs,
+        beforeId: oldest.id,
+        limit: COMPLETED_TURN_PAGE_SIZE
+      })
+      if (!alive || generation !== completedTurnsGeneration) return
+      if (page.kind !== 'window' || page.completedTurn !== true) return
+      completedTurns = completedTurns.map((candidate) =>
+        candidate.endTs === endTs
+          ? {
+              ...candidate,
+              parts: [...page.parts, ...candidate.parts],
+              start: page.start,
+              hasOlder: page.hasOlder,
+              total: page.total,
+              totalSteps: page.totalSteps
+            }
+          : candidate
+      )
+    } catch {
+      // The reader keeps the window they have; the next open retries.
+    }
+  }
+
+  /**
+   * Each closed turn paired with the message that closed it (the steer), which
+   * is where its trace renders.
+   *
+   * A turn the transcript has meanwhile mirrored is dropped, because its own
+   * assistant rows already render that work: the log's copy would show the same
+   * steps twice. A turn whose anchor is not on screen yet has no place to render
+   * either, so it waits until the transcript reaches it.
+   */
+  let completedTurnViews = $derived.by(() => {
+    if (completedTurns.length === 0) return []
+    const views: Array<{ turn: TurnStreamCompletedTurn; anchorId: string }> = []
+    for (const turn of completedTurns) {
+      const anchorIndex = structureMessages.findIndex(
+        (message) => message.role === 'user' && (message.createdAt ?? 0) >= turn.endTs
+      )
+      if (anchorIndex === -1) continue
+      const mirrored = structureMessages
+        .slice(0, anchorIndex)
+        .some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.visibility !== 'subagent_trace' &&
+            (message.createdAt ?? 0) >= turn.startTs &&
+            (message.createdAt ?? 0) < turn.endTs
+        )
+      if (mirrored) continue
+      views.push({ turn, anchorId: structureMessages[anchorIndex].id })
+    }
+    return views
+  })
 
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
@@ -1430,8 +1506,50 @@
     await tick()
     await ovenControl?.openPicker()
   }
-  let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
-    if (chatMode) return undefined
+  /**
+   * What the composer is writing into, which the shoe names once.
+   *
+   * The thread's own project id already says what it is: the assistant space
+   * holds routine tasks and their runs, the hidden browser container holds one
+   * conversation per browser tab, and everything else is a project thread   or a
+   * plain chat, which is what a chat in the chats view is: a conversation with no
+   * project, no routine and no page behind it.
+   */
+  function composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
+    if (target.projectId === ASSISTANT_SPACE_ID) {
+      // A run inherits its task's routine, so this resolves for a task and each
+      // of its runs alike; a routine-less task is named by itself.
+      const routine = assistantRoutines.routineForTask(target)
+      if (routine) return { kind: 'routine', routine }
+      return { kind: 'task', task: target }
+    }
+    if (target.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const tabId = browserAssistant.chatForThread(target.id)?.browserTabId
+      if (tabId) return { kind: 'browser-tab', tabId }
+      return { kind: 'chat' }
+    }
+    if (!chatMode && project) {
+      return {
+        kind: 'project',
+        activeProjectId: target.projectId,
+        project: {
+          name: project.name,
+          path: project.path,
+          source: project.source,
+          host: project.host,
+          iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
+          branch: target.branch
+        },
+        interactive: isNewThread,
+        onSwitchProject: (pid: string) => void switchProject(pid)
+      }
+    }
+    return { kind: 'chat' }
+  }
+
+  /** The scope segment's data, for a project thread that has a scope on the board. */
+  function composerScope(identity: ComposerIdentity, isNewThread: boolean) {
+    if (identity.kind !== 'project') return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     // Resolve against the thread's own project board like scope.bucketForThread.
     const board = scopeState.boards.get(thread.projectId) ?? scopeState.board
@@ -1441,24 +1559,20 @@
       projectId: thread.projectId,
       threadId: thread.id,
       bucket,
-      source: project?.source,
-      host: project?.host,
+      isNewThread,
+      onOpenScopeView: () => onOpenScopeView?.(thread)
+    }
+  }
+
+  let composerShoe = $derived.by((): ComposerShoeData => {
+    const isNewThread = messages.length === 0 && !busy
+    const identity = composerIdentity(thread, isNewThread)
+    return {
+      identity,
+      scope: composerScope(identity, isNewThread),
+      isWorking: busy,
       oven: ovenPicker,
       onOpenOven: () => void openOvenPicker(),
-      project: project
-        ? {
-            name: project.name,
-            path: project.path,
-            source: project.source,
-            host: project.host,
-            iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
-            branch: thread.branch
-          }
-        : undefined,
-      isNewThread: messages.length === 0 && !busy,
-      isWorking: busy,
-      onOpenScopeView: () => onOpenScopeView?.(thread),
-      onSwitchProject: (pid: string) => void switchProject(pid),
       // Only a worker has a coordinator to report to, so only a worker gets the
       // control. Reporting stays on unless this thread switched it off, which
       // keeps the worker in a private iteration loop the user drives.
@@ -5305,6 +5419,7 @@
       // refresh or thread switch. Only the newest page is read here; older
       // entries page in on the trace's own inner scroll.
       const generation = ++streamPartsLoadGeneration
+      void loadCompletedTurns()
       void invoke('thread:loadStreamParts', projectId, id, {
         limit: WORKING_TRACE_PAGE_SIZE
       })
@@ -11915,6 +12030,9 @@
         streamCursor = page.cursor
         return
       }
+      // A completed-turn read is a different request shape; the poll never asks
+      // for one, so anything but a window or a change is not this reader's.
+      if (page.kind === 'completedTurns') return
       if (foldBoundaryMoved(page)) {
         await handleFoldBoundaryMove(page.turnStartTs as number, generation)
         return
@@ -11947,6 +12065,10 @@
    * finished thread can still clear its card on its own.
    */
   async function refreshStreamTailAfterTurn(): Promise<void> {
+    // A turn boundary is also when the provider transcript may have reached the
+    // mirror, so a closed turn's durable copy is re-read here: the mirror's own
+    // trace takes over and the log's copy stands down.
+    void loadCompletedTurns()
     try {
       const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
         limit: WORKING_TRACE_PAGE_SIZE
@@ -12608,46 +12730,46 @@
               onCiteFile={openFileCitation}
             />
           {/snippet}
-          <!-- The interrupted turn, frozen with the work it had when the steer
-               landed. It owns no session any more, so it renders settled: no
-               spinner, no paging, and its own step total. -->
-          {#snippet completedTurnTraceBlock()}
-            {#if completedTurnTrace}
-              <WorkingTrace
-                parts={completedTurnTrace.parts}
-                done
-                busy={false}
-                totalSteps={completedTurnTrace.totalSteps}
-                {active}
-                projectId={thread.projectId}
-                threadId={thread.id}
-                modelLabel={currentWorkingTraceAttribution.modelLabel}
-                thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
-                providerName={currentWorkingTraceAttribution.providerName}
-                providerId={currentWorkingTraceAttribution.providerId}
-                harnessId={currentWorkingTraceAttribution.harnessId}
-                harnessName={currentWorkingTraceAttribution.harnessName}
-                accountLabel={currentWorkingTraceAttribution.accountLabel}
-                accountId={currentWorkingTraceAttribution.accountId}
-                ovenLabel={currentWorkingTraceAttribution.ovenLabel}
-                ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
-                ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
-                isFast={currentWorkingTraceAttribution.isFast}
-                onOpenSubagent={openSubagent}
-                onCiteFile={openFileCitation}
-              />
-            {/if}
+          <!-- A turn a prompt closed whose work the transcript never mirrored:
+               the durable log's record of it, rendered settled. It owns no
+               session any more, so it shows no spinner, and it ships its step
+               total with the newest window of entries, paging the rest in as
+               the reader opens it. -->
+          {#snippet completedTurnTraceBlock(turn: TurnStreamCompletedTurn)}
+            <WorkingTrace
+              parts={turn.parts}
+              done
+              busy={false}
+              totalSteps={turn.totalSteps}
+              {active}
+              olderPartsAvailable={turn.hasOlder}
+              onLoadOlderParts={() => loadOlderCompletedTurnParts(turn.endTs)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
+              isFast={currentWorkingTraceAttribution.isFast}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
-            <!-- The turn a steer interrupted keeps the work that was on screen,
-                 right above the message that opened the new turn. It renders
-                 here because a run that never mirrored an assistant row has no
-                 other mount point, and the new turn's trace follows the
-                 message below. -->
-            {#if completedTurnTrace && completedTurnAnchorId === msg.id}
-              {@render completedTurnTraceBlock()}
-            {/if}
+            <!-- The work of the turn a steer interrupted sits directly above the
+                 message that closed it, which is the order the run was lived in:
+                 prompt, its trace, the steer, then the next turn's trace. -->
+            {#each completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+              {@render completedTurnTraceBlock(view.turn)}
+            {/each}
             <!-- A steer still held under the running trace: its work is the
                  interrupted turn's, so that trace renders above the message. -->
             {#if absIndex === heldSteerAbsIndex && !turnAboveHasAssistantRow(absIndex)}
@@ -14332,7 +14454,7 @@
                       }}
                       projectId={thread.projectId}
                       threadId={thread.id}
-                      {scopeShoe}
+                      shoe={composerShoe}
                       attachmentStorage={{
                         kind: chatMode ? 'chat' : 'project',
                         projectId: thread.projectId,
