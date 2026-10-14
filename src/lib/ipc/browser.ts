@@ -366,9 +366,14 @@ export interface BrowserDevToolsState {
 /**
  * What the browser surface claims while it owns the keyboard.
  *
- * The set is Chrome's, scoped to the browser and nothing else: a key pressed
- * inside a browser tab must act on that tab, never on the application around
- * it, and an unbound action leaves the key to the rest of the app.
+ * The set is the chords a browser reserves and no page can answer: reload and
+ * hard reload, history back and forward, focusing the address bar, zoom,
+ * DevTools, and the tab actions. A page holds the keyboard through its own view,
+ * so a key pressed in a page would otherwise reach the application menu; these
+ * are claimed so it acts on the page instead. Every page-overridable chord (find
+ * and the app's own shortcuts) is deliberately outside this set, so a page that
+ * draws its own find keeps `mod+f`, and an unbound action leaves the key to the
+ * rest of the app.
  */
 export const BROWSER_SHORTCUT_ACTIONS = [
   'reload',
@@ -385,18 +390,7 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'designRedo',
   'closeTab',
   'newTab',
-  'reopenTab',
-  'toggleNotes',
-  'find',
-  'findNext',
-  'findPrevious',
-  'nav-projects',
-  'nav-threads',
-  'nav-projects-with-scope',
-  'nav-scope',
-  'nav-chats',
-  'nav-browser',
-  'nav-assistant'
+  'reopenTab'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -437,8 +431,8 @@ export interface BrowserSwitcherKey {
 
 /**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip or holds the find bar: focusing the address bar, closing, opening or
- * reopening a tab, showing the tab's notes, and find.
+ * strip or holds the address field: focusing the address bar, closing, opening
+ * or reopening a tab, and the design screen history.
  */
 export type BrowserPanelShortcutAction =
   | 'design-undo'
@@ -447,10 +441,6 @@ export type BrowserPanelShortcutAction =
   | 'close-tab'
   | 'new-tab'
   | 'reopen-tab'
-  | 'toggle-notes'
-  | 'find'
-  | 'find-next'
-  | 'find-previous'
 
 /**
  * One find request for a tab's page.

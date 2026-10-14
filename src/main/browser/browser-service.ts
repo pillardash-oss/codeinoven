@@ -61,7 +61,6 @@ import type {
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
-  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
   BrowserScrollbarTheme,
@@ -245,7 +244,6 @@ import {
   validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
-  validateBrowserAppShortcutChords,
   validateBrowserStripInteraction,
   validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
@@ -293,11 +291,7 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
     | 'focusAddress'
     | 'closeTab'
     | 'newTab'
-    | 'reopenTab'
-    | 'toggleNotes'
-    | 'find'
-    | 'findNext'
-    | 'findPrevious',
+    | 'reopenTab',
     BrowserPanelShortcutAction
   >
 > = {
@@ -306,11 +300,7 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
-  reopenTab: 'reopen-tab',
-  toggleNotes: 'toggle-notes',
-  find: 'find',
-  findNext: 'find-next',
-  findPrevious: 'find-previous'
+  reopenTab: 'reopen-tab'
 }
 
 /**
@@ -330,17 +320,13 @@ function isRendererAnsweredAction(
 /**
  * Browser chords a popup window deliberately leaves unclaimed.
  *
- * Find is the chrome's own tool: its bar is a row of the surface that shows the
- * page, and a popup's page is shown by the rail, which carries no toolbar of its
- * own by design. Claiming the chord in a popup would swallow the key and open
- * nothing, so it is left to the page instead.
+ * Screen history belongs to the authored page a tab shows; a popup has none, so
+ * its own page keeps the chord instead of the popup swallowing it for an undo
+ * that could not run.
  */
 const POPUP_UNCLAIMED_ACTIONS: ReadonlySet<BrowserShortcutAction> = new Set<BrowserShortcutAction>([
   'designUndo',
-  'designRedo',
-  'find',
-  'findNext',
-  'findPrevious'
+  'designRedo'
 ])
 
 import {
@@ -623,12 +609,6 @@ export class BrowserService {
   /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
-  /**
-   * Every chord the app's own keymap answers, claimed in a page so the app's
-   * shortcuts survive a focused page. The browser's own table is matched first,
-   * and a chord with no Command/Control/Alt never arrives here.
-   */
-  private appShortcutChords: BrowserShortcutChord[] = []
   /**
    * Which find request each tab's page is answering.
    *
@@ -1507,9 +1487,6 @@ export class BrowserService {
     })
     replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
-    })
-    replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
-      this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
     })
     replaceHandler('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
@@ -3034,32 +3011,20 @@ export class BrowserService {
     this.publishState(tabId)
   }
 
-  /** Deliver view navigation to the existing shell handlers, with renderer focus. */
-  private forwardNavigationShortcut(action: BrowserShortcutAction): boolean {
-    if (!action.startsWith('nav-')) return false
-    const chord = this.shortcutBindings[action]?.[0]
-    if (chord && !this.window.webContents.isDestroyed()) {
-      this.window.webContents.focus()
-      sendToRenderer(this.window.webContents, 'browser:navigationKey', chord)
-    }
-    return true
-  }
-
   /**
    * Run one claimed browser action on a tab.
    *
    * The actions split by owner: what acts on the page happens here, and what
-   * acts on the tab strip (focusing the address bar, closing or opening a tab,
-   * showing the tab's notes) is forwarded to the renderer, which is the only side
-   * that knows the strip. Saving is asynchronous because the save dialog is, and
-   * it must never block the key event that asked for it.
+   * acts on the tab strip (focusing the address bar, closing or opening a tab)
+   * is forwarded to the renderer, which is the only side that knows the strip.
+   * Saving is asynchronous because the save dialog is, and it must never block
+   * the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
-    if (this.forwardNavigationShortcut(action)) return
-    // The strip, the address field and the find bar are the renderer's, so their
-    // actions are forwarded before this process looks for a page to act on. A
-    // claimed tab with no view (a sleeping or blank tab) still has a row the
-    // renderer owns, and that row is what these actions act on.
+    // The address field and the tab strip are the renderer's, so their actions
+    // are forwarded before this process looks for a page to act on. A claimed
+    // tab with no view (a sleeping or blank tab) still has a row the renderer
+    // owns, and that row is what these actions act on.
     if (isRendererAnsweredAction(action)) {
       this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
       return
@@ -3137,16 +3102,14 @@ export class BrowserService {
    * When the key came from the page, this process still holds the OS keyboard
    * through the page's own `WebContentsView`, so the renderer can move its
    * `document.activeElement` into the address field but not take the user's
-   * typing with it. A shortcut whose whole point is a DOM field therefore hands
-   * the window's web contents the focus first: `focus-address`, `new-tab` and
-   * `find` all open a field the renderer immediately focuses. The tab-strip
-   * actions that do not involve a field (`close-tab`, `toggle-notes`, and a find
-   * step) deliberately do not, because the page must keep the keyboard after
-   * them.
+   * typing with it. The actions whose whole point is a DOM field (`focus-address`
+   * and `new-tab`) therefore hand the window's web contents the focus first. The
+   * tab-strip actions that do not involve a field (`close-tab`, `reopen-tab`)
+   * deliberately do not, because the page must keep the keyboard after them.
    */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
     if (this.window.webContents.isDestroyed()) return
-    if (action === 'focus-address' || action === 'new-tab' || action === 'find') {
+    if (action === 'focus-address' || action === 'new-tab') {
       this.window.webContents.focus()
     }
     sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
@@ -3384,11 +3347,16 @@ export class BrowserService {
       this.keyboardOwnerTabId = tabId
     })
     // A key pressed in the page reaches this view's web contents and nothing
-    // else in the app, so this is where the browser claims its own shortcuts.
-    // Preventing the event also prevents the application menu from acting on
-    // the key, which is what keeps Cmd/Ctrl+R from reloading the whole app (in
-    // a development build the menu is Electron's default one) and Cmd/Ctrl+W
-    // from closing its window.
+    // else in the app, so this is where the browser claims the chords it
+    // reserves. Preventing the event also prevents the application menu from
+    // acting on the key, which is what keeps Cmd/Ctrl+R from reloading the whole
+    // app (in a development build the menu is Electron's default one) and
+    // Cmd/Ctrl+W from closing its window.
+    //
+    // Only reserved chrome chords are claimed, so a page keeps every shortcut it
+    // can answer itself, including `mod+f` for its own find. A key the page
+    // receives is dispatched to the page first; nothing here intercepts an app
+    // shortcut, so the page's own handler always wins.
     view.webContents.on('before-input-event', (event, input) => {
       if (this.peekTabs.has(tabId) && input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault()
@@ -3408,23 +3376,6 @@ export class BrowserService {
       ) {
         event.preventDefault()
         this.runBrowserShortcut(tabId, action)
-        return
-      }
-      // The app's own keymap, claimed after the browser's table so a page still
-      // gets `mod+r` and every other key the browser answers itself. Handing the
-      // chord back is what makes the spotlight open from inside a page.
-      if (matchesBrowserChord(input, this.appShortcutChords)) {
-        event.preventDefault()
-        if (!this.window.webContents.isDestroyed()) {
-          this.window.webContents.focus()
-          sendToRenderer(this.window.webContents, 'browser:navigationKey', {
-            key: input.key.toLowerCase(),
-            meta: input.meta,
-            control: input.control,
-            shift: input.shift,
-            alt: input.alt
-          })
-        }
       }
     })
     // The page itself never sees the application's DOM menus, so this is where
@@ -4403,14 +4354,13 @@ export class BrowserService {
    *
    * Cmd/Ctrl+W dismisses the popup surface. A page-created window ends; an
    * extension action popup is parked for reuse. The chords that belong to the
-   * app's own chrome (the address bar, a new tab, the note) are forwarded to the
-   * renderer under the owning tab, which is the tab the app would act on.
+   * app's own chrome (the address bar, a new tab) are forwarded to the renderer
+   * under the owning tab, which is the tab the app would act on.
    */
   private runPopupWindowShortcut(
     record: BrowserPopupWindowRecord,
     action: BrowserShortcutAction
   ): void {
-    if (this.forwardNavigationShortcut(action)) return
     const contents = record.view.webContents
     if (contents.isDestroyed()) return
     switch (action) {
@@ -4446,7 +4396,6 @@ export class BrowserService {
         return
       case 'focusAddress':
       case 'newTab':
-      case 'toggleNotes':
         this.requestPanelShortcut(record.tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }

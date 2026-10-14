@@ -345,14 +345,6 @@
       globalBrowser.reopenLastClosedTab()
       return
     }
-    if (action === 'toggle-notes') {
-      globalBrowser.toggleContextSidebar()
-      return
-    }
-    // Find belongs to the surface showing the page (`BrowserWorkspace`), which owns
-    // the bar and its own row, so nothing here answers it. It is named rather than
-    // left to fall through, because the fall-through below closes the tab.
-    if (action === 'find' || action === 'find-next' || action === 'find-previous') return
     const tab = globalBrowser.activeTab
     if (tab) globalBrowser.close(tab.id)
   }

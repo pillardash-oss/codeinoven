@@ -316,11 +316,6 @@
    * The focus a keyboard-driven shortcut lands on. Only the instance that owns
    * the native view may take it: a full screen and a sidebar panel can both be
    * mounted for one tab, and the hidden one has no visible address bar.
-   *
-   * Find is the same shape of answer   the bar is this column's own row, so the
-   * request is honoured by the instance that is on screen and the other one leaves
-   * it alone   and its state is the shared one, so the surface that does answer
-   * opens the bar the user last left.
    */
   function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
     if (eventTabId !== tabId) return
@@ -329,15 +324,6 @@
       addressBar?.focusAndSelect()
       return
     }
-    if (action === 'find') {
-      browserFindState.open(tabId)
-      return
-    }
-    if (action === 'find-next') {
-      browserFindState.step(tabId, 'next')
-      return
-    }
-    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {

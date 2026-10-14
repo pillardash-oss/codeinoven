@@ -24,7 +24,6 @@ import type {
   BrowserPermissionPromptContext,
   BrowserPopupWindow,
   BrowserShortcutBindings,
-  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
@@ -352,12 +351,6 @@ export const invokeBrowserContract = {
    * gesture; the chords come from the renderer's keymap, which main cannot read.
    */
   'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
-  /**
-   * Every chord the app's own keymap answers, so a key pressed in a page can be
-   * claimed there and handed back to the renderer. A chord the browser answers
-   * itself is checked first and never appears here.
-   */
-  'browser:setAppShortcutChords': {} as Contract<[chords: BrowserShortcutChord[]], void>,
   /**
    * Report the address bar's active search engine. Main builds the browser's
    * native context menu and its "Search <engine> for ..." item, and holds no
