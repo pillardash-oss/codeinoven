@@ -5,7 +5,11 @@
  * source; pi-core-tools-extension.ts concatenates every fragment in order so
  * the emitted module is byte-for-byte identical to the original single string.
  */
-import { CIO_AGENT_OUTPUT_TOOL_NAME, CIO_AGENT_STATUS_TOOL_NAME } from '../../../../lib/core-tools'
+import {
+  CIO_AGENT_OUTPUT_TOOL_NAME,
+  CIO_AGENT_STATUS_TOOL_NAME,
+  CIO_TODO_WRITE_TOOL_NAME
+} from '../../../../lib/core-tools'
 
 export function piCoreToolsEventsSource(): string {
   return `  // A fresh, resumed, or forked session must not expose sub-agent tools before
@@ -24,7 +28,7 @@ export function piCoreToolsEventsSource(): string {
   // with a fresh turn instructing it to collect every result (completed or
   // failed) before finishing. Loop terminates because the wait blocks until
   // the workers resolve.
-  pi.on('agent_settled', async () => {
+  pi.on('agent_settled', async (event) => {
     // A settled run the app just stopped must not wake the primary: the stop
     // request aborted every worker, and the guard below would otherwise start a
     // fresh turn defending work the user cancelled. The suppression stays until
@@ -36,16 +40,56 @@ export function piCoreToolsEventsSource(): string {
         running.push(record.purpose + ' (' + record.agentId + ')')
       }
     }
-    if (running.length === 0) return
+    // Capture the published list's unfinished tasks before clearing it: the
+    // list only describes the run that just settled, and a later turn that
+    // never publishes one must not be judged against it.
+    const unfinishedTodos = []
+    for (const item of latestTodoItems) {
+      if (item.status !== 'completed') unfinishedTodos.push(item)
+    }
+    latestTodoItems = []
+    if (running.length > 0) {
+      if (!pi || typeof pi.sendMessage !== 'function') return
+      try {
+        void pi.sendMessage(
+          {
+            customType: 'cio-subagent-wait',
+            content:
+              'Your turn ended while sub-agents are still running: ' +
+              running.join(', ') +
+              '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with wait:true (or omit agent_id to cover them all) to let them finish, read each finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids), and incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            display: false
+          },
+          { triggerTurn: true }
+        )
+      } catch {}
+      return
+    }
+    // Task-list guard: a run that settles while the list it published still
+    // shows unfinished work leaves the app's task card frozen mid-run, reading
+    // as abandoned work. Wake the agent once per user prompt to reconcile the
+    // list with what it actually did. One nudge is spent per prompt (the
+    // counter resets on the next genuine prompt), so this can never loop; an
+    // aborted run is never defended with a fresh turn.
+    if (event && event.aborted) return
+    if (unfinishedTodos.length === 0) return
+    if (todoReconcileSpent) {
+      todoReconcileSpent = false
+      return
+    }
     if (!pi || typeof pi.sendMessage !== 'function') return
+    const labels = unfinishedTodos.map(function (item) {
+      return item.content
+    })
+    todoReconcileSpent = true
     try {
       void pi.sendMessage(
         {
-          customType: 'cio-subagent-wait',
+          customType: 'cio-todo-reconcile',
           content:
-            'Your turn ended while sub-agents are still running: ' +
-            running.join(', ') +
-            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with wait:true (or omit agent_id to cover them all) to let them finish, read each finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids), and incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            'Your turn ended, but the task list you published still shows unfinished work: ' +
+            labels.join('; ') +
+            '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, call ${CIO_TODO_WRITE_TOOL_NAME} once more with the final list: mark every task you completed as completed, and drop tasks you no longer intend to do (publish an empty list to clear them). Only end your turn once the list matches what you actually did.',
           display: false
         },
         { triggerTurn: true }
@@ -63,6 +107,13 @@ export function piCoreToolsEventsSource(): string {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    // A genuine user prompt begins a fresh task-list budget: the previous
+    // turn's list is gone from the screen, and a reconciliation nudge may be
+    // spent again. This hook fires only for a user prompt   never for the
+    // guard's own synthetic reconciliation turn   so it can never disarm the
+    // guard mid-flight.
+    latestTodoItems = []
+    todoReconcileSpent = false
     // Pi reports each surface's annotations here, and an MCP server can connect
     // between turns, so the read-only set is refreshed before every turn.
     refreshCioReadOnlyTools(pi)

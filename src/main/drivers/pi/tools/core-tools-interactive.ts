@@ -102,14 +102,27 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
     }
   })
 
+  // Latest list the agent published through cio_todo_write. The turn-end guard
+  // in the events fragment reads it to catch the common failure where the
+  // agent finishes its work but never marks the tasks complete, which leaves
+  // the app's task card frozen on stale progress. It is cleared on every
+  // settle and on every new user prompt, so a turn that never publishes a list
+  // is never nudged about an older turn's list.
+  let latestTodoItems = []
+  // One reconciliation nudge is spent per user prompt; the flag is reset on
+  // before_agent_start, which fires only for a genuine user prompt   never for
+  // the guard's own synthetic reconciliation turn   so the guard can never loop.
+  let todoReconcileSpent = false
+
   pi.registerTool({
     name: '${CIO_TODO_WRITE_TOOL_NAME}',
     label: 'Write the todo list',
     description:
-      'Create or update the visible todo list so the user can track progress. Replace the whole list on every call: give every task with its current status (pending, in_progress, or completed). Mark tasks in_progress just before starting and completed immediately after finishing.',
+      'Create or update the visible todo list so the user can track progress. Replace the whole list on every call: give every task with its current status (pending, in_progress, or completed), or an empty list to clear the tasks. Mark tasks in_progress just before starting and completed immediately after finishing.',
     promptSnippet: 'Publish or update the shared todo list (task tracking)',
     promptGuidelines: [
-      'Use ${CIO_TODO_WRITE_TOOL_NAME} as soon as a task spans multiple steps: publish the full plan, keep exactly one task in_progress, and update statuses as work advances.'
+      'Use ${CIO_TODO_WRITE_TOOL_NAME} as soon as a task spans multiple steps: publish the full plan, keep exactly one task in_progress, and update statuses as work advances.',
+      'Before you end a turn, publish the final list: mark every task you completed as completed, and publish an empty list (or a shorter one) to drop tasks you no longer intend to do, so the visible list matches what you actually finished.'
     ],
     parameters: Type.Object({
       todos: Type.Array(
@@ -122,7 +135,10 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
             Type.Literal('completed')
           ])
         }),
-        { description: 'The full task list (replaces the previous one).', minItems: 1 }
+        {
+          description: 'The full task list (replaces the previous one). Empty clears it.',
+          minItems: 0
+        }
       )
     }),
     async execute(_toolCallId, params) {
@@ -131,6 +147,7 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
         content: todo.content,
         status: todo.status
       }))
+      latestTodoItems = todos
       const active = todos.find((todo) => todo.status === 'in_progress')
       return textResult({
         todos,
