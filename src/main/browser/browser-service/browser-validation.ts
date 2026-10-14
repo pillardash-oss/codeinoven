@@ -5,6 +5,7 @@
  */
 
 import { validateNativeDockTypography } from '../../../lib/native-dock'
+import { MAX_OVERLAY_TOASTS } from '../../../lib/browser-overlay'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
@@ -1185,13 +1186,6 @@ export function isSameViewport(a: BrowserViewport | undefined | null, b: Browser
   return a !== undefined && a !== null && a.width === b.width && a.height === b.height
 }
 
-/**
- * The most cards the overlay is ever asked to draw. svelte-sonner keeps three on
- * screen at once, and the stack is projected whole, so this only bounds a
- * payload that would otherwise be free to fill a whole window.
- */
-export const MAX_OVERLAY_TOASTS = 16
-
 /** Characters kept from one projected text field. A toast is a line or two; the
  *  ceiling is here so a pathological message cannot cross IPC whole. */
 const MAX_OVERLAY_TEXT_LENGTH = 4_000
@@ -1254,7 +1248,11 @@ export function validateToastOverlayInteraction(value: unknown): ToastOverlayInt
  * `null` is a real request: nothing covers the toaster's corner any more, so the
  * overlay takes itself down. Every field is optional in the projection, so a
  * malformed card is dropped rather than rejected whole: one odd toast must never
- * cost the renderer its stack.
+ * cost the renderer its stack. A list longer than the ceiling is trimmed for the
+ * same reason, and for one more: while a page covers the toaster's corner this
+ * overlay is the only surface a card reaches, so refusing an over-long update
+ * does not bound the payload, it hides every notification in it. Sonner keeps its
+ * toasts newest first, so the trim keeps the cards that would have been on screen.
  */
 export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest {
   if (value === null) return null
@@ -1266,11 +1264,10 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
   if (!Array.isArray(rawToasts)) {
     throw new TypeError('The toast overlay request must carry a toast list')
   }
-  if (rawToasts.length > MAX_OVERLAY_TOASTS) {
-    throw new TypeError('The toast overlay request carries too many toasts')
-  }
+  const entries =
+    rawToasts.length > MAX_OVERLAY_TOASTS ? rawToasts.slice(0, MAX_OVERLAY_TOASTS) : rawToasts
   const toasts: ToastOverlayToast[] = []
-  for (const raw of rawToasts) {
+  for (const raw of entries) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const entry = raw as Record<string, unknown>
     const id = entry['id']

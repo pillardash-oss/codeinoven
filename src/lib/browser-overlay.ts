@@ -136,6 +136,21 @@ export interface ToastOverlayToast {
   cancel?: { label: string }
 }
 
+/**
+ * The most cards the overlay is ever asked to draw.
+ *
+ * The stack is projected from svelte-sonner's live state, and sonner holds every
+ * toast that has not dismissed itself yet, newest first. A window whose toast
+ * timers are paused keeps all of them, so the list can outgrow any number of
+ * cards a person could read. Both sides of the boundary share this ceiling and
+ * neither may turn a longer list into a lost stack: the app renderer projects
+ * only the newest cards that fit, and the main-process validator keeps the same
+ * slice rather than refusing the update. Refusing one is how a busy session lost
+ * every notification over a browser page, because the overlay is the only surface
+ * a card reaches while a page covers the toaster's corner.
+ */
+export const MAX_OVERLAY_TOASTS = 16
+
 /** The whole stack, and the theme the cards are drawn in. */
 export interface ToastOverlayStack {
   toasts: ToastOverlayToast[]

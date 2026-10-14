@@ -2,6 +2,7 @@ import { toast } from 'svelte-sonner'
 import type { ToastT } from 'svelte-sonner'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
 import {
+  MAX_OVERLAY_TOASTS,
   TOAST_CARD_WIDTH,
   TOAST_STACK_RIGHT,
   TOAST_STACK_TOP,
@@ -146,8 +147,14 @@ export function projectStack(
   theme: 'light' | 'dark',
   typography?: ToastOverlayStack['typography']
 ): ToastOverlayStack {
+  // Sonner holds every toast that has not dismissed itself, newest first, and a
+  // window whose timers are paused holds all of them. The overlay draws the top
+  // of that stack, and the boundary that carries it refuses nothing, so only the
+  // newest cards within its ceiling are projected: anything beyond them would
+  // reach a surface that cannot draw it anyway.
+  const newest = toasts.length > MAX_OVERLAY_TOASTS ? toasts.slice(0, MAX_OVERLAY_TOASTS) : toasts
   const projected: ToastOverlayToast[] = []
-  for (const entry of toasts) {
+  for (const entry of newest) {
     const card = projectToast(entry)
     if (card) projected.push(card)
   }
