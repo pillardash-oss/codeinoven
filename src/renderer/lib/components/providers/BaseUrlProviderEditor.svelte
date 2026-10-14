@@ -3,6 +3,7 @@
     ArrowLeft,
     ClipboardPaste,
     Copy,
+    Gauge,
     Loader2,
     Plus,
     RefreshCw,
@@ -22,7 +23,11 @@
   import { APP_SLUG } from '$shared/brand'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
+  import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import { creditsLabel } from '$lib/format/usage'
+  import { PROVIDER_USAGE_FORMATS } from '$shared/provider-usage-format'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import {
     parseModelClipboard,
@@ -36,6 +41,8 @@
     BaseUrlProviderCreateRequest,
     BaseUrlProviderModel,
     BaseUrlProviderUpdateRequest,
+    BaseUrlProviderUsageFormat,
+    BaseUrlProviderUsagePreview,
     DiscoveredBaseUrlModel,
     ProviderConnectionInfo,
     ThinkingLevel
@@ -79,8 +86,10 @@
     apiKey: string
     removeApiKey: boolean
     headers: string
-    /** Optional account status/usage route (e.g. /status or /usage). */
+    /** Optional usage route (e.g. /status or /usage) or absolute URL. */
     usagePath: string
+    /** Response format of the usage route; empty means auto-detect. */
+    usageFormat: BaseUrlProviderUsageFormat | ''
     /** Optional model-list route (defaults to /models when empty). */
     modelsPath: string
     models: ModelDraft[]
@@ -270,6 +279,44 @@
   let discoveringModels = $state(false)
   let discoverError = $state('')
 
+  /** Result of the last usage-route Test, shown inline under the format picker. */
+  let usagePreview = $state<BaseUrlProviderUsagePreview | null>(null)
+  let testingUsage = $state(false)
+  const usageFormatHint = $derived(
+    PROVIDER_USAGE_FORMATS.find((option) => option.value === draft.usageFormat)?.hint ?? ''
+  )
+  const usageFormatOptions = PROVIDER_USAGE_FORMATS.map((option) => ({
+    id: option.value,
+    label: option.label,
+    hint: option.hint
+  }))
+
+  /** Read the usage route as configured in the draft, before saving. */
+  async function testUsage(): Promise<void> {
+    const usagePath = draft.usagePath.trim()
+    if (!draft.baseURL.trim() || !usagePath) {
+      toast.error('Enter a base URL and a usage endpoint first.')
+      return
+    }
+    testingUsage = true
+    usagePreview = null
+    try {
+      const headers = parseHeaders(draft.headers)
+      usagePreview = await baseUrlProviderStore.previewUsage({
+        baseURL: draft.baseURL.trim(),
+        usagePath,
+        ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+        ...(draft.usageFormat ? { usageFormat: draft.usageFormat } : {}),
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+        ...(headers ? { headers } : {})
+      })
+    } catch (usageError) {
+      reportError(usageError, 'Usage preview failed.')
+    } finally {
+      testingUsage = false
+    }
+  }
+
   async function discoverModels(force = false): Promise<void> {
     if (!draft.baseURL.trim()) return
     discoveringModels = true
@@ -377,6 +424,7 @@
               .join('\n')
           : '',
         usagePath: provider.usagePath ?? '',
+        usageFormat: provider.usageFormat ?? '',
         modelsPath: provider.modelsPath ?? '',
         models: provider.models.map((model) => ({
           id: model.id,
@@ -420,6 +468,7 @@
       removeApiKey: false,
       headers: '',
       usagePath: '',
+      usageFormat: '',
       modelsPath: '',
       models: [],
       enabled: true
@@ -537,6 +586,7 @@
           models,
           enabled: draft.enabled,
           usagePath: draft.usagePath.trim(),
+          usageFormat: draft.usageFormat,
           modelsPath: draft.modelsPath.trim(),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
@@ -559,6 +609,7 @@
           models,
           enabled: draft.enabled,
           ...(draft.usagePath.trim() ? { usagePath: draft.usagePath.trim() } : {}),
+          ...(draft.usageFormat ? { usageFormat: draft.usageFormat } : {}),
           ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
@@ -610,6 +661,7 @@
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         headers: draft.headers,
         usagePath: draft.usagePath,
+        usageFormat: draft.usageFormat,
         modelsPath: draft.modelsPath,
         models: draft.models,
         enabled: draft.enabled
@@ -635,6 +687,7 @@
         removeApiKey: false,
         headers: provider.headers,
         ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
+        usageFormat: provider.usageFormat ?? '',
         ...(provider.modelsPath ? { modelsPath: provider.modelsPath } : {}),
         models: provider.models.map(modelToDraft),
         enabled: provider.enabled
@@ -916,21 +969,80 @@
         bind:value={draft.headers}></textarea>
     </label>
 
-    <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
-      <span>Status route (optional)</span>
-      <input
-        id="base-url-provider-usage-path"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
-        placeholder="/status or /usage"
-        autocomplete="off"
-        spellcheck="false"
-        bind:value={draft.usagePath}
-      />
-      <span class="block text-[0.6875rem] font-normal text-dimmed">
-        Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
-        show quota bars; leave empty if the provider has none.
-      </span>
-    </label>
+    <div class="space-y-2 rounded-lg border bg-surface/40 px-3 py-2.5">
+      <div class="flex items-end gap-2">
+        <label
+          class="block min-w-0 flex-1 space-y-1 text-xs font-medium"
+          for="base-url-provider-usage-path"
+        >
+          <span>Usage endpoint (optional)</span>
+          <input
+            id="base-url-provider-usage-path"
+            class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+            placeholder="/status or https://analytics.example.com/usage"
+            autocomplete="off"
+            spellcheck="false"
+            bind:value={draft.usagePath}
+          />
+        </label>
+        <button
+          type="button"
+          class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          title="Read the usage endpoint now and show the limits it reports"
+          aria-label="Test the usage endpoint"
+          disabled={testingUsage || !draft.usagePath.trim() || !draft.baseURL.trim()}
+          onclick={() => void testUsage()}
+        >
+          {#if testingUsage}
+            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            Testing…
+          {:else}
+            <Gauge size={13} aria-hidden="true" />
+            Test
+          {/if}
+        </button>
+      </div>
+
+      <div class="space-y-1">
+        <span class="block text-xs font-medium">Response format</span>
+        <EnumSelect
+          options={usageFormatOptions}
+          value={draft.usageFormat || null}
+          onChange={(id) => {
+            draft.usageFormat = id
+            usagePreview = null
+          }}
+          placeholder="Auto-detect"
+          ariaLabel="Usage response format"
+          title="How CodeInOven reads this usage endpoint"
+          class="w-full"
+        />
+        <p class="text-[0.6875rem] font-normal text-dimmed">
+          {usageFormatHint} A path is relative to the base URL; a full URL is used as-is.
+        </p>
+      </div>
+
+      {#if usagePreview}
+        <div class="rounded-lg border bg-elevated px-2.5 py-2">
+          {#if usagePreview.usage && (usagePreview.usage.rateLimits.length > 0 || usagePreview.usage.credits)}
+            <UsageWindowList limits={usagePreview.usage.rateLimits} />
+            {#if creditsLabel(usagePreview.usage)}
+              <p class="mt-1 text-[0.625rem] text-dimmed">{creditsLabel(usagePreview.usage)}</p>
+            {/if}
+            <p
+              class="mt-1.5 truncate text-[0.5625rem] text-dimmed"
+              title={usagePreview.usage.source}
+            >
+              {usagePreview.usage.source}
+            </p>
+          {:else}
+            <p class="text-[0.6875rem] text-muted">
+              {usagePreview.message ?? 'No limits to report.'}
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </div>
 
     <label class="block space-y-1 text-xs font-medium" for="base-url-provider-models-path">
       <span>Models route (optional)</span>

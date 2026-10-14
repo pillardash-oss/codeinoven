@@ -9,6 +9,8 @@ import type {
   BaseUrlProviderCreateRequest,
   BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderUpdateRequest,
+  BaseUrlProviderUsagePreview,
+  BaseUrlProviderUsagePreviewRequest,
   ComputerUseActivity,
   ComputerUsePipState,
   CuaBridgeStatus,
@@ -207,6 +209,10 @@ export const invokeProviderContract = {
   'baseUrlProviders:fetchUsage': {} as Contract<
     [harnessId: string, id: string],
     import('../types').CustomProviderUsage | null
+  >,
+  'baseUrlProviders:previewUsage': {} as Contract<
+    [input: BaseUrlProviderUsagePreviewRequest],
+    BaseUrlProviderUsagePreview
   >,
   'gateway:list': {} as Contract<[], import('../gateway-types').GatewayStatus[]>,
   'gateway:setEnabled': {} as Contract<

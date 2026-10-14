@@ -15,6 +15,8 @@
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
   import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
@@ -41,6 +43,35 @@
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+
+  /**
+   * A custom base-URL provider is not an authenticated account, so the account
+   * registry never lists it. Its usage route is still account-level quota, so
+   * it earns a usage-only row here, keyed by the provider id   the same
+   * identity the battery hover and `refreshAccountUsage` use, which keeps two
+   * custom providers in one harness from sharing one cache slot.
+   */
+  const customProviderRows = $derived.by(() =>
+    baseUrlProviderStore.providers
+      .filter((provider) => provider.enabled && Boolean(provider.usagePath))
+      .map((provider): HarnessAccount => ({
+        id: provider.id,
+        harnessId: provider.harnessId,
+        providerId: provider.id,
+        providerName: provider.name,
+        label: provider.name,
+        containerKind: 'legacy-default',
+        createdAt: 0,
+        updatedAt: 0
+      }))
+  )
+
+  /** Every row the table shows: authenticated accounts plus custom providers. */
+  const rows = $derived<HarnessAccount[]>([...accounts, ...customProviderRows])
+
+  function isCustomProviderRow(account: HarnessAccount): boolean {
+    return isCodeInOvenCustomProviderId(account.providerId)
+  }
 
   type AccountSortKey = 'account'
 
@@ -80,7 +111,7 @@
   let filterHarnesses = $derived.by(() => {
     const seen: Record<string, true> = {}
     const harnesses: Array<{ id: string; name: string }> = []
-    for (const account of accounts) {
+    for (const account of rows) {
       if (seen[account.harnessId]) continue
       seen[account.harnessId] = true
       harnesses.push({
@@ -98,7 +129,7 @@
    *  there is more than one to choose from. */
   let siblingCounts = $derived.by(() => {
     const counts = new SvelteMap<string, number>()
-    for (const account of accounts) {
+    for (const account of rows) {
       const key = `${account.harnessId}\u0000${account.providerId}`
       counts.set(key, (counts.get(key) ?? 0) + 1)
     }
@@ -109,9 +140,9 @@
     return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
   }
 
-  let filteredAccounts = $derived.by(() => {
+  let filteredRows = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
-    return accounts.filter((account) => {
+    return rows.filter((account) => {
       if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
       if (!query) return true
       const harnessName = harnessFor(account.harnessId)?.name ?? account.harnessId
@@ -167,7 +198,7 @@
    *  scroll position away; removing the single entry leaves the rest untouched. */
   function dropAccount(accountId: string): void {
     accounts = accounts.filter((account) => account.id !== accountId)
-    harnessAccountUsageCache.prune(accounts.map((account) => account.id))
+    harnessAccountUsageCache.prune(rows.map((account) => account.id))
   }
 
   /** Swap one row's payload in place, preserving its position and scroll offset. */
@@ -180,7 +211,7 @@
     error = ''
     try {
       accounts = sortAccounts(await invoke('providerAccounts:list'))
-      harnessAccountUsageCache.prune(accounts.map((account) => account.id))
+      harnessAccountUsageCache.prune(rows.map((account) => account.id))
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Accounts could not be loaded.'
     } finally {
@@ -249,21 +280,31 @@
    *  probes finish, and usage hydrates in its own bounded batches so the tab
    *  never blocks on either. */
   async function refreshAll(): Promise<void> {
-    harnessAccountUsageCache.schedule(accounts, { force: true })
+    harnessAccountUsageCache.schedule(rows, { force: true })
     await refreshAccounts()
     // A forced account read can surface a newly created account; queue it now
     // so usage covers every row the table shows.
-    harnessAccountUsageCache.schedule(accounts)
+    harnessAccountUsageCache.schedule(rows)
   }
 
   async function initializeAccounts(): Promise<void> {
     await loadStoredAccounts()
     // Quota hydrates immediately in small batches: cached snapshots paint first
     // and each account's live values land as its probe completes.
-    harnessAccountUsageCache.schedule(accounts)
+    harnessAccountUsageCache.schedule(rows)
     await refreshAccounts()
-    harnessAccountUsageCache.schedule(accounts)
+    harnessAccountUsageCache.schedule(rows)
   }
+
+  /** Custom-provider rows can appear after this panel mounts, once the provider
+   *  store hydrates, so probe them as they show up. */
+  let scheduledCustomRowIds = ''
+  $effect(() => {
+    const ids = customProviderRows.map((row) => row.id).join('\u0000')
+    if (ids === scheduledCustomRowIds) return
+    scheduledCustomRowIds = ids
+    if (ids) harnessAccountUsageCache.schedule(customProviderRows)
+  })
 
   function openEdit(account: HarnessAccount): void {
     editTarget = account
@@ -437,7 +478,7 @@
       <UserRound size={20} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-muted">No accounts have been created yet.</p>
     </div>
-  {:else if filteredAccounts.length === 0}
+  {:else if filteredRows.length === 0}
     <div class="rounded-xl border border-dashed p-8 text-center">
       <ListFilter size={18} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-dimmed">
@@ -457,7 +498,7 @@
     </div>
   {:else}
     <DataTable
-      rows={filteredAccounts}
+      rows={filteredRows}
       columns={accountColumns}
       getRowId={(account) => account.id}
       label="Harness accounts"
@@ -494,6 +535,14 @@
                     Default
                   </span>
                 {/if}
+                {#if isCustomProviderRow(account)}
+                  <span
+                    class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    title="Custom base URL provider"
+                  >
+                    Custom
+                  </span>
+                {/if}
               </div>
               <p
                 class="truncate text-[0.625rem] text-muted"
@@ -517,6 +566,8 @@
           </div>
         {:else if column === usageColumn}
           <HarnessAccountUsageCell {account} />
+        {:else if isCustomProviderRow(account)}
+          <span class="text-[0.6875rem] text-dimmed">Edit in Providers</span>
         {:else}
           <div class="flex items-center gap-1">
             {#if hasSiblingAccounts(account) && !account.isDefault}

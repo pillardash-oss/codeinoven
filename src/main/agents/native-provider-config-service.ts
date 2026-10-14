@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
+import { isBaseUrlProviderUsageFormat } from '../../lib/provider-usage-format'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -201,9 +202,18 @@ export class NativeProviderConfigService {
       baseURL: provider.baseURL,
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
+      ...(provider.usageFormat ? { usageFormat: provider.usageFormat } : {}),
       ...(apiKey ? { apiKey } : {})
     }
     if (removeApiKey) delete options['apiKey']
+    // A cleared route must actually leave the config, not linger from a previous
+    // save and keep a stale format pointing at nothing.
+    if (!provider.usagePath) {
+      delete options['usagePath']
+      delete options['usageFormat']
+    } else if (!provider.usageFormat) {
+      delete options['usageFormat']
+    }
     const models = Object.fromEntries(
       provider.models.map((model) => [model.id, serializeOpenCodeModel(model)])
     )
@@ -282,7 +292,14 @@ export class NativeProviderConfigService {
       apiKey: removeApiKey ? 'none' : (apiKey ?? existing['apiKey'] ?? 'none'),
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
+      ...(provider.usageFormat ? { usageFormat: provider.usageFormat } : {}),
       models: mergePiModels(existing['models'], provider.models)
+    }
+    if (!provider.usagePath) {
+      delete entry['usagePath']
+      delete entry['usageFormat']
+    } else if (!provider.usageFormat) {
+      delete entry['usageFormat']
     }
     if (!provider.enabled) {
       // Park first, delete second: a failure in between leaves the provider
@@ -463,6 +480,7 @@ function nativeProvider(
   const apiKey = stringValue(source['apiKey'])
   const apiKeyConfigured = apiKey !== undefined && apiKey.trim() !== '' && apiKey !== 'none'
   const usagePath = stringValue(source['usagePath'])
+  const usageFormat = source['usageFormat']
   return {
     id,
     harnessId,
@@ -472,6 +490,7 @@ function nativeProvider(
     apiKeyConfigured,
     ...(headers ? { headers } : {}),
     ...(usagePath ? { usagePath } : {}),
+    ...(isBaseUrlProviderUsageFormat(usageFormat) ? { usageFormat } : {}),
     models,
     enabled,
     createdAt: 0,

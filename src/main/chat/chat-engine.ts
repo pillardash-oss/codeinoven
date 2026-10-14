@@ -387,7 +387,11 @@ import {
   workflowGroupThreads
 } from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
-import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
+import {
+  compactTurnStreamEvents,
+  foldTurnStreamEvents,
+  groupStreamPartsIntoMessages
+} from './turn-stream'
 import { readTurnStreamLog } from './turn-stream-log'
 import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
@@ -4831,7 +4835,12 @@ export class ChatEngine {
     const entry = await this.readHarnessAccountUsage({
       harnessId,
       providerId,
-      accountId: account.id,
+      // A custom base-URL provider has no authenticated account row: the
+      // registry hands back the harness's virtual legacy account for every
+      // provider, so several custom providers in one harness would share one
+      // id and clobber each other's cached quota. Key the read by the provider
+      // id instead, which the battery hover and the Accounts rows both match.
+      accountId: isCodeInOvenCustomProviderId(providerId) ? providerId : account.id,
       accountEnvironment: this.accountRegistry.environment(account),
       driver,
       projectPath
@@ -4993,7 +5002,8 @@ export class ChatEngine {
         provider.baseURL,
         provider.usagePath,
         apiKey,
-        provider.headers
+        provider.headers,
+        provider.usageFormat
       )
     } catch (error) {
       Logger.dev('Custom provider usage read failed:', error)
@@ -13338,6 +13348,11 @@ export class ChatEngine {
     // The user stopped this run deliberately   reflect it immediately so the
     // sidebar indicator never stays stuck on "working". A deliberate stop is
     // "done (read)": it is not an error and not pending the user's attention.
+    // A stopped turn reports nothing from its provider (and may never run its
+    // idle finalization at all), so the work it already streamed is persisted
+    // from the durable log now, while its boundary still covers that work. Any
+    // later turn, and the log's own compaction, would scope it out for good.
+    await this.persistStreamedTurnWork(projectId, threadId, thread.sessionId)
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
       await this.storage.drainRaw(turnStreamPath(projectId, threadId))
@@ -24233,6 +24248,118 @@ export class ChatEngine {
       entry.foldKey = foldKey
     }
     return pageTurnStreamParts(folded, entry.events, query, turnStartTs ?? null)
+  }
+
+  /** Oner inner-scroll-independent pages walked while rebuilding a turn from
+   *  the durable log. Bounded so a corrupt or endless fold can never spin here. */
+  private static readonly STREAM_RECOVERY_PAGE_ATTEMPTS = 12
+
+  /**
+   * Persist the work a turn streamed but never reported.
+   *
+   * A stop ends a turn before the provider transcript is finalized, and a crash
+   * can end one before its idle finalization runs at all. The mirror then holds
+   * no assistant row for the turn, so the work exists only in the durable stream
+   * log, which the next turn's boundary scopes out and the log's eventual
+   * compaction trims away. Folding the log into the assistant messages the
+   * harness was streaming when the turn died keeps that work in the transcript
+   *   across the stop, across a restart, and across whatever turn comes next.
+   *
+   * A gap filler and nothing more. A turn that already has an assistant row is
+   * left exactly as the provider reported it, so a finalized transcript is never
+   * rewritten from the log and a provider's own message ids are never shadowed
+   * by the log's. It returns quietly when there is nothing to recover.
+   */
+  private async persistStreamedTurnWork(
+    projectId: string,
+    threadId: string,
+    sessionId: string | null
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread) return
+      const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
+      const tail = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 60)
+      // The provider's own transcript wins whenever the turn has one. Its 
+      // message ids are the ones the transcript was built with; adding the
+      // log's ids beside them would double the turn, not fill a gap.
+      if (
+        tail.messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            (turnStartTs === undefined || message.createdAt >= turnStartTs)
+        )
+      ) {
+        return
+      }
+      const folded = await this.readWholeTurnStream(projectId, threadId)
+      if (folded.length === 0) return
+      const existingIds = new Set(tail.messages.map((message) => message.id))
+      const selection = sessionId ? this.sessionModelIds.get(sessionId) : undefined
+      const settings = thread.settings
+      const recovered: AgentMessage[] = []
+      let previousCreatedAt: number | undefined
+      for (const rebuilt of groupStreamPartsIntoMessages(folded)) {
+        if (existingIds.has(rebuilt.id)) continue
+        // Keep the messages in stream order even when the harness reported a
+        // timestamp for only some of them.
+        const createdAt = Math.max(
+          rebuilt.startedAt ?? Number.NEGATIVE_INFINITY,
+          (previousCreatedAt ?? Number.NEGATIVE_INFINITY) + 1,
+          turnStartTs ?? 0
+        )
+        previousCreatedAt = createdAt
+        recovered.push({
+          id: rebuilt.id,
+          role: 'assistant',
+          origin: 'harness',
+          visibility: 'conversation',
+          parts: rebuilt.parts,
+          harnessId: thread.sessionHarnessId ?? settings?.harnessId,
+          providerId: selection?.providerId ?? settings?.providerId,
+          modelId: selection?.modelId ?? settings?.modelId,
+          thinkingLevel: selection?.thinkingLevel ?? settings?.thinkingLevel,
+          accountId: thread.sessionAccountId,
+          createdAt
+        })
+      }
+      if (recovered.length === 0) return
+      await this.threadManager.upsertMessages(projectId, threadId, recovered, sessionId ?? undefined)
+      Logger.info('Recovered streamed turn work into the transcript', {
+        projectId,
+        threadId,
+        messages: recovered.length
+      })
+    } catch (error) {
+      Logger.error('Recovering streamed turn work failed', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
+  /** Read a thread's whole folded durable stream, oldest page first. */
+  private async readWholeTurnStream(projectId: string, threadId: string): Promise<AgentPart[]> {
+    const parts: AgentPart[] = []
+    let beforeId: string | undefined
+    for (
+      let attempt = 0;
+      attempt < ChatEngine.STREAM_RECOVERY_PAGE_ATTEMPTS;
+      attempt += 1
+    ) {
+      const page = await this.loadTurnStreamParts(
+        projectId,
+        threadId,
+        beforeId ? { beforeId } : {}
+      )
+      if (page.kind !== 'window') break
+      parts.unshift(...page.parts)
+      const oldest = page.parts[0]
+      if (!page.hasOlder || !oldest) break
+      beforeId = oldest.id
+    }
+    return parts
   }
 
   /**

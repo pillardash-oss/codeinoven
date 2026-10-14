@@ -136,6 +136,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -2212,7 +2213,10 @@
     const currentUsage = usageList.find(
       (usage) =>
         usage.harnessId === settings.harnessId &&
-        usage.accountId === (settings.accountId ?? `${settings.harnessId}.default`) &&
+        usage.accountId ===
+          (isCodeInOvenCustomProviderId(settings.providerId)
+            ? settings.providerId
+            : (settings.accountId ?? `${settings.harnessId}.default`)) &&
         usage.providerId === settings.providerId
     )
     if (currentUsage) {
