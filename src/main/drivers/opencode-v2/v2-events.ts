@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentPart, AgentToolState, PermissionReply } from '../../../lib/types'
+import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { OpenCodeV2SseEvent } from '../../opencode-v2/opencode-v2-client'
 import { mapOpenCodeV2FormToQuestionRequest } from './v2-forms'
 import {
@@ -142,6 +143,7 @@ export function mapOpenCodeV2Event(
       const messageId = context.assistantMessageId ?? eventAssistantMessageId(event)
       if (!messageId) return []
       const reasoning = event.type === 'session.reasoning.delta'
+      const delta = stringValue(data['delta']) ?? ''
       return [
         {
           type: 'message.part.delta',
@@ -151,7 +153,7 @@ export function mapOpenCodeV2Event(
             ? reasoningPartId(messageId, ordinalOf(data))
             : textPartId(messageId, ordinalOf(data)),
           field: 'text',
-          delta: stringValue(data['delta']) ?? ''
+          delta: reasoning ? delta : stripThinkingArtifacts(delta)
         }
       ]
     }
@@ -180,7 +182,7 @@ export function mapOpenCodeV2Event(
                 type: 'text',
                 id: textPartId(messageId, ordinalOf(data)),
                 messageID: messageId,
-                text
+                text: stripThinkingArtifacts(text)
               }
             }
       ]

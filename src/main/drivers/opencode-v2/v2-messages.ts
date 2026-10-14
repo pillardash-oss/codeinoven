@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentPart, AgentToolState } from '../../../lib/types'
+import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import { isOpenCodeV2AbortError, openCodeV2ErrorMessage } from './v2-issues'
 import { mapOpenCodeV2Usage } from './v2-usage'
 import {
@@ -151,7 +152,7 @@ function mapAssistantContent(
         type: 'text',
         id: textPartId(messageId, ordinal),
         messageID: messageId,
-        text: stringValue(record['text']) ?? ''
+        text: stripThinkingArtifacts(stringValue(record['text']) ?? '')
       }
     }
     case 'reasoning': {

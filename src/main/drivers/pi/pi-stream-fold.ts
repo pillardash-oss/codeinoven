@@ -6,6 +6,7 @@ import type {
   SessionAgentEvent
 } from '../../../lib/types'
 import { isCodeModeToolName, parseRecord } from '../../../lib/agent-interactions'
+import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import { base64Kilobytes } from '../../../lib/image-payload'
 import {
   classifyProviderIssue,
@@ -45,7 +46,7 @@ function mapPiContentBlock(
       type: 'text',
       id: `${messageId}:text:${index}`,
       messageID: messageId,
-      text: stringValue(block['text']) ?? ''
+      text: stripThinkingArtifacts(stringValue(block['text']) ?? '')
     }
   }
   if (type === 'thinking') {
@@ -351,7 +352,7 @@ export function mapPiRecord(
             messageId,
             partId,
             field: 'text',
-            delta
+            delta: stripThinkingArtifacts(delta)
           }
         ]
       }
