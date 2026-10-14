@@ -28,6 +28,7 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
+  import CompositionStage from '$lib/components/design/CompositionStage.svelte'
   import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
   import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
@@ -37,6 +38,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
+  import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -297,6 +299,18 @@
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
+  /**
+   * The composition tab the board is showing, when it is open.
+   *
+   * A composition is played by a browser tab, and the board mounts that tab's
+   * native page into its own stage rather than picturing it. The tab arrives on
+   * `browser:state`, so this is the live handle: while it is here the board is a
+   * player and an editor at once, and while it is not the stage falls back to the
+   * last export or the captured frame.
+   */
+  let liveTab = $derived(
+    video ? videoTimelineState.compositionIn(projectId, threadId, selected.directory) : null
+  )
   /**
    * The thread that created the design in front, or an empty string when none is
    * recorded.
@@ -856,73 +870,86 @@
 
 <div class="flex h-full min-h-0 flex-col">
   {#snippet videoStage()}
-    <div
-      class="mb-2 rounded-xl border border-border bg-app p-2"
-      aria-label={`${nounTitle} preview`}
-    >
-      {#if exportPath}
-        <video
-          class="block max-h-72 w-full rounded-lg bg-black"
-          src={`appfile://project/${projectId}/${exportPath}`}
-          controls
-          playsinline
-          preload="metadata"
-          aria-label={`Exported ${noun} ${selectedName}`}
-        >
-          <track kind="captions" />
-        </video>
-        <div class="mt-1.5 flex items-center justify-between gap-2">
-          <span class="min-w-0 truncate text-[0.625rem] text-dimmed"
-            >Latest export · {exportPath.split('/').at(-1)}</span
+    {#if liveTab}
+      <!--
+        The live composition, played in the board.
+
+        The stage owns the tab's native view while it is on screen, so the
+        transport below scrubs the composition the user is watching rather than
+        a still of it. The frame follows the composition's own aspect ratio.
+      -->
+      <div class="mb-2" style:aspect-ratio={`${liveTab.width || 16} / ${liveTab.height || 9}`}>
+        <CompositionStage tab={liveTab} />
+      </div>
+    {:else}
+      <div
+        class="mb-2 rounded-xl border border-border bg-surface p-2"
+        aria-label={`${nounTitle} preview`}
+      >
+        {#if exportPath}
+          <video
+            class="block max-h-72 w-full rounded-lg bg-app"
+            src={`appfile://project/${projectId}/${exportPath}`}
+            controls
+            playsinline
+            preload="metadata"
+            aria-label={`Exported ${noun} ${selectedName}`}
           >
+            <track kind="captions" />
+          </video>
+          <div class="mt-1.5 flex items-center justify-between gap-2">
+            <span class="min-w-0 truncate text-[0.625rem] text-dimmed"
+              >Latest export · {exportPath.split('/').at(-1)}</span
+            >
+            <button
+              type="button"
+              class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title={`Open the live ${noun} preview in the in-app browser`}
+              aria-label={`Open the live ${noun} preview in the in-app browser`}
+              onclick={() => void openPreview(selected.entry)}
+            >
+              Live preview
+            </button>
+          </div>
+        {:else}
           <button
             type="button"
-            class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title={`Open the live ${noun} preview in the in-app browser`}
-            aria-label={`Open the live ${noun} preview in the in-app browser`}
+            class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated"
+            title={`Open the ${noun} preview to play, scrub and export`}
+            aria-label={`Open the ${noun} preview to play, scrub and export`}
             onclick={() => void openPreview(selected.entry)}
           >
-            Live preview
-          </button>
-        </div>
-      {:else}
-        <button
-          type="button"
-          class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated"
-          title={`Open the ${noun} preview to play, scrub and export`}
-          aria-label={`Open the ${noun} preview to play, scrub and export`}
-          onclick={() => void openPreview(selected.entry)}
-        >
-          {#if gallery[0]?.dataUrl}
-            <img
-              src={gallery[0].dataUrl}
-              alt={`Preview of the ${noun} ${selectedName}`}
-              class="block max-h-72 w-full object-contain"
-            />
-          {:else}
+            {#if gallery[0]?.dataUrl}
+              <img
+                src={gallery[0].dataUrl}
+                alt={`Preview of the ${noun} ${selectedName}`}
+                class="block max-h-72 w-full object-contain"
+              />
+            {:else}
+              <span
+                class="flex aspect-video w-full flex-col items-center justify-center gap-1 text-dimmed"
+              >
+                {#if galleryBusy}
+                  <LoaderCircle size={14} class="animate-spin" />
+                  <span class="text-[0.625rem]">Capturing…</span>
+                {:else}
+                  <ImageOff size={14} />
+                  <span class="text-[0.625rem]">No preview yet.</span>
+                {/if}
+              </span>
+            {/if}
             <span
-              class="flex aspect-video w-full flex-col items-center justify-center gap-1 text-dimmed"
+              class="absolute inset-0 flex items-center justify-center bg-app/70 p-2 opacity-0 transition-opacity group-hover:opacity-100"
             >
-              {#if galleryBusy}
-                <LoaderCircle size={14} class="animate-spin" />
-                <span class="text-[0.625rem]">Capturing…</span>
-              {:else}
-                <ImageOff size={14} />
-                <span class="text-[0.625rem]">No preview yet.</span>
-              {/if}
+              <span class="text-[0.625rem] font-medium text-foreground">Play the {noun}</span>
             </span>
-          {/if}
-          <span
-            class="absolute inset-0 flex items-center justify-center bg-black/40 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-          >
-            <span class="text-[0.625rem] font-medium text-white">Play the {noun}</span>
-          </span>
-        </button>
-        <p class="mt-1.5 text-[0.625rem] text-dimmed">
-          Export the {noun} to play it here, or open the live preview to scrub the composition as it is.
-        </p>
-      {/if}
-    </div>
+          </button>
+          <p class="mt-1.5 text-[0.625rem] text-dimmed">
+            Open the live preview to play and scrub this {noun} in the in-app browser.
+          </p>
+        {/if}
+      </div>
+    {/if}
   {/snippet}
 
   {#snippet screenCard(screen: DesignScreenShot, full: boolean)}

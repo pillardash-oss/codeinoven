@@ -41,7 +41,7 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
-export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace' | 'peek'
+export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace' | 'peek' | 'panel'
 
 /**
  * A reason a DOM surface publishes while it is on screen and the native view
@@ -317,6 +317,10 @@ class BrowserVisibilityState {
     if (this.claims.has('peek')) return 'peek'
     if (this.claims.has('workspace')) return 'workspace'
     if (this.claims.has('fullscreen')) return 'fullscreen'
+    // A rail panel that is showing the page (the composition board) outranks the
+    // plain sidebar: it displays the tab deliberately, where the sidebar only
+    // owns the tab it happens to have active.
+    if (this.claims.has('panel')) return 'panel'
     const tabId = this.claims.get('sidebar')
     if (tabId === undefined) return null
     return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId

@@ -9,6 +9,13 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 /** A composition tab the app can drive, with the identity the transport needs. */
 export interface VideoCompositionTab extends BrowserCompositionTab {
   tabId: string
+  /** The scope that owns the tab, so a board can place its native view. */
+  projectId: string
+  threadId: string
+  /** The address the tab is showing, which is what re-attaching the view needs. */
+  url: string
+  /** The cookie jar the tab runs against, or null for the scope's own. */
+  boxId: string | null
 }
 
 function compositionKey(projectId: string, threadId: string): string {
@@ -44,7 +51,14 @@ class VideoTimelineState {
     subscribe('browser:state', (state) => {
       const key = compositionKey(state.projectId, state.threadId)
       if (state.composition) {
-        this.tabs.set(key, { ...state.composition, tabId: state.tabId })
+        this.tabs.set(key, {
+          ...state.composition,
+          tabId: state.tabId,
+          projectId: state.projectId,
+          threadId: state.threadId,
+          url: state.url,
+          boxId: state.boxId
+        })
         return
       }
       // A tab that is no longer showing a composition must not keep answering

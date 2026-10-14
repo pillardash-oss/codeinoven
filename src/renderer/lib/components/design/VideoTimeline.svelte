@@ -1,16 +1,14 @@
 <script lang="ts">
   import {
     Clapperboard,
+    MessageSquarePlus,
     Pause,
-    Pencil,
     Play,
-    Plus,
     SkipBack,
-    SkipForward,
-    Trash2,
-    X
+    SkipForward
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
+  import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
@@ -20,7 +18,6 @@
     videoAudioLanes,
     videoBandGeometry,
     videoCaptionBands,
-    videoFrameAt,
     videoTimecode,
     videoTimelineTicks
   } from '$shared/video/timeline'
@@ -40,8 +37,6 @@
   const POLL_MS = 200
   /** Lanes ask for a waveform each; past this many the rest are plain bands. */
   const WAVEFORM_LANE_LIMIT = 12
-  /** Main refuses a comment longer than this on send, so a note is written within it. */
-  const MAX_NOTE_LENGTH = 2_000
   const LANE_HEIGHT = '2.5rem'
 
   let studio = $state<VideoStudioDocument | null>(null)
@@ -56,10 +51,9 @@
   let reading = false
   let bandArea = $state<HTMLElement | null>(null)
 
-  /** The note being written or edited, and the second it belongs to. */
-  let editingId = $state<string | null>(null)
-  let draft = $state('')
-  let pinnedSeconds = $state<number | null>(null)
+  /** The note whose comment bubble is open, and where the bubble is anchored. */
+  let editing = $state<{ id: string; seconds: number } | null>(null)
+  let anchor = $state<{ x: number; y: number } | null>(null)
 
   const tab = $derived(videoTimelineState.compositionIn(projectId, threadId, directory))
   const duration = $derived(
@@ -70,8 +64,6 @@
   const time = $derived(playback?.time ?? 0)
   const playing = $derived(playback?.playing ?? false)
   const shown = $derived(Math.min(Math.max(scrubbing ? scrubSeconds : time, 0), duration))
-  /** Where a note would land: the pinned second, or wherever the playhead is. */
-  const noteSeconds = $derived(pinnedSeconds ?? shown)
   const playhead = $derived(`${(shown / duration) * 100}%`)
   const ticks = $derived(videoTimelineTicks(duration))
   const captions = $derived(videoCaptionBands(studio))
@@ -175,7 +167,6 @@
   /** Go to a second, pinning it, and show the frame the page draws there. */
   function goTo(seconds: number): void {
     const target = clamp(seconds)
-    pinnedSeconds = target
     void command('seek', target)
   }
 
@@ -211,49 +202,80 @@
     goTo(secondsAt(event.clientX))
   }
 
-  function editNote(id: string, seconds: number, comment: string): void {
-    editingId = id
-    draft = comment
-    goTo(seconds)
-  }
-
-  function resetDraft(): void {
-    editingId = null
-    pinnedSeconds = null
-    draft = ''
-  }
-
   /**
-   * Write or update the note at the pinned second, and attach it to the composer.
+   * Write one note on the conversation at a second.
    *
-   * The reference is a `PromptReference` like any other, so it appears in the
-   * composer the moment it is stored and travels with the next prompt. Its text
-   * is the descriptor the model reads, rebuilt here so a note moved to another
-   * second describes the second it actually sits at.
+   * The reference is a `PromptReference` like a quoted response selection or a
+   * picked design element, so it appears in the composer the moment it is stored
+   * and travels with the next prompt. Its text is the descriptor the model reads,
+   * rebuilt here so a note describes the second it actually sits at.
    */
-  function commit(): void {
-    const text = draft.trim().slice(0, MAX_NOTE_LENGTH)
-    if (!text) return
-    const id = editingId ?? newVideoNoteId()
+  function writeNote(id: string, seconds: number, comment: string): void {
     const existing = responseReferencesState.forThread(projectId, threadId)
     const previous = existing.find((candidate) => candidate.id === id)
     // Keep the tab a note was written against when the preview happens to be
     // closed right now, so editing it does not quietly cost the note its seek.
     const tabId = tab?.tabId ?? previous?.tabId
     const reference = {
-      ...videoNoteReference(id, noteSeconds, {
+      ...videoNoteReference(id, seconds, {
         directory,
         composition: tab,
         document: studio,
         ...(tabId ? { tabId } : {})
       }),
-      comment: text
+      comment
     }
     const merged = previous
       ? existing.map((candidate) => (candidate.id === id ? reference : candidate))
       : [...existing, reference]
     responseReferencesState.setForThread(projectId, threadId, merged)
-    resetDraft()
+  }
+
+  /** Where a bubble anchored to a second sits, in viewport coordinates. */
+  function anchorAt(seconds: number): { x: number; y: number } | null {
+    const element = bandArea
+    if (!element) return null
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0) return null
+    return { x: rect.left + (clamp(seconds) / duration) * rect.width, y: rect.top }
+  }
+
+  /** Open the comment bubble for a note, seeking the composition to its second. */
+  function openNote(id: string, seconds: number): void {
+    goTo(seconds)
+    anchor = anchorAt(seconds)
+    editing = { id, seconds }
+  }
+
+  /** Comment on the moment the playhead is on: write the note, then open its bubble. */
+  function startNote(): void {
+    const seconds = shown
+    const id = newVideoNoteId()
+    writeNote(id, seconds, '')
+    openNote(id, seconds)
+  }
+
+  /** Close the bubble, dropping a note the user left without a comment. */
+  function closeEditor(): void {
+    const current = editing
+    editing = null
+    anchor = null
+    if (!current) return
+    const note = responseReferencesState
+      .forThread(projectId, threadId)
+      .find((entry) => entry.id === current.id)
+    if (note && (note.comment ?? '').trim() === '') removeNote(current.id)
+  }
+
+  function saveComment(id: string, comment: string): void {
+    const current = editing
+    writeNote(id, current?.seconds ?? shown, comment)
+    editing = null
+    anchor = null
+  }
+
+  function draftComment(id: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(projectId, threadId, id, comment)
   }
 
   function removeNote(id: string): void {
@@ -262,20 +284,16 @@
       threadId,
       responseReferencesState.forThread(projectId, threadId).filter((entry) => entry.id !== id)
     )
-    if (editingId === id) resetDraft()
-  }
-
-  function onDraftKeydown(event: KeyboardEvent): void {
-    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter') return
-    event.preventDefault()
-    event.stopPropagation()
-    commit()
+    if (editing?.id === id) {
+      editing = null
+      anchor = null
+    }
   }
 
   function noteMarkerClass(active: boolean): string {
     return active
-      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-danger bg-danger/10 px-1.5 text-[0.5625rem] tabular-nums transition-colors'
-      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-accent bg-accent/20 px-1.5 text-[0.5625rem] tabular-nums transition-colors'
+      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-primary bg-primary/15 px-1.5 text-[0.5625rem] text-foreground tabular-nums transition-colors'
+      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-elevated px-1.5 text-[0.5625rem] text-muted tabular-nums transition-colors hover:text-foreground'
   }
 
   onMount(() => {
@@ -303,12 +321,7 @@
     if (!request || request.directory !== directory) return
     const match = notes.find((entry) => entry.reference.id === request.referenceId)
     videoNoteFocusState.consume(request.token)
-    if (match)
-      editNote(
-        match.reference.id,
-        match.reference.seconds ?? request.seconds,
-        match.reference.comment ?? ''
-      )
+    if (match) openNote(match.reference.id, match.reference.seconds ?? request.seconds)
     else goTo(request.seconds)
   })
 </script>
@@ -360,6 +373,16 @@
         onclick={() => step(1)}
       >
         <SkipForward size={13} />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        title="Comment on the moment the playhead is on"
+        aria-label="Comment on the moment the playhead is on"
+        disabled={!manifest}
+        onclick={startNote}
+      >
+        <MessageSquarePlus size={13} />
       </button>
     </div>
   </div>
@@ -456,11 +479,11 @@
             {@const seconds = note.reference.seconds ?? 0}
             <button
               type="button"
-              class={noteMarkerClass(note.reference.id === editingId)}
+              class={noteMarkerClass(note.reference.id === editing?.id)}
               style={`left: ${(Math.min(seconds, duration) / duration) * 100}%`}
               title={`${videoTimecode(seconds)} ${note.reference.comment ?? ''}`}
               aria-label={`Edit video note ${note.number}`}
-              onclick={() => editNote(note.reference.id, seconds, note.reference.comment ?? '')}
+              onclick={() => openNote(note.reference.id, seconds)}
             >
               <Clapperboard size={9} aria-hidden="true" />
               {note.number}
@@ -475,77 +498,37 @@
         ></span>
       </div>
 
-      <form
-        class="mt-2 space-y-2"
-        onsubmit={(event) => {
-          event.preventDefault()
-          commit()
-        }}
-      >
-        <div class="flex items-center justify-between gap-2">
-          <span class="flex items-center gap-1.5 text-[0.6875rem] text-muted">
-            <Pencil size={11} aria-hidden="true" />
-            {editingId ? 'Editing note at' : 'New note at'}
-            <button
-              type="button"
-              class="rounded bg-elevated px-1.5 py-0.5 font-medium text-foreground tabular-nums"
-              title="Pin the note to this second, instead of following the playhead"
-              aria-label="Pin the note to this second"
-              onclick={() => (pinnedSeconds = shown)}
-            >
-              {videoTimecode(noteSeconds)}
-            </button>
-            <span class="text-dimmed">frame {videoFrameAt(noteSeconds, fps)}</span>
-          </span>
-          {#if editingId}
-            <button
-              type="button"
-              class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-              title="Stop editing this note"
-              aria-label="Stop editing this note"
-              onclick={resetDraft}
-            >
-              <X size={12} />
-            </button>
-          {/if}
-        </div>
-        <textarea
-          class="w-full resize-y rounded-lg border border-border bg-app px-2 py-1.5 text-xs text-foreground placeholder:text-dimmed focus:border-primary focus:outline-none"
-          rows="2"
-          placeholder="What should change at this moment? Time the cut, fix the caption, redraw the frame."
-          aria-label="Video note"
-          maxlength={MAX_NOTE_LENGTH}
-          bind:value={draft}
-          onkeydown={onDraftKeydown}></textarea>
-        <div class="flex items-center gap-2">
-          <button
-            type="submit"
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={draft.trim().length === 0}
-            title={editingId
-              ? 'Update this note and keep it on the composer'
-              : 'Attach this note to the composer'}
-            aria-label={editingId ? 'Update this note' : 'Attach this note to the composer'}
-          >
-            <Plus size={12} aria-hidden="true" />
-            {editingId ? 'Update note' : 'Add note'}
-          </button>
-          {#if editingId}
-            <button
-              type="button"
-              class="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
-              title="Delete this note and detach it from the composer"
-              aria-label="Delete this note"
-              onclick={() => removeNote(editingId ?? '')}
-            >
-              <Trash2 size={12} aria-hidden="true" /> Delete
-            </button>
-          {/if}
-          <span class="text-[0.6875rem] text-dimmed">
-            {notes.length} note{notes.length === 1 ? '' : 's'} attached to this conversation
-          </span>
-        </div>
-      </form>
+      <p class="mt-2 flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
+        <MessageSquarePlus size={11} aria-hidden="true" />
+        {notes.length === 0
+          ? 'No comments on this composition yet.'
+          : `${notes.length} comment${notes.length === 1 ? '' : 's'} on this composition`}
+      </p>
+
+      {#if editing && anchor}
+        <!--
+          A moment is commented on the way every other annotation is: the one
+          comment bubble the app draws, anchored to the second it belongs to.
+          The bubble is a fixed-position overlay, so it takes no space in the
+          timeline and the editor below stays a timeline.
+        -->
+        <ResponseAnnotationComment
+          x={anchor.x}
+          y={anchor.y}
+          title="Comment on this moment"
+          dragHandleTitle="Move moment comment"
+          closeLabel="Close moment comment"
+          removeTitle="Remove this note and its comment"
+          initialComment={notes.find((entry) => entry.reference.id === editing?.id)?.reference
+            .comment ?? ''}
+          targetId={`video-note-comment-${threadId}-${editing.id}`}
+          scope={{ kind: 'project', projectId }}
+          onDraftChange={(comment) => draftComment(editing?.id ?? '', comment)}
+          onDone={(comment) => saveComment(editing?.id ?? '', comment)}
+          onRemove={() => removeNote(editing?.id ?? '')}
+          onClose={closeEditor}
+        />
+      {/if}
     </div>
   {/if}
 </div>
