@@ -181,9 +181,10 @@
     blocksBrowserView?: boolean
     /** Render above browser page shells and Peek flight animations. */
     abovePage?: boolean
-    /** Stable identity for an explicitly enabled native presentation. */
+    /** Stable identity for a custom native presentation, such as the switcher.
+     * Otherwise complete button dialogs automatically use native presentation. */
     nativeOverlay?: string
-    /** Ordinary dialogs stay in the app document. Custom native overlays opt in. */
+    /** Keep typing surfaces in one document throughout their screen changes. */
     nativePresentation?: boolean
     nativeReady?: boolean
     nativeFailed?: boolean
@@ -224,7 +225,7 @@
     blocksBrowserView = true,
     abovePage = false,
     nativeOverlay,
-    nativePresentation = nativeOverlay !== undefined,
+    nativePresentation = true,
     nativeReady = $bindable(false),
     nativeFailed = $bindable(false),
     onNativeHover,
