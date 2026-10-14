@@ -235,6 +235,10 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     return threadManager.markRead(projectId, safeThreadId)
   })
+  ipcMain.handle('thread:markUnread', async (_, projectId: string, threadId: string) => {
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    return threadManager.markUnread(projectId, safeThreadId)
+  })
   ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {

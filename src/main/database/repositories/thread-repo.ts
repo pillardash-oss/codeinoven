@@ -665,6 +665,51 @@ export class ThreadRepo {
   }
 
   /**
+   * Mark a thread unread without loading it through the main SQLite connection.
+   * The counterpart of {@link markReadViaWorker}: a user-requested unread mark
+   * from a thread actions menu. `lastActivity` is deliberately untouched so
+   * flagging an old thread never rewrites when it actually ran.
+   */
+  async markUnreadViaWorker(
+    projectId: string,
+    id: string
+  ): Promise<{ thread: Thread; changed: boolean } | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM threads WHERE id = ? AND project_id = ?',
+      [id, projectId],
+      1
+    )
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadRow[])[0]
+    if (!row) return null
+
+    const wasRead = row.read === 1
+    if (wasRead) {
+      const updated = await this.db.executeViaWorker(
+        'UPDATE threads SET read = 0 WHERE id = ? AND project_id = ? AND read = 1',
+        [id, projectId]
+      )
+      if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread unread')
+    }
+
+    const thread = rowToThread(row)
+    thread.read = false
+    const usage = await this.db.queryViaWorker(
+      `SELECT harness_id
+       FROM harness_usage
+       WHERE thread_id = ?
+       GROUP BY harness_id
+       ORDER BY MAX(last_used_at) DESC`,
+      [id],
+      0
+    )
+    if (usage.ok && usage.rows.length > 0) {
+      thread.usedHarnessIds = usage.rows.map((entry) => String(entry['harness_id']))
+    }
+    return { thread, changed: wasRead }
+  }
+
+  /**
    * Persist a thread's draft state on the database worker: the edge-triggered
    * `drafting` flag (immediately, so listings never drop a thread that is
    * being composed or dictated) and the debounce-committed draft content.

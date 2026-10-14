@@ -197,6 +197,7 @@ export const invokeThreadContract = {
     import('../types').TurnStreamPartsPage | import('../types').TurnStreamPartsChange
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
+  'thread:markUnread': {} as Contract<[projectId: string, threadId: string], Thread>,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */
   'thread:draftActivity': {} as Contract<
     [projectId: string, threadId: string, drafting: boolean],

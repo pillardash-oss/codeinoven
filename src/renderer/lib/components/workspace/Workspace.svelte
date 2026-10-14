@@ -49,6 +49,7 @@
     chatEffectiveSettings,
     threadSettings
   } from '$lib/stores/thread-settings.svelte'
+  import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
     findEmptyNewThread,
@@ -2165,6 +2166,8 @@
   $effect(() => {
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
+      // A thread that reads as read by any path ends a deliberate unread mark.
+      if (updated.read) threadUnreadIntent.clear(updated.id)
       scopeState.updateThread(updated)
       // Children stay out of the sidebar list, but the read flow below must
       // still cover them: the coordinator panel renders a worker's live status
@@ -2227,6 +2230,8 @@
     const thread = selectedThread
     if (!thread || thread.id === readSettledThreadId) return
     readSettledThreadId = thread.id
+    // Selecting the thread is opening it: a deliberate unread mark ends here.
+    threadUnreadIntent.clear(thread.id)
     // Only a thread that tracks read status settles here: a regular thread, or
     // a worker whose reporting the user switched off (the coordinator panel
     // shows its status chip, so an opened or selected non-reporting worker must
@@ -2280,6 +2285,7 @@
     return subscribe('thread:deleted', (projectId, threadId) => {
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
       scopeState.removeThread(threadId)
+      threadUnreadIntent.clear(threadId)
       const browserTabIds = contextSidebarState.removeThreadBrowsers(projectId, threadId)
       if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
         browserFullscreenTabId = null
@@ -4109,6 +4115,9 @@
 
   /** Entry point that gates duplicate in-flight requests per thread. */
   function requestThreadRead(projectId: string, threadId: string): void {
+    // A deliberate unread mark outranks the automatic settle: keep the thread
+    // unread until the user opens it again (see `threadUnreadIntent`).
+    if (threadUnreadIntent.has(threadId)) return
     const key = `${projectId}:${threadId}`
     if (pendingReadThreads.has(key)) return
     pendingReadThreads.add(key)
@@ -4129,6 +4138,8 @@
   function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
+    // Opening a thread is the signal that ends a deliberate unread mark.
+    threadUnreadIntent.clear(thread.id)
     if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread)

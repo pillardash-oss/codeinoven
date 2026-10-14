@@ -1197,6 +1197,20 @@ export class ThreadManager {
   }
 
   /**
+   * Mark a thread unread at the user's request (a thread actions menu). The
+   * broadcast lets every window settle its badge; the renderer keeps the mark
+   * from being auto-undone while the thread stays open (see `threadUnreadIntent`).
+   */
+  async markUnread(projectId: string, threadId: string): Promise<Thread> {
+    const result = await this.threadRepo.markUnreadViaWorker(projectId, threadId)
+    if (!result) {
+      throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+    }
+    if (result.changed) this.onChange?.(result.thread)
+    return result.thread
+  }
+
+  /**
    * Persist a thread's draft state: the edge-triggered `drafting` flag and the
    * debounce-committed draft content. Broadcasts a lightweight draft event so
    * every renderer keeps its draft indicators in sync
