@@ -1719,6 +1719,15 @@ export class GlobalBrowserState {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
     const closing = this.tabs[index]
+    // The strip order must be read before the tab is removed. It is derived from
+    // `this.tabs`, so once the closing tab is gone its row position cannot be
+    // found there, and a lookup after the removal resolves to nothing. The strip
+    // order is what "the previous tab" means   the stored list order is not it,
+    // because a grouped tab keeps its stored index while its row moves into the
+    // fold, so a pinned or grouped row would otherwise move the landing tab.
+    const stripBeforeClose = this.stripOrder
+    const visualIndex = stripBeforeClose.findIndex((tab) => tab.id === tabId)
+    const visuallyRemaining = stripBeforeClose.filter((tab) => tab.id !== tabId)
     this.closeSourcePeek(tabId)
     if (options.recordForReopen !== false) this.rememberClosedTab(closing, index)
     // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
@@ -1733,15 +1742,12 @@ export class GlobalBrowserState {
     if (this.activeTabId === tabId) {
       // Closing the active tab lands on the previous tab of the strip order,
       // not the next one, so focus moves back through the tabs as the user
-      // sees them. The stored list order is not that: a grouped tab keeps its
-      // stored position while its row moves into the fold, so the neighbour
-      // is read off `stripOrder` instead. Closing the first row has no
-      // previous, so it falls through to what is now first.
-      const visualIndex = this.stripOrder.findIndex((tab) => tab.id === tabId)
-      const visuallyRemaining = this.stripOrder.filter((tab) => tab.id !== tabId)
+      // sees them. Closing the first row has no previous, so it falls through
+      // to what is now first; only a strip with nothing left lands on the
+      // empty state.
       const neighbour =
         visuallyRemaining[visualIndex - 1] ??
-        visuallyRemaining[Math.min(visualIndex, visuallyRemaining.length - 1)]
+        visuallyRemaining[Math.min(Math.max(visualIndex, 0), visuallyRemaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) {
         neighbour.lastUsedAt = Date.now()
