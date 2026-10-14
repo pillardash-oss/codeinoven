@@ -354,23 +354,25 @@
   aria-label="Context and provider usage"
   onmouseleave={onHide}
 >
+  <!-- Console usage control: a flat meter and its number, the shape the chosen
+       composer draws. The bar keeps the app's severity colours, so a nearly
+       full context still reads amber then red at a glance. -->
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+    class="flex h-8 items-center gap-2 rounded-xs px-2 text-muted transition-colors hover:bg-elevated hover:text-foreground"
     onmouseenter={onReveal}
     aria-label={boundedPercent === undefined
       ? 'Context usage unavailable'
       : `Context ${Math.round(boundedPercent)}% used`}
     title="Context and usage"
   >
-    <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
+    <span class="h-1 w-8 shrink-0 overflow-hidden bg-overlay" aria-hidden="true">
       <span
-        class={`block h-full rounded-[1px] ${fillClass}`}
+        class={`block h-full ${fillClass} transition-[width] duration-700 ease-out`}
         style={`width: ${boundedPercent ?? 0}%`}
       ></span>
-      <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
     </span>
-    <span class="context-usage-label tabular-nums text-[0.625rem]">{percentLabel}</span>
+    <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
   </button>
 
   <div

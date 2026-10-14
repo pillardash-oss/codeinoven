@@ -11901,6 +11901,7 @@
       {thread}
       {settings}
       {busy}
+      variant="segment"
       onSettingsChange={updateSettings}
     />
   {:catch}

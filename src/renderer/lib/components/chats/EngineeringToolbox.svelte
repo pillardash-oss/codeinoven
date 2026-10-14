@@ -153,7 +153,7 @@
 <div class="relative">
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded-lg transition-colors {filled
+    class="flex h-8 w-8 items-center justify-center rounded-lg transition-colors {filled
       ? 'text-thread-spec'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     title="Engineering Toolbox"

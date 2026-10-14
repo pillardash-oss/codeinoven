@@ -31,7 +31,7 @@
 <!-- Permission level selector -->
 {#if readOnlyMode}
   <span
-    class="flex shrink-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
+    class="flex h-8 shrink-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 text-[0.6875rem] whitespace-nowrap text-muted"
     title="Temporary chats can inspect context but cannot modify files or run commands"
   >
     <Shield size={12} class="shrink-0" />
@@ -43,7 +43,7 @@
   <div class="relative shrink-0">
     <button
       type="button"
-      class="flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {permissionLevel ===
+      class="flex h-8 min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {permissionLevel ===
       'full_access'
         ? 'font-bold text-warning'
         : 'text-muted hover:text-foreground'}"

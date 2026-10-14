@@ -291,12 +291,12 @@
   })
 </script>
 
-<div class="flex min-w-0 items-center gap-1.5">
+<div class="flex min-w-0 items-center gap-px whitespace-nowrap">
   <!-- Project scope -->
   <div class="relative min-w-0">
     <button
       type="button"
-      class="flex w-full min-w-0 cursor-pointer items-center gap-1 rounded-md transition-opacity hover:opacity-85"
+      class="group flex h-6 min-w-0 shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-haspopup="menu"
       aria-expanded={menuOpen}
       title={isNewThread
@@ -320,9 +320,11 @@
           <FolderTree size={12} class="text-warning" />
         </span>
       {/if}
-      <ScopeBadge {bucket} size="sm" />
+      <ScopeBadge {bucket} size="sm" variant="mark" />
       {#if isNewThread}
-        <span class="shrink-0 text-dimmed">
+        <span
+          class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
+        >
           <ChevronDown size={11} />
         </span>
       {/if}
@@ -375,39 +377,52 @@
       disabled={!isNewThread}
       side="top"
       align="start"
-      class="shoe-project flex max-w-48 min-w-0 items-center gap-2 justify-start"
+      class="shoe-project group flex h-6 max-w-48 min-w-0 shrink items-center justify-start gap-1.5 px-1.5 text-[0.6875rem] text-muted hover:text-foreground"
       ariaLabel={isNewThread ? 'Change the project of this new thread' : `Project: ${project.name}`}
     >
       {#if project.iconUrl}
-        <img src={project.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+        <img src={project.iconUrl} alt="" class="h-3 w-3 shrink-0 rounded" />
       {:else}
-        <Folder size={13} class="shrink-0 text-dimmed" />
+        <Folder
+          size={12}
+          class="shrink-0 text-dimmed transition-colors group-hover:text-foreground"
+        />
       {/if}
       <ProjectIdentity
         {project}
         class="shoe-identity min-w-0"
-        nameClass="text-xs font-medium text-foreground"
+        nameClass="text-[0.6875rem] font-semibold text-foreground"
         locationClass="shoe-identity-location text-[0.5625rem] text-dimmed"
         showLocation={hasProjectNameCollision(project, scopeState.projectRecords)}
       />
+      {#if isNewThread}
+        <span
+          class="shoe-project-chevron shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
+        >
+          <ChevronDown size={11} />
+        </span>
+      {/if}
     </ProjectSwitch>
   {/if}
+
+  <!-- One hairline separates where the work runs from what runs it. -->
+  <span class="mx-1 h-3 w-px shrink-0 bg-border-strong" aria-hidden="true"></span>
 
   {#if oven}
     {@render oven()}
   {:else}
     <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
     <span
-      class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
+      class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs px-1.5 text-[0.6875rem] text-muted"
       title={source === 'ssh'
         ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
         : 'Project runs locally on this machine'}
     >
       {#if source === 'ssh'}
-        <Globe size={10} class="shrink-0" />
+        <Globe size={11} class="shrink-0 text-dimmed" />
         <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
       {:else}
-        <Monitor size={10} class="shrink-0" />
+        <Monitor size={11} class="shrink-0 text-dimmed" />
         <span>Local</span>
       {/if}
     </span>
@@ -415,21 +430,21 @@
 
   {#if project?.branch}
     <span
-      class="flex min-w-0 shrink items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
+      class="flex h-6 min-w-0 shrink items-center gap-1.5 rounded-xs px-1.5 text-[0.6875rem] text-muted"
       title={branchPillTitle}
     >
-      <GitBranch size={9} class="shrink-0" />
+      <GitBranch size={11} class="shrink-0 text-dimmed" />
       <span class="truncate">{project.branch}</span>
     </span>
   {/if}
 
   <!-- Worker reporting: green while the worker hands its finished task back to
-       the Sr. Engineer, amber and bold when it keeps the work private. -->
+       the Sr. Engineer, amber when it keeps the work private. -->
   {#if report}
     <div class="relative min-w-0 shrink">
       <button
         type="button"
-        class="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] whitespace-nowrap transition-colors hover:bg-elevated {report.enabled
+        class="flex h-6 min-w-0 max-w-full shrink items-center gap-1.5 px-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {report.enabled
           ? 'text-success'
           : 'font-bold text-warning'}"
         aria-haspopup="menu"
@@ -443,9 +458,9 @@
         onclick={toggleReportMenu}
       >
         {#if report.enabled}
-          <ClipboardCheck size={10} class="shrink-0" />
+          <ClipboardCheck size={12} class="shrink-0" />
         {:else}
-          <ClipboardX size={10} strokeWidth={2.75} class="shrink-0" />
+          <ClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
         {/if}
         <span class="shoe-report-label min-w-0 truncate"
           >{report.enabled ? 'Reporting' : 'Not reporting'}</span
@@ -554,7 +569,7 @@
 
   @container (max-width: 630px) {
     :global(.shoe-project) {
-      max-width: 8rem;
+      max-width: 9rem;
     }
 
     :global(.shoe-identity .shoe-identity-location) {
@@ -569,10 +584,11 @@
 
   @container (max-width: 490px) {
     :global(.shoe-project) {
-      max-width: 1.25rem;
+      max-width: 1.75rem;
     }
 
-    :global(.shoe-identity) {
+    :global(.shoe-identity),
+    .shoe-project-chevron {
       display: none;
     }
 

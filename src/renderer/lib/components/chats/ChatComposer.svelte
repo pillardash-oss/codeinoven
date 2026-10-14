@@ -5,6 +5,8 @@
   import { fade } from 'svelte/transition'
   import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
   import { motionDuration } from '$lib/motion'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import ShortcutHint from '../ui/ShortcutHint.svelte'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -1850,13 +1852,34 @@
 />
 
 <div
-  class="chat-composer relative z-10 border bg-surface shadow-sm {expansion.maximized
+  class="chat-composer relative z-10 border bg-surface {expansion.maximized
     ? 'composer-maximized'
     : ''}"
   data-onboarding="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
 >
+  <!-- Console header: the writing surface names itself, and the two keys that end
+       it are shown where the hand already is. While a turn streams the strip
+       adds the steer key that jumps the queue and nothing else: no trace, no
+       pulse, because motion in the field the user is typing into is noise. -->
+  <div
+    class="composer-head flex min-w-0 items-center gap-2 overflow-hidden border-b border-border bg-elevated px-3 py-1.5"
+  >
+    <span
+      class="composer-head-title shrink-0 text-[0.625rem] font-semibold tracking-[0.08em] text-foreground uppercase"
+      >Message</span
+    >
+    <span class="composer-head-hints ml-auto flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+      <ShortcutHint keys={keymapState.keysFor('chat-send')} />
+      <span class="composer-hint-text text-[0.625rem] tracking-[0.02em] text-dimmed">send</span>
+      {#if working}
+        <ShortcutHint keys={keymapState.keysFor('chat-steer')} />
+        <span class="composer-hint-text text-[0.625rem] tracking-[0.02em] text-dimmed">steer</span>
+      {/if}
+    </span>
+  </div>
+
   {#if imageDescriptorGateOpen}
     <ChatComposerImageGate
       {providers}
@@ -1941,7 +1964,7 @@
     {onRemoveAllReferences}
   />
 
-  <div class="relative">
+  <div class="relative" style="--editor-gutter: 2.25rem">
     {#if slashOpen}
       <SlashActionMenu
         actions={slash.available}
@@ -1984,10 +2007,14 @@
       </button>
     {/if}
 
+    <!-- The console prompt: the marker the writing line hangs off, in the gold
+         this workstation keeps for the few places that earn it. It inks up and
+         steps forward while the field has focus, and it is never selectable. -->
+    <span class="composer-prompt" aria-hidden="true">&gt;</span>
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
-      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-3.5 text-sm leading-5 text-foreground outline-none {showExpandControl
+      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-9 text-sm leading-5 text-foreground outline-none {showExpandControl
         ? 'pr-10'
         : 'pr-3.5'}"
       bind:value
@@ -2004,7 +2031,9 @@
   </div>
 
   <!-- Bottom bar: + menu · model · thinking ··· send -->
-  <div class="composer-toolbar flex min-w-0 items-center gap-1 px-3 pb-2 pt-1">
+  <div
+    class="composer-toolbar flex min-w-0 items-center gap-1 border-t border-dashed border-border-strong px-3 pb-2 pt-1.5"
+  >
     <ChatComposerPlusMenu
       open={plusMenuOpen}
       onToggle={() => {
@@ -2114,7 +2143,7 @@
     {#if usageCreditsCommandId}
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Switch to API usage credits"
         title="Switch this session to pay-as-you-go API usage credits"
         onclick={runUsageCredits}
@@ -2159,7 +2188,7 @@
           ? 'bg-danger text-on-danger hover:bg-danger-hover'
           : canStop
             ? 'bg-danger/10 text-danger hover:bg-danger/20'
-            : 'bg-primary text-on-primary hover:bg-primary-hover'}"
+            : 'bg-accent text-on-accent hover:bg-accent-hover'}"
         aria-label={pendingStop
           ? 'Confirm stop'
           : canStop
@@ -2208,8 +2237,11 @@
      can size itself to its content. -->
 {#if scopeShoe}
   <div class="composer-shoe relative -mt-4 flex w-full justify-center px-4 pt-3 pb-2 @container">
+    <!-- The card frame is the console shoe: one surface, tucked behind the
+         composer so only its lower band shows. Its top padding is what holds the
+         segments clear of the composer's lower edge. -->
     <div
-      class="composer-shoe-card flex min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
+      class="composer-shoe-card flex min-w-0 items-center justify-center rounded-xs border border-border bg-surface px-0.5 pt-1.5 pb-1"
     >
       <ComposerShoe
         bind:this={scopeShoeComponent}
@@ -2253,7 +2285,58 @@
     width: 100%;
     transition:
       width 240ms ease,
-      margin-inline 240ms ease;
+      margin-inline 240ms ease,
+      border-color 220ms ease,
+      box-shadow 420ms ease;
+  }
+
+  /* At rest the composer is a bordered field; focus inks the border and lifts it
+     a hair, so the surface being written on is what the eye lands on. */
+  .chat-composer:focus-within {
+    border-color: var(--color-border-strong);
+    box-shadow: 0 0.5rem 1.5rem -0.75rem rgb(0 0 0 / 0.18);
+  }
+
+  /* The header strip: a thin band of chrome, so the composer reads as a console
+     block rather than an anonymous text box. Its key chips are the app's own
+     ShortcutHint, flipped to the surface colour they would otherwise blend into
+     on this elevated band (hence the :global   that element is a child
+     component's). The strip carries no motion of its own. */
+  :global(.composer-head kbd) {
+    height: 1rem;
+    padding-inline: 0.25rem;
+    background: var(--color-surface);
+    border-color: var(--color-border-strong);
+    color: var(--color-muted);
+    font-size: 0.5625rem;
+  }
+
+  /* The prompt marker sits in the editor's gutter, on the writing line, and
+     steps forward as focus arrives. It is decorative: the marker is
+     aria-hidden and the gutter is why the placeholder is inset too. */
+  .composer-prompt {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.875rem;
+    font-weight: 700;
+    line-height: 1.25rem;
+    color: var(--color-accent-hover);
+    opacity: 0.55;
+    pointer-events: none;
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease;
+  }
+
+  .chat-composer:focus-within .composer-prompt {
+    opacity: 1;
+    transform: translateX(0.125rem);
+  }
+
+  /* The shoe card carries the console shadow: a soft, short drop that separates
+     the bar from the canvas without turning it into a floating panel. */
+  .composer-shoe-card {
+    box-shadow: 0 0.5rem 1.25rem -0.875rem rgb(0 0 0 / 0.4);
   }
 
   /* Maximize   the editor is the composer's typing surface, so the control is
@@ -2312,6 +2395,18 @@
 
     .pending-stop-icon {
       display: block;
+    }
+
+    /* The hint words go before the strip can wrap; the keys stay, because a key
+       chip with no word next to it still says which key it is. */
+    .composer-hint-text {
+      display: none;
+    }
+  }
+
+  @container (max-width: 400px) {
+    .composer-head-hints {
+      display: none;
     }
   }
 

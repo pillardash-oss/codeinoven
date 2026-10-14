@@ -55,7 +55,7 @@
   <div class="relative">
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Chat options"
       aria-label="Chat options"
       aria-haspopup="menu"
