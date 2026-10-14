@@ -1113,7 +1113,8 @@ describe('cloudDeploy IPC', () => {
             uuid: 'app-1',
             name: 'Provider-Assigned Name',
             environment_id: 7,
-            status: 'running',
+            // Coolify reports the runtime state as `state:health`.
+            status: 'running:healthy',
             fqdn: 'https://app-1.example.dev'
           },
           {
