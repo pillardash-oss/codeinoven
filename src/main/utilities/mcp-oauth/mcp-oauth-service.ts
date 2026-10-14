@@ -107,7 +107,13 @@ export class McpOAuthService {
     return {
       utilityId,
       enabled: oauth?.enabled ?? false,
-      state: this.connectionState(utilityId, tokens, state?.tokensExpireAt, error),
+      state: this.connectionState(
+        utilityId,
+        tokens,
+        state?.tokensExpireAt,
+        error,
+        oauth !== undefined
+      ),
       required: oauth !== undefined || this.challenges.has(utilityId),
       ...(issuer ? { issuer } : {}),
       ...(clientId ? { clientId } : {}),
@@ -273,6 +279,14 @@ export class McpOAuthService {
         { serverUrl: url, ...this.challenge(utility.id) }
       )
       if (result !== 'AUTHORIZED') return null
+      // A disconnect may have landed while this renewal was in flight. The
+      // grant it just refreshed is not one the user asked to keep, so it is
+      // dropped again rather than left in the vault to resurrect later.
+      const current = await this.dependencies.registry.get(utility.id)
+      if (current?.kind !== 'mcp' || !current.config.oauth?.enabled) {
+        await store.clear()
+        return null
+      }
       await this.persistGrant(utility, {})
       this.lastErrors.delete(utility.id)
       return (await store.load())?.tokens?.access_token ?? null
@@ -323,9 +337,14 @@ export class McpOAuthService {
     utilityId: string,
     tokens: OAuthTokens | undefined,
     tokensExpireAt: number | undefined,
-    error: string | undefined
+    error: string | undefined,
+    /** Whether the utility carries an OAuth block at all. */
+    configured: boolean
   ): McpOAuthConnectionState {
     if (this.sessions.has(utilityId)) return 'authorizing'
+    // A grant without a configuration block is one nothing sends: disconnecting
+    // removes both, and reading the tokens alone would call that "connected".
+    if (!configured) return error ? 'error' : 'not_connected'
     if (!tokens?.access_token) return error ? 'error' : 'not_connected'
     // A refresh token renews an expired access token without the user, so the
     // grant is connected even when the token it holds right now is stale.
