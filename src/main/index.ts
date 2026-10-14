@@ -300,7 +300,13 @@ function getMacIconPath(): string {
  * `...Template.png` file, so the attention variant is a second asset rather
  * than a second colour.
  */
-function getTrayIconPath(attention: boolean): string {
+function getTrayIconPath(attention: boolean, darkTaskbar = false): string {
+  if (process.platform === 'win32') {
+    const name = `tray${attention ? 'Attention' : ''}-${darkTaskbar ? 'dark' : 'light'}.ico`
+    return !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/windows', name)
+      : join(mainBundleDirectory, '../renderer/windows', name)
+  }
   const name = attention ? 'trayAttentionTemplate.png' : 'trayTemplate.png'
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/macos', name)
@@ -366,7 +372,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
-  resolveTrayIcon: (attention) => getTrayIconPath(attention)
+  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar)
 })
 state.backgroundLifecycle = backgroundLifecycle
 

@@ -15,11 +15,11 @@
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
 import pngToIco from 'png-to-ico'
 import { Logger } from '../src/main/system/logger'
+import { buildWindowsTrayIcons } from './build-windows-tray-icons'
 
 const root = join(import.meta.dir, '..')
 const staticDir = join(root, 'src/renderer/static')
@@ -42,56 +42,61 @@ function renderOpaque(svg: string, size: number, backdrop: string): Buffer {
   return renderPng(withBackdrop, size)
 }
 
-const outputs: Array<[string, Buffer]> = [
-  ['icon.png', renderPng(master, 1024)],
-  ['favicon.png', renderPng(master, 180)],
-  // Opaque rasters: Windows shows taskbar/window icons over arbitrary
-  // surfaces, and the historic flat black look came from a fully opaque
-  // square — keep those rasters opaque but let the squircle corners show the
-  // dark backdrop instead of pure black.
-  ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
-]
-
-for (const [name, buffer] of outputs) {
-  writeFileSync(join(staticDir, name), buffer)
-}
-Logger.dev(`[build-app-icons] Wrote ${outputs.length} raster assets to ${staticDir}.`)
-
-// Multi-size Windows favicon: PNG-compressed 16→256 entries in one .ico.
-const icoSizes = [16, 24, 32, 48, 64, 128, 256]
-const ico = await pngToIco(icoSizes.map((size) => renderPng(master, size)))
-writeFileSync(join(staticDir, 'favicon.ico'), ico)
-Logger.dev(`[build-app-icons] Wrote favicon.ico (${icoSizes.join('/')}px).`)
-
-// macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
-// shape with transparent margins; macOS composites its own drop shadow.
-const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
-mkdirSync(macosDir, { recursive: true })
-for (const size of iconSizes) {
-  writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
-}
-if (process.platform === 'darwin') {
-  const iconset = mkdtempSync(join(tmpdir(), 'cio-iconset-'))
-  const setDir = join(iconset, 'AppIcon.iconset')
-  mkdirSync(setDir)
-  const entries: Array<[string, number]> = [
-    ['icon_16x16.png', 16],
-    ['icon_16x16@2x.png', 32],
-    ['icon_32x32.png', 32],
-    ['icon_32x32@2x.png', 64],
-    ['icon_128x128.png', 128],
-    ['icon_128x128@2x.png', 256],
-    ['icon_256x256.png', 256],
-    ['icon_256x256@2x.png', 512],
-    ['icon_512x512.png', 512],
-    ['icon_512x512@2x.png', 1024]
+// Allow tray-only regeneration without rewriting unrelated app/Dock assets.
+if (!Bun.argv.includes('--windows-tray-only')) {
+  const outputs: Array<[string, Buffer]> = [
+    ['icon.png', renderPng(master, 1024)],
+    ['favicon.png', renderPng(master, 180)],
+    // Opaque rasters: Windows shows taskbar/window icons over arbitrary
+    // surfaces, and the historic flat black look came from a fully opaque
+    // square — keep those rasters opaque but let the squircle corners show the
+    // dark backdrop instead of pure black.
+    ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
   ]
-  for (const [name, size] of entries) {
-    writeFileSync(join(setDir, name), renderPng(master, size))
+
+  for (const [name, buffer] of outputs) {
+    writeFileSync(join(staticDir, name), buffer)
   }
-  execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
-  rmSync(iconset, { recursive: true, force: true })
-  Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
+  Logger.dev(`[build-app-icons] Wrote ${outputs.length} raster assets to ${staticDir}.`)
+
+  // Multi-size Windows favicon: PNG-compressed 16→256 entries in one .ico.
+  const icoSizes = [16, 24, 32, 48, 64, 128, 256]
+  const ico = await pngToIco(icoSizes.map((size) => renderPng(master, size)))
+  writeFileSync(join(staticDir, 'favicon.ico'), ico)
+  Logger.dev(`[build-app-icons] Wrote favicon.ico (${icoSizes.join('/')}px).`)
+
+  // macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
+  // shape with transparent margins; macOS composites its own drop shadow.
+  const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
+  mkdirSync(macosDir, { recursive: true })
+  for (const size of iconSizes) {
+    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
+  }
+  if (process.platform === 'darwin') {
+    const scratchDir = join(root, '.cio/tmp')
+    mkdirSync(scratchDir, { recursive: true })
+    const iconset = mkdtempSync(join(scratchDir, 'cio-iconset-'))
+    const setDir = join(iconset, 'AppIcon.iconset')
+    mkdirSync(setDir)
+    const entries: Array<[string, number]> = [
+      ['icon_16x16.png', 16],
+      ['icon_16x16@2x.png', 32],
+      ['icon_32x32.png', 32],
+      ['icon_32x32@2x.png', 64],
+      ['icon_128x128.png', 128],
+      ['icon_128x128@2x.png', 256],
+      ['icon_256x256.png', 256],
+      ['icon_256x256@2x.png', 512],
+      ['icon_512x512.png', 512],
+      ['icon_512x512@2x.png', 1024]
+    ]
+    for (const [name, size] of entries) {
+      writeFileSync(join(setDir, name), renderPng(master, size))
+    }
+    execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
+    rmSync(iconset, { recursive: true, force: true })
+    Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
+  }
 }
 
 // Menu bar tray template images.
@@ -147,8 +152,13 @@ const trayOutputs: Array<[string, Buffer]> = [
   ['trayAttentionTemplate.png', renderPng(attentionMaster, 16)],
   ['trayAttentionTemplate@2x.png', renderPng(attentionMaster, 32)]
 ]
-for (const [name, buffer] of trayOutputs) {
-  writeFileSync(join(macosDir, name), buffer)
+if (!Bun.argv.includes('--windows-tray-only')) {
+  for (const [name, buffer] of trayOutputs) {
+    writeFileSync(join(macosDir, name), buffer)
+  }
+  Logger.dev(
+    `[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`
+  )
 }
-Logger.dev(`[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`)
+await buildWindowsTrayIcons(monoMaster, attentionMaster, join(staticDir, 'windows'))
 Logger.dev('[build-app-icons] Done.')

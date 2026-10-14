@@ -31,7 +31,9 @@ import {
   BrowserWindow,
   Menu,
   nativeImage,
+  nativeTheme,
   Notification,
+  screen,
   Tray,
   type MenuItemConstructorOptions,
   type NativeImage
@@ -97,8 +99,8 @@ export interface BackgroundLifecycleDeps {
   computeAttention: () => boolean
   /** Called when this instance becomes the owner of scheduled work. */
   onBecameOwner: () => void
-  /** Absolute path to the tray template art (attention variant when true). */
-  resolveTrayIcon: (attention: boolean) => string
+  /** Absolute path to platform tray art, using the Windows taskbar theme. */
+  resolveTrayIcon: (attention: boolean, darkTaskbar?: boolean) => string
 }
 
 /**
@@ -393,6 +395,12 @@ export class BackgroundLifecycleService {
       this.tray.setContextMenu(this.buildContextMenu())
       // A left click on the icon opens the app, matching every other menu bar app.
       this.tray.on('click', () => this.deps.openWindow())
+      if (process.platform === 'win32') {
+        nativeTheme.on('updated', this.refreshWindowsTray)
+        screen.on('display-metrics-changed', this.refreshWindowsTray)
+        screen.on('display-added', this.refreshWindowsTray)
+        screen.on('display-removed', this.refreshWindowsTray)
+      }
     } catch (error) {
       Logger.error('Could not create the menu bar icon', error)
       this.tray = null
@@ -400,6 +408,12 @@ export class BackgroundLifecycleService {
   }
 
   private destroyTray(): void {
+    if (process.platform === 'win32' && this.tray) {
+      nativeTheme.removeListener('updated', this.refreshWindowsTray)
+      screen.removeListener('display-metrics-changed', this.refreshWindowsTray)
+      screen.removeListener('display-added', this.refreshWindowsTray)
+      screen.removeListener('display-removed', this.refreshWindowsTray)
+    }
     this.tray?.destroy()
     this.tray = null
   }
@@ -414,7 +428,20 @@ export class BackgroundLifecycleService {
     }
   }
 
-  private loadTrayImage(attention: boolean): NativeImage {
+  private readonly refreshWindowsTray = (): void => {
+    this.updateTrayAppearance()
+  }
+
+  private loadTrayImage(attention: boolean): NativeImage | string {
+    if (process.platform === 'win32') {
+      // Keep the ICO path intact so Electron loads the native HICON at the
+      // Windows small-icon metric, choosing from all embedded resolutions.
+      // App theme and taskbar theme can differ on Windows.
+      return this.deps.resolveTrayIcon(
+        attention,
+        nativeTheme.shouldUseDarkColorsForSystemIntegratedUI
+      )
+    }
     const image = nativeImage.createFromPath(this.deps.resolveTrayIcon(attention))
     if (process.platform === 'darwin') image.setTemplateImage(true)
     return image
