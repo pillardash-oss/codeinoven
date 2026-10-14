@@ -24,6 +24,7 @@ import type {
   BrowserPermissionPromptContext,
   BrowserPopupWindow,
   BrowserShortcutBindings,
+  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
@@ -351,6 +352,24 @@ export const invokeBrowserContract = {
    * gesture; the chords come from the renderer's keymap, which main cannot read.
    */
   'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
+  /**
+   * Replace the app keymap chords a page may override.
+   *
+   * A key pressed in a page never reaches the renderer, so an app shortcut the
+   * page did not handle has to be recognised in main and replayed. This is every
+   * app-global chord the keymap answers, resolved per platform; main claims none
+   * of them itself, it only matches a chord the page reported as unhandled and
+   * hands it back.
+   */
+  'browser:setAppShortcutChords': {} as Contract<[chords: BrowserShortcutChord[]], void>,
+  /**
+   * Report whether a website may override the app's keymaps.
+   *
+   * On, main offers an overridable chord to the page first and only acts when the
+   * page leaves it unhandled. Off, main claims every app chord in the page and
+   * the app wins whether the page is focused or not.
+   */
+  'browser:setSiteKeymapOverride': {} as Contract<[allows: boolean], void>,
   /**
    * Report the address bar's active search engine. Main builds the browser's
    * native context menu and its "Search <engine> for ..." item, and holds no

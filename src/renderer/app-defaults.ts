@@ -54,6 +54,7 @@ export const defaultConfig: AppConfig = {
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+  browserAllowSiteKeymapOverride: true,
   backgroundMode: 'scheduled',
   launchAtLogin: false,
   launchAtLoginPrompted: false,

@@ -19,6 +19,7 @@
  */
 
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { publishBrowserAllowSiteKeymapOverride } from '$lib/browser-keymap-context'
 import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
 import { appConfigState } from './app-config.svelte'
 import { browserAssistant } from './browser-assistant.svelte'
@@ -76,4 +77,5 @@ export function startBrowserRuntime(): void {
   // before the first page exists to use them.
   publishBrowserScrollbarTheme()
   publishBrowserSearchEngine(appConfigState.browserSearchEngine)
+  publishBrowserAllowSiteKeymapOverride(appConfigState.browserAllowSiteKeymapOverride)
 }

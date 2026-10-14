@@ -447,6 +447,13 @@ export interface AppConfig {
    */
   browserHistoryLimit: number
   /**
+   * Let a page keep a shortcut the app also binds. On by default: a page that
+   * handles a chord itself (its own find, its own save) wins it, and a chord the
+   * page does not handle bubbles up to the app, which runs its own action. Off
+   * makes the app win every chord whether the page is focused or not.
+   */
+  browserAllowSiteKeymapOverride: boolean
+  /**
    * How the app behaves once its last window closes. On by default (`scheduled`)
    * so Assistant routines can fire while the window is closed.
    */
@@ -558,6 +565,7 @@ export type AppConfigPatch = Partial<
     | 'openAllLinksInCioBrowser'
     | 'browserHibernationMinutes'
     | 'browserHistoryLimit'
+    | 'browserAllowSiteKeymapOverride'
     | 'backgroundMode'
     | 'launchAtLogin'
     | 'launchAtLoginPrompted'

@@ -115,6 +115,7 @@ function defaultConfig(): AppConfig {
     maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
     browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
     browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+    browserAllowSiteKeymapOverride: true,
     backgroundMode: 'scheduled',
     launchAtLogin: true,
     launchAtLoginPrompted: false,

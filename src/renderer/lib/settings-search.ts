@@ -441,9 +441,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'browser-tabs',
     section: 'browser',
     blockId: 'browser-tabs',
-    title: 'Tab hibernation',
-    description: 'Free a browser tab’s memory after it sits unused for a while.',
-    keywords: ['tab', 'memory', 'hibernate', 'idle'],
+    title: 'Tab hibernation and page shortcuts',
+    description:
+      'Free a browser tab’s memory after it sits unused, and choose whether a website may override the app’s shortcuts.',
+    keywords: ['tab', 'memory', 'hibernate', 'idle', 'shortcut', 'keyboard', 'keymap', 'page'],
     icon: Globe
   },
   {

@@ -25,6 +25,7 @@ import type {
   BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
+  BrowserPageKey,
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
@@ -268,6 +269,13 @@ export const IPC_EVENT_CONTRACT = {
    * opens from inside a page exactly as it does from the app's own chrome.
    */
   'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
+  /**
+   * An app shortcut a page did not handle, replayed so the app's own keymap
+   * handlers run. Main offered the chord to the page first, so this is only sent
+   * for a chord the page left alone; the renderer rebuilds a `keydown` from it and
+   * dispatches it, which is what makes every existing binding work unchanged.
+   */
+  'browser:pageKey': [] as unknown as [key: BrowserPageKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Every popup window the browser holds, whole, after any change to one of

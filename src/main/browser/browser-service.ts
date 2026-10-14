@@ -58,9 +58,11 @@ import type {
   BrowserLoadError,
   BrowserPageState,
   BrowserPanelShortcutAction,
+  BrowserPageKey,
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
   BrowserScrollbarTheme,
@@ -153,6 +155,7 @@ import {
 import {
   matchBrowserShortcut,
   matchesBrowserChord,
+  isReservedBrowserAction,
   type ShortcutKeyInput
 } from './browser-service/browser-shortcuts'
 import {
@@ -213,6 +216,7 @@ import {
 } from './browser-service/browser-profile-store'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import { installBrowserHistorySwipe } from './browser-service/browser-history-swipe'
+import { BrowserPageKeys } from './browser-service/browser-page-keys'
 import {
   AGENT_REVEAL_GRACE_MS,
   DEFAULT_PARKED_VIEWPORT,
@@ -244,6 +248,7 @@ import {
   validateBoundedHost,
   validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
+  validateBrowserAppShortcutChords,
   validateBrowserShortcutBindings,
   validateBrowserStripInteraction,
   validateBrowserStripOverlayRequest,
@@ -311,6 +316,25 @@ function isRendererAnsweredAction(
   action: BrowserShortcutAction
 ): action is keyof typeof PANEL_SHORTCUT_TARGETS {
   return action in PANEL_SHORTCUT_TARGETS
+}
+
+/**
+ * The page-key shape of a key pressed in a page.
+ *
+ * The app chord table is matched against Electron's `Input`, while what travels
+ * to the renderer is the DOM event the page would have seen, so this is the one
+ * conversion between the two.
+ */
+function pageKeyFromInput(input: ShortcutKeyInput): BrowserPageKey {
+  return {
+    key: input.key.toLowerCase(),
+    code: input.code,
+    meta: input.meta,
+    control: input.control,
+    shift: input.shift,
+    alt: input.alt,
+    repeat: input.isAutoRepeat
+  }
 }
 
 /**
@@ -605,6 +629,28 @@ export class BrowserService {
   /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
+  /**
+   * Every app-global chord the keymap answers, pushed by the renderer.
+   *
+   * Main claims none of these itself. It matches a chord a page reported as
+   * unhandled against them and replays the chord so the app's own handler runs,
+   * which is the half of the browser's keyboard behaviour that has to happen after
+   * the page has had its turn.
+   */
+  private appShortcutChords: BrowserShortcutChord[] = []
+  /**
+   * Whether a page may keep a chord the app also binds.
+   *
+   * On, the shipped default: an overridable chord is offered to the page first and
+   * only runs the browser's or the app's action when the page leaves it unhandled.
+   * Off, the app claims every app chord in the page, so it wins whether the page is
+   * focused or not.
+   */
+  private allowSiteKeymapOverride = true
+  /** The page-side observer that reports a chord a page did not handle. */
+  private readonly pageKeys = new BrowserPageKeys({
+    onKey: (contents, key) => this.handlePageKey(contents, key)
+  })
   /**
    * Which find request each tab's page is answering.
    *
@@ -1492,6 +1538,15 @@ export class BrowserService {
     })
     replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
+    })
+    replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
+      this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
+    })
+    replaceHandler('browser:setSiteKeymapOverride', (_event, rawAllows) => {
+      if (typeof rawAllows !== 'boolean') {
+        throw new TypeError('Browser site keymap override must be a boolean')
+      }
+      this.allowSiteKeymapOverride = rawAllows
     })
     replaceHandler('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
@@ -3121,6 +3176,62 @@ export class BrowserService {
   }
 
   /**
+   * Act on a chord a page reported as unhandled.
+   *
+   * The page observer only reports what the page's own handlers left alone, so
+   * this is the app's turn. A browser action still runs when it is the browser
+   * that answers the chord (Save, which a page may override), an app chord is
+   * replayed into the renderer, which owns the DOM its keymap handlers live in,
+   * and anything else is a page key that merely carried a modifier and is dropped.
+   */
+  private handlePageKey(contents: WebContents, key: BrowserPageKey): void {
+    if (!this.allowSiteKeymapOverride) return
+    const input: ShortcutKeyInput = {
+      type: 'keyDown',
+      key: key.key,
+      code: key.code,
+      meta: key.meta,
+      control: key.control,
+      shift: key.shift,
+      alt: key.alt,
+      isAutoRepeat: key.repeat
+    }
+    const action = matchBrowserShortcut(input, this.shortcutBindings)
+    const popup = this.popupWindows.recordForContents(contents.id)
+    if (popup) {
+      if (action && !POPUP_UNCLAIMED_ACTIONS.has(action)) {
+        this.runPopupWindowShortcut(popup, action)
+        return
+      }
+    } else {
+      const owner = this.tabForContents(contents.id)
+      if (
+        owner &&
+        action &&
+        ((action !== 'designUndo' && action !== 'designRedo') ||
+          this.canUseScreenHistory(owner.id))
+      ) {
+        this.runBrowserShortcut(owner.id, action)
+        return
+      }
+    }
+    if (matchesBrowserChord(input, this.appShortcutChords)) this.dispatchPageKey(key)
+  }
+
+  /**
+   * Replay a chord into the renderer, which owns the keymap handlers.
+   *
+   * The app's web contents takes the keyboard first: the chords this carries open
+   * DOM surfaces (the spotlight's field, a dialog) that cannot receive typing
+   * while a page holds the OS keyboard.
+   */
+  private dispatchPageKey(key: BrowserPageKey): void {
+    if (this.window.webContents.isDestroyed()) return
+    this.window.webContents.focus()
+    sendToRenderer(this.window.webContents, 'browser:pageKey', key)
+  }
+
+  /**
    * Resolve a key pressed while the browser toolbar holds DOM focus.
    *
    * That key goes to the app renderer, so the window-level interception is the
@@ -3375,12 +3486,31 @@ export class BrowserService {
         return
       }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
-      if (
+      const usable =
         action &&
         ((action !== 'designUndo' && action !== 'designRedo') || this.canUseScreenHistory(tabId))
-      ) {
+          ? action
+          : null
+      if (this.allowSiteKeymapOverride) {
+        // The page goes first. Reserved chrome is still claimed here   no page can
+        // answer a reload or a tab close, and the application menu would take the
+        // key instead   and every other chord is left to the page, which reports
+        // back the ones it did not handle (see `handlePageKey`).
+        if (usable && isReservedBrowserAction(usable)) {
+          event.preventDefault()
+          this.runBrowserShortcut(tabId, usable)
+        }
+        return
+      }
+      // The app wins every chord, whether the page is focused or not.
+      if (usable) {
         event.preventDefault()
-        this.runBrowserShortcut(tabId, action)
+        this.runBrowserShortcut(tabId, usable)
+        return
+      }
+      if (matchesBrowserChord(input, this.appShortcutChords)) {
+        event.preventDefault()
+        this.dispatchPageKey(pageKeyFromInput(input))
       }
     })
     // The page itself never sees the application's DOM menus, so this is where
@@ -3403,6 +3533,9 @@ export class BrowserService {
     // for the microphone.
     view.webContents.on('dom-ready', () => {
       installBrowserHistorySwipe(view.webContents)
+      // The observer that reports a chord the page did not handle, so the app's
+      // own shortcuts still reach the app from inside a page.
+      this.pageKeys.install(view.webContents)
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
@@ -4276,6 +4409,8 @@ export class BrowserService {
     })
     // A popup's keys reach its own page and then the application menu, where
     // Cmd/Ctrl+W would close the app window rather than this popup.
+    contents.on('dom-ready', () => this.pageKeys.install(contents))
+    contents.on('destroyed', () => this.pageKeys.release(contents))
     contents.on('before-input-event', (event, input) => {
       if (this.consumeSwitcherKey(input)) {
         event.preventDefault()
@@ -4285,9 +4420,25 @@ export class BrowserService {
       // A popup answers the browser's chords except the ones that need chrome it
       // does not have (see `POPUP_UNCLAIMED_ACTIONS`): those are left to the page
       // rather than prevented into a no-op.
-      if (!action || POPUP_UNCLAIMED_ACTIONS.has(action)) return
-      event.preventDefault()
-      this.runPopupWindowShortcut(record, action)
+      const usable = action && !POPUP_UNCLAIMED_ACTIONS.has(action) ? action : null
+      if (this.allowSiteKeymapOverride) {
+        // Reserved chrome is claimed; the rest is the page's until it reports it
+        // did not handle it, exactly as for a tab's page.
+        if (usable && isReservedBrowserAction(usable)) {
+          event.preventDefault()
+          this.runPopupWindowShortcut(record, usable)
+        }
+        return
+      }
+      if (usable) {
+        event.preventDefault()
+        this.runPopupWindowShortcut(record, usable)
+        return
+      }
+      if (matchesBrowserChord(input, this.appShortcutChords)) {
+        event.preventDefault()
+        this.dispatchPageKey(pageKeyFromInput(input))
+      }
     })
     contents.on('context-menu', (_event, params) => {
       this.showPopupWindowContextMenu(record, params)
@@ -6902,6 +7053,7 @@ export class BrowserService {
     // Likewise a destroyed page cannot be given the keyboard back on return.
     if (this.keyboardOwnerTabId === tabId) this.keyboardOwnerTabId = null
     if (this.restorePageFocusTabId === tabId) this.restorePageFocusTabId = null
+    if (removedContents) this.pageKeys.release(removedContents)
     this.injectedDialogLabels.delete(tabId)
     this.extensionNavigationUrls.delete(tabId)
     this.forgetParked(tabId)

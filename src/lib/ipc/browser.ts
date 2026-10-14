@@ -370,10 +370,12 @@ export interface BrowserDevToolsState {
  * hard reload, history back and forward, focusing the address bar, zoom,
  * DevTools, and the tab actions. A page holds the keyboard through its own view,
  * so a key pressed in a page would otherwise reach the application menu; these
- * are claimed so it acts on the page instead. Every page-overridable chord (find
- * and the app's own shortcuts) is deliberately outside this set, so a page that
- * draws its own find keeps `mod+f`, and an unbound action leaves the key to the
- * rest of the app.
+ * are claimed so it acts on the page instead.
+ *
+ * Most of the set is the browser's reserved chrome, which no page can answer and
+ * which the app therefore claims whether or not the user lets a site override the
+ * app's keymaps. `savePage` is the one page-overridable member: a site that draws
+ * its own Save handler keeps `mod+s` and this only runs for a site that does not.
  */
 export const BROWSER_SHORTCUT_ACTIONS = [
   'reload',
@@ -427,6 +429,28 @@ export type BrowserSwitcherBindings = BrowserShortcutChord[]
 export interface BrowserSwitcherKey {
   /** Whether Shift was held, i.e. the user is cycling backward. */
   backward: boolean
+}
+
+/**
+ * One keyboard chord a page did not handle, reported up so the app can act on it.
+ *
+ * The page is a native `WebContentsView`, so a key pressed in it never reaches the
+ * renderer's DOM handlers, and a page that draws its own shortcut (its own find,
+ * its own save) must keep the chord. An injected page script therefore reports a
+ * chord only when the page's own handlers left it unhandled, and main replays it as
+ * this shape: enough of the DOM event to rebuild one the app's keymap can match.
+ */
+export interface BrowserPageKey {
+  /** Lowercase `KeyboardEvent.key` the chord ends on, e.g. `'k'`. */
+  key: string
+  /** `KeyboardEvent.code`, for the handlers that read a physical key. */
+  code: string
+  meta: boolean
+  control: boolean
+  shift: boolean
+  alt: boolean
+  /** True for an auto-repeated press while the key is held. */
+  repeat: boolean
 }
 
 /**

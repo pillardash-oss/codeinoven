@@ -212,6 +212,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxConflictFileBytes',
   'browserHibernationMinutes',
   'browserHistoryLimit',
+  'browserAllowSiteKeymapOverride',
   'openLocalhostInCioBrowser',
   'openAllLinksInCioBrowser',
   'backgroundMode',
@@ -837,6 +838,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       MIN_BROWSER_HISTORY_LIMIT,
       MAX_BROWSER_HISTORY_LIMIT
     )
+  }
+
+  if ('browserAllowSiteKeymapOverride' in value) {
+    if (typeof value.browserAllowSiteKeymapOverride !== 'boolean') {
+      throw new TypeError('browserAllowSiteKeymapOverride must be a boolean')
+    }
+    patch.browserAllowSiteKeymapOverride = value.browserAllowSiteKeymapOverride
   }
 
   if ('maxConflictFileBytes' in value) {

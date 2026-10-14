@@ -247,6 +247,8 @@ const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const MAX_SHORTCUT_CHORDS_PER_ACTION = 6
 /** The switcher is one gesture, so it carries at most these chords. */
 const MAX_SWITCHER_CHORDS = 6
+/** The app's own keymap, which is a whole registry rather than one action. */
+const MAX_APP_SHORTCUT_CHORDS = 512
 /** Ceiling on a chord's key token, matching the longest DOM key name. */
 const MAX_SHORTCUT_KEY_LENGTH = 24
 
@@ -294,6 +296,25 @@ export function validateBrowserSwitcherBindings(value: unknown): BrowserSwitcher
   }
   if (value.length > MAX_SWITCHER_CHORDS) {
     throw new TypeError('Browser switcher chord count exceeds the cap')
+  }
+  return value.map((entry) => validateBrowserShortcutChord(entry))
+}
+
+/**
+ * Validate the app keymap chords a page may override.
+ *
+ * The same trust boundary as the other two tables applies: every entry is a
+ * single key with an explicit modifier set, and the whole registry is capped.
+ * These chords are never claimed by main itself, only matched against a chord a
+ * page reported as unhandled and replayed, so an over-wide list costs a scan
+ * rather than a stolen key.
+ */
+export function validateBrowserAppShortcutChords(value: unknown): BrowserShortcutChord[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser app shortcut chords must be an array')
+  }
+  if (value.length > MAX_APP_SHORTCUT_CHORDS) {
+    throw new TypeError('Browser app shortcut chord count exceeds the cap')
   }
   return value.map((entry) => validateBrowserShortcutChord(entry))
 }

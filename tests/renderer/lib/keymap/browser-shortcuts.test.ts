@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { browserShortcutBindings, browserSwitcherChords } from '$lib/keymap/browser-shortcuts'
+import { appShortcutChords, browserShortcutBindings, browserSwitcherChords } from '$lib/keymap/browser-shortcuts'
 import { keymapKeys } from '$lib/keymap/keymap'
 
 /** The registry's effective keys, which is what the live keymap store answers
@@ -84,5 +84,71 @@ describe('browserSwitcherChords', () => {
     setPlatform('darwin')
     const chords = browserSwitcherChords(source)
     expect(chords.some((chord) => chord.key === 'tab' && chord.control)).toBe(true)
+  })
+})
+
+function appChords(platform: string): ReturnType<typeof appShortcutChords> {
+  setPlatform(platform)
+  return appShortcutChords(source)
+}
+
+function carriesAppChord(platform: string, wanted: { key: string }): boolean {
+  const wantsMac = platform === 'darwin'
+  return appChords(platform).some(
+    (chord) => chord.key === wanted.key && (wantsMac ? chord.meta : chord.control)
+  )
+}
+
+describe('appShortcutChords', () => {
+  it('reports the app shortcuts a page did not handle, every platform', () => {
+    // These are the chords a page can only leave to the app, because the app's own
+    // handler is the one that opens the surface: with none of them in this table a
+    // page would silently kill the spotlight, a new thread and every view switch.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      for (const key of ['k', 'n', '1', '2', '3', '4', ',']) {
+        expect(carriesAppChord(platform, { key })).toBe(true)
+      }
+    }
+  })
+
+  it('never carries a reserved browser chord, so a page cannot override chrome', () => {
+    // Reload, address focus and tab close are the browser's, claimed in
+    // `before-input-event` before a page ever sees them; carrying them here would
+    // let a page that reported them unhandled re-run them from the wrong side.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      for (const key of ['r', 'w', 'l']) {
+        expect(carriesAppChord(platform, { key })).toBe(false)
+      }
+    }
+  })
+
+  it('never carries an editor chord a caret owns', () => {
+    // Undo, bold and italic are native page editing commands: they do not mark the
+    // key as handled, so replaying them would steal the page's own undo and move
+    // focus out of the field the user was typing in.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      for (const key of ['z', 'b', 'i']) {
+        expect(carriesAppChord(platform, { key })).toBe(false)
+      }
+    }
+  })
+
+  it('never carries a chord a page may not run', () => {
+    // Deleting the open thread and quitting are not safe to fire from a page the
+    // user was reading, so neither chord is ever offered to a page.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      expect(carriesAppChord(platform, { key: 'd' })).toBe(false)
+    }
+  })
+
+  it('carries no arrow chord and no bare-key chord', () => {
+    // Arrow chords are the page's caret and scroll movement, and every app chord
+    // needs a primary modifier; a plain key is the page's own typing.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      for (const chord of appChords(platform)) {
+        expect(['arrowup', 'arrowdown', 'arrowleft', 'arrowright']).not.toContain(chord.key)
+        expect(chord.meta || chord.control || chord.alt).toBe(true)
+      }
+    }
   })
 })

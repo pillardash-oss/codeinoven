@@ -333,6 +333,27 @@
           minutes
         </label>
       </div>
+      <div class="mt-4 border-t pt-4">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium">Let websites override app shortcuts</p>
+            <p class="text-xs leading-relaxed text-dimmed">
+              A page's own shortcut wins a key the app also binds, and a key the page does not
+              handle still falls through to the app. Turn this off to make the app win every
+              shortcut, whether or not the page is focused.
+            </p>
+          </div>
+          <Switch
+            checked={config.browserAllowSiteKeymapOverride}
+            onchange={() =>
+              void updateConfig({
+                browserAllowSiteKeymapOverride: !config.browserAllowSiteKeymapOverride
+              })}
+            aria-label="Toggle letting websites override application shortcuts"
+            disabled={!settingsReady}
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Browsing data -->
