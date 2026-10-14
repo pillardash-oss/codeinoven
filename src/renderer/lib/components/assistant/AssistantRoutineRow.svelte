@@ -16,6 +16,11 @@
   import { DropdownMenu, Portal } from 'bits-ui'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
+  import {
+    hasThreadStateCounts,
+    type ThreadStateCounts as ThreadStateCountsValue
+  } from '$lib/thread-state-counts'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import { routineIsScheduled, type Routine } from '$shared/types'
@@ -32,8 +37,12 @@
   interface Props {
     routine: Routine
     expanded: boolean
-    /** How many tasks in the routine are currently running. */
-    workingCount: number
+    /**
+     * How this routine's threads break down   its tasks and their runs   by
+     * working, attention, and error. This is the same indicator a project row
+     * wears, so a routine summarizes its work the same way.
+     */
+    stateCounts: ThreadStateCountsValue
     /** At least one task or run in the routine has unread activity. */
     unread: boolean
     /** At least one task or run waits on the user or has failed. */
@@ -70,7 +79,7 @@
   let {
     routine,
     expanded,
-    workingCount,
+    stateCounts,
     unread,
     attention,
     missed,
@@ -101,8 +110,7 @@
   // without either the row draws the routine default mark.
   const routineIcon = $derived(getRoutineIcon(routine, iconUrl))
   const incomplete = $derived(routineGap(routine) !== null)
-  const working = $derived(workingCount > 0)
-  const workingLabel = $derived(`${workingCount} ${workingCount === 1 ? 'task' : 'tasks'} working`)
+  const working = $derived(stateCounts.working > 0)
   /** Line 2's next fire, beside the run count (see `routineNextRunLine`). */
   const nextRunLabel = $derived(routineNextRunLine(routine, nextRunAt, Date.now()))
   const scheduled = $derived(routineIsScheduled(routine))
@@ -331,9 +339,7 @@
           <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
-        {#if attention}
-          <StatusBadge tone="attention" title="A task or run needs attention" size="sm" />
-        {:else if unread}
+        {#if unread}
           <StatusBadge stage="unread" title="Unread task or run" size="sm" />
         {/if}
       </span>
@@ -488,17 +494,14 @@
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   </span>
-  {#if workingCount > 0}
+  <!-- The state indicator floats over the right edge like a project row's, and
+       yields to the hover actions the same way, so both rows summarize their
+       threads identically. -->
+  {#if hasThreadStateCounts(stateCounts)}
     <span
-      class="pointer-events-none flex h-5 shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
-      role="img"
-      aria-label={workingLabel}
-      title={workingLabel}
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
-      <span class="h-1.5 w-1.5 animate-pulse rounded-full" style="background: {color}"></span>
-      <span class="text-[0.5625rem] font-semibold tabular-nums" style="color: {color}">
-        {workingCount}
-      </span>
+      <ThreadStateCounts counts={stateCounts} />
     </span>
   {/if}
 </div>

@@ -13,7 +13,11 @@
     type Routine,
     type Thread
   } from '$shared/types'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import {
+    countThreadStates,
+    emptyThreadStateCounts,
+    type ThreadStateCounts
+  } from '$lib/thread-state-counts'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
@@ -127,6 +131,7 @@
 
   const EMPTY_RUNS: readonly Thread[] = []
   const EMPTY_TASKS: readonly Thread[] = []
+  const EMPTY_STATE_COUNTS = emptyThreadStateCounts()
 
   /** Every routine's tasks, most recent first, built once per tasks change.
    *  The sidebar reads a routine's task list from this map instead of re-running
@@ -205,6 +210,28 @@
       }
     }
     return ids
+  })
+
+  /**
+   * How each routine's threads break down   working, attention, error   over
+   * its tasks and their runs, so a routine row wears the same indicator a
+   * project row does. Built once per tasks/runs change instead of re-scanning a
+   * routine's whole history on every render.
+   */
+  const routineStateCounts = $derived.by(() => {
+    const map = new SvelteMap<string, ThreadStateCounts>()
+    for (const [routineId, list] of tasksByRoutine) {
+      map.set(
+        routineId,
+        countThreadStates([...list, ...(runsByRoutine.get(routineId) ?? EMPTY_RUNS)])
+      )
+    }
+    // A run can outlive the routine's task list (its task was removed), so any
+    // routine left with only runs still gets a breakdown.
+    for (const [routineId, runs] of runsByRoutine) {
+      if (!map.has(routineId)) map.set(routineId, countThreadStates(runs))
+    }
+    return map
   })
 
   /**
@@ -327,17 +354,6 @@
   function routineColorFor(task: Thread): string | undefined {
     if (!task.routineId) return undefined
     return routines.find((routine) => routine.id === task.routineId)?.color
-  }
-
-  /** How many of a routine's tasks are working: either the task's own status is
-   *  working or one of its runs is. The routine row shows this count beside its
-   *  working indicator, exactly as a project row does. */
-  function routineWorkingCount(routineId: string): number {
-    let count = 0
-    for (const task of routineTasks(routineId)) {
-      if (threadStatusPolicy(task.status).tone === 'working' || taskRunWorking(task.id)) count++
-    }
-    return count
   }
 
   function routineNextRun(routineId: string): number | null {
@@ -534,7 +550,7 @@
         <AssistantRoutineRow
           {routine}
           expanded={isExpanded}
-          workingCount={routineWorkingCount(routine.id)}
+          stateCounts={routineStateCounts.get(routine.id) ?? EMPTY_STATE_COUNTS}
           unread={unreadRoutineIds.has(routine.id)}
           attention={attentionRoutineIds.has(routine.id)}
           missed={missedRoutineIds.has(routine.id)}

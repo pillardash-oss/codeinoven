@@ -3,7 +3,12 @@
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
+  import {
+    emptyThreadStateCounts,
+    hasThreadStateCounts,
+    type ThreadStateCounts as ThreadStateCountsValue
+  } from '$lib/thread-state-counts'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
 
@@ -12,8 +17,8 @@
     /** Data URL of the project's custom icon. */
     iconUrl?: string | null
     expanded: boolean
-    /** How many threads inside this folder are currently being worked on. */
-    workingCount?: number
+    /** How this folder's threads break down: working, attention, and errors. */
+    stateCounts?: ThreadStateCountsValue
     onToggle: () => void
     /** Hover actions rendered on the right (e.g. new-thread button, ellipsis menu). */
     actions?: Snippet
@@ -34,7 +39,7 @@
     project,
     iconUrl = null,
     expanded,
-    workingCount = 0,
+    stateCounts = emptyThreadStateCounts(),
     onToggle,
     actions,
     actionsPinned = false,
@@ -168,22 +173,15 @@
     />
   </button>
 
-  <!-- The working badge and the hover actions float over the right edge of the row
-       instead of reserving width in the flex flow, so the project name always keeps
-       the full width of the row until the actions are actually visible. The left-to-right
-       fade keeps the overlaid controls legible over a long name. -->
-  {#if workingCount > 0}
+  <!-- The state indicator and the hover actions float over the right edge of the
+       row instead of reserving width in the flex flow, so the project name always
+       keeps the full width of the row until the actions are actually visible. The
+       left-to-right fade keeps the overlaid controls legible over a long name. -->
+  {#if hasThreadStateCounts(stateCounts)}
     <span
-      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center gap-1 bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
-      <StatusBadge
-        stage="working"
-        animated
-        title="{workingCount} {workingCount === 1 ? 'thread' : 'threads'} working"
-      />
-      <span class="text-[0.5625rem] font-semibold tabular-nums text-thread-working">
-        {workingCount}
-      </span>
+      <ThreadStateCounts counts={stateCounts} />
     </span>
   {/if}
 

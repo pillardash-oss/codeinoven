@@ -58,9 +58,9 @@
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
     filterThreadsByQuery,
-    groupThreadsByStatus,
-    threadHasVisibleWork
+    groupThreadsByStatus
   } from './workspace-thread-helpers'
+  import { countThreadStates } from '$lib/thread-state-counts'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
   import { ThreadOrderSettle } from './thread-order-settle.svelte'
 
@@ -917,9 +917,7 @@
                   {@const expanded =
                     sidebar.expandedFolders.has(project.id) ||
                     sidebar.projectSearchOpen.has(project.id)}
-                  {@const workingCount = folderThreads.filter((thread) =>
-                    threadHasVisibleWork(thread)
-                  ).length}
+                  {@const stateCounts = countThreadStates(folderThreads)}
                   <DropdownMenu.Root
                     open={openProjectMenuId === project.id}
                     onOpenChange={(o) => {
@@ -931,7 +929,7 @@
                         {project}
                         iconUrl={projectIcons.get(project.id) ?? null}
                         {expanded}
-                        {workingCount}
+                        {stateCounts}
                         showLocation={hasProjectNameCollision(project, visibleProjects)}
                         actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                           openProjectMenuId === project.id}
@@ -1157,9 +1155,7 @@
               {@const expanded =
                 sidebar.expandedFolders.has(project.id) ||
                 sidebar.projectSearchOpen.has(project.id)}
-              {@const workingCount = folderThreads.filter((thread) =>
-                threadHasVisibleWork(thread)
-              ).length}
+              {@const stateCounts = countThreadStates(folderThreads)}
               <DropdownMenu.Root
                 open={openProjectMenuId === project.id}
                 onOpenChange={(o) => {
@@ -1171,7 +1167,7 @@
                     {project}
                     iconUrl={projectIcons.get(project.id) ?? null}
                     {expanded}
-                    {workingCount}
+                    {stateCounts}
                     showLocation={hasProjectNameCollision(project, visibleProjects)}
                     actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                       openProjectMenuId === project.id}

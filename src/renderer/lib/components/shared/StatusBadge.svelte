@@ -14,6 +14,12 @@
     size?: 'sm' | 'md' | 'lg'
     animated?: boolean
     title?: string
+    /**
+     * Render as a purely visual mark: no role, no aria-label, no title, so a
+     * parent group owns the accessible name and the tooltip. Use this when the
+     * badge sits inside a labelled cluster (see ThreadStateCounts).
+     */
+    decorative?: boolean
     class?: string
   }
 
@@ -27,6 +33,7 @@
     size = 'sm',
     animated = false,
     title,
+    decorative = false,
     class: className = ''
   }: Props = $props()
 
@@ -63,24 +70,33 @@
   })
 
   let label = $derived(title ?? stage ?? kind ?? 'status')
+
+  // A decorative badge keeps its shape and colour but hands its accessible
+  // name and tooltip to its parent group.
+  let role = $derived(decorative ? undefined : 'status')
+  let ariaLabel = $derived(decorative ? undefined : label)
+  let ariaHidden = $derived(decorative ? true : undefined)
+  let titleAttr = $derived(decorative ? undefined : label)
 </script>
 
 {#if variant === 'spinner'}
   <span
     class="{sizeClass} shrink-0 animate-spin rounded-full border-2 border-transparent bg-transparent {className}"
     style="border-top-color: {resolvedColor}; border-right-color: {resolvedColor};"
-    role="status"
-    aria-label={label}
-    title={label}
+    {role}
+    aria-label={ariaLabel}
+    aria-hidden={ariaHidden}
+    title={titleAttr}
   ></span>
 {:else if variant === 'icon' && icon}
   {@const Icon = icon}
   <span
     class="{className} flex shrink-0 items-center justify-center"
     style="color: {resolvedColor}"
-    role="status"
-    aria-label={label}
-    title={label}
+    {role}
+    aria-label={ariaLabel}
+    aria-hidden={ariaHidden}
+    title={titleAttr}
   >
     <Icon size={size === 'sm' ? 12 : size === 'md' ? 14 : 16} aria-hidden="true" />
   </span>
@@ -88,8 +104,9 @@
   <span
     class="{sizeClass} shrink-0 rounded-full {animated ? 'animate-pulse' : ''} {className}"
     style="background: {resolvedColor}"
-    role="status"
-    aria-label={label}
-    title={label}
+    {role}
+    aria-label={ariaLabel}
+    aria-hidden={ariaHidden}
+    title={titleAttr}
   ></span>
 {/if}
