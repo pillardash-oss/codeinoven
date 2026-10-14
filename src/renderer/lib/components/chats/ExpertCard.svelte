@@ -187,8 +187,8 @@
     open
     title="Your experts"
     description={`The models you staffed for the craft work a ${sessionLabel} needs.`}
-    size="full"
     placement="fullscreen"
+    panelClass="bg-app"
     onClose={() => (fullscreen = false)}
   >
     {#snippet footer()}
