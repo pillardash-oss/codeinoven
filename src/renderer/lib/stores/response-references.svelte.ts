@@ -24,6 +24,12 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
   filePath?: string
+  /** Video notes: the second on the composition the note was written at, so the
+   *  timeline can place its row and a jump can seek the preview back to it. */
+  seconds?: number
+  /** Video notes: the project-relative composition folder the moment belongs
+   *  to, so a note names its file the way a document annotation names its path. */
+  directory?: string
 }
 
 /**
@@ -50,7 +56,12 @@ export function isResponseSelection(reference: Pick<PromptReference, 'kind'>): b
  * only from the surface that happens to be on screen.
  */
 export function referenceHasEditableSurface(reference: Pick<PromptReference, 'kind'>): boolean {
-  return isResponseSelection(reference) || reference.kind === 'file' || reference.kind === 'design'
+  return (
+    isResponseSelection(reference) ||
+    reference.kind === 'file' ||
+    reference.kind === 'design' ||
+    reference.kind === 'video'
+  )
 }
 
 /**
@@ -147,7 +158,9 @@ class ResponseReferencesState {
             ? `Selection ${index + 1}`
             : reference.kind === 'file'
               ? reference.label
-              : `Design element ${index + 1}`
+              : reference.kind === 'video'
+                ? `Video note ${index + 1}`
+                : `Design element ${index + 1}`
         }))
       next[key] = stored
     }

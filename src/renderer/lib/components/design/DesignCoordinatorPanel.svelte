@@ -26,6 +26,7 @@
   import { toast } from 'svelte-sonner'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
+  import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
@@ -1279,6 +1280,7 @@
 
       {#if video && selected.directory !== ''}
         {#key `${projectId}:${threadId}:${selected.directory}`}
+          <VideoTimeline {projectId} {threadId} directory={selected.directory} />
           <VideoStudioControls {projectId} {threadId} directory={selected.directory} />
         {/key}
       {/if}

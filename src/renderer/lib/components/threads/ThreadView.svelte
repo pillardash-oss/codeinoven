@@ -218,6 +218,8 @@
   } from '$lib/reveal-file'
   import { openPassageInNewThread } from '$lib/quoted-passage'
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
+  import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
@@ -2567,6 +2569,44 @@
   }
 
   /**
+   * Bring a noted video moment back in front of the reader: show the video board,
+   * put the composition preview on the exact frame the note was written at, and
+   * let the timeline open the note itself. A tab the user has since closed still
+   * has a timeline to land on, so the seek is best effort.
+   */
+  /**
+   * Bring a noted video moment back in front of the reader: show the video board,
+   * open the composition the moment belongs to, put its preview on the exact frame
+   * the note was written at, and let the timeline open the note itself.
+   *
+   * Opening the composition is what moves the board onto that folder, and the
+   * timeline that can take the request only exists once it has.
+   */
+  function editVideoNote(reference: ResponseReferenceAnchor): void {
+    const seconds = reference.seconds ?? 0
+    const directory = reference.directory ?? ''
+    videoNoteFocusState.request({
+      projectId: thread.projectId,
+      threadId: thread.id,
+      referenceId: reference.id,
+      seconds,
+      directory
+    })
+    designCoordinatorState.openBoard(thread.projectId, thread.id, 'video')
+    if (!directory) return
+    void invoke('design:open', thread.projectId, thread.id, directory, null, true, 'video')
+      .then((opened) => {
+        contextSidebarState.focus(opened.tabId)
+        return invoke('browser:transport', opened.tabId, 'seek', seconds).catch(() => undefined)
+      })
+      .catch(() => {
+        toast.error('The composition this note was written on could not be opened.', {
+          description: directory
+        })
+      })
+  }
+
+  /**
    * Jump to the document one annotation was made in: reveal it in the project tree
    * and open it in the annotate view, which is the only surface that draws the
    * annotated passage and its note, then open that note. A document that has since
@@ -2636,6 +2676,10 @@
     }
     if (reference.kind === 'design') {
       editDesignAnnotation(reference)
+      return
+    }
+    if (reference.kind === 'video') {
+      editVideoNote(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -2743,11 +2787,17 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, and may have annotated passages of a project document in the file panel. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, and may have noted moments on a video composition timeline in the video board. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         const tag =
-          reference.kind === 'design' ? 'element' : reference.kind === 'file' ? 'file' : 'selection'
+          reference.kind === 'design'
+            ? 'element'
+            : reference.kind === 'file'
+              ? 'file'
+              : reference.kind === 'video'
+                ? 'video'
+                : 'selection'
         return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')

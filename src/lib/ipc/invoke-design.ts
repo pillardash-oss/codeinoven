@@ -16,20 +16,39 @@ import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
 import type { VideoStudioDocument, VideoJob } from '../video/studio'
+import type { VideoProjectManifest } from '../video/project'
 import type { VideoPackagesState } from './video-packages'
 
 export const invokeDesignContract = {
+  /**
+   * The composition's saved edits, plus the manifest a timeline is drawn from:
+   * its duration is the ruler and its rate is the frame step, and neither of
+   * those is part of the editable document.
+   */
   'video:studio': {} as Contract<
     [projectId: string, directory: string],
-    { document: VideoStudioDocument; revision: string }
+    { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
   >,
   'video:save': {} as Contract<
     [projectId: string, directory: string, document: VideoStudioDocument, revision: string],
-    { document: VideoStudioDocument; revision: string }
+    { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
   >,
   'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
   'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
   'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
+  /**
+   * A waveform picture for one audio source's used range, as a data URL.
+   *
+   * A timeline draws one band per audio track, and a band wants a picture of the
+   * sound rather than its samples: the app cannot decode the file itself (the
+   * preview origin sends no CORS header), so ffmpeg draws a bounded 1200x240
+   * picture and the band is an image. Null means the source has no audio to
+   * draw, which is a plain band rather than a failure.
+   */
+  'video:waveform': {} as Contract<
+    [projectId: string, directory: string, source: string, offset: number, duration: number],
+    string | null
+  >,
   /**
    * The optional video inference pack the GPU background-removal operation
    * needs. It installs at runtime into the app's config folder, so the shipped

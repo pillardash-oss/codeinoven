@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { FileText, Pencil, SquareDashedMousePointer, Trash2, X } from '@lucide/svelte'
+  import {
+    Clapperboard,
+    FileText,
+    Pencil,
+    SquareDashedMousePointer,
+    Trash2,
+    X
+  } from '@lucide/svelte'
   import type { PromptReference } from '$shared/types'
   import { referenceHasEditableSurface } from '$lib/stores/response-references.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
@@ -47,6 +54,7 @@
       {@const number = referenceIndex + 1}
       {@const isElement = reference.kind === 'design'}
       {@const isAnnotation = reference.kind === 'file'}
+      {@const isNote = reference.kind === 'video'}
       <div class="flex items-start gap-2 rounded-lg px-2 py-1.5">
         <span
           class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[0.625rem] font-semibold text-accent tabular-nums"
@@ -60,6 +68,8 @@
               <SquareDashedMousePointer size={10} class="shrink-0 text-accent" />
             {:else if isAnnotation}
               <FileText size={10} class="shrink-0 text-accent" />
+            {:else if isNote}
+              <Clapperboard size={10} class="shrink-0 text-accent" />
             {/if}
             <span class="truncate">{reference.label}</span>
           </p>
@@ -81,12 +91,16 @@
                 ? `Open ${reference.label} and edit its comment`
                 : isElement
                   ? `Show ${reference.label} in the browser and edit its comment`
-                  : `Edit comment on ${reference.label}`}
+                  : isNote
+                    ? `Show ${reference.label} on the timeline and edit its comment`
+                    : `Edit comment on ${reference.label}`}
               aria-label={isAnnotation
                 ? `Open ${reference.label} and edit its comment`
                 : isElement
                   ? `Show ${reference.label} in the browser and edit its comment`
-                  : `Edit comment on ${reference.label}`}
+                  : isNote
+                    ? `Show ${reference.label} on the timeline and edit its comment`
+                    : `Edit comment on ${reference.label}`}
               onclick={() => onEdit(reference.id)}
             >
               <Pencil size={11} />

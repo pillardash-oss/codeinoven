@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     AudioLines,
+    Clapperboard,
     Clock,
     FileText,
     HardDrive,
@@ -205,10 +206,12 @@
             aria-expanded={selectionPopoverOpen}
             onclick={onToggleSelectionPopover}
           >
-            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0 && referenceSummary.annotations === 0}
+            {#if referenceSummary.noun === 'element'}
               <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.annotations > 0 && referenceSummary.elements === 0 && referenceSummary.selections === 0}
+            {:else if referenceSummary.noun === 'annotation'}
               <FileText size={11} class="shrink-0 text-accent" />
+            {:else if referenceSummary.noun === 'note'}
+              <Clapperboard size={11} class="shrink-0 text-accent" />
             {:else}
               <MessageSquare size={11} class="shrink-0 text-accent" />
             {/if}
@@ -220,12 +223,12 @@
             <button
               type="button"
               class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-              title={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
-              aria-label={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
+              title={referenceSummary.noun === 'selection'
+                ? 'Delete all selections'
+                : 'Delete all attached references'}
+              aria-label={referenceSummary.noun === 'selection'
+                ? 'Delete all selections'
+                : 'Delete all attached references'}
               onclick={onRemoveAllReferences}
             >
               <X size={11} />

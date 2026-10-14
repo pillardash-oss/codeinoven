@@ -96,6 +96,12 @@ export interface QueuedResponseReference extends PromptReference {
   selector?: string
   /** Design references: the browser tab the element was picked from. */
   tabId?: string
+  /** Document annotations: the project-relative path of the document. */
+  filePath?: string
+  /** Video notes: the second on the composition the note was written at. */
+  seconds?: number
+  /** Video notes: the project-relative composition folder the moment belongs to. */
+  directory?: string
 }
 
 /**
@@ -289,7 +295,8 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== undefined &&
     value.kind !== 'selection' &&
     value.kind !== 'design' &&
-    value.kind !== 'file'
+    value.kind !== 'file' &&
+    value.kind !== 'video'
   )
     return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
@@ -298,6 +305,8 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
+  if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
+  if (value.directory !== undefined && typeof value.directory !== 'string') return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
 }

@@ -14,6 +14,7 @@ import {
   type VideoStudioDocument
 } from '../../lib/video/studio'
 import { currentWorkRoot } from '../design/work-roots-state'
+import { videoBoundedSeconds } from '../../lib/video/timeline'
 import {
   readVideoStudio,
   writeVideoStudio,
@@ -26,7 +27,10 @@ import { VideoJobs } from './video-jobs'
 import { VideoPackagesService } from './video-packages'
 import { exportVideo } from './video-export'
 import { probeVideo, inspectVideo } from './video-inspection'
+import { videoWaveformDataUrl } from './video-waveform'
 import { videoProcess } from './video-process'
+import { readCompositionManifest } from './video-manifest'
+import type { VideoProjectManifest } from '../../lib/video/project'
 import { videoRuntimeSource } from './video-runtime'
 import { videoWorkerJob } from './video-worker-job'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -82,17 +86,33 @@ export class VideoStudioService {
   async read(
     projectId: string,
     directory: unknown
-  ): Promise<{ document: VideoStudioDocument; revision: string }> {
+  ): Promise<{
+    document: VideoStudioDocument
+    revision: string
+    manifest: VideoProjectManifest | null
+  }> {
     const { folder } = await this.folder(projectId, directory)
     const document = await readVideoStudio(folder)
-    return { document, revision: revision(document) }
+    // The manifest comes along because a timeline is drawn from it: its duration
+    // is the ruler and its rate is the frame step, and neither is in studio.json.
+    // A folder with no readable composition is not an error here: the reader
+    // already refuses to serve one, and the panel shows an empty ruler.
+    return {
+      document,
+      revision: revision(document),
+      manifest: await readCompositionManifest(folder)
+    }
   }
   async save(
     projectId: string,
     directory: unknown,
     raw: unknown,
     expected: unknown
-  ): Promise<{ document: VideoStudioDocument; revision: string }> {
+  ): Promise<{
+    document: VideoStudioDocument
+    revision: string
+    manifest: VideoProjectManifest | null
+  }> {
     const { folder } = await this.folder(projectId, directory)
     const previous = this.writes.get(folder) ?? Promise.resolve()
     const task = previous
@@ -104,7 +124,11 @@ export class VideoStudioService {
         const document = validateVideoStudio(raw)
         for (const track of document.audioTracks) await videoFile(folder, track.source)
         await writeVideoStudio(folder, document)
-        return { document, revision: revision(document) }
+        return {
+          document,
+          revision: revision(document),
+          manifest: await readCompositionManifest(folder)
+        }
       })
     this.writes.set(folder, task)
     try {
@@ -113,6 +137,31 @@ export class VideoStudioService {
       if (this.writes.get(folder) === task) this.writes.delete(folder)
     }
   }
+  /**
+   * A waveform picture for one audio source's used range, as a data URL.
+   *
+   * The source is resolved against the composition folder, exactly as the export
+   * resolves it, so a lane pictures the sound the composition will actually play.
+   * A folder-relative audio path and a project-root-relative one both work, since
+   * the file is canonicalised before it is drawn.
+   */
+  async waveform(
+    projectId: string,
+    directory: unknown,
+    source: unknown,
+    offset: unknown,
+    duration: unknown
+  ): Promise<string | null> {
+    const { root, folder } = await this.folder(projectId, directory)
+    const file = await videoFile(folder, source)
+    // Clamped rather than validated: a track's `duration` may legally be as long
+    // as the document allows, and a lane that cannot be pictured is a plain band
+    // rather than a hard error the timeline would have to swallow.
+    const from = videoBoundedSeconds(offset, 0, 0, 3600)
+    const length = videoBoundedSeconds(duration, 10, 0.01, 3600)
+    return videoWaveformDataUrl(root, file, from, length, new AbortController().signal)
+  }
+
   readonly execute: VideoCapabilityExecutor = async (operation, input, context) => {
     const project = await requireLocalProjectViaWorker(this.options.database, context.projectId)
     const root = project.path
@@ -342,6 +391,9 @@ export class VideoStudioService {
     )
     ipcMain.handle('video:export', (_event, projectId, threadId, directory) =>
       this.execute('export', { directory }, { projectId: id(projectId), threadId: id(threadId) })
+    )
+    ipcMain.handle('video:waveform', (_event, projectId, directory, source, offset, duration) =>
+      this.waveform(id(projectId), directory, source, offset, duration)
     )
     const stopPackProgress = this.packages.onProgress((state) => {
       for (const window of BrowserWindow.getAllWindows()) {
