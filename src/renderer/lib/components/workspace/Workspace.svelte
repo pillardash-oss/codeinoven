@@ -2117,11 +2117,12 @@
    *  fires two reads for the same run. */
   const pendingAssistantParentReads = new SvelteSet<string>()
 
-  // An assistant run renders nested under its task. Selecting one from a
+  // A run resolves the task it ran through its `assistantTaskId`, which names
+  // the run's row and decides where the sidebar lifts it. Selecting one from a
   // notification can land on a run whose task sits beyond the bounded recent
   // hydration slice, so the parent is fetched and added before the row is drawn
-  //   without it the run has no row to nest under, the sidebar cannot reveal
-  // it, and the thread looks like it opened nowhere at all.
+  //   without it the run loses its task name and cannot be revealed where it
+  // belongs, and the thread looks like it opened nowhere at all.
   $effect(() => {
     const thread = selectedThread
     if (!thread || mode !== 'assistant') return
@@ -3609,6 +3610,12 @@
   ): Promise<void> {
     const routineId = assistant.routineId
     const gettingStarted = assistant.gettingStarted === true
+    // A task created inside a routine starts on demand: it runs only when the
+    // user switches its own schedule on, so a thread they open to work with the
+    // assistant never becomes a quiet recurring job of the routine. The
+    // routine's seed Getting started thread is the exception: it carries the
+    // routine's own clock.
+    const needsOnDemand = routineId !== undefined && !gettingStarted
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -3638,15 +3645,18 @@
       // A routine-scoped create always lands inside its routine, even when it
       // reuses a blank thread: the reused row predates this call, so its
       // grouping and setup label are applied here rather than at creation time.
+      // A task the user creates starts off the routine's clock (see needsOnDemand
+      // above), so a reused blank row is put back on demand here too.
       const regroup = routineId !== undefined && existing.routineId !== routineId
       const needsSetupPatch = gettingStarted && existing.assistantGettingStarted !== true
-      if (regroup || needsSetupPatch) {
+      if (regroup || needsSetupPatch || needsOnDemand) {
         const optimistic: Thread = {
           ...existing,
           // A routine's how-to ("Getting started") thread is pinned for life, and
           // a reused blank row must join the Pinned section too.
           ...(gettingStarted ? { pinned: true } : {}),
           ...(regroup ? { routineId } : {}),
+          ...(needsOnDemand ? { scheduled: false } : {}),
           ...(gettingStarted
             ? {
                 title: ASSISTANT_SETUP_TITLE,
@@ -3662,6 +3672,9 @@
         const persist = async (): Promise<void> => {
           if (regroup && routineId) {
             upsertThreadInList(await assistantRoutines.setTaskRoutine(existing.id, routineId))
+          }
+          if (needsOnDemand) {
+            upsertThreadInList(await assistantRoutines.setTaskScheduled(existing.id, false))
           }
           if (needsSetupPatch) {
             upsertThreadInList(
@@ -3737,6 +3750,7 @@
       lastActivity: Date.now(),
       workingDirectory: project.path,
       ...(routineId ? { routineId } : {}),
+      ...(needsOnDemand ? { scheduled: false } : {}),
       ...(gettingStarted ? { assistantGettingStarted: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
@@ -3771,6 +3785,7 @@
       settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {}),
       ...(routineId ? { routineId } : {}),
+      ...(needsOnDemand ? { scheduled: false } : {}),
       ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {

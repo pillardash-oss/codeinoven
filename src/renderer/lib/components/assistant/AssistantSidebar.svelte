@@ -37,7 +37,8 @@
     tasks: Thread[]
     /**
      * Every task's runs, newest first, keyed by task id. A run executes on its
-     * own thread and renders nested under the task it ran.
+     * own thread; a routine lifts it out to the routine's own level, while a
+     * routine-less task (Pinned or Tasks) renders it nested under the task.
      */
     runsByTask: ReadonlyMap<string, Thread[]>
     /**
@@ -309,8 +310,9 @@
   /**
    * The task name a hoisted run row reports. A run lifted to its routine's own
    * level has no parent row above it to say which task it ran, so without this
-   * every hoisted run read as a bare time. A run nested under its task already
-   * sits below that task's name, so it needs nothing. The name resolves through
+   * every hoisted run read as a bare time. A run nested under its task (a Pinned
+   * or routine-less task) already sits below that task's name, so it needs
+   * nothing. The name resolves through
    * `assistantSubjectName`, so a routine's Getting started host keeps naming the
    * routine instead of leaking "Getting started" onto its own runs.
    */
@@ -335,10 +337,17 @@
     return routineSiblingRuns(runs, routineHowToComplete(routine), renderedTaskIds, tasksById)
   }
 
-  /** Whether a task row nests its own runs. A set-up routine's Getting started
-   *  runs leave that row and render beside it instead. */
+  /**
+   * Whether a task row nests its own runs. Only a routine's Getting started
+   * thread nests, and only while the routine is still being written: its runs
+   * are the failed startup passes that set the routine up. Every other task's
+   * runs, and the seed's once its how-to is saved, lift to the routine's own
+   * level instead, so a task row never swallows a run. A routine-less task has
+   * no routine row to lift them to, so it keeps them (see the Tasks and Pinned
+   * sections, which always nest).
+   */
   function taskNestsRuns(task: Thread, routine: Routine): boolean {
-    return !routineHowToComplete(routine) || !isAssistantSetupThread(task)
+    return !routineHowToComplete(routine) && isAssistantSetupThread(task)
   }
 
   /**

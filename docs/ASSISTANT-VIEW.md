@@ -565,22 +565,22 @@ suppressed via `hideProject`). A new task is created already inside its routine
 (`routineId` travels through `thread:create`), so the creation broadcast can
 never leave it stranded outside the routine.
 
-**A task's runs render nested under it.** `Workspace.svelte` groups every run
-thread by its `assistantTaskId` (`groupRunsByTask`) and passes it to the sidebar,
-which renders the runs indented under the task row with the same
-`AssistantTaskRow` in its `run` variant (a run mark instead of the task clock,
-and its own last-activity line instead of the task's schedule). The list is
-bounded: only the newest `TASK_RUN_PREVIEW` runs show until the user picks
-**Show all N runs** (`previewRuns`), so a routine that has run for months cannot
-turn the sidebar into a log. The toggle is a plain row under the runs, never a
-control nested inside a row's button. A task row also pulses while any of its
-runs is working (`runWorking`), because the run, not the task, is what is
-executing, and the routine row aggregates the same signal. Missed badges stay on
-the task (and its routine): a miss is a property of the schedule, not of one
-execution. A run lifted to its routine's own level (`routineSiblingRuns`) names
-the task it ran on its own line (`contextLabel`), because it has no parent row
-above it to say which task it belongs to, and a row that is actually working
-reads **Running now** instead of a stale schedule time.
+**A run never nests under a task; it renders at the routine's own level.**
+`Workspace.svelte` groups every run thread by its `assistantTaskId`
+(`groupRunsByTask`) and by its `routineId` (`groupRunsByRoutine`) too. The
+sidebar lifts each task's runs out to sit beside its task rows, at the same
+level, through `routineSiblingRuns`, and draws them with the same `AssistantTaskRow` in its `run` variant (a run mark instead of the
+task clock, and its own last-activity line instead of the task's schedule). A
+lifted run names the task it ran on its own line (`contextLabel`), because it
+has no parent row above it to say which task it belongs to. The list is bounded:
+only the newest `TASK_RUN_PREVIEW` runs show until the user picks **Show all N
+runs** (`previewRuns`), so a routine that has run for months cannot turn the
+sidebar into a log. The toggle is a plain row under the runs, never a control
+nested inside a row's button. A task row pulses while any of its runs is working
+(`runWorking`), because the run, not the task, is what is executing, and the
+routine row aggregates the same signal. Missed badges stay on the task (and its
+routine): a miss is a property of the schedule, not of one execution, and a row
+that is actually working reads **Running now** instead of a stale schedule time.
 
 Selecting a run from a notification follows the same focus-follow rule as every
 other thread: the workspace fetches and adds the run's parent task when it falls
@@ -599,17 +599,17 @@ only while work is actually being produced. A parked run is never blue: its
 session stays bound and reports `waiting` for as long as the card is open, so
 the parked status is the authority until the user answers it.
 
-**A routine's Getting started runs leave that row once the routine is set up.**
-While the routine is still authoring (its how-to unsaved) its runs stay nested
-inside the Getting started thread, since they are still about setting the
-routine up. Once `routineHowToComplete` holds, `Workspace.svelte` also groups
-every run by its `routineId` (`groupRunsByRoutine`) and the sidebar lifts the
-seed thread's runs out to sit beside its task rows, at the same level, through
-`routineSiblingRuns`. A run whose task is no longer on screen (the Getting
-started thread was hidden) rises to the routine too, so hiding the seed only
-hides that row and never the runs it produced. A run whose task renders
-elsewhere (a pinned task that left for the Pinned section) keeps nesting under
-that row.
+**A routine's Getting started thread nests its runs only while it is being set
+up.** The seed thread is the one row that indents, and only while the routine is
+still authoring (its how-to unsaved): its runs are the failed startup passes that
+set the routine up, so they stay nested inside it. Once `routineHowToComplete`
+holds, `routineSiblingRuns` lifts the seed's runs out to sit beside its task
+rows like every other task's, and the row stops nesting. A run whose
+task is no longer on screen (the Getting started thread was hidden) rises to the
+routine too, so hiding the seed only hides that row and never the runs it
+produced. A run whose task renders elsewhere (a pinned task that left for the
+Pinned section, or a routine-less task in the Pinned or Tasks section) keeps
+nesting under that row, since there is no routine row to lift it to.
 
 Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
@@ -721,6 +721,16 @@ calendar toggle on hover (`AssistantTaskRow.svelte`); the toggle calls
 row. Turning a function off never touches its routine's schedule, and turning an
 on-demand routine's function on reuses the routine's saved cadence when it has
 one.
+
+**A task the user creates starts on demand.** Creating a thread inside a routine
+stores `scheduled: false` on it (`Workspace.svelte` `createThreadInProject`,
+carried through `thread:create` and validated in
+`src/main/ipc/validation/threads.ts`), so a thread the user opens to work with
+the assistant never quietly becomes a recurring job of the routine. The
+routine's seed **Getting started** thread is the exception: it carries the
+routine's own clock, so the routine still has a scheduled job the moment it is
+created. The user switches a function on from its row, or the agent schedules it
+in the how-to.
 
 ## How-to authoring
 

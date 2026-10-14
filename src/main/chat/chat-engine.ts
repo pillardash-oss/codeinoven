@@ -24371,8 +24371,8 @@ export class ChatEngine {
       }
     )
     await finalize()
-    // The sidebar nests a run under its task from this broadcast, so it must
-    // reach every renderer the moment the row exists.
+    // The sidebar draws the run's row from this broadcast the moment it
+    // exists, so it must reach every renderer.
     broadcastThreadUpdate(thread)
     return thread
   }

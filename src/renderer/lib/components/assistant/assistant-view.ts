@@ -340,9 +340,11 @@ export function groupRunsByRoutine<
  * The runs a routine renders at its own level, beside its task rows, newest
  * first:
  *
- * - the Getting started seed's runs, once the routine's how-to is saved; while
- *   the routine is still authoring they stay nested inside it, since they are
- *   still about setting the routine up;
+ * - every task's runs, so a task row never nests them. A routine's Getting
+ *   started seed is the one exception while the routine is still authoring (its
+ *   how-to unsaved): its runs stay nested inside it, since they are the failed
+ *   startup passes that set the routine up, and they lift here once the how-to
+ *   is saved;
  * - any run whose task is no longer on screen, so hiding the Getting started
  *   thread never hides the runs it produced.
  *
@@ -366,7 +368,10 @@ export function routineSiblingRuns<
     if (!parent) return true
     // A parent that renders elsewhere (the Pinned section) still owns it.
     if (!renderedTaskIds.has(taskId)) return false
-    return setupDone && isAssistantSetupThread(parent)
+    // While the routine is still authoring, its Getting started seed nests its
+    // own runs; every other task's runs, and the seed's once the how-to is
+    // saved, lift to the routine's own level.
+    return setupDone || !isAssistantSetupThread(parent)
   })
   hoisted.sort((a, b) => b.createdAt - a.createdAt)
   return hoisted
