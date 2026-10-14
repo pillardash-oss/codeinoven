@@ -40,8 +40,52 @@ export function textParts(message: AgentMessage): Extract<AgentPart, { type: 'te
   )
 }
 
-export function workingParts(message: AgentMessage): AgentPart[] {
-  return message.parts.filter((part) => part.type !== 'text' && part.type !== 'question')
+/** A sub-agent run folded into what the transcript and its trace each render. */
+export interface SubagentSessionRun {
+  /** Every renderable part of the run, in stream order, with the closing
+   *  statement removed when the transcript is the one rendering it. */
+  parts: AgentPart[]
+  /** The run's closing statement, or null when there is none to move out. */
+  closing: Extract<AgentPart, { type: 'text' }> | null
+}
+
+/**
+ * Fold a sub-agent's whole transcript into one run: every assistant message's
+ * parts in stream order, with the worker's closing statement separated out.
+ *
+ * A sub-agent session is one continuous piece of work, not a series of turns,
+ * so it renders as a single working trace. Folding all of its messages into one
+ * part list is what lets `groupTraceIntoChains` read that trace as chains of
+ * thought exactly as a main-thread turn does, instead of stacking one trace per
+ * message   and reprinting one running timer on each of them.
+ *
+ * `holdsClosingText` is true while the run is still busy, when its newest text
+ * is commentary on work in flight and belongs in the trace with that work. Once
+ * the run is over, the closing statement is the worker's answer, so it leaves
+ * the trace for the transcript.
+ */
+export function subagentSessionRun(
+  messages: readonly AgentMessage[],
+  holdsClosingText: boolean
+): SubagentSessionRun {
+  const parts: AgentPart[] = []
+  let closing: Extract<AgentPart, { type: 'text' }> | null = null
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    for (const part of message.parts) {
+      // A question part needs its own card, which this view does not render, so
+      // it stays out of the trace instead of showing up as a step.
+      if (part.type === 'question') continue
+      if (part.type === 'text') {
+        if (part.text.trim().length === 0) continue
+        closing = part
+      }
+      parts.push(part)
+    }
+  }
+  if (holdsClosingText || !closing) return { parts, closing: null }
+  const closingId = closing.id
+  return { parts: parts.filter((part) => part.id !== closingId), closing }
 }
 
 /** Provider-neutral issue for a failure reported without any structured detail. */
