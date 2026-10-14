@@ -92,10 +92,16 @@ export function accentMarkColor(): string {
   return value || FALLBACK_MARK_COLOR
 }
 
-/** A colour a mark may carry: a stored value, or the accent when there is none. */
+/**
+ * A colour a mark is drawn in: the one stored with the mark, else the accent.
+ *
+ * Falling back to the live accent rather than to a constant matters for the marks
+ * drawn before the pen was choosable: they stored no colour, so they have to keep
+ * looking like the accent marks the app has always drawn.
+ */
 export function markColor(value: string | undefined): string {
   const trimmed = value?.trim()
-  return trimmed ? trimmed : FALLBACK_MARK_COLOR
+  return trimmed ? trimmed : accentMarkColor()
 }
 
 /** Clamp a stroke width into the range the control offers. */

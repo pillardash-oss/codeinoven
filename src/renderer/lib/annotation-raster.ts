@@ -57,9 +57,6 @@ export const MAX_FRAME_SOURCE_BYTES = 64 * 1024 * 1024
 /** Ceiling on one decode or one seek, so a corrupt file cannot hang a send. */
 export const FRAME_DECODE_TIMEOUT_MS = 10_000
 
-/** Colour used when the live theme cannot be read (tests, SSR, a bare page). */
-export const FALLBACK_ACCENT = '#e5484d'
-
 /** Wait for one media event, or reject rather than hang the send. */
 function waitForMediaEvent(video: HTMLVideoElement, type: 'loadeddata' | 'seeked'): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -136,13 +133,6 @@ export async function baseBitmap(input: {
   return videoFrameBitmap(input.bytes, input.mime, input.seconds)
 }
 
-/** The stroke colour, read from the live theme so the picture matches the app. */
-function accentColor(): string {
-  if (typeof document === 'undefined') return FALLBACK_ACCENT
-  const value = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim()
-  return value || FALLBACK_ACCENT
-}
-
 /** Draw one mark: a haloed stroke for a drawn area, a dot for a tap. */
 export function drawMark(
   context: OffscreenCanvasRenderingContext2D,
@@ -192,7 +182,7 @@ export function drawMark(
   const y = Math.min(Math.max(badge.y * height, radius), height - radius)
   context.beginPath()
   context.arc(x, y, radius, 0, Math.PI * 2)
-  context.fillStyle = accentColor()
+  context.fillStyle = accentMarkColor()
   context.fill()
   context.lineWidth = Math.max(2, radius / 5)
   context.strokeStyle = '#ffffff'
