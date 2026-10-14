@@ -132,11 +132,7 @@ async function syncContainingDirectory(filePath: string): Promise<void> {
  * temporary file behind on any path. `durable` also flushes the temporary file
  * (and the containing directory) to disk before the rename is reported done.
  */
-async function writeAtomically(
-  filePath: string,
-  content: string,
-  durable: boolean
-): Promise<void> {
+async function writeAtomically(filePath: string, content: string, durable: boolean): Promise<void> {
   const tmpPath = `${filePath}.${process.pid}.${generateId()}.tmp`
   try {
     if (durable) {

@@ -243,9 +243,7 @@
             class="min-w-0 flex-1"
             showLocation={hasProjectNameCollision(project, availableProjects)}
           />
-          {#if multiSelect
-            ? selectedIds.includes(project.id)
-            : activeProjectId === project.id}
+          {#if multiSelect ? selectedIds.includes(project.id) : activeProjectId === project.id}
             <Check size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>

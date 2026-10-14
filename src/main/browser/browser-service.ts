@@ -286,12 +286,7 @@ import { designScreenTabId } from './browser-service/design-screen-tab'
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
   Record<
-    | 'designUndo'
-    | 'designRedo'
-    | 'focusAddress'
-    | 'closeTab'
-    | 'newTab'
-    | 'reopenTab',
+    'designUndo' | 'designRedo' | 'focusAddress' | 'closeTab' | 'newTab' | 'reopenTab',
     BrowserPanelShortcutAction
   >
 > = {

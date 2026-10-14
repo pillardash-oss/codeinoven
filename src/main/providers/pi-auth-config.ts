@@ -95,11 +95,7 @@ export class PiAuthConfigService {
    * provider-scoped config values Pi's flows collect (Cloudflare account /
    * gateway ids) and resolves at request time.
    */
-  async setApiKey(
-    providerId: string,
-    apiKey: string,
-    env?: Record<string, string>
-  ): Promise<void> {
+  async setApiKey(providerId: string, apiKey: string, env?: Record<string, string>): Promise<void> {
     assertProviderId(providerId)
     const data = await this.readAll()
     data[providerId] = {

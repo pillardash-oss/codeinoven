@@ -304,7 +304,9 @@ async function waitForToolCalls(
     const errored = messages.some((message) => {
       const info = message?.['info']
       return (
-        typeof info === 'object' && info !== null && Boolean((info as Record<string, unknown>)['error'])
+        typeof info === 'object' &&
+        info !== null &&
+        Boolean((info as Record<string, unknown>)['error'])
       )
     })
     if (errored) return []

@@ -126,10 +126,7 @@ export function compareVersions(a: string, b: string): number {
  * older than the running build is ever an update, so this is the last word that
  * stops the loop before a download begins.
  */
-export function isRunningNewestBuild(
-  runningVersion: string,
-  offeredVersion: string
-): boolean {
+export function isRunningNewestBuild(runningVersion: string, offeredVersion: string): boolean {
   return compareVersions(runningVersion, offeredVersion) >= 0
 }
 
@@ -156,8 +153,7 @@ export function nextFailureState(
   version: string,
   attemptedAt: number
 ): InstallFailureState {
-  const attempts =
-    previous !== null && previous.version === version ? previous.attempts + 1 : 1
+  const attempts = previous !== null && previous.version === version ? previous.attempts + 1 : 1
   return { version, attempts, lastAttemptAt: attemptedAt }
 }
 
@@ -351,7 +347,8 @@ export async function purgeAbandonedInstallStaging(
       continue
     }
     const candidates = entries.filter((entry) => rule.matches(entry.name))
-    if (candidates.length > MAX_SWEEP_CANDIDATES) deferred += candidates.length - MAX_SWEEP_CANDIDATES
+    if (candidates.length > MAX_SWEEP_CANDIDATES)
+      deferred += candidates.length - MAX_SWEEP_CANDIDATES
     for (const candidate of candidates.slice(0, MAX_SWEEP_CANDIDATES)) {
       if (removed.length >= MAX_SWEEP_REMOVALS) {
         deferred += 1
