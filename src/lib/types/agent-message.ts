@@ -242,6 +242,10 @@ export interface AgentMessage {
   origin?: AgentMessageOrigin
   /** Which UI channel may load this record. */
   visibility?: AgentMessageVisibility
+  /** Renderer-only: a user message that only steers the running turn, so it
+   *  must not open or close one. Set on the in-memory copy while the steer is
+   *  held for its undo window and never persisted. */
+  turnTransparent?: boolean
   parts: AgentPart[]
   /** Exact provider-facing payload, deliberately separate from display parts. */
   transportParts?: AgentPart[]

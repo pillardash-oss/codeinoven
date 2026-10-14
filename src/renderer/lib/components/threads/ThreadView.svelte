@@ -324,6 +324,7 @@
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
     isTurnCompleted,
+    isTurnTransparentUserMessage,
     lastTurnStartIndex,
     pendingTurnAnchorIndex,
     resolvedSubagentPart,
@@ -576,9 +577,27 @@
    * the last turn starts, what the user has already asked   reads this instead
    * of the live `messages` array and stops recomputing at the stream cadence.
    */
-  let structureMessages = $derived(
-    hasController ? messages : threadMessages.structureMessages(thread.projectId, thread.id)
-  )
+  let structureMessages = $derived.by(() => {
+    const source = hasController
+      ? messages
+      : threadMessages.structureMessages(thread.projectId, thread.id)
+    // A held steer has not reached the harness, so it must not open a turn: the
+    // turn it steers keeps its own trace above the message instead of splitting
+    // into a new one below it. Mark the in-memory copy transparent until the
+    // steer is delivered, when the message becomes a turn of its own.
+    let marked: AgentMessage[] | null = null
+    for (let index = 0; index < source.length; index++) {
+      const message = source[index]
+      if (
+        message?.role === 'user' &&
+        threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)
+      ) {
+        marked ??= source.slice()
+        marked[index] = { ...message, turnTransparent: true }
+      }
+    }
+    return marked ?? source
+  })
   /**
    * Every per-message turn question, answered once per structural change. The
    * transcript asks these once per mounted message per render; reading them from
@@ -586,6 +605,19 @@
    * rescanned on every streamed frame.
    */
   let transcriptIndex = $derived(buildTranscriptIndex(structureMessages, checkpoints))
+
+  /**
+   * A user message transparent to the turn span the live parts are read with: an
+   * activity notice, or a steer still held for its undo window. Held state is not
+   * on the message, so it is checked here; the persisted rule covers reloads.
+   */
+  function isTransparentTurnMessage(message: AgentMessage): boolean {
+    return (
+      isTurnTransparentUserMessage(message) ||
+      (message.role === 'user' &&
+        threadMessages.isSteerHeld(thread.projectId, conversationId, message.id))
+    )
+  }
 
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
@@ -784,7 +816,8 @@
     const { leading, body } = getTurnWorkingParts(
       messages,
       latestTurnInfo.startIndex,
-      conversationBusy && latestTurnInfo.active
+      conversationBusy && latestTurnInfo.active,
+      isTransparentTurnMessage
     )
     return [...leading, ...body]
   })
@@ -801,11 +834,11 @@
    * rather than flashing through the reading position and jumping back out.
    */
   function closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
-    const closing = getTurnFinalText(messages, endIndex)
+    const closing = getTurnFinalText(messages, endIndex, isTransparentTurnMessage)
     if (!closing) return false
     if (closing.phase === 'final_answer') return true
     if (!conversationBusy || !isLastTurnEnd) return true
-    return turnEndsOnQuestion(messages, endIndex)
+    return turnEndsOnQuestion(messages, endIndex, isTransparentTurnMessage)
   }
 
   // A persisted in-flight status is only a recovery hint. Start every mount in
@@ -4170,7 +4203,7 @@
       // it fetching until three deduped turn starts exist before the anchor.
       let pagesWithoutTurnStart = 0
       for (let attempt = 0; attempt < 30; attempt++) {
-        const startsBefore = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+        const startsBefore = turnStartPromptsBefore(structureMessages, mountedStartIndex, 3)
         if (startsBefore.length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
@@ -4263,7 +4296,7 @@
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
-      const starts = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+      const starts = turnStartPromptsBefore(structureMessages, mountedStartIndex, 3)
       let target = starts.length === 3 ? starts[starts.length - 1] : 0
       const isRealPrompt = (index: number): boolean => {
         const message = messages[index]
@@ -11448,14 +11481,19 @@
   function hasPersistedInFlightWork(): boolean {
     const startIndex = latestTurnInfo.startIndex
     if (startIndex === -1) return false
-    if (isTurnCompleted(messages, startIndex)) return false
-    const { leading, body } = getTurnWorkingParts(messages, startIndex, false)
+    if (isTurnCompleted(structureMessages, startIndex)) return false
+    const { leading, body } = getTurnWorkingParts(
+      messages,
+      startIndex,
+      false,
+      isTransparentTurnMessage
+    )
     return hasRenderableWorkingParts([...leading, ...body])
   }
 
   function isLatestTurnCompleted(): boolean {
     const startIndex = latestTurnInfo.startIndex
-    return startIndex !== -1 && isTurnCompleted(messages, startIndex)
+    return startIndex !== -1 && isTurnCompleted(structureMessages, startIndex)
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
@@ -11491,7 +11529,12 @@
     holdsClosingText: boolean,
     collectsDurable: boolean
   ): AgentPart[] {
-    const working = getTurnWorkingParts(messages, startIndex, holdsClosingText)
+    const working = getTurnWorkingParts(
+      messages,
+      startIndex,
+      holdsClosingText,
+      isTransparentTurnMessage
+    )
     const durable = pendingLiveTurn
       ? []
       : streamWorkingPartsForTurn(streamParts, transcriptIndex, startIndex, holdsClosingText)
@@ -12558,7 +12601,11 @@
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
                     {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
-                    {@const turnClosingText = getTurnFinalText(messages, turnEndIndex)}
+                    {@const turnClosingText = getTurnFinalText(
+                      messages,
+                      turnEndIndex,
+                      isTransparentTurnMessage
+                    )}
                     {@const turnClosingVisible = closingStatementVisible(
                       turnEndIndex,
                       turnEndIndex === messages.length - 1
@@ -12682,7 +12729,11 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnClosingText = getTurnFinalText(messages, absIndex)}
+                      {@const turnClosingText = getTurnFinalText(
+                        messages,
+                        absIndex,
+                        isTransparentTurnMessage
+                      )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
                       {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
