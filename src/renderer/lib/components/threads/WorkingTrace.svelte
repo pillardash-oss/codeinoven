@@ -16,12 +16,6 @@
     latestWorkingTraceParts,
     tracePartsSpan
   } from '$lib/working-trace-parts'
-  import {
-    newestTraceStartId,
-    olderTraceStartId,
-    traceWindowAnchorExpired,
-    traceWindowStartIndex
-  } from '$lib/working-trace-window'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import {
     subagentIsRunning,
@@ -62,14 +56,16 @@
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /** True while this trace is on screen. A hidden trace   the workspace keeps
-     *  a thread mounted behind Settings/Scope and other views   re-bounds its
-     *  mounted window, so coming back never mounts whatever streamed while the
-     *  reader was away. */
+     *  a thread mounted behind Settings/Scope and other views   does not pull
+     *  its older durable pages, so coming back mounts what the reader is
+     *  looking at instead of streaming in a turn nobody is reading. */
     active?: boolean
     /** True when the durable stream holds entries older than the oldest this
-     *  trace holds, so paging past the window needs another read. */
+     *  trace holds, so the trace is still missing part of its turn. */
     olderPartsAvailable?: boolean
-    /** Pull the next older durable page into this trace's parts. */
+    /** Pull the next older durable page into this trace's parts. The trace
+     *  calls it on open until `olderPartsAvailable` is false, so the whole
+     *  structure exists before it is grouped. */
     onLoadOlderParts?: () => void | Promise<void>
     /** Thinking level used for this trace's turn, when the model reasons. */
     thinkingLevel?: ThinkingLevel | null
@@ -139,161 +135,55 @@
   let userFolded = $state(initiallyFolded)
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
-  /** How close to the trace scroller's edges counts as "there". */
+  /** How close to the trace scroller's bottom counts as "there". */
   const TRACE_SCROLL_THRESHOLD = 32
-  const TRACE_TOP_THRESHOLD = 32
   /** The trace's own scroller. A tall trace caps its height and scrolls inside
-   *  the transcript, so older pages mount as the reader reaches its top. */
+   *  the transcript. */
   let traceScrollEl = $state<HTMLDivElement>()
   /** True while the reader is parked at the trace's bottom, where live output
    *  keeps following. A scroll-up pins their place and stops the follow. */
   let traceAtBottom = $state(true)
-  /** Pinned start of the mounted window. `null` means "the newest page"   the
-   *  state a trace opens in, the state it re-bounds to whenever it is not being
-   *  watched, and the state the reader's own paging moves back from. A pinned
-   *  entry never moves on its own: entries that stream in append at the tail,
-   *  so nothing the reader is looking at is ever evicted while they are on the
-   *  thread. */
-  let windowStartId = $state<string | null>(null)
-  const windowStartIndex = $derived(traceWindowStartIndex(visibleParts, windowStartId))
-  const pagedParts = $derived(visibleParts.slice(windowStartIndex))
-  /** The mounted window as chains of thought: the thinking and tool work, closed
-   *  by the text each chain produced. Grouping the window rather than the whole
-   *  trace is what keeps a turn with hundreds of steps   often one long chain
-   *  with no text in it at all   from mounting them all at once. */
-  const chains = $derived(groupTraceIntoChains(pagedParts))
+  /** The turn's trace as chains of thought, grouped from the complete part list
+   *  in one pass. Grouping everything at once is what keeps the structure
+   *  stable: a trace that grouped only its newest page reorganized itself as
+   *  older entries arrived   a flat run of steps turning into folded chains
+   *  which broke the reader's place. */
+  const chains = $derived(groupTraceIntoChains(visibleParts))
   /** How much thinking and tool work the whole trace holds, for the header count. */
   const stepCount = $derived(visibleParts.filter((part) => part.type !== 'text').length)
   /** The trace's whole wall-clock span, from its earliest entry to its latest. */
   const traceSpan = $derived(tracePartsSpan(visibleParts))
-  /** True while an older durable page is in flight, so one gesture cannot queue
-   *  the same page twice. */
-  let loadingOlderParts = $state(false)
-  /** Set for the duration of one wheel gesture's mount, so a momentum flick
-   *  that fires many wheel events still pages once. */
-  let wheelPagingLocked = false
+  /** True while the rest of this turn's durable stream is being pulled in. A
+   *  plain flag, not reactive state: the effect below re-runs on the part list
+   *  growing, so writing it back must not schedule the effect itself. */
+  let loadingOlderParts = false
 
-  /** Pin the window while the trace is genuinely being watched. A collapsed or
-   *  hidden trace keeps the plain newest-page window: nothing mounts while it
-   *  is away, and re-showing it must not mount whatever streamed meanwhile. A
-   *  pinned entry that left the list (turn boundary, fold reset, replaced cache
-   *  page) re-pins to the page being shown so nothing below the reader is
-   *  evicted. */
+  /** Pull the rest of this turn's durable stream in as soon as the trace is
+   *  open. The whole structure is grouped in one pass, so the header count and
+   *  every chain header are complete the moment the trace appears instead of
+   *  rebuilding themselves as the reader scrolls. One page per call, so a long
+   *  turn never blocks a frame; the loader stops when the turn's oldest entry
+   *  is mounted. */
   $effect(() => {
-    if (!isOpen || !active) return
-    if (windowStartId !== null && !traceWindowAnchorExpired(visibleParts, windowStartId)) {
-      return
-    }
-    windowStartId = newestTraceStartId(visibleParts)
-  })
-
-  /** Leaving the trace   another thread, another top-level view   re-bounds it
-   *  to the newest page off the reader's critical path, so returning mounts a
-   *  bounded window instead of the whole turn. The turn keeps streaming into the
-   *  log while away; the trace simply never keeps it mounted for nobody. The
-   *  same rule applies while the trace is collapsed: nothing is mounted, so
-   *  re-showing it opens on the newest page. */
-  $effect(() => {
-    if (active && isOpen) return
-    windowStartId = null
-    loadingOlderParts = false
-  })
-
-  /** Hold the reader's place across a window growth. Everything a page adds
-   *  lands above the entries already on screen, so the scroll offset moves by
-   *  exactly that added height and nothing the reader is looking at shifts.
-   *  Measured against `previousHeight`, captured before the window grew, and
-   *  applied in the same frame the new entries mount. */
-  function holdReaderPlace(previousHeight: number, previousTop: number): void {
-    void tick().then(() => {
-      const element = traceScrollEl
-      if (!element) return
-      const grown = element.scrollHeight - previousHeight
-      if (grown > 0) element.scrollTop = previousTop + grown
-    })
-  }
-
-  /** Move the pinned window start one page older, keeping the reader's place in
-   *  the trace stable across the mount. */
-  function moveWindowOlderPage(): void {
-    const element = traceScrollEl
-    const nextId = olderTraceStartId(visibleParts, windowStartIndex)
-    if (nextId === null) return
-    const previousHeight = element?.scrollHeight ?? 0
-    const previousTop = element?.scrollTop ?? 0
-    windowStartId = nextId
-    holdReaderPlace(previousHeight, previousTop)
-  }
-
-  /** Page in older entries. Entries already loaded come from the message cache
-   *  at no IPC cost; once the window reaches the oldest entry the trace holds,
-   *  the durable stream is asked for the next older page   a live turn's work
-   *  lives there long before the mirror records it. */
-  function expandTracePage(): void {
-    if (windowStartIndex > 0) {
-      moveWindowOlderPage()
-      return
-    }
-    if (!olderPartsAvailable || loadingOlderParts) return
-    // The durable page arrives by growing `parts`, which re-slices the pinned
-    // window before it can be re-pinned. Capture the height now, while the
-    // window still holds exactly what is on screen, so one adjustment covers
-    // the load and the re-pin together instead of measuring a half-grown tree.
-    const element = traceScrollEl
-    const previousHeight = element?.scrollHeight ?? 0
-    const previousTop = element?.scrollTop ?? 0
+    // Re-run as each page lands, and while the trace is open on screen.
+    void visibleParts.length
+    if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
+    if (loadingOlderParts) return
     loadingOlderParts = true
-    void Promise.resolve(onLoadOlderParts?.())
+    void Promise.resolve(onLoadOlderParts())
       .catch(() => {})
       .finally(() => {
         loadingOlderParts = false
-        const nextId = olderTraceStartId(visibleParts, windowStartIndex)
-        if (nextId !== null) windowStartId = nextId
-        holdReaderPlace(previousHeight, previousTop)
       })
-  }
+  })
 
-  /** Page older entries once the reader reaches the top of a scrollable trace.
-   *  A trace whose content fits needs no paging, and a reader parked at the
-   *  bottom must never pull pages in behind a live stream. */
-  function maybePageOlderEntries(element: HTMLDivElement): void {
-    if (element.scrollHeight - element.clientHeight <= TRACE_SCROLL_THRESHOLD) return
-    if (element.scrollTop > TRACE_TOP_THRESHOLD) return
-    expandTracePage()
-  }
-
-  /** Track the trace's own scroll: remember whether the reader is at the bottom
-   *  (for tail-follow) and page older entries when they reach its top. */
+  /** Track the trace's own scroll: remember whether the reader is at the bottom,
+   *  where live output keeps following. */
   function onTraceScroll(): void {
     const element = traceScrollEl
     if (!element) return
     traceAtBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
-    maybePageOlderEntries(element)
-  }
-
-  /** A trace whose content fits can offer no scroll of its own, so a wheel-up
-   *  is the reader's paging gesture. It only counts when the wheel did not come
-   *  from a nested scroller such as a tool's output box, so those gestures stay
-   *  with their own box. The event still bubbles: the transcript needs it. */
-  function onTraceWheel(event: WheelEvent): void {
-    const element = traceScrollEl
-    if (
-      !element ||
-      event.deltaY >= 0 ||
-      loadingOlderParts ||
-      wheelPagingLocked ||
-      element.scrollHeight - element.clientHeight > TRACE_SCROLL_THRESHOLD ||
-      (windowStartIndex === 0 && !olderPartsAvailable) ||
-      wheelFromNestedScroller(event)
-    ) {
-      return
-    }
-    wheelPagingLocked = true
-    expandTracePage()
-    void tick().then(() => {
-      wheelPagingLocked = false
-    })
   }
 
   // New live parts follow the trace only while the reader remains at its
@@ -309,17 +199,6 @@
       traceScrollEl.scrollTop = traceScrollEl.scrollHeight
     })
   })
-
-  /** True when the wheel came from an element that scrolls on its own between
-   *  the event target and the trace body   a tool's output box, a thinking
-   *  block. Those gestures belong to that box, not to trace paging. */
-  function wheelFromNestedScroller(event: WheelEvent): boolean {
-    const body = event.currentTarget
-    for (let el = event.target; el instanceof Element && el !== body; el = el.parentElement) {
-      if (el.scrollHeight > el.clientHeight + 1) return true
-    }
-    return false
-  }
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
@@ -498,7 +377,6 @@
       transition:slide={foldSlide()}
       class="trace-scroll flex max-h-[min(75vh,48rem)] min-w-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-2"
       onscroll={onTraceScroll}
-      onwheel={onTraceWheel}
     >
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
@@ -552,10 +430,9 @@
 {/if}
 
 <style>
-  /* The trace holds the reader's place itself when an older page mounts (see
-     holdReaderPlace). Chromium's scroll anchoring would apply the same
-     correction a second time and overshoot by a page, so it is off here   the
-     same reason the transcript scroller turns it off. */
+  /* The trace mounts its whole structure up front, so its scroll position is
+     its own. Chromium's scroll anchoring is left off so a fold or unfold inside
+     never shifts the reader. */
   .trace-scroll {
     overflow-anchor: none;
   }

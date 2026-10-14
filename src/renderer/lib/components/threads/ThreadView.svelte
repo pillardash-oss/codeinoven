@@ -1112,11 +1112,17 @@
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
+  /** Parts per read while the trace pulls the rest of its turn in. Larger than
+   *  the window page so a normal turn completes in one round trip; the main
+   *  process clamps it. */
+  const STREAM_OLDER_PAGE_SIZE = 200
+  /** Upper bound on reads in one catch-up, so a fold that never shrinks can
+   *  never spin the loader. */
+  const STREAM_OLDER_PAGE_ATTEMPTS = 25
   /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. Only a
-   *  bounded window is ever held here: the newest page plus whatever older pages
-   *  the reader has actually paged into, so opening a long running thread never
-   *  pulls (or parses) a whole turn's worth of streamed work. */
+   *  the live mirror and restore the latest trace after an app refresh. A trace
+   *  that is on screen pulls the rest of its turn in, so its whole structure
+   *  can be grouped once; a trace nobody is watching holds only the newest page. */
   let streamParts = $state<AgentPart[]>([])
   /** True when the durable log still folds entries older than `streamParts[0]`. */
   let streamHasOlder = $state(false)
@@ -11597,18 +11603,32 @@
    *  (a part older than the mounted window that kept updating) adopts its real
    *  position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
-    const oldest = streamParts[0]
-    if (!oldest || !streamHasOlder) return
-    const foldVersion = streamFoldVersion
-    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
-      beforeId: oldest.id,
-      limit: WORKING_TRACE_PAGE_SIZE
-    })
-    if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
-    streamHasOlder = page.hasOlder
-    if (page.parts.length === 0) return
-    const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
-    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
+    // Pull the whole remainder of the turn's stream, a large page at a time, so
+    // the trace can group its complete structure in one pass. Bounded, and it
+    // stops on the first read that makes no progress, so a fold that never
+    // shrinks can never spin here.
+    for (let attempt = 0; attempt < STREAM_OLDER_PAGE_ATTEMPTS; attempt += 1) {
+      const oldest = streamParts[0]
+      if (!oldest || !streamHasOlder) return
+      const foldVersion = streamFoldVersion
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        beforeId: oldest.id,
+        limit: STREAM_OLDER_PAGE_SIZE
+      })
+      if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
+      if (page.parts.length === 0) {
+        streamHasOlder = false
+        return
+      }
+      const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
+      const mountedBefore = streamParts.length
+      streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
+      streamHasOlder = page.hasOlder
+      if (streamParts.length === mountedBefore) {
+        streamHasOlder = false
+        return
+      }
+    }
   }
 
   // While a run is streaming on screen, re-read the durable SSE log every second

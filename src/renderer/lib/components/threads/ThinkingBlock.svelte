@@ -55,14 +55,19 @@
   <div class="min-w-0">
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+      class="group/think flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
       aria-expanded={open}
       title={open ? 'Hide thinking' : 'Show thinking'}
       onclick={() => (open = !open)}
     >
-      <Brain size={13} class="shrink-0 text-info/70" />
+      <Brain
+        size={13}
+        class="shrink-0 text-info/60 transition-colors group-hover/think:text-info"
+      />
       <span class="shrink-0">Thinking</span>
-      <span class="tabular-nums text-[0.625rem] text-dimmed">
+      <span
+        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
+      >
         {formatDurationSeconds(elapsed)}
       </span>
       {#if active}
@@ -71,7 +76,9 @@
       <span class="flex-1"></span>
       <ChevronRight
         size={12}
-        class="shrink-0 text-muted transition-transform {open ? 'rotate-90' : ''}"
+        class="shrink-0 text-dimmed transition-transform group-hover/think:text-foreground {open
+          ? 'rotate-90'
+          : ''}"
       />
     </button>
     {#if open}

@@ -62,6 +62,9 @@
   const displayDiffs = $derived(fileDiffs.length > 0 ? fileDiffs : checkpointDiffs)
 
   $effect(() => {
+    // Nothing is read until the reader opens the card: a trace can mount
+    // hundreds of folded rows, and each diff read is an IPC round trip.
+    if (!open) return
     const paths = checkpointPathsForTool(part, checkpointPaths)
     const currentProjectId = projectId
     const currentThreadId = threadId
@@ -123,6 +126,8 @@
   })
 
   const inputPreview = $derived(formatInput(part.state.input))
+  /** The tool-kind glyph: washed out with the row, brighter on hover. */
+  const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
     // Code mode outranks the name heuristics: a call a script made can carry
     // any inner tool name (read, bash, an MCP call), and it belongs to the
@@ -187,7 +192,7 @@
 <div class="min-w-0">
   <button
     type="button"
-    class="flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-muted transition-colors hover:text-foreground"
+    class="group/tool flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
@@ -204,30 +209,34 @@
       <Clock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
     {#if toolKind === 'code'}
-      <CodeXml size={12} class="shrink-0 text-dimmed" />
+      <CodeXml size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
-      <BookOpenText size={12} class="shrink-0 text-dimmed" />
+      <BookOpenText size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
-      <FilePenLine size={12} class="shrink-0 text-dimmed" />
+      <FilePenLine size={12} class={kindIconClass} />
     {:else if toolKind === 'write'}
-      <FilePlus2 size={12} class="shrink-0 text-dimmed" />
+      <FilePlus2 size={12} class={kindIconClass} />
     {:else if toolKind === 'search'}
-      <Search size={12} class="shrink-0 text-dimmed" />
+      <Search size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}
-      <GlobeCode size={12} class="shrink-0 text-dimmed" />
+      <GlobeCode size={12} class={kindIconClass} />
     {:else if toolKind === 'shell'}
-      <Terminal size={12} class="shrink-0 text-dimmed" />
+      <Terminal size={12} class={kindIconClass} />
     {:else}
-      <Wrench size={12} class="shrink-0 text-dimmed" />
+      <Wrench size={12} class={kindIconClass} />
     {/if}
-    <span class="shrink-0 font-mono font-medium text-foreground">
+    <span class="shrink-0 font-mono font-medium">
       {codeModeLabel}
     </span>
     {#if start}
-      <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDurationSeconds(elapsed)}</span>
+      <span
+        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
+        >{formatDurationSeconds(elapsed)}</span
+      >
     {/if}
     {#if !open && inputPreview}
-      <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed"
+      <span
+        class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
         >{inputPreview}</span
       >
     {:else}
@@ -235,7 +244,9 @@
     {/if}
     <ChevronRight
       size={13}
-      class="shrink-0 text-dimmed transition-transform {open ? 'rotate-90' : ''}"
+      class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
+        ? 'rotate-90'
+        : ''}"
     />
   </button>
 

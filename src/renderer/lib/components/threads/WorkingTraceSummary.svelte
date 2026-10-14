@@ -56,38 +56,41 @@
   )
 </script>
 
-<div class="py-1 text-left text-[0.75rem] font-medium text-muted">
-  <!-- The rule under the header belongs to the content, not the row: it spans
-       only what is on screen, from the title to the last badge, so a short fold
-       is underlined short and a row full of badges is underlined across. -->
+<div
+  class="group/trace relative flex flex-wrap items-center gap-x-2 gap-y-1 py-1 text-left text-[0.75rem] font-medium text-muted"
+>
+  <!-- The whole line is one click target, but the rule belongs to the content:
+       it spans only what is on screen, from the title to the last badge. The
+       target is an overlay so the sub-agent dropdown stays a real sibling
+       instead of a button nested inside a button. -->
+  <button
+    type="button"
+    class="absolute inset-0 cursor-pointer rounded-sm"
+    aria-expanded={open}
+    aria-label={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+    title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+    onclick={onToggle}
+  ></button>
   <div
-    class="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1"
+    class="pointer-events-none relative inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong group-hover/trace:text-foreground"
   >
-    <!-- The toggle is its own button so the sub-agent dropdown stays a sibling,
-         not a button nested inside a button. -->
-    <button
-      type="button"
-      class="flex min-w-0 cursor-pointer items-center gap-x-2 text-left transition-colors hover:text-foreground"
-      aria-expanded={open}
-      title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
-      onclick={onToggle}
+    <!-- Icons share one left gutter with every step below, so the orb and the
+       cog sit on the same edge as the thinking and tool marks. -->
+    <span class="flex h-5 w-5 shrink-0 items-center">
+      {#if open && busy}
+        <ThinkingOrb size={20} label="Working" />
+      {:else}
+        <Cog size={12} />
+      {/if}
+    </span>
+    Working Trace
+    <span class="tabular-nums text-dimmed transition-colors group-hover/trace:text-foreground"
+      >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
     >
-      <!-- Icons share one left gutter with every step below, so the orb and the
-         cog sit on the same edge as the thinking and tool marks. -->
-      <span class="flex h-5 w-5 shrink-0 items-center">
-        {#if open && busy}
-          <ThinkingOrb size={20} label="Working" />
-        {:else}
-          <Cog size={12} />
-        {/if}
-      </span>
-      Working Trace
-      <span class="tabular-nums text-dimmed"
-        >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
-      >
-    </button>
     {#if hasCompaction || subagentCount > 0 || hasCodeMode}
-      <span class="flex items-center gap-1.5">
+      <!-- Only the sub-agent dropdown takes the click; the plain badges let it
+           fall through to the line's own toggle. -->
+      <span class="relative z-10 flex items-center gap-1.5">
         {#if hasCodeMode}
           <span
             class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
@@ -109,17 +112,19 @@
           </span>
         {/if}
         {#if subagentCount > 0}
-          <WorkingTraceSubagentBadge
-            {coarsePointer}
-            {title}
-            {label}
-            {subagentCount}
-            {activeSubagentCount}
-            parts={subagentParts}
-            {elapsedFor}
-            {onOpen}
-            {onOpenSheet}
-          />
+          <span class="pointer-events-auto">
+            <WorkingTraceSubagentBadge
+              {coarsePointer}
+              {title}
+              {label}
+              {subagentCount}
+              {activeSubagentCount}
+              parts={subagentParts}
+              {elapsedFor}
+              {onOpen}
+              {onOpenSheet}
+            />
+          </span>
         {/if}
       </span>
     {/if}
