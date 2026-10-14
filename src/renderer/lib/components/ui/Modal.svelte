@@ -126,6 +126,15 @@
     /** Override Cmd/Mod+W without changing backdrop or Escape dismissal. */
     onCloseShortcut?: () => void
     children: Snippet
+    /**
+     * Actions that sit in the canonical header beside the close control.
+     *
+     * A surface whose one or two actions belong to the panel itself (a viewer
+     * that toggles a mode) puts them here rather than in a footer bar, which
+     * would add a whole band for a single control. Only rendered with the
+     * canonical chrome.
+     */
+    headerActions?: Snippet
     /** The fixed action bar. Only rendered with the canonical chrome. */
     footer?: Snippet
     /** Where the panel sits. `palette` is a top-anchored command surface.
@@ -210,6 +219,7 @@
     onClose,
     onCloseShortcut,
     children,
+    headerActions,
     footer,
     placement = 'center',
     size = 'md',
@@ -497,13 +507,18 @@
                   {#if description}
                     <Dialog.Description class="sr-only">{description}</Dialog.Description>
                   {/if}
-                  <Dialog.Close
-                    class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    <X size={16} />
-                  </Dialog.Close>
+                  <div class="flex items-center gap-1">
+                    {#if headerActions}
+                      {@render headerActions()}
+                    {/if}
+                    <Dialog.Close
+                      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      aria-label="Close"
+                      title="Close"
+                    >
+                      <X size={16} />
+                    </Dialog.Close>
+                  </div>
                 </div>
 
                 <div class="min-h-0 flex-1 {contentClass}">

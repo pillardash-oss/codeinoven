@@ -221,12 +221,15 @@
   {@render artifactBody()}
 </div>
 
-{#snippet modalActions()}
+{#snippet inspectAction()}
   <button
     type="button"
+    data-modal-primary
     class={[
-      'flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay',
-      inspecting ? 'border-accent text-accent' : ''
+      'flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors',
+      inspecting
+        ? 'border-accent bg-accent/10 text-accent'
+        : 'text-muted hover:bg-elevated hover:text-foreground'
     ]}
     aria-pressed={inspecting}
     title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
@@ -252,7 +255,7 @@
   placement="fullscreen"
   panelClass="bg-app"
   contentClass="flex flex-col overflow-hidden p-0"
-  footer={canInspect ? modalActions : undefined}
+  headerActions={canInspect ? inspectAction : undefined}
 >
   <div class="min-h-0 flex-1">
     {@render artifactBody(true)}
