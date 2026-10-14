@@ -51,7 +51,6 @@
   }: Props = $props()
 
   let open = $state(false)
-  let userToggled = $state(false)
   const clock = new ElapsedTimer()
   let checkpointDiffs = $state<ToolFileDiff[]>([])
   let loadedCheckpointKey = $state<string | null>(null)
@@ -61,10 +60,6 @@
   let isRunning = $derived(part.state.status === 'running')
   const fileDiffs = $derived(toolFileDiffs(part))
   const displayDiffs = $derived(fileDiffs.length > 0 ? fileDiffs : checkpointDiffs)
-
-  $effect(() => {
-    if (displayDiffs.length > 0 && !userToggled) open = true
-  })
 
   $effect(() => {
     const paths = checkpointPathsForTool(part, checkpointPaths)
@@ -197,7 +192,6 @@
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
       open = !open
-      userToggled = true
     }}
   >
     {#if statusMeta.icon === Loader2}

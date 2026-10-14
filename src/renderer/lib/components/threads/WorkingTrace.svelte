@@ -199,6 +199,20 @@
     loadingOlderParts = false
   })
 
+  /** Hold the reader's place across a window growth. Everything a page adds
+   *  lands above the entries already on screen, so the scroll offset moves by
+   *  exactly that added height and nothing the reader is looking at shifts.
+   *  Measured against `previousHeight`, captured before the window grew, and
+   *  applied in the same frame the new entries mount. */
+  function holdReaderPlace(previousHeight: number, previousTop: number): void {
+    void tick().then(() => {
+      const element = traceScrollEl
+      if (!element) return
+      const grown = element.scrollHeight - previousHeight
+      if (grown > 0) element.scrollTop = previousTop + grown
+    })
+  }
+
   /** Move the pinned window start one page older, keeping the reader's place in
    *  the trace stable across the mount. */
   function moveWindowOlderPage(): void {
@@ -208,11 +222,7 @@
     const previousHeight = element?.scrollHeight ?? 0
     const previousTop = element?.scrollTop ?? 0
     windowStartId = nextId
-    void tick().then(() => {
-      if (!element) return
-      const grown = element.scrollHeight - previousHeight
-      if (grown > 0) element.scrollTop = previousTop + grown
-    })
+    holdReaderPlace(previousHeight, previousTop)
   }
 
   /** Page in older entries. Entries already loaded come from the message cache
@@ -225,12 +235,21 @@
       return
     }
     if (!olderPartsAvailable || loadingOlderParts) return
+    // The durable page arrives by growing `parts`, which re-slices the pinned
+    // window before it can be re-pinned. Capture the height now, while the
+    // window still holds exactly what is on screen, so one adjustment covers
+    // the load and the re-pin together instead of measuring a half-grown tree.
+    const element = traceScrollEl
+    const previousHeight = element?.scrollHeight ?? 0
+    const previousTop = element?.scrollTop ?? 0
     loadingOlderParts = true
     void Promise.resolve(onLoadOlderParts?.())
       .catch(() => {})
       .finally(() => {
         loadingOlderParts = false
-        void tick().then(() => moveWindowOlderPage())
+        const nextId = olderTraceStartId(visibleParts, windowStartIndex)
+        if (nextId !== null) windowStartId = nextId
+        holdReaderPlace(previousHeight, previousTop)
       })
   }
 
@@ -477,7 +496,7 @@
     <div
       bind:this={traceScrollEl}
       transition:slide={foldSlide()}
-      class="flex max-h-[min(75vh,48rem)] min-w-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-2"
+      class="trace-scroll flex max-h-[min(75vh,48rem)] min-w-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-2"
       onscroll={onTraceScroll}
       onwheel={onTraceWheel}
     >
@@ -531,3 +550,13 @@
     onClose={() => (subagentSheetOpen = false)}
   />
 {/if}
+
+<style>
+  /* The trace holds the reader's place itself when an older page mounts (see
+     holdReaderPlace). Chromium's scroll anchoring would apply the same
+     correction a second time and overshoot by a page, so it is off here   the
+     same reason the transcript scroller turns it off. */
+  .trace-scroll {
+    overflow-anchor: none;
+  }
+</style>

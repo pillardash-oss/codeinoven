@@ -49,10 +49,6 @@
   })
 
   const elapsed = $derived(clock.seconds(start, end))
-
-  $effect(() => {
-    if (active) open = true
-  })
 </script>
 
 {#if body.trim() || summary.trim()}

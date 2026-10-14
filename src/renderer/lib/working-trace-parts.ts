@@ -41,7 +41,17 @@ export function latestWorkingTraceParts(parts: AgentPart[]): AgentPart[] {
  * runs, closed by the text it writes when it stops to report.
  */
 export interface TraceChain {
-  /** Stable key: the first step's id, or the output's id when a chain has no steps. */
+  /**
+   * Stable key for the chain. A chain that produced an output is keyed by that
+   * output's id, because the text is the boundary that defines it and older
+   * entries can only ever be added before it. A trailing chain with no output
+   * yet is keyed by its first step.
+   *
+   * The first step is deliberately not the key for an output chain: paging an
+   * older page into the window prepends steps to the chain the window starts
+   * inside, which would change a first-step key and remount the chain  and
+   * replay its fold  for nothing.
+   */
   id: string
   /** Reasoning, tool, sub-agent, compaction and file entries behind the output. */
   steps: AgentPart[]
@@ -68,7 +78,7 @@ export function groupTraceIntoChains(parts: readonly AgentPart[]): TraceChain[] 
   let steps: AgentPart[] = []
   for (const part of parts) {
     if (part.type === 'text') {
-      chains.push({ id: steps[0]?.id ?? part.id, steps, output: part })
+      chains.push({ id: part.id, steps, output: part })
       steps = []
       continue
     }
