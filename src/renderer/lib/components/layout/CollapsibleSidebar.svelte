@@ -94,6 +94,13 @@
      *  Off for a caller that owns the decision itself, so the parked/attached
      *  handover never depends on an attachment being re-evaluated mid-flight. */
     trackOcclusion?: boolean
+    /**
+     * Extra classes for the scrollable body, so an owner can tint or pad the
+     * content area (the browser tab strip paints a subtle background so the
+     * active tab's own colour is the prominent block) without a wrapper that
+     * would collapse children sizing themselves from the scroller.
+     */
+    bodyClass?: string
     children: Snippet
   }
 
@@ -115,7 +122,8 @@
     children,
     panel,
     holdOpen,
-    trackOcclusion = true
+    trackOcclusion = true,
+    bodyClass = undefined
   }: Props = $props()
 
   let resizing = $state(false)
@@ -190,7 +198,7 @@
     {/if}
 
     <div
-      class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2"
+      class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2 {bodyClass ?? ''}"
       class:ring-2={fileDrop?.active}
       class:ring-primary={fileDrop?.active}
       class:ring-inset={fileDrop?.active}
@@ -266,7 +274,7 @@
       {/if}
 
       <div
-        class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2"
+        class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2 {bodyClass ?? ''}"
         class:ring-2={fileDrop?.active}
         class:ring-primary={fileDrop?.active}
         class:ring-inset={fileDrop?.active}

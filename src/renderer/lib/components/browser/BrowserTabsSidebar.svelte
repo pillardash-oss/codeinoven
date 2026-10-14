@@ -807,6 +807,7 @@
     trackOcclusion={false}
     holdOpen={() => browserStripOverlay.pointerHeld}
     bind:scroller={tabScroller}
+    bodyClass="bg-app/50"
     {chrome}
   >
     {#if searchGroupId === null && pinned.length > 0}
@@ -847,7 +848,7 @@
         {#if searchGroupId !== null || query.trim() === '' || group.pinned || tabsFor(group.id).length > 0}
           <div class="mb-1">
             <div
-              class="group/header flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
+              class="group/header flex items-center gap-1 border-l-2 px-1.5 py-1 transition-colors hover:bg-elevated {groupDropTargetId ===
               group.id
                 ? draggingGroupId
                   ? groupDropPosition === 'before'
@@ -855,7 +856,7 @@
                     : 'border-b-2 border-info'
                   : 'ring-1 ring-info'
                 : ''}"
-              style="background-color: {accent}1a"
+              style="border-left-color: {accent}"
               role="group"
               aria-label={`${group.name}, drop a tab here to move it into this group`}
               ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}

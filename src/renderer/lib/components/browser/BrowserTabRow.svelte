@@ -19,7 +19,8 @@
   import {
     browserAppearanceAccent,
     browserAppearanceHasIcon,
-    browserAppearanceIconUrl
+    browserAppearanceIconUrl,
+    browserGroupAccent
   } from './browser-group-appearance'
 
   interface Props {
@@ -99,6 +100,28 @@
     return { harnessId, providerId, providerName }
   })
   const groups = $derived(globalBrowser.groups)
+  /** The group this row's tab is filed under, when it has one. */
+  const group = $derived(tab.groupId ? (groups.find((entry) => entry.id === tab.groupId) ?? null) : null)
+  /**
+   * The colour the tab on screen wears. A tab's own colour wins, and a tab with
+   * none borrows its group's accent, so an active tab filed under a group reads
+   * as that group the way a thread reads as its project. A tab with neither has
+   * no colour to fill with and falls back to the plain elevated surface.
+   */
+  const activeAccent = $derived(accent ?? (group ? browserGroupAccent(group) : null))
+  /**
+   * The fill of the active row. The group's identity is a left border, so the
+   * active tab is the only place colour fills: the tab's own accent is mixed
+   * into the elevated surface to make the page on screen the prominent block,
+   * exactly as the selected thread row is the prominent one in the thread list.
+   */
+  const activeRowStyle = $derived(
+    active
+      ? activeAccent
+        ? `background-color: color-mix(in srgb, ${activeAccent} 30%, var(--color-elevated))`
+        : 'background-color: var(--color-elevated)'
+      : undefined
+  )
   /** The box this tab runs in, or null in the default jar. Drives the row's box
    *  badge and the menu's reopen targets. */
   const box = $derived(tab.boxId ? globalBrowser.boxById(tab.boxId) : null)
@@ -312,11 +335,14 @@
 </script>
 
 <div
-  class="group flex items-center rounded-md transition-colors {dropTarget
+  class="group flex items-center transition-colors {dropTarget
     ? 'bg-info/10'
-    : highlighted
-      ? 'bg-elevated'
-      : 'hover:bg-elevated'}"
+    : active
+      ? ''
+      : highlighted
+        ? 'bg-elevated'
+        : 'hover:bg-elevated'}"
+  style={activeRowStyle}
   role="group"
   aria-label={`${label} tab row`}
   data-browser-tab-id={tab.id}
@@ -324,7 +350,7 @@
 >
   <button
     type="button"
-    class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
+    class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 pl-2 text-left"
     aria-current={active}
     aria-pressed={selected}
     title={tab.url || label}
@@ -358,7 +384,7 @@
         class="truncate text-xs {tab.hibernated && !highlighted
           ? 'text-dimmed'
           : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
-        style={accent ? `color: ${accent}` : undefined}
+        style={!active && accent ? `color: ${accent}` : undefined}
       >
         {label}
       </span>
