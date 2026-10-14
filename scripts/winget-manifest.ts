@@ -5,7 +5,7 @@
  *
  * winget pins one version and one installer hash per manifest folder, so every
  * release needs a fresh set of three files under
- * `packaging/winget/manifests/<letter>/<publisher>/<package>/<version>/`:
+ * `packaging/winget/manifests/<letter>/<identifier segments>/<version>/`:
  *
  *   <Identifier>.yaml                 the version manifest
  *   <Identifier>.installer.yaml       the installer manifest
@@ -24,10 +24,19 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 /**
- * winget requires `<publisher>.<package>` with no spaces, and the folder layout
- * must mirror the identifier exactly: the first segment sets the top folder.
+ * The one reverse-DNS application identifier, shared with the macOS
+ * CFBundleIdentifier and the Windows AppUserModelID (`APP_ID` in
+ * `src/lib/brand.ts`, `appId` in `electron-builder.yml`). winget allows a
+ * dotted identifier like this (its schema permits up to 8 segments, each up to
+ * 32 characters, and the community repository already carries reverse-DNS
+ * entries such as `io.github.frathe.picfetch`), and the folder layout must
+ * mirror it exactly: the first folder is the lowercase first letter, then every
+ * dotted segment, case-sensitive.
+ *
+ * A winget identifier is permanent: once a version is merged it is the upgrade
+ * key, so changing it later ships a second package instead of an upgrade.
  */
-const PACKAGE_IDENTIFIER = 'PillardashSolutions.CodeInOven'
+const PACKAGE_IDENTIFIER = 'com.pillardash.codeinoven'
 const PUBLISHER = 'Pillardash Solutions Limited'
 const PACKAGE_NAME = 'CodeInOven'
 const PACKAGE_LOCALE = 'en-US'
@@ -207,12 +216,10 @@ const date =
   (release ? releaseDate(release.publishedAt) : releaseDate(new Date().toISOString()))
 const installerUrl = flags.get('url') ?? `${REPO_URL}/releases/download/${tag}/${assetName}`
 
-const [publisherSegment, packageSegment] = PACKAGE_IDENTIFIER.split('.')
 const targetDirectory = join(
   outputRoot,
-  publisherSegment.charAt(0).toLowerCase(),
-  publisherSegment,
-  packageSegment,
+  PACKAGE_IDENTIFIER.charAt(0).toLowerCase(),
+  ...PACKAGE_IDENTIFIER.split('.'),
   version
 )
 
