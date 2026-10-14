@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { AppWindow, Loader2, RefreshCw, Zap } from '@lucide/svelte'
+  import { AppWindow, RefreshCw, Zap } from '@lucide/svelte'
+  import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -91,7 +92,7 @@
     </span>
   {:else}
     <span class="flex min-w-0 shrink items-center gap-2">
-      <Loader2 size={11} class="shrink-0 animate-spin text-info" />
+      <ThinkingOrb size={20} label={note ?? 'Agent working'} />
       <span class="min-w-0 truncate text-[0.625rem] text-info/80">{note ?? 'Agent working…'}</span>
       {#if startTime}
         <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">

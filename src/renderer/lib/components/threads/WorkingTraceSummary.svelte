@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Archive, CodeXml, Cog, Loader2 } from '@lucide/svelte'
+  import { Archive, CodeXml, Cog } from '@lucide/svelte'
+  import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'
   import WorkingTraceSubagentBadge from './WorkingTraceSubagentBadge.svelte'
@@ -59,11 +60,13 @@
   class="flex w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 border-b border-border py-1 text-left text-[0.75rem] font-medium text-muted transition-colors hover:text-foreground"
   onclick={onToggle}
 >
-  {#if open && busy}
-    <Loader2 size={12} class="shrink-0 animate-spin text-info" />
-  {:else}
-    <Cog size={12} class="shrink-0" />
-  {/if}
+  <span class="flex h-5 w-5 shrink-0 items-center justify-center">
+    {#if open && busy}
+      <ThinkingOrb size={20} label="Working" />
+    {:else}
+      <Cog size={12} />
+    {/if}
+  </span>
   Working Trace
   <span class="tabular-nums text-dimmed"
     >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span

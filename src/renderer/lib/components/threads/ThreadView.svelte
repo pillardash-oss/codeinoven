@@ -68,6 +68,7 @@
   import { speechController } from '../../speech/speech-controller.svelte'
   import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
+  import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
@@ -12071,11 +12072,11 @@
                     {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                       (reference) => !inlinedPaths.has(reference.path)
                     )}
-                    <!-- The user's own message reads as a ledger row: squared off
-                         on the left against an accent edge, rounded on the right,
-                         so it is unmistakable from the agent's prose. -->
+                    <!-- The user's own message reads as a ledger row: only its
+                         left edge is drawn, a 2px accent against the transcript,
+                         squared off on the left and rounded on the right. -->
                     <div
-                      class="w-full rounded-r-lg border border-border border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
+                      class="w-full rounded-r-lg border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
                       {#if leftoverReferences.length}
@@ -12780,7 +12781,7 @@
 
           {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
-              <Loader2 size={14} class="animate-spin text-info" />
+              <ThinkingOrb size={20} label={activityLabel} />
               <span>
                 {brainstormReportRefreshing
                   ? brainstormActivityLabel

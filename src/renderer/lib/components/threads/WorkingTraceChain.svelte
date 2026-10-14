@@ -84,7 +84,7 @@
 
 <div class="min-w-0">
   {#snippet stepList()}
-    <div class="flex min-w-0 flex-col gap-0.5" class:pl-4={indented}>
+    <div class="flex min-w-0 flex-col gap-1.5" class:pl-4={indented}>
       {#each chain.steps as step (step.id)}
         <WorkingTraceRow
           part={step}
