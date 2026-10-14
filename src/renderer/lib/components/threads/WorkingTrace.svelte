@@ -9,7 +9,11 @@
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
-  import { groupTraceIntoChains, latestWorkingTraceParts } from '$lib/working-trace-parts'
+  import {
+    groupTraceIntoChains,
+    latestWorkingTraceParts,
+    tracePartsSpan
+  } from '$lib/working-trace-parts'
   import {
     newestTraceStartId,
     olderTraceStartId,
@@ -48,6 +52,10 @@
     note?: string | null
     initialOpen?: boolean
     initialUserOpened?: boolean
+    /** True when the user explicitly folded this turn's trace. A folded trace
+     *  stays folded   it is never force-opened by the busy state or a remount
+     *  until a new turn begins. */
+    initiallyFolded?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
     /** Attribution for the model currently working on this trace. */
@@ -78,7 +86,7 @@
     threadId?: string
     checkpointId?: string | null
     checkpointPaths?: string[]
-    onToggle?: (open: boolean, userOpened: boolean) => void
+    onToggle?: (open: boolean, userOpened: boolean, userFolded: boolean) => void
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     onCiteFile?: (path: string, line?: number) => void
   }
@@ -94,6 +102,7 @@
     note = null,
     initialOpen = false,
     initialUserOpened = false,
+    initiallyFolded = false,
     startTime,
     active = true,
     olderPartsAvailable = false,
@@ -121,9 +130,11 @@
 
   // Intentional initial-value capture   props are only used to seed local state.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(open || initialOpen)
+  let isOpen = $state(!initiallyFolded && (open || initialOpen))
   // svelte-ignore state_referenced_locally
   let userOpened = $state(initialUserOpened)
+  // svelte-ignore state_referenced_locally
+  let userFolded = $state(initiallyFolded)
   // svelte-ignore state_referenced_locally
   let wasLatest = $state(latest)
   let closeTimer: ReturnType<typeof setTimeout> | null = null
@@ -152,6 +163,10 @@
    *  trace is what keeps a turn with hundreds of steps   often one long chain
    *  with no text in it at all   from mounting them all at once. */
   const chains = $derived(groupTraceIntoChains(pagedParts))
+  /** How much thinking and tool work the whole trace holds, for the header count. */
+  const stepCount = $derived(visibleParts.filter((part) => part.type !== 'text').length)
+  /** The trace's whole wall-clock span, from its earliest entry to its latest. */
+  const traceSpan = $derived(tracePartsSpan(visibleParts))
   /** True while an older durable page is in flight, so one gesture cannot queue
    *  the same page twice. */
   let loadingOlderParts = $state(false)
@@ -321,6 +336,16 @@
   })
 
   const elapsed = $derived(busy && effectiveStartTime ? agentClock.seconds(effectiveStartTime) : 0)
+  /** The trace's total duration in seconds: the live clock while it works, the
+   *  frozen span once it settles. Null when no entry reported a timestamp. */
+  const totalDurationSeconds = $derived.by((): number | null => {
+    if (busy && effectiveStartTime) return elapsed
+    if (traceSpan && effectiveStartTime) {
+      return Math.max(0, (traceSpan.end - effectiveStartTime) / 1000)
+    }
+    if (traceSpan) return (traceSpan.end - traceSpan.start) / 1000
+    return null
+  })
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.
   $effect(() => {
@@ -335,7 +360,7 @@
   onDestroy(() => imageUrls.destroy())
 
   function notify(): void {
-    onToggle?.(isOpen, userOpened)
+    onToggle?.(isOpen, userOpened, userFolded)
   }
 
   $effect(() => {
@@ -344,7 +369,8 @@
         clearTimeout(closeTimer)
         closeTimer = null
       }
-      if (!isOpen) {
+      // A trace the user explicitly folded stays folded while it works.
+      if (!isOpen && !userFolded) {
         isOpen = true
         notify()
       }
@@ -384,6 +410,7 @@
     event.preventDefault()
     isOpen = !isOpen
     userOpened = isOpen
+    userFolded = !isOpen
     if (closeTimer) {
       clearTimeout(closeTimer)
       closeTimer = null
@@ -465,7 +492,8 @@
   <WorkingTraceSummary
     open={isOpen}
     {busy}
-    count={visibleParts.length}
+    count={stepCount}
+    durationSeconds={totalDurationSeconds}
     {hasCompaction}
     {hasCodeMode}
     {subagentCount}

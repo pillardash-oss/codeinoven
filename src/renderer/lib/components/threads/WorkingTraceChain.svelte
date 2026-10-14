@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronRight } from '@lucide/svelte'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
+  import { formatDurationMs } from '$lib/format/duration'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { traceChainSpan, type TraceChain } from '$lib/working-trace-parts'
   import type { AgentPart } from '$shared/types'
@@ -72,7 +72,12 @@
     }
     return () => clock.stop()
   })
-  const elapsed = $derived(durationStart ? clock.seconds(durationStart, durationEnd) : 0)
+  /** The chain's own duration in milliseconds. Millisecond precision keeps a
+   *  fast chain readable as "<1s" instead of collapsing to "0s". */
+  const durationMs = $derived(
+    durationStart === undefined ? 0 : Math.max(0, (durationEnd ?? clock.now()) - durationStart)
+  )
+  const durationLabel = $derived(durationStart === undefined ? null : formatDurationMs(durationMs))
 
   const stepLabel = $derived(`${chain.steps.length} ${chain.steps.length === 1 ? 'step' : 'steps'}`)
 </script>
@@ -108,8 +113,8 @@
       >
         <ChevronRight size={12} class="shrink-0 transition-transform {open ? 'rotate-90' : ''}" />
         <span class="font-medium">{stepLabel}</span>
-        {#if durationStart}
-          <span class="tabular-nums">· {formatDurationSeconds(elapsed)}</span>
+        {#if durationLabel}
+          <span class="tabular-nums">· {durationLabel}</span>
         {/if}
       </button>
       {#if open}

@@ -12071,8 +12071,11 @@
                     {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                       (reference) => !inlinedPaths.has(reference.path)
                     )}
+                    <!-- The user's own message reads as a ledger row: squared off
+                         on the left against an accent edge, rounded on the right,
+                         so it is unmistakable from the agent's prose. -->
                     <div
-                      class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm text-foreground"
+                      class="w-full rounded-r-lg border border-border border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
                       {#if leftoverReferences.length}
@@ -12418,13 +12421,21 @@
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
                         initialUserOpened={isCurrentAssistantTurn &&
                           agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
+                        initiallyFolded={isCurrentAssistantTurn &&
+                          agentRuns.isTraceUserFolded(thread.projectId, thread.id)}
                         projectId={thread.projectId}
                         threadId={thread.id}
                         checkpointId={turnCheckpoint?.id ?? null}
                         checkpointPaths={turnCheckpoint?.changes.map((change) => change.path) ?? []}
-                        onToggle={(open, userOpened) => {
+                        onToggle={(open, userOpened, userFolded) => {
                           if (isCurrentAssistantTurn) {
-                            agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)
+                            agentRuns.setTraceOpen(
+                              thread.projectId,
+                              thread.id,
+                              open,
+                              userOpened,
+                              userFolded
+                            )
                           }
                         }}
                         onOpenSubagent={openSubagent}
@@ -12727,10 +12738,17 @@
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
+              initiallyFolded={agentRuns.isTraceUserFolded(thread.projectId, conversationId)}
               projectId={thread.projectId}
               threadId={thread.id}
-              onToggle={(open, userOpened) =>
-                agentRuns.setTraceOpen(thread.projectId, conversationId, open, userOpened)}
+              onToggle={(open, userOpened, userFolded) =>
+                agentRuns.setTraceOpen(
+                  thread.projectId,
+                  conversationId,
+                  open,
+                  userOpened,
+                  userFolded
+                )}
               onOpenSubagent={openSubagent}
               onCiteFile={openFileCitation}
             />

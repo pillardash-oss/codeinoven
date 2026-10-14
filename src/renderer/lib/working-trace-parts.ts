@@ -92,20 +92,36 @@ function stepTime(part: AgentPart): { start?: number; end?: number } | undefined
 }
 
 /**
- * Earliest start and latest end across a chain's steps, or null when no step
- * reported a timestamp. The end falls back to the start so a chain whose steps
- * never closed still has a stable duration to render instead of an open range.
+ * Earliest start and latest end across a set of parts, or null when none of
+ * them reported a timestamp. The end falls back to the start so a span whose
+ * entries never closed still has a stable duration to render instead of an
+ * open range.
  */
-export function traceChainSpan(chain: TraceChain): TraceChainSpan | null {
+function spanOfParts(parts: readonly AgentPart[]): TraceChainSpan | null {
   let start = Number.POSITIVE_INFINITY
   let end = Number.NEGATIVE_INFINITY
-  for (const part of chain.steps) {
+  for (const part of parts) {
     const time = stepTime(part)
     if (time?.start !== undefined) start = Math.min(start, time.start)
     if (time?.end !== undefined) end = Math.max(end, time.end)
   }
   if (start === Number.POSITIVE_INFINITY) return null
   return { start, end: end === Number.NEGATIVE_INFINITY ? start : Math.max(end, start) }
+}
+
+/** The wall-clock span a chain's steps occupied, or null when none reported one. */
+export function traceChainSpan(chain: TraceChain): TraceChainSpan | null {
+  return spanOfParts(chain.steps)
+}
+
+/**
+ * The wall-clock span an entire trace occupied: the earliest start to the
+ * latest end across every entry it holds. This is what the trace header shows
+ * as the turn's total duration, so it reads the same whether the work arrived
+ * as one chain or several.
+ */
+export function tracePartsSpan(parts: readonly AgentPart[]): TraceChainSpan | null {
+  return spanOfParts(parts)
 }
 
 /**

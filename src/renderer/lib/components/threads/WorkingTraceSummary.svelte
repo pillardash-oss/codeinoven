@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Archive, CodeXml, Cog, Loader2 } from '@lucide/svelte'
+  import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'
   import WorkingTraceSubagentBadge from './WorkingTraceSubagentBadge.svelte'
 
@@ -8,8 +9,10 @@
     open: boolean
     /** True while the turn is streaming, so the header shows a spinner. */
     busy: boolean
-    /** Number of entries this trace holds. */
+    /** Number of thinking and tool steps this trace holds. */
     count: number
+    /** Total wall-clock seconds the trace occupied, or null when unknown. */
+    durationSeconds: number | null
     hasCompaction: boolean
     /** True when this trace ran code-mode scripts (any harness). */
     hasCodeMode: boolean
@@ -31,6 +34,7 @@
     open,
     busy,
     count,
+    durationSeconds,
     hasCompaction,
     hasCodeMode,
     subagentCount,
@@ -44,10 +48,15 @@
     onOpenSheet,
     onToggle
   }: Props = $props()
+
+  const stepLabel = $derived(`${count} ${count === 1 ? 'step' : 'steps'}`)
+  const durationLabel = $derived(
+    durationSeconds === null ? null : formatDurationMs(durationSeconds * 1000)
+  )
 </script>
 
 <summary
-  class="flex w-full cursor-pointer items-center gap-2 py-1 text-left text-[0.75rem] font-medium text-muted transition-colors hover:text-foreground"
+  class="flex w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 border-b border-border py-1 text-left text-[0.75rem] font-medium text-muted transition-colors hover:text-foreground"
   onclick={onToggle}
 >
   {#if open && busy}
@@ -56,9 +65,11 @@
     <Cog size={12} class="shrink-0" />
   {/if}
   Working Trace
-  <span class="tabular-nums text-dimmed">({count})</span>
+  <span class="tabular-nums text-dimmed"
+    >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
+  >
   {#if hasCompaction || subagentCount > 0 || hasCodeMode}
-    <span class="ml-auto flex items-center gap-1.5">
+    <span class="flex items-center gap-1.5">
       {#if hasCodeMode}
         <span
           class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
