@@ -4,7 +4,7 @@ import { toPosixPath, posixBasename } from '$shared/paths'
 import { invoke } from '$lib/ipc.svelte'
 import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
 import { threadArtifactLocationForUrl } from '$lib/thread-artifact-url'
-import { clampMarkStrokeWidth, markColor, type MarkPoint } from '$lib/annotation-marks'
+import { clampMarkStrokeWidth, markColor } from '$lib/annotation-marks'
 import {
   annotatedFilename,
   baseBitmap,
@@ -75,7 +75,8 @@ function groupMarks(references: readonly ResponseReferenceAnchor[]): MarkGroup[]
       color: markColor(reference.markColor),
       number: referenceLabelNumber(reference.label, position),
       points: [...points],
-      strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth)
+      strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth),
+      surfaceEdge: reference.markSurfaceEdge
     })
     groups.set(key, group)
   })

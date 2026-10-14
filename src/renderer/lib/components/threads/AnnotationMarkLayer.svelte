@@ -8,6 +8,7 @@
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import {
     MARK_BADGE_SIZE,
+    MARK_FRAME_TOLERANCE_SECONDS,
     MARK_MAX_STROKE_WIDTH,
     MARK_MIN_STROKE_WIDTH,
     MARK_TAP_SLOP_PX,
@@ -16,8 +17,8 @@
     markColor,
     markPointsAttribute,
     normalizeMark,
-    type MarkPoint,
-    type MarkStyle
+    type MarkCapture,
+    type MarkPoint
   } from '$lib/annotation-marks'
   import { annotationTool } from '$lib/stores/annotation-tool.svelte'
   import {
@@ -55,7 +56,7 @@
      * refused it. The host owns this because only the host knows what the mark is
      * on: the picture's URL, and the second a video frame belongs to.
      */
-    createMark: (points: MarkPoint[], style: MarkStyle) => string | null
+    createMark: (capture: MarkCapture) => string | null
     /** A mark the user asked to edit from elsewhere; a composer jump sets it. */
     editingId: string | null
     /** The comment editor closed, so the caller can clear its request. */
@@ -80,6 +81,15 @@
      */
     badgeVisibility?: 'always' | 'while-annotating'
     /**
+     * The second whose frame the picture is showing, for a video.
+     *
+     * A video's marks belong to moments, not to the file: a stroke drawn at 0:05
+     * is a note about 0:05, and painting it over the 0:10 frame would show the
+     * user, and the agent looking at a screenshot of it, a mark on the wrong
+     * picture. Unset for a still, where every mark belongs to the one picture.
+     */
+    activeSeconds?: number | null
+    /**
      * Called before a mark's editor opens, so a host can put that mark's own
      * picture on screen first. A video seeks to the mark's second: the editor is
      * about a moment, and a moment the user cannot see is not editable.
@@ -98,6 +108,7 @@
     onArmedChange = () => {},
     hint = 'Draw on the picture · Esc to finish',
     badgeVisibility = 'always',
+    activeSeconds = null,
     onFocusMark
   }: Props = $props()
 
@@ -204,14 +215,19 @@
       strokeTravel <= MARK_TAP_SLOP_PX
         ? normalizeMark([{ x: drawn[0]?.x ?? 0, y: drawn[0]?.y ?? 0 }])
         : drawn
-    void addMark(points)
+    // Measured from the surface the stroke was drawn on rather than from the
+    // picture alone, because the send composes a picture of another size and needs
+    // the ratio between the two to keep the line as heavy as the user drew it.
+    const box = event.currentTarget.getBoundingClientRect()
+    void addMark(points, Math.min(box.width, box.height))
   }
 
   /** Attach a new mark and open its comment editor, the way a new selection does. */
-  async function addMark(points: MarkPoint[]): Promise<void> {
-    const id = createMark(points, {
-      color: annotationTool.color,
-      strokeWidth: annotationTool.strokeWidth
+  async function addMark(points: MarkPoint[], surfaceEdge: number): Promise<void> {
+    const id = createMark({
+      points,
+      surfaceEdge,
+      style: { color: annotationTool.color, strokeWidth: annotationTool.strokeWidth }
     })
     if (!id) return
     localEditingId = id
@@ -279,16 +295,38 @@
   /** Whether the numbered badges are on screen right now. */
   const showBadges = $derived(badgeVisibility === 'always' || armed || activeEditingId !== null)
 
+  /** Badge wording names a frame's moment, which a still mark has none of. */
+  function markMoment(mark: ResponseReferenceAnchor): string {
+    return mark.markSeconds === undefined ? '' : ` at ${videoTimecode(mark.markSeconds)}`
+  }
+
+  /** Whether a mark's stroke belongs on the picture the surface is showing. */
+  function marksThisPicture(mark: ResponseReferenceAnchor): boolean {
+    if (activeSeconds === null || activeSeconds === undefined) return true
+    if (mark.markSeconds === undefined) return true
+    return Math.abs(mark.markSeconds - activeSeconds) <= MARK_FRAME_TOLERANCE_SECONDS
+  }
+
+  /**
+   * The marks that belong on the picture right now, in composer order.
+   *
+   * Their strokes and their badges are the same list: a badge is where a note is,
+   * so a badge floating on a frame the note is not about is as wrong as a stroke
+   * drawn there. Moving to another annotated frame is the frame strip's job, and
+   * the composer lists every mark with its own jump.
+   */
+  const visibleMarks = $derived(marks.filter(marksThisPicture))
+
   /** The badge's wording, naming a frame's moment when it has one. */
   function badgeLabel(mark: ResponseReferenceAnchor, number: number): string {
-    const at = mark.seconds === undefined ? '' : ` at ${videoTimecode(mark.seconds)}`
+    const at = markMoment(mark)
     return mark.comment
       ? `Edit comment on mark ${number}${at}: ${mark.comment}`
       : `Comment on mark ${number}${at}`
   }
 
   function badgeHint(mark: ResponseReferenceAnchor, number: number): string {
-    const at = mark.seconds === undefined ? '' : ` at ${videoTimecode(mark.seconds)}`
+    const at = markMoment(mark)
     return mark.comment
       ? `Edit mark ${number}${at}: ${mark.comment}`
       : `Comment on mark ${number}${at}`
@@ -303,7 +341,7 @@
   preserveAspectRatio="none"
   aria-hidden="true"
 >
-  {#each marks as mark (mark.id)}
+  {#each visibleMarks as mark (mark.id)}
     {@const points = mark.points ?? []}
     {#if points.length > 1}
       <polyline
@@ -332,7 +370,7 @@
 </svg>
 
 {#if showBadges}
-  {#each marks as mark, index (mark.id)}
+  {#each visibleMarks as mark, index (mark.id)}
     {@const badge = markBadgePoint(mark.points ?? [])}
     {@const number = referenceLabelNumber(mark.label, index)}
     <button

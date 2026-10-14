@@ -50,6 +50,10 @@ export interface ResponseReferenceAnchor extends PromptReference {
   markColor?: string
   /** Media marks: the stroke's width in CSS pixels. Absent means the default. */
   markStrokeWidth?: number
+  /** Media marks: the shorter edge of the picture the stroke was drawn on, in CSS
+   *  pixels. The composed picture is usually a different size, so this is the
+   *  ratio that keeps the stroke as heavy as the user drew it. */
+  markSurfaceEdge?: number
   /** SVG element picks: a stable key for the artifact card the element was
    *  picked in, so the card that drew the element is the one that pins it. */
   artifactKey?: string

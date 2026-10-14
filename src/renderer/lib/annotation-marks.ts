@@ -32,6 +32,21 @@ export interface MarkStyle {
   strokeWidth: number
 }
 
+/**
+ * One captured stroke, as the surface that drew it reported it.
+ *
+ * `surfaceEdge` is the picture's shorter edge in CSS pixels at the moment the
+ * stroke was drawn. It is what keeps the stroke faithful: the user chose a width
+ * in pixels against the picture in front of them, and the send composes a picture
+ * of the artifact's own size, which is usually much larger. Without the edge the
+ * agent would receive a hairline where the user drew a deliberate line.
+ */
+export interface MarkCapture {
+  points: MarkPoint[]
+  style: MarkStyle
+  surfaceEdge: number
+}
+
 /** Which picture a mark was drawn on, for the wording of its descriptor. */
 export type MarkSurface = 'picture' | 'frame'
 
@@ -60,6 +75,18 @@ export const MARK_TAP_SLOP_PX = 4
 
 /** The badge diameter, in CSS pixels, of a numbered mark. */
 export const MARK_BADGE_SIZE = 20
+
+/**
+ * How close two seconds have to be to count as the same frame.
+ *
+ * A mark is stored at the second the player reported, and the player is later
+ * asked for its second again; a seek settles a frame or so away from what was
+ * requested, so a stroke drawn on the frame in front of the user has to remain on
+ * screen when that frame comes back. It is short enough that two deliberately
+ * different annotations are never the same frame, and long enough to cover a
+ * seek's own rounding.
+ */
+export const MARK_FRAME_TOLERANCE_SECONDS = 0.05
 
 /**
  * The stroke width a new mark is drawn with until the user picks another.

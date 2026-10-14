@@ -113,6 +113,8 @@ export interface QueuedResponseReference extends PromptReference {
   markColor?: string
   /** Media marks: the stroke's width in CSS pixels. */
   markStrokeWidth?: number
+  /** Media marks: the picture's shorter edge in CSS pixels when it was drawn on. */
+  markSurfaceEdge?: number
   /** SVG element picks: the artifact card the element was picked in. */
   artifactKey?: string
 }
@@ -325,15 +327,23 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.mediaUrl !== undefined && typeof value.mediaUrl !== 'string') return false
   if (value.markSeconds !== undefined && typeof value.markSeconds !== 'number') return false
   if (value.markColor !== undefined && typeof value.markColor !== 'string') return false
-  if (
-    value.markStrokeWidth !== undefined &&
-    (typeof value.markStrokeWidth !== 'number' || !Number.isFinite(value.markStrokeWidth))
-  )
-    return false
+  if (isInvalidPositiveNumber(value.markStrokeWidth)) return false
+  if (isInvalidPositiveNumber(value.markSurfaceEdge)) return false
   if (value.artifactKey !== undefined && typeof value.artifactKey !== 'string') return false
   if (value.points !== undefined && !isMarkPoints(value.points)) return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
+}
+
+/**
+ * Whether a stored number is present but not a positive finite one.
+ *
+ * Both mark measurements are lengths, so zero and negatives are as invalid as a
+ * string: a restored value the rasteriser would divide by has to be usable.
+ */
+function isInvalidPositiveNumber(value: unknown): boolean {
+  if (value === undefined) return false
+  return typeof value !== 'number' || !Number.isFinite(value) || value <= 0
 }
 
 /** A restored freehand stroke: every point a finite pair inside the unit square. */

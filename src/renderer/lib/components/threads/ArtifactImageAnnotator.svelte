@@ -1,7 +1,7 @@
 <script lang="ts">
   import InlineImageFigure from './InlineImageFigure.svelte'
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
-  import { markDescriptor, type MarkPoint, type MarkStyle } from '$lib/annotation-marks'
+  import { markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
@@ -64,7 +64,7 @@
    * names its surface: the same stroke means something different on another
    * picture, and on a video it also has to carry the second it was drawn at.
    */
-  function createMark(points: MarkPoint[], style: MarkStyle): string | null {
+  function createMark(capture: MarkCapture): string | null {
     const id = crypto.randomUUID()
     const current = responseReferencesState.forThread(projectId, threadId)
     responseReferencesState.setForThread(projectId, threadId, [
@@ -72,13 +72,14 @@
       {
         id,
         label: '',
-        text: markDescriptor(filename, points),
+        text: markDescriptor(filename, capture.points),
         kind: 'image',
         mediaUrl: url,
-        markColor: style.color,
-        markStrokeWidth: style.strokeWidth,
+        markColor: capture.style.color,
+        markStrokeWidth: capture.style.strokeWidth,
+        markSurfaceEdge: capture.surfaceEdge,
         ...(messageId ? { messageId } : {}),
-        points
+        points: capture.points
       }
     ])
     // The store caps how many references a thread may hold and numbers the

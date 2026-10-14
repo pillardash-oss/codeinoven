@@ -32,8 +32,15 @@ export interface RasterMark {
   number: number
   /** The stroke, normalized to 0..1 of the picture. */
   points: readonly MarkPoint[]
-  /** Stroke width in CSS pixels, at the picture's own size. */
+  /** Stroke width in CSS pixels, as the user chose it. */
   strokeWidth: number
+  /**
+   * The shorter edge, in CSS pixels, of the picture the user drew on, when it is
+   * known. The composed picture is usually a different size, so the stroke is
+   * scaled by the ratio between the two and reads as the same line. Absent for a
+   * mark drawn before the surface reported its size, which keeps its width.
+   */
+  surfaceEdge?: number
 }
 
 /**
@@ -45,12 +52,14 @@ export interface RasterMark {
 export const MAX_COMPOSED_EDGE = 1600
 
 /**
- * Ceiling on the bytes read to resolve one frame.
+ * Ceiling on the bytes a frame is decoded from.
  *
- * Reading a video into memory to reach a frame is the only way a renderer can
- * decode one, and a long clip is exactly the case where that is not worth doing
- * for a single annotation. Past this the mark travels as its timecode and text
- * alone, which still tells the agent which second to change.
+ * Decoding a video to reach a frame means holding it in memory, and a long clip is
+ * exactly the case where that is not worth doing for a single annotation. Past
+ * this the mark travels as its timecode and text alone, which still tells the
+ * agent which second to change. It bounds the decode, not the read: the bytes
+ * arrive here already read, and the read is bounded by the same policy that lets
+ * the app serve the artifact inline at all.
  */
 export const MAX_FRAME_SOURCE_BYTES = 64 * 1024 * 1024
 
@@ -133,6 +142,23 @@ export async function baseBitmap(input: {
   return videoFrameBitmap(input.bytes, input.mime, input.seconds)
 }
 
+/**
+ * The stroke width to draw in the composed picture.
+ *
+ * The user chose the width against the picture in front of them, and the composed
+ * picture is the artifact's own size, so the width is scaled by the ratio between
+ * the two shorter edges. A mark with no recorded surface keeps its literal width,
+ * which is what the rasteriser always did before surfaces reported theirs.
+ */
+function composedStrokeWidth(mark: RasterMark, width: number, height: number): number {
+  const chosen = clampMarkStrokeWidth(mark.strokeWidth)
+  const surfaceEdge = mark.surfaceEdge
+  if (surfaceEdge === undefined || !Number.isFinite(surfaceEdge) || surfaceEdge <= 0) {
+    return chosen
+  }
+  return Math.max(1, chosen * (Math.min(width, height) / surfaceEdge))
+}
+
 /** Draw one mark: a haloed stroke for a drawn area, a dot for a tap. */
 export function drawMark(
   context: OffscreenCanvasRenderingContext2D,
@@ -143,7 +169,7 @@ export function drawMark(
   const scale = Math.min(width, height)
   const first = mark.points[0]
   if (!first) return
-  const strokeWidth = clampMarkStrokeWidth(mark.strokeWidth)
+  const strokeWidth = composedStrokeWidth(mark, width, height)
   context.lineJoin = 'round'
   context.lineCap = 'round'
   if (isMarkTap(mark.points)) {

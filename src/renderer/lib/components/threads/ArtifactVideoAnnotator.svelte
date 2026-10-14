@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Expand } from '@lucide/svelte'
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
-  import { markDescriptor, type MarkPoint, type MarkStyle } from '$lib/annotation-marks'
+  import { markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
@@ -128,7 +128,7 @@
    * part of what the user meant: the playhead can move afterwards, and a mark
    * whose moment followed it would be a mark on whatever frame happened to be up.
    */
-  function createMark(points: MarkPoint[], style: MarkStyle): string | null {
+  function createMark(capture: MarkCapture): string | null {
     const id = crypto.randomUUID()
     const seconds = Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0
     const current = responseReferencesState.forThread(projectId, threadId)
@@ -137,17 +137,18 @@
       {
         id,
         label: '',
-        text: markDescriptor(filename, points, {
+        text: markDescriptor(filename, capture.points, {
           surface: 'frame',
           timecode: videoTimecode(seconds)
         }),
         kind: 'image',
         mediaUrl: url,
         markSeconds: seconds,
-        markColor: style.color,
-        markStrokeWidth: style.strokeWidth,
+        markColor: capture.style.color,
+        markStrokeWidth: capture.style.strokeWidth,
+        markSurfaceEdge: capture.surfaceEdge,
         ...(messageId ? { messageId } : {}),
-        points
+        points: capture.points
       }
     ])
     // The store caps how many references a thread may hold, so a mark beyond the
@@ -204,6 +205,7 @@
           {armed}
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
+          activeSeconds={currentTime}
           badgeVisibility="while-annotating"
           hint="Pick the frame, then draw · Esc to finish"
         />
