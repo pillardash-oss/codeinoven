@@ -30,6 +30,9 @@
         `${counts.attention} ${counts.attention === 1 ? 'thread needs' : 'threads need'} attention`
       )
     }
+    if (counts.retry > 0) {
+      parts.push(`${counts.retry} ${counts.retry === 1 ? 'thread' : 'threads'} waiting to retry`)
+    }
     if (counts.error > 0) parts.push(`${counts.error} ${counts.error === 1 ? 'thread' : 'threads'} failed`)
     if (counts.working > 0) {
       parts.push(`${counts.working} ${counts.working === 1 ? 'thread' : 'threads'} working`)
@@ -59,6 +62,9 @@
     {/if}
     {#if counts.attention > 0}
       {@render stateItem('var(--color-warning)', counts.attention, true)}
+    {/if}
+    {#if counts.retry > 0}
+      {@render stateItem('var(--color-thread-working-paused)', counts.retry, true)}
     {/if}
     {#if counts.error > 0}
       {@render stateItem('var(--color-thread-error)', counts.error, false)}

@@ -13,6 +13,8 @@ export interface ThreadStateCounts {
   unread: number
   /** Threads parked on the user (a permission, question, secret, or review). */
   attention: number
+  /** Threads parked on a scheduled retry (a rate limit or provider wait). */
+  retry: number
   /** Threads that ended in failure. */
   error: number
 }
@@ -27,18 +29,20 @@ export interface CountThreadStatesOptions {
 }
 
 export function emptyThreadStateCounts(): ThreadStateCounts {
-  return { working: 0, unread: 0, attention: 0, error: 0 }
+  return { working: 0, unread: 0, attention: 0, retry: 0, error: 0 }
 }
 
 /**
- * Count threads by the state a sidebar row reports. Working, attention, and
- * error are mutually exclusive: a live-working thread is never counted as
- * attention, so those three never double-count the same thread. Unread is a
- * separate axis (a thread can be unread and parked at once), so it is counted
- * on its own and only when the caller asks for it.
+ * Count threads by the state a sidebar row reports. Working, attention, retry,
+ * and error are mutually exclusive: a thread lands in exactly one of them, so a
+ * thread is never double-counted. Unread is a separate axis (a thread can be
+ * unread and parked at once), so it is counted on its own and only when the
+ * caller asks for it.
  *
  * Working reads the one live-working rule, so a row's badge can never disagree
- * with the thread rows it summarizes.
+ * with the thread rows it summarizes. Retry is the `working-paused` status, the
+ * same threads the rail counts as "waiting to retry"; without it a routine
+ * parked on a provider retry wore no indicator at all.
  */
 export function countThreadStates(
   threads: Iterable<Thread>,
@@ -49,6 +53,7 @@ export function countThreadStates(
     if (threadHasVisibleWork(thread)) counts.working += 1
     else if (thread.status === 'failed') counts.error += 1
     else if (thread.status === 'awaiting_approval') counts.attention += 1
+    else if (thread.status === 'working-paused') counts.retry += 1
     if (options.includeUnread && !thread.read) counts.unread += 1
   }
   return counts
@@ -57,6 +62,10 @@ export function countThreadStates(
 /** Whether a breakdown has anything to show, so a row can skip the cluster. */
 export function hasThreadStateCounts(counts: ThreadStateCounts): boolean {
   return (
-    counts.working > 0 || counts.unread > 0 || counts.attention > 0 || counts.error > 0
+    counts.working > 0 ||
+    counts.unread > 0 ||
+    counts.attention > 0 ||
+    counts.retry > 0 ||
+    counts.error > 0
   )
 }
