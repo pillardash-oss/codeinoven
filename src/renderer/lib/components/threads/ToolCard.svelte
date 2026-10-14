@@ -258,7 +258,7 @@
   </button>
 
   {#if open}
-    <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pl-3">
+    <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pr-3 pl-3">
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}

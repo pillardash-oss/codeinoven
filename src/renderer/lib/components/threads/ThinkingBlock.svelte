@@ -31,7 +31,7 @@
    * the Codex channels were separated still carry it. Render it once: the
    * summary formatting is the clean one (the body copy has the streamed line
    * separators collapsed into literal `****`), so it becomes the body and the
-   * separate "Thinking summary" section is dropped.
+   * separate "Reasoning summary" section is dropped.
    */
   let repeatsSummary = $derived(reasoningSummaryRepeatsBody(part.text, part.summary ?? ''))
   let body = $derived(repeatsSummary ? (part.summary ?? '') : part.text)
@@ -65,24 +65,19 @@
       type="button"
       class="group/think flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
       aria-expanded={open}
-      title={open ? 'Hide thinking' : 'Show thinking'}
+      title={open ? 'Hide reasoning' : 'Show reasoning'}
       onclick={() => (open = !open)}
     >
       <Brain
         size={13}
         class="shrink-0 text-info/60 transition-colors group-hover/think:text-info"
       />
-      <span class="shrink-0">Thinking</span>
-      {#if start !== undefined}
-        <span
-          class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
-        >
-          {formatDurationMs(elapsed * 1000)}
-        </span>
-      {/if}
-      {#if active}
-        <span class="h-1.5 w-1.5 rounded-full bg-info animate-pulse"></span>
-      {/if}
+      <!-- Bold label plus the muted summary reads as one sentence, and the
+           weight is what separates the label from the content it introduces. -->
+      <span
+        class="shrink-0 font-semibold text-muted transition-colors group-hover/think:text-foreground"
+        >Reasoning:</span
+      >
       {#if title}
         <span
           class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed transition-colors group-hover/think:text-muted"
@@ -90,6 +85,16 @@
         >
       {:else}
         <span class="flex-1"></span>
+      {/if}
+      {#if start !== undefined}
+        <span
+          class="shrink-0 tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
+        >
+          {formatDurationMs(elapsed * 1000)}
+        </span>
+      {/if}
+      {#if active}
+        <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-info animate-pulse"></span>
       {/if}
       <ChevronRight
         size={12}
@@ -99,7 +104,7 @@
       />
     </button>
     {#if open}
-      <div transition:slide={foldSlide()} class="border-l border-border/60 py-1 pl-3">
+      <div transition:slide={foldSlide()} class="border-l border-border/60 py-1 pr-3 pl-3">
         <div class="max-h-80 overflow-y-auto">
           {#if body.trim()}
             <SmoothMarkdown
@@ -112,7 +117,7 @@
           {#if summary.trim()}
             <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
               <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
-                Thinking summary
+                Reasoning summary
               </p>
               <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
             </div>
