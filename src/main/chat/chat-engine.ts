@@ -40,6 +40,7 @@ import {
   createOpenCodeHarnessDriver,
   isOpenCodeV2Installed
 } from '../drivers/opencode-harness-driver'
+import { warmOpenCodeInstallation } from '../agents/opencode-installation'
 import type { IsolatedSessionHandle } from '../drivers/isolated-session'
 import { supportsIsolatedSessions } from '../drivers/isolated-session'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
@@ -932,6 +933,13 @@ export class ChatEngine {
   /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
   private openCodeDriverIsV2 = false
 
+  /**
+   * A transport swap that could not run yet because a turn owns the harness.
+   * The swap is retried on the next idle signal and on the next acquisition
+   * instead of being dropped, so a completed probe always converges.
+   */
+  private openCodeHarnessSwapPending = false
+
   private childSessionOwners = new Map<string, ChildSessionInfo>()
 
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -1799,6 +1807,15 @@ export class ChatEngine {
   }
 
   private async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {
+    // The install probe decides which OpenCode transport a driver speaks, and
+    // the post-paint boot deliberately starts it without awaiting so
+    // `features:ready` is not held on the child processes. The driver map is
+    // therefore built against whatever install is cached at that instant (empty
+    // on a session's first launch, which selects V1). A turn that acquires an
+    // OpenCode driver joins the same single-flight probe here and swaps the map
+    // before it is handed out, so a V2-only install is never given V1 session
+    // operations.
+    if (harnessId === 'opencode') await this.resolveOpenCodeTransport()
     // Thread-bound ids can outlive their account: the account may be removed
     // while the thread keeps a persisted session binding (for example across
     // an app restart, when no live session-registry entry matches). Fall back
@@ -1823,6 +1840,24 @@ export class ChatEngine {
     this.wireNativeUtilityReporting(driver)
     this.accountDrivers.set(account.id, driver)
     return driver
+  }
+
+  /**
+   * Join the OpenCode install probe and converge the driver map on its result.
+   *
+   * A driver is acquired for every turn and account-scoped read, so this is
+   * where installation readiness is awaited: by the time the driver is returned
+   * the probe has settled and `refreshOpenCodeHarness` has swapped the map (or
+   * recorded a pending swap because a turn still owns the harness). Once the
+   * probe has settled, `warmOpenCodeInstallation` answers from memory, so later
+   * acquisitions pay nothing.
+   */
+  private async resolveOpenCodeTransport(): Promise<void> {
+    await warmOpenCodeInstallation().catch((error: unknown) => {
+      Logger.dev('opencode install detection failed (non-fatal):', error)
+      return null
+    })
+    this.refreshOpenCodeHarness()
   }
 
   private driverForRuntime(harnessId: string, accountId?: string): HarnessDriver | undefined {
@@ -4542,14 +4577,26 @@ export class ChatEngine {
    * Rebuild the single `opencode` driver when the detected install crossed the
    * V1/V2 line while the app was running (for example right after the user ran
    * the harness's own updater). A swap mid-turn would route the in-flight turn's
-   * events to the new driver, so it is deferred until the harness is idle; the
-   * next probe change or app restart picks it up otherwise.
+   * events to the new driver, so it is deferred until the harness is idle. A
+   * deferred swap is remembered and retried on the next idle signal or the next
+   * driver acquisition, so it always converges instead of being dropped.
    */
   refreshOpenCodeHarness(): void {
     if (!this.drivers.has('opencode')) return
     const desiredV2 = isOpenCodeV2Installed()
-    if (desiredV2 === this.openCodeDriverIsV2) return
-    if (this.harnessHasActiveTurn('opencode')) return
+    if (desiredV2 === this.openCodeDriverIsV2) {
+      this.openCodeHarnessSwapPending = false
+      return
+    }
+    // A swap mid-turn would route the in-flight turn's events to the new
+    // driver, so it waits. It is not dropped: mark it pending so the next idle
+    // signal or the next driver acquisition retries it and the transport
+    // converges once the harness goes quiet.
+    if (this.harnessHasActiveTurn('opencode')) {
+      this.openCodeHarnessSwapPending = true
+      return
+    }
+    this.openCodeHarnessSwapPending = false
     const driver = createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault)
     driver.setProcessObserver?.(this.agentProcesses)
     driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
@@ -22834,6 +22881,17 @@ export class ChatEngine {
     }
     // `providerCatalog.updated` is a chat-engine broadcast, never a driver event.
     if (event.type === 'providerCatalog.updated') return
+    // A transport swap deferred because a turn owned the harness converges the
+    // moment that harness goes idle, so a settled install probe is honored
+    // without waiting for the next turn or an app restart.
+    if (
+      driverId === 'opencode' &&
+      this.openCodeHarnessSwapPending &&
+      (event.type === 'session.idle' ||
+        (event.type === 'session.status' && event.status.state === 'idle'))
+    ) {
+      this.refreshOpenCodeHarness()
+    }
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.sessionRegistry.get(event.sessionId)

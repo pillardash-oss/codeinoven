@@ -28,6 +28,9 @@ let cachedInstallation: OpenCodeInstallation | null = null
 /** The one in-flight probe, shared by every caller that wants the install. */
 let detectionInFlight: Promise<OpenCodeInstallation | null> | null = null
 
+/** True once a probe has settled, so later callers reuse the memory. */
+let detectionSettled = false
+
 /** The last resolved install, or null when nothing has been probed yet. */
 export function cachedOpenCodeInstallation(): OpenCodeInstallation | null {
   return cachedInstallation
@@ -42,6 +45,7 @@ export function rememberOpenCodeInstallation(installation: OpenCodeInstallation 
 export function resetOpenCodeInstallationCache(): void {
   cachedInstallation = null
   detectionInFlight = null
+  detectionSettled = false
 }
 
 /**
@@ -56,9 +60,19 @@ export function resetOpenCodeInstallationCache(): void {
  * joins the same probe instead of spawning the same candidates again.
  */
 export function warmOpenCodeInstallation(): Promise<OpenCodeInstallation | null> {
-  detectionInFlight ??= detectOpenCodeInstallation().finally(() => {
-    detectionInFlight = null
-  })
+  // Once a probe has settled, the resolved install is the answer. A caller that
+  // acquires the driver on every turn must not re-spawn the probe each time; a
+  // mid-session install change is detected by `ProviderConnectionService`, which
+  // re-probes and calls `rememberOpenCodeInstallation` directly.
+  if (detectionSettled) return Promise.resolve(cachedInstallation)
+  detectionInFlight ??= detectOpenCodeInstallation()
+    .then((installation) => {
+      detectionSettled = true
+      return installation
+    })
+    .finally(() => {
+      detectionInFlight = null
+    })
   return detectionInFlight
 }
 
