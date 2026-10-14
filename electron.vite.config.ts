@@ -246,8 +246,14 @@ export default defineConfig(({ mode }) => {
           // registerMediabunnyServer() installs would never reach the copy
           // @remotion/video-matting decodes with (background removal then fails
           // with `The primary video track cannot be decoded.`). Resolving them at
-          // runtime keeps one copy of each, which is also what the package layout
-          // now guarantees.
+          // runtime also keeps one copy of each of these six.
+          //
+          // They are devDependencies, not runtime ones: the installer no longer
+          // carries them, and the matting operation installs them on demand into
+          // the app config folder (see src/main/video/video-packages.ts). They
+          // stay listed here because the matting utility process still imports
+          // them by name, from wherever they are installed, so the build must
+          // leave those imports alone.
           external: [
             'electron',
             'node-pty',
