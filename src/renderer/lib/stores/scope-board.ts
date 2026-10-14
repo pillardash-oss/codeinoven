@@ -9,6 +9,7 @@ import {
   type Thread
 } from '$shared/types'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
+import { settledThreadReadsUnread } from '$shared/thread-status-policy'
 
 /** Stage a thread renders under on the scope board; one slice per board column. */
 export type ThreadStage = ScopeSlice
@@ -162,7 +163,10 @@ export function clearScopeSnapshot(): void {
 export function threadStage(thread: Thread, draftThreadId?: string | null): ThreadStage {
   if (draftThreadId && thread.id === draftThreadId) return 'todo'
   if (thread.pinned) return 'pinned'
-  if (thread.status === 'completed' && !thread.read && !isOrchestrationChildThread(thread)) {
+  // A settled thread the user has not read sits in Unread, whether it finished
+  // (`completed`) or errored (`failed`); reading it returns it to its own
+  // slice. A child worker never surfaces here.
+  if (!isOrchestrationChildThread(thread) && settledThreadReadsUnread(thread, thread.read)) {
     return 'unread'
   }
   return scopeSliceForStatus(thread.status)

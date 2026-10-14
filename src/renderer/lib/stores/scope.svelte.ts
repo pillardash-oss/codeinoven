@@ -23,6 +23,7 @@ import {
   type ScopeWorktreeSourceInfo,
   type Thread
 } from '$shared/types'
+import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import {
   cloneBoard,
   EMPTY_BOARD,
@@ -165,9 +166,11 @@ class ScopeState {
       const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
       badges.set(project.id, {
         hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
-        hasUnread: userThreads.some((t) => t.status === 'completed' && !t.read),
+        // A settled thread counts as unread until the user reads it; once read,
+        // an errored one shows its error again (see `settledThreadReadsUnread`).
+        hasUnread: userThreads.some((t) => canMarkThreadUnread(t.status) && !t.read),
         hasAttention: userThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
-        hasError: userThreads.some((t) => t.status === 'failed')
+        hasError: userThreads.some((t) => t.status === 'failed' && t.read)
       })
     }
     return badges

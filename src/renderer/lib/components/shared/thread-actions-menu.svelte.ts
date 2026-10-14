@@ -5,6 +5,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
 import { Copy, EyeOff, GitFork, Kanban, Mail, Pencil, Pin, PinOff, Send, Trash2 } from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
@@ -116,7 +117,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
    */
   async function markUnread(): Promise<void> {
     const thread = config.getThread()
-    if (!thread || !thread.read) return
+    if (!thread || !thread.read || !canMarkThreadUnread(thread.status)) return
     threadUnreadIntent.mark(thread.id)
     try {
       const updated = await invoke('thread:markUnread', thread.projectId, thread.id)
@@ -136,7 +137,11 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
     const howToThread = config.isHowToThread?.() ?? false
-    const canMarkUnread = threadTracksReadStatus(thread) && thread.read
+    // Only a settled thread may be pushed back to unread: a finished or errored
+    // run. Live work, a ready spec, and "Needs attention" are not the same as
+    // unread and are never offered here (see `canMarkThreadUnread`).
+    const canMarkUnread =
+      threadTracksReadStatus(thread) && thread.read && canMarkThreadUnread(thread.status)
     return [
       { label: 'Rename', icon: Pencil, onClick: startRename },
       ...(canMarkUnread

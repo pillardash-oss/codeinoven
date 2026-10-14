@@ -51,7 +51,9 @@ export function countThreadStates(
   const counts = emptyThreadStateCounts()
   for (const thread of threads) {
     if (threadHasVisibleWork(thread)) counts.working += 1
-    else if (thread.status === 'failed') counts.error += 1
+    // A settled thread the user has not read reads as unread, so it leaves the
+    // error axis for the unread one, matching its row badge.
+    else if (thread.status === 'failed' && thread.read) counts.error += 1
     else if (thread.status === 'awaiting_approval') counts.attention += 1
     else if (thread.status === 'working-paused') counts.retry += 1
     if (options.includeUnread && !thread.read) counts.unread += 1

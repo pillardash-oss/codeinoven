@@ -1,4 +1,4 @@
-import type { ScopeSlice, ThreadStatus } from './types'
+import type { ScopeSlice, Thread, ThreadStatus } from './types'
 import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
 export type ThreadStatusTone =
@@ -150,6 +150,37 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
 export const DONE_THREAD_STATUSES: readonly ThreadStatus[] = THREAD_STATUSES.filter(
   (status) => THREAD_STATUS_POLICY[status].scopeSlice === 'done'
 )
+
+/**
+ * Whether a settled thread may be pushed back to unread from a thread actions
+ * menu. Only the two outcomes that end a run qualify: `completed` and `failed`.
+ * A live status still has work in flight, and `spec` or `awaiting_approval`
+ * ("Needs attention") are states the app keeps and never evicts, so unread is
+ * not the same thing and neither may be flipped. `interrupted` is likewise out:
+ * the user stopped that run on purpose, which unread would only obscure.
+ *
+ * This mirrors the terminal-outcome split the assistant reports use; see
+ * `assistantReportIsTerminal` in `src/lib/assistant-reports.ts`.
+ */
+export function canMarkThreadUnread(status: ThreadStatus): boolean {
+  return status === 'completed' || status === 'failed'
+}
+
+/**
+ * Whether a settled thread reads as unread until the user opens it.
+ *
+ * A `completed` or `failed` thread the user has not read shows the unread dot
+ * and sits in the Unread slice, exactly as it did the moment the run settled.
+ * A run that failed while the user was away and a thread they pushed back to
+ * unread from its actions menu are therefore the same, and neither hides behind
+ * a Done or Error badge until it is actually opened.
+ *
+ * `read` is the caller's resolved read state, so a surface that folds in
+ * orchestration children passes its own `effectiveRead`.
+ */
+export function settledThreadReadsUnread(thread: Thread, read: boolean): boolean {
+  return !read && canMarkThreadUnread(thread.status)
+}
 
 export function threadStatusPolicy(status: ThreadStatus): ThreadStatusPolicy {
   return THREAD_STATUS_POLICY[status]

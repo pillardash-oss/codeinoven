@@ -38,7 +38,9 @@ export function groupThreadsByStatus(
   }
   for (const thread of threads) {
     let group: ThreadGroup
-    if (thread.status === 'failed') group = 'Errors'
+    // An errored thread the user has not read groups as Unread, like a settled
+    // thread that finished unread; opening it returns it to Errors.
+    if (thread.status === 'failed' && thread.read) group = 'Errors'
     else if (thread.status === 'awaiting_approval') group = 'Attention'
     else if (thread.status === 'spec') group = 'Spec'
     else if (

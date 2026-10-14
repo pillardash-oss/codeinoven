@@ -1,6 +1,6 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
-import { DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
+import { canMarkThreadUnread, DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
@@ -673,6 +673,10 @@ export class ThreadRepo {
    * `now` exactly as a new turn would. Every unread rule then applies to it
    * unchanged: the thread is sorted to the top of its list and grouped as
    * Unread, with no special casing anywhere.
+   *
+   * Only a settled thread may be flipped (see `canMarkThreadUnread`): a live
+   * thread, a ready spec, or a thread parked on the user is left untouched, so
+   * the rule holds even for a caller that skips the actions-menu gate.
    */
   async markUnreadViaWorker(
     projectId: string,
@@ -687,6 +691,9 @@ export class ThreadRepo {
     const row = (result.rows as unknown as ThreadRow[])[0]
     if (!row) return null
 
+    const thread = rowToThread(row)
+    if (!canMarkThreadUnread(thread.status)) return { thread, changed: false }
+
     const now = Date.now()
     const wasRead = row.read === 1
     if (wasRead) {
@@ -697,7 +704,6 @@ export class ThreadRepo {
       if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread unread')
     }
 
-    const thread = rowToThread(row)
     thread.read = false
     if (wasRead) {
       thread.lastActivity = now

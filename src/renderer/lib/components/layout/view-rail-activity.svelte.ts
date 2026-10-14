@@ -11,6 +11,7 @@ import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import {
   coordinatorHasActiveDelegates,
   isOrchestrationChildThread,
@@ -184,7 +185,7 @@ export class ViewRailActivity {
         bucket.retry += 1
         continue
       }
-      if (thread.status === 'awaiting_approval' || thread.status === 'failed') {
+      if (thread.status === 'awaiting_approval' || (thread.status === 'failed' && thread.read)) {
         bucket.attention += 1
         if (thread.status === 'failed') bucket.attentionError = true
       }
@@ -207,7 +208,9 @@ export class ViewRailActivity {
         .filter(
           (thread) =>
             !thread.archived &&
-            thread.status === 'completed' &&
+            // A settled thread counts as unread while the user has not read it,
+            // errored ones included; reading it clears the count.
+            canMarkThreadUnread(thread.status) &&
             threadTracksReadStatus(thread) &&
             !thread.read
         )
@@ -250,7 +253,7 @@ export class ViewRailActivity {
         continue
       }
       if (thread.status === 'awaiting_approval') activity.attention += 1
-      else if (thread.status === 'failed') {
+      else if (thread.status === 'failed' && thread.read) {
         activity.attention += 1
         activity.attentionError = true
       } else if (thread.status === 'working-paused') activity.retry += 1

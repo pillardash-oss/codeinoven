@@ -510,7 +510,10 @@
   })
 
   let threadState = $derived.by((): ThreadState => {
-    if (thread.status === 'failed') return 'error'
+    // A settled thread the user has not read reads as unread: an errored run
+    // they never opened falls through to the unread dot below, and the Error
+    // badge returns the moment it is read (see `settledThreadReadsUnread`).
+    if (thread.status === 'failed' && effectiveRead) return 'error'
     if (hasQueuedMessage && thread.status !== 'awaiting_approval' && thread.status !== 'spec')
       return 'queued'
     if (thread.status === 'working-paused') return 'working-paused'

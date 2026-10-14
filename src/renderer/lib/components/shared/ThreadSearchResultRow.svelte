@@ -71,7 +71,7 @@
     if (thread.status === 'spec') {
       return { stage: 'spec' as const }
     }
-    if (thread.status === 'failed') {
+    if (thread.status === 'failed' && thread.read) {
       return { kind: 'error' as const }
     }
     if (!thread.read) return { stage: 'unread' as const }
@@ -104,7 +104,9 @@
   })
 
   let threadState = $derived.by((): ThreadState => {
-    if (thread.status === 'failed') return 'error'
+    // An errored thread the user has not read reads as unread; the Error state
+    // returns once it is opened (see `settledThreadReadsUnread`).
+    if (thread.status === 'failed' && thread.read) return 'error'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
