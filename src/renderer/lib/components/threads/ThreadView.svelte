@@ -326,7 +326,8 @@
     streamWorkingPartsForTurn,
     turnEndsOnQuestion,
     turnStartPromptsBefore,
-    type SubagentPart
+    type SubagentPart,
+    type TranscriptIndex
   } from './thread-turn-parts'
   import {
     annotationFallbackAnchor,
@@ -11408,6 +11409,79 @@
     return parts.filter((part) => !pendingPartIds.has(part.id))
   }
 
+  /**
+   * Assemble one turn's working-trace parts from the mirror and the live
+   * durable log, dropping the closing statement once the transcript shows it.
+   *
+   * `closingTextId` is the turn's closing statement when the transcript renders
+   * it (so the trace must not show the same sentence twice), and
+   * `holdsClosingText` is true while the trace still owns that text because the
+   * transcript cannot show it yet. `collectsDurable` mirrors the original rule
+   * that only the current assistant turn merges the durable fold ahead of the
+   * mirror body.
+   */
+  function buildTurnTrace(
+    startIndex: number,
+    closingTextId: string | null,
+    holdsClosingText: boolean,
+    collectsDurable: boolean
+  ): AgentPart[] {
+    const working = getTurnWorkingParts(messages, startIndex, holdsClosingText)
+    const durable = pendingLiveTurn
+      ? []
+      : streamWorkingPartsForTurn(streamParts, transcriptIndex, startIndex, holdsClosingText)
+    const collected =
+      streamParts.length > 0 && collectsDurable
+        ? // The durable log is the turn's stream order, so it orders the body;
+          // entries that streamed before this view mounted only exist there. The
+          // leading context is not in the durable fold, so it stays in front.
+          mergeWorkingParts([...working.leading, ...durable], working.body)
+        : withoutPendingLiveParts([...working.leading, ...working.body])
+    if (isAssignmentAuditorThread) {
+      // The auditor transcript renders its own commentary from the trace and
+      // keeps its deliverable (the report card) out of both, so its trace still
+      // holds commentary prose.
+      return collected.filter((part) => part.type !== 'text' || part.phase === 'commentary')
+    }
+    return closingTextId ? collected.filter((part) => part.id !== closingTextId) : collected
+  }
+
+  /**
+   * Trace parts for a settled turn, memoized by the transcript index they were
+   * assembled from.
+   *
+   * `messages` moves on every streamed frame, so without this a long thread
+   * re-assembled EVERY mounted turn's trace on every frame even though only the
+   * live turn can still change. The key is the index instance, which is rebuilt
+   * exactly when the transcript's structure changes, so the cache can never
+   * serve a trace the structure has moved past. The live/current turn   and a
+   * turn whose pending live parts are still being reconciled   always
+   * recomputes. Deliberately a plain array, never reactive: this is a pure
+   * cache, so subscribing to it would only buy extra renders.
+   */
+  const settledTurnTraces = new WeakMap<TranscriptIndex, (AgentPart[] | undefined)[]>()
+
+  function turnTraceParts(
+    startIndex: number,
+    live: boolean,
+    closingTextId: string | null,
+    holdsClosingText: boolean
+  ): AgentPart[] {
+    if (live || pendingLiveTurn) {
+      return buildTurnTrace(startIndex, closingTextId, holdsClosingText, true)
+    }
+    let byStart = settledTurnTraces.get(transcriptIndex)
+    if (!byStart) {
+      byStart = []
+      settledTurnTraces.set(transcriptIndex, byStart)
+    }
+    const cached = byStart[startIndex]
+    if (cached) return cached
+    const built = buildTurnTrace(startIndex, closingTextId, holdsClosingText, false)
+    byStart[startIndex] = built
+    return built
+  }
+
   /** Find the last text part in a turn ending at the given message index.
    *  Activity-only user messages are transparent to the turn span. */
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
@@ -12350,47 +12424,16 @@
                       turnEndIndex === messages.length - 1
                     )}
                     {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
-                    {@const turnWorkingParts = getTurnWorkingParts(
-                      messages,
+                    {@const traceIsLiveTurn =
+                      isCurrentAssistantTurn || traceIsLive || traceIsRestored}
+                    {@const turnClosingTextId =
+                      turnClosingVisible && turnClosingText ? turnClosingText.id : null}
+                    {@const turnParts = turnTraceParts(
                       absIndex,
+                      traceIsLiveTurn,
+                      turnClosingTextId,
                       traceHoldsClosingText
                     )}
-                    {@const durableTurnParts = pendingLiveTurn
-                      ? []
-                      : streamWorkingPartsForTurn(
-                          streamParts,
-                          transcriptIndex,
-                          absIndex,
-                          traceHoldsClosingText
-                        )}
-                    {@const collectedTurnParts =
-                      streamParts.length > 0 && isCurrentAssistantTurn
-                        ? // The durable log is the turn's stream order, so it orders the
-                          // body; entries that streamed before this view mounted only
-                          // exist there. The leading context is not in the durable fold
-                          // (the fold scopes it out), so it keeps its place in front.
-                          mergeWorkingParts(
-                            [...turnWorkingParts.leading, ...durableTurnParts],
-                            turnWorkingParts.body
-                          )
-                        : withoutPendingLiveParts([
-                            ...turnWorkingParts.leading,
-                            ...turnWorkingParts.body
-                          ])}
-                    {@const turnParts = isAssignmentAuditorThread
-                      ? // The auditor transcript renders its own commentary from the
-                        // trace and keeps its deliverable (the report card) out of
-                        // both, so its trace still holds commentary prose.
-                        collectedTurnParts.filter(
-                          (part) => part.type !== 'text' || part.phase === 'commentary'
-                        )
-                      : // The transcript is showing the agent's closing statement, so
-                        // the trace must not carry a second copy of that one part.
-                        // Every other text part stays: it is the commentary that
-                        // explains the work behind the answer.
-                        turnClosingVisible && turnClosingText
-                        ? collectedTurnParts.filter((part) => part.id !== turnClosingText.id)
-                        : collectedTurnParts}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}

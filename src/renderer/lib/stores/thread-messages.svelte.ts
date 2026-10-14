@@ -17,8 +17,8 @@ import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
-  containsNewestTurnPrompt,
   EMPTY_MESSAGES,
+  pageOpensNewestTurn,
   threadKey,
   THREAD_MESSAGE_PRELOAD_WINDOW,
   type ThreadMessagesEntry
@@ -39,9 +39,14 @@ import type {
 
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
 
-/** Extra older pages a bounded load may fetch to reach the newest turn's
- *  prompt. A long working trace spans many rows, so the raw tail window can
- *  start mid-trace; the user's message must never be cut off by the cache. */
+/** One older page fetched to reach the newest turn's opening prompt. A long
+ *  working trace spans dozens of rows (one row per step), so this is sized to
+ *  cover a whole turn in one or two round trips instead of walking it twelve
+ *  rows at a time from the raw tail window. */
+const TURN_ALIGNMENT_PAGE_SIZE = 100
+/** How many older pages a bounded load may add to reach that prompt. A turn
+ *  longer than this is left to the reader's own paging rather than turning a
+ *  navigation into an unbounded read. */
 const MAX_TURN_ALIGNMENT_PAGES = 4
 
 class ThreadMessagesStore {
@@ -259,14 +264,14 @@ class ThreadMessagesStore {
         // Turn-aligned tail: a bounded tail window that starts mid-turn cuts
         // the user's message out of the cached page, the view would begin at
         // the working trace with the prompt missing until "Load earlier
-        // messages" was clicked. Extend the fetch just far enough to include
-        // the newest turn's prompt, bounded so a pathological mega-turn cannot
-        // turn navigation into an unbounded read.
+        // messages" was clicked. Extend the fetch until the page reaches the
+        // prompt that opens the turn owning the newest output, bounded so a
+        // pathological mega-turn cannot turn navigation into an unbounded read.
         let alignmentPages = 0
         while (
           serverMessages.length > 0 &&
           entry.hasOlder &&
-          !containsNewestTurnPrompt(serverMessages) &&
+          !pageOpensNewestTurn(serverMessages) &&
           alignmentPages < MAX_TURN_ALIGNMENT_PAGES
         ) {
           const oldest = serverMessages[0]
@@ -276,7 +281,7 @@ class ThreadMessagesStore {
             projectId,
             threadId,
             { createdAt: oldest.createdAt, id: oldest.id },
-            recentLimit
+            Math.max(recentLimit, TURN_ALIGNMENT_PAGE_SIZE)
           )
           if (older.messages.length === 0) {
             entry.hasOlder = false
