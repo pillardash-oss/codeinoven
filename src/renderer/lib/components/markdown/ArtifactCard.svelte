@@ -112,13 +112,15 @@
     </div>
   {:else if inspecting && annotationScope}
     <div class={fullscreen ? 'h-full min-h-0' : 'h-80'}>
+      <!-- Only the inline card answers a composer jump: the expanded copy draws
+           the same picks, and both opening the editor would show two of them. -->
       <ArtifactInspector
         {code}
         {artifactKey}
         projectId={annotationScope.projectId}
         threadId={annotationScope.threadId}
         {picks}
-        editingId={inspectorEditingId}
+        editingId={fullscreen ? null : inspectorEditingId}
         onEditClosed={releaseFocusRequest}
         onExit={() => {
           releaseFocusRequest()
