@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRawSnippet, flushSync, mount, unmount } from 'svelte'
+import { createRawSnippet, flushSync, mount, unmount, type Snippet } from 'svelte'
 import Modal from '$lib/components/ui/Modal.svelte'
 import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
 import type { NativeDockNode, NativeDockRequest } from '$shared/native-dock'
@@ -20,21 +20,25 @@ vi.mock('$lib/ipc.svelte', () => ({
 vi.mock('$lib/stores/browser-visibility.svelte', () => ({
   browserVisibility: { hideWhile: bridge.hideWhile }
 }))
-vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
+const logger = vi.hoisted(() => ({ logRendererError: vi.fn(), logRendererDev: vi.fn() }))
+vi.mock('$lib/system/renderer-logger', () => logger)
 const instances: ReturnType<typeof mount>[] = []
 const children = createRawSnippet(() => ({
   render: () =>
     '<div><input aria-label="Title" value="Note"><button data-modal-primary>Apply</button></div>'
 }))
-function renderModal() {
+function renderModalWith(content: Snippet) {
   const target = document.createElement('div')
   document.body.append(target)
   const onClose = vi.fn()
   instances.push(
-    mount(Modal, { target, props: { open: true, title: 'Edit note', onClose, children } })
+    mount(Modal, { target, props: { open: true, title: 'Edit note', onClose, children: content } })
   )
   flushSync()
   return onClose
+}
+function renderModal() {
+  return renderModalWith(children)
 }
 function projection(): NativeDockRequest {
   const call = bridge.invoke.mock.calls.find(
@@ -47,6 +51,8 @@ beforeEach(() => {
   vi.useFakeTimers()
   bridge.invoke.mockClear()
   bridge.hideWhile.mockClear()
+  logger.logRendererError.mockClear()
+  logger.logRendererDev.mockClear()
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -191,5 +197,44 @@ describe('canonical native modal', () => {
     await unmount(instances.pop()!)
     expect(bridge.invoke).toHaveBeenCalledWith('browser:setDockOverlay', request.id, null)
     expect(bridge.listeners.size).toBe(0)
+  })
+
+  it('projects a modal whose picker keeps its menu inside the panel', async () => {
+    const snippet = createRawSnippet(() => ({
+      render: () =>
+        '<div><button aria-expanded="false">Filter</button><div><button>All projects</button><button>Project one</button></div></div>'
+    }))
+    renderModalWith(snippet)
+    await vi.advanceTimersByTimeAsync(40)
+    const request = projection()
+    expect(request.nodes.length).toBeGreaterThan(0)
+    expect(logger.logRendererDev).not.toHaveBeenCalled()
+    expect(logger.logRendererError).not.toHaveBeenCalled()
+  })
+
+  it('reports a popup-backed fallback at dev level, never as an error', async () => {
+    const snippet = createRawSnippet(() => ({
+      render: () => '<div><button aria-haspopup="menu">Menu</button></div>'
+    }))
+    renderModalWith(snippet)
+    await vi.advanceTimersByTimeAsync(40)
+    expect(logger.logRendererDev).toHaveBeenCalledTimes(1)
+    const message = String(logger.logRendererDev.mock.calls[0]?.[0])
+    expect(message).toContain('fell back to the app window')
+    expect(message).toContain('opens its own popup')
+    expect(logger.logRendererError).not.toHaveBeenCalled()
+  })
+
+  it('carries an inert SVG theme style instead of refusing the modal for it', async () => {
+    const snippet = createRawSnippet(() => ({
+      render: () =>
+        '<div><svg viewBox="0 0 10 10"><style>.ink { fill: currentColor; }</style><path class="ink" d="M0 0h10v10H0z" /></svg></div>'
+    }))
+    renderModalWith(snippet)
+    await vi.advanceTimersByTimeAsync(40)
+    const request = projection()
+    expect(request.nodes.length).toBeGreaterThan(0)
+    expect(logger.logRendererDev).not.toHaveBeenCalled()
+    expect(logger.logRendererError).not.toHaveBeenCalled()
   })
 })

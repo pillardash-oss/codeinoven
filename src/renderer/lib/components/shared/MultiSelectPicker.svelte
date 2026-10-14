@@ -5,17 +5,22 @@
   import type { MultiSelectOption } from './multi-select-option'
 
   /**
-   * The palette footer's sub-container filter: a project, routine, or browser
-   * group picked from one entity-agnostic list.
+   * One entity-agnostic filter list: a project, routine, browser group, or task
+   * sort picked from the same rows.
    *
-   * The list is anchored to the footer and opens upward inside the owning panel,
-   * rather than in a portal popup. The spotlight is a Modal that the native
-   * projection draws above the browser's page view, and that projection refuses
-   * any panel containing an `aria-haspopup` element (a popup it cannot own). A
-   * portaled `bits-ui` DropdownMenu therefore forced the whole palette onto the
-   * app-window DOM presentation, which detaches the browser so the palette can be
-   * seen. In-panel markup carries the same menu with no popup, so the palette
-   * keeps its projection and the browser stays up.
+   * The list is anchored to its trigger and opens inside the owning panel,
+   * rather than in a portal popup. The spotlight and the task manager are Modals
+   * that the native projection draws above the browser's page view, and that
+   * projection refuses any panel containing an `aria-haspopup` element (a popup
+   * it cannot own). A portaled `bits-ui` DropdownMenu therefore forced the whole
+   * modal onto the app-window DOM presentation, which detaches the browser so
+   * the panel can be seen. In-panel markup carries the same menu with no popup,
+   * so the modal keeps its projection and the browser stays up.
+   *
+   * `single` turns the same rows into a single-choice picker: one row replaces
+   * the selection instead of adding to it, and the trigger shows that row's
+   * label. The in-panel menu is unchanged, so a projecting modal carries it the
+   * same way.
    */
   interface Props {
     options: readonly MultiSelectOption[]
@@ -31,6 +36,9 @@
     searchPlaceholder?: string
     emptyMessage?: string
     disabled?: boolean
+    /** Single-choice mode: picking a row replaces the selection rather than
+     *  adding to it, and the trigger shows that row's label. */
+    single?: boolean
   }
 
   let {
@@ -43,7 +51,8 @@
     ariaLabel = 'Filter',
     searchPlaceholder = 'Search…',
     emptyMessage = 'No matching options',
-    disabled = false
+    disabled = false,
+    single = false
   }: Props = $props()
 
   let open = $state(false)
@@ -61,6 +70,10 @@
   )
 
   function toggle(optionId: string): void {
+    if (single) {
+      onSelectionChange(selectedIdSet.has(optionId) ? [] : [optionId])
+      return
+    }
     onSelectionChange(
       selectedIdSet.has(optionId)
         ? selectedIds.filter((candidate) => candidate !== optionId)
@@ -243,7 +256,11 @@
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate">
-      {selectedOptions.length === 0 ? allLabel : `${selectedOptions.length} selected`}
+      {selectedOptions.length === 0
+        ? allLabel
+        : single
+          ? (selectedOptions[0]?.label ?? allLabel)
+          : `${selectedOptions.length} selected`}
     </span>
     <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
   </button>

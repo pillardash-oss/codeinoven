@@ -1,5 +1,5 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-import { logRendererError } from '$lib/system/renderer-logger'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   NATIVE_DOCK_TAGS,
@@ -619,7 +619,10 @@ export class NativeDockController {
     if (this.modalOptions?.requireCompleteProjection) {
       const refusal = nativeModalRefusal(this.root, { panel: this.modalOptions.panel === true })
       if (refusal) {
-        this.refuse(`its content cannot be projected: ${refusal}`)
+        // Content the projection cannot carry is a supported limitation, not a
+        // failure: the app window is the designed fallback for it, so it is
+        // logged at dev level. Only a broken projection is an error.
+        this.refuse(`its content cannot be projected: ${refusal}`, true)
         return
       }
     }
@@ -721,10 +724,13 @@ export class NativeDockController {
     }
   }
 
-  private refuse(reason?: string): void {
+  private refuse(reason?: string, supported = false): void {
     this.failed = true
-    if (reason)
-      logRendererError(`The native dock '${this.id}' fell back to the app window: ${reason}`)
+    if (reason) {
+      const message = `The native dock '${this.id}' fell back to the app window: ${reason}`
+      if (supported) logRendererDev(message)
+      else logRendererError(message)
+    }
     this.modalOptions?.onFailure?.(reason)
     this.ready = false
     this.active = false

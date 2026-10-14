@@ -1,12 +1,9 @@
 <script lang="ts">
   import {
-    ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
     Cog,
     Cpu,
-    Check,
-    ChevronDown,
     GlobeCode,
     MemoryStick,
     MessagesSquare,
@@ -20,13 +17,14 @@
     Trash2,
     X
   } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
+  import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
   import Switch from '$lib/components/ui/Switch.svelte'
   import TaskManagerNode from './TaskManagerNode.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -123,6 +121,29 @@
   const projectIconUrls = new SvelteMap<string, string>()
 
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
+
+  /**
+   * The footer's project filter rows, in the shape the shared in-panel picker
+   * draws. The picker keeps its list inside the panel rather than in a portal
+   * popup, which is what lets the native projection carry this toolbar.
+   */
+  const projectFilterOptions: readonly MultiSelectOption[] = $derived(
+    scopeState.projects.map((project) => ({
+      id: project.id,
+      label: project.name,
+      ...(project.color ? { color: project.color } : {}),
+      iconUrl: project.iconUrl ?? null
+    }))
+  )
+
+  /** The sort picker's rows: the three modes with their explanatory hint. */
+  const sortFilterOptions = $derived(
+    SORT_MODES.map((mode) => ({
+      id: mode,
+      label: SORT_MODE_LABELS[mode],
+      hint: SORT_MODE_DESCRIPTIONS[mode]
+    }))
+  )
 
   /**
    * App-scoped processes (ASR, LAMA server, …) have no owning project, so a
@@ -1179,17 +1200,17 @@
             {formatCpu(totalCpuPercent)}
           </span>
           <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-          <ProjectSwitch
-            projects={scopeState.projects}
-            activeProjectId={filterProjectId}
-            onSwitch={(projectId) => setFilterProject(projectId)}
+          <MultiSelectPicker
+            single
+            compact
+            options={projectFilterOptions}
+            selectedIds={filterProjectId ? [filterProjectId] : []}
+            onSelectionChange={(ids) => setFilterProject(ids[0] ?? null)}
+            allLabel="All projects"
             ariaLabel="Filter processes by project"
-            placeholder="All projects"
             searchPlaceholder="Search projects…"
             emptyMessage="No matching projects"
-            class="h-7 shrink-0"
-            compact
-            align="start"
+            class="shrink-0"
           />
           {#if filterProjectId}
             <button
@@ -1202,45 +1223,16 @@
               <X size={12} />
             </button>
           {/if}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
-              title="Choose sort mode"
-              aria-label="Choose sort mode"
-            >
-              <ArrowDownUp size={12} />
-              {SORT_MODE_LABELS[sortMode]}
-              <ChevronDown size={11} class="text-dimmed" />
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="top"
-                align="start"
-                sideOffset={6}
-                collisionPadding={8}
-                class="z-60 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-              >
-                {#each SORT_MODES as mode (mode)}
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated focus:bg-elevated max-md:py-2.5 {mode ===
-                    sortMode
-                      ? 'text-foreground'
-                      : 'text-muted'}"
-                    title={SORT_MODE_DESCRIPTIONS[mode]}
-                    aria-label={SORT_MODE_DESCRIPTIONS[mode]}
-                    onSelect={() => (sortMode = mode)}
-                  >
-                    <Check
-                      size={12}
-                      class={mode === sortMode ? 'text-primary' : 'opacity-0'}
-                      aria-hidden="true"
-                    />
-                    {SORT_MODE_LABELS[mode]}
-                  </DropdownMenu.Item>
-                {/each}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <EnumSelect
+            inline
+            options={sortFilterOptions}
+            value={sortMode}
+            onChange={(mode) => (sortMode = mode)}
+            placeholder="Sort"
+            ariaLabel="Choose sort mode"
+            title="Choose sort mode"
+            class="shrink-0"
+          />
         {/if}
         <button
           type="button"
