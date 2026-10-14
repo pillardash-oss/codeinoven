@@ -312,6 +312,26 @@
     video ? videoTimelineState.compositionIn(projectId, threadId, selected.directory) : null
   )
   /**
+   * Whether the folder in front has an entry page, which is what makes it playable.
+   *
+   * A composition folder with no `index.html` yet is a folder of assets rather than
+   * a composition: there is nothing to serve, so the board says so instead of
+   * opening a tab on a directory listing.
+   */
+  let playable = $derived(video && selectedItem?.hasEntry === true)
+  /** The folder whose composition the board is opening right now, or an empty string. */
+  let composing = $state('')
+  /** Why the last open failed, in the user's terms, or an empty string. */
+  let compositionError = $state('')
+  /**
+   * The folder this board has already asked main to open.
+   *
+   * Deliberately not reactive state: it guards the effect below against asking
+   * twice for one folder, and nothing renders it. A failure is reported and not
+   * retried, so a folder that cannot be served never spins.
+   */
+  let compositionAsked = ''
+  /**
    * The thread that created the design in front, or an empty string when none is
    * recorded.
    *
@@ -560,6 +580,32 @@
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work could not be opened.'
+    }
+  }
+
+  /**
+   * Open the composition in the background, so the board can play it itself.
+   *
+   * The same call the Live preview action makes, minus the reveal. A composition
+   * is played by a browser tab, and nothing opens one for the board, so without
+   * this the panel could only ever picture the work and the user had to leave for
+   * the browser to watch it. The tab is served, marked as a composition and
+   * reported on `browser:state`, which is what mounts the stage; the browser is
+   * left exactly where it was, because the user asked to watch the work here.
+   */
+  async function ensureComposition(directory: string, force = false): Promise<void> {
+    if (!video || directory === '') return
+    if (!force && compositionAsked === directory) return
+    compositionAsked = directory
+    composing = directory
+    try {
+      await invoke('design:open', projectId, threadId, directory, null, false, forcedKind)
+      compositionError = ''
+    } catch (failure) {
+      compositionError =
+        failure instanceof Error ? failure.message : `The ${noun} could not be opened.`
+    } finally {
+      if (composing === directory) composing = ''
     }
   }
 
@@ -843,6 +889,22 @@
     void loadWorkRoots()
   })
 
+  // Play the composition in the board rather than in the browser.
+  //
+  // The folder in front changes, a rail panel comes back on screen, or a tab was
+  // closed under the board: every one of those leaves the stage with nothing to
+  // mount, and this is what asks for the tab again. Only the folder, the live tab
+  // and whether the folder is playable are read here, so a report from
+  // `browser:state` is what settles it rather than a poll.
+  $effect(() => {
+    const directory = selected.directory
+    const live = liveTab
+    const canPlay = playable
+    const busyFolder = composing
+    if (!video || !canPlay || live !== null || directory === '' || busyFolder === directory) return
+    void ensureComposition(directory)
+  })
+
   // The board owns the composition job poll, because it draws the export above the
   // controls and both must read the same list. A design has no jobs, so nothing
   // polls for one.
@@ -875,20 +937,36 @@
         The live composition, played in the board.
 
         The stage owns the tab's native view while it is on screen, so the
-        transport below scrubs the composition the user is watching rather than
-        a still of it. The frame follows the composition's own aspect ratio.
+        transport above the picture and the timeline below both drive the
+        composition the user is watching rather than a still of it. The stage fits
+        the composition's own aspect ratio inside this pane, so the frame is whole
+        at every panel size.
       -->
-      <div class="mb-2" style:aspect-ratio={`${liveTab.width || 16} / ${liveTab.height || 9}`}>
-        <CompositionStage tab={liveTab} />
+      <CompositionStage tab={liveTab} />
+    {:else if !playable}
+      <div
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-border bg-elevated text-dimmed"
+      >
+        <ImageOff size={16} />
+        <span class="px-4 text-center text-[0.6875rem]">
+          {`This ${noun} has no entry page yet, so there is nothing to play. The agent writes one when it starts the ${noun}.`}
+        </span>
       </div>
     {:else}
+      <!--
+        Nothing to play yet: the tab is being served, or the folder holds no
+        composition to serve. The last export stands in while that settles, in the
+        same frame the live stage uses, so the board does not jump when the page
+        lands. The action here is a retry in the panel rather than a hand-off to
+        the browser, because the browser is not where this board plays.
+      -->
       <div
-        class="mb-2 rounded-xl border border-border bg-surface p-2"
+        class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-app"
         aria-label={`${nounTitle} preview`}
       >
         {#if exportPath}
           <video
-            class="block max-h-72 w-full rounded-lg bg-app"
+            class="min-h-0 flex-1 object-contain"
             src={`appfile://project/${projectId}/${exportPath}`}
             controls
             playsinline
@@ -897,57 +975,44 @@
           >
             <track kind="captions" />
           </video>
-          <div class="mt-1.5 flex items-center justify-between gap-2">
-            <span class="min-w-0 truncate text-[0.625rem] text-dimmed"
-              >Latest export · {exportPath.split('/').at(-1)}</span
-            >
-            <button
-              type="button"
-              class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title={`Open the live ${noun} preview in the in-app browser`}
-              aria-label={`Open the live ${noun} preview in the in-app browser`}
-              onclick={() => void openPreview(selected.entry)}
-            >
-              Live preview
-            </button>
-          </div>
+        {:else if gallery[0]?.dataUrl}
+          <img
+            src={gallery[0].dataUrl}
+            alt={`Preview of the ${noun} ${selectedName}`}
+            class="min-h-0 flex-1 object-contain"
+          />
         {:else}
+          <div class="flex min-h-0 flex-1 items-center justify-center gap-1.5 text-dimmed">
+            {#if galleryBusy}
+              <LoaderCircle size={14} class="animate-spin" />
+              <span class="text-[0.625rem]">Capturing…</span>
+            {:else}
+              <ImageOff size={14} />
+              <span class="text-[0.625rem]">No frame captured yet.</span>
+            {/if}
+          </div>
+        {/if}
+        <div
+          class="flex shrink-0 items-center justify-between gap-2 border-t border-border px-2 py-1.5"
+        >
+          <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
+            {composing === selected.directory
+              ? `Opening the ${noun}…`
+              : exportPath
+                ? `Latest export · ${exportPath.split('/').at(-1)}`
+                : `Waiting for the ${noun} preview`}
+          </span>
           <button
             type="button"
-            class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated"
-            title={`Open the ${noun} preview to play, scrub and export`}
-            aria-label={`Open the ${noun} preview to play, scrub and export`}
-            onclick={() => void openPreview(selected.entry)}
+            class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title={`Open the ${noun} preview again`}
+            aria-label={`Open the ${noun} preview again`}
+            disabled={composing !== ''}
+            onclick={() => void ensureComposition(selected.directory, true)}
           >
-            {#if gallery[0]?.dataUrl}
-              <img
-                src={gallery[0].dataUrl}
-                alt={`Preview of the ${noun} ${selectedName}`}
-                class="block max-h-72 w-full object-contain"
-              />
-            {:else}
-              <span
-                class="flex aspect-video w-full flex-col items-center justify-center gap-1 text-dimmed"
-              >
-                {#if galleryBusy}
-                  <LoaderCircle size={14} class="animate-spin" />
-                  <span class="text-[0.625rem]">Capturing…</span>
-                {:else}
-                  <ImageOff size={14} />
-                  <span class="text-[0.625rem]">No preview yet.</span>
-                {/if}
-              </span>
-            {/if}
-            <span
-              class="absolute inset-0 flex items-center justify-center bg-app/70 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <span class="text-[0.625rem] font-medium text-foreground">Play the {noun}</span>
-            </span>
+            Try again
           </button>
-          <p class="mt-1.5 text-[0.625rem] text-dimmed">
-            Open the live preview to play and scrub this {noun} in the in-app browser.
-          </p>
-        {/if}
+        </div>
       </div>
     {/if}
   {/snippet}
@@ -1504,18 +1569,44 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-      {#if error !== ''}
-        <p
-          class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-          role="alert"
-        >
-          {error}
-        </p>
-      {/if}
+    {#if error !== '' || compositionError !== ''}
+      <p
+        class="mx-2.5 mt-2 shrink-0 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        role="alert"
+      >
+        {error !== '' ? error : compositionError}
+      </p>
+    {/if}
 
-      {#if video}
-        {#if selected.directory === ''}
+    {#if video && selected.directory !== ''}
+      <!--
+        The composition above, the tools below.
+
+        The picture takes the space the panel has, and the timeline and controls
+        sit under it in their own scroller. That is what keeps the frame whole: a
+        native page cannot be clipped by `overflow`, so a picture sharing a
+        scrolling column with the controls would be drawn past the panel at the
+        sizes where the column is taller than the panel.
+      -->
+      <div class="flex min-h-0 flex-1 flex-col px-2.5 pt-2">
+        {@render videoStage()}
+      </div>
+      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto px-2.5 py-2">
+        {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
+          <VideoTimeline {projectId} {threadId} directory={selected.directory} />
+          <VideoStudioControls
+            {projectId}
+            {threadId}
+            directory={selected.directory}
+            jobs={videoJobs}
+            onCancelJob={cancelVideoJob}
+            onDirtyChange={setStudioDirty}
+          />
+        {/key}
+      </div>
+    {:else}
+      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+        {#if video}
           <div
             class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
           >
@@ -1524,78 +1615,65 @@
               {`The agent has not written a ${noun} yet. It will appear here when it does.`}
             </span>
           </div>
+        {:else if gallery.length === 0}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+          >
+            {#if galleryBusy}
+              <LoaderCircle size={16} class="animate-spin" />
+              <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+            {:else}
+              <ImageOff size={16} />
+              <span class="px-4 text-center text-[0.6875rem]">
+                {items.length === 0
+                  ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+                  : 'No preview captured yet.'}
+              </span>
+            {/if}
+          </div>
         {:else}
-          {@render videoStage()}
-          {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
-            <VideoTimeline {projectId} {threadId} directory={selected.directory} />
-            <VideoStudioControls
-              {projectId}
-              {threadId}
-              directory={selected.directory}
-              jobs={videoJobs}
-              onCancelJob={cancelVideoJob}
-              onDirtyChange={setStudioDirty}
-            />
-          {/key}
-        {/if}
-      {:else if gallery.length === 0}
-        <div
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
-        >
-          {#if galleryBusy}
-            <LoaderCircle size={16} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-          {:else}
-            <ImageOff size={16} />
-            <span class="px-4 text-center text-[0.6875rem]">
-              {items.length === 0
-                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-                : 'No preview captured yet.'}
-            </span>
-          {/if}
-        </div>
-      {:else}
-        <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-          {#if !video}
-            {@render entryCard({
-              icon: Presentation,
-              name: 'Screen Canvas',
-              shot: canvasShot,
-              label: 'Open the Screen Canvas in the in-app browser',
-              empty: canvasEntryNote,
-              busy: !canvasRead || openingCanvas,
-              ready: canvasState !== null,
-              onOpen: () => void openCanvas()
-            })}
-            {@render entryCard({
-              icon: PlayingCardsFan,
-              name: 'Live preview',
-              shot: liveShot,
-              label: `Open the live preview of this ${noun} in the in-app browser`,
-              empty: liveEntryNote,
-              busy: opening,
-              ready: liveReady,
-              onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
-            })}
-          {/if}
-          {#each designScreens as screen (screen.entry)}
-            {@render screenCard(screen, video)}
-          {/each}
-        </div>
-        {#if !video && designScreens.length === 0}
-          {#if galleryBusy}
-            <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-              <LoaderCircle size={12} class="animate-spin" />
-              Capturing the {noun}…
-            </p>
-          {:else}
-            <p class="mt-2 text-center text-[0.6875rem] text-muted">
-              {`The agent has not written a ${noun} yet. It will appear here when it does.`}
-            </p>
+          <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+            {#if !video}
+              {@render entryCard({
+                icon: Presentation,
+                name: 'Screen Canvas',
+                shot: canvasShot,
+                label: 'Open the Screen Canvas in the in-app browser',
+                empty: canvasEntryNote,
+                busy: !canvasRead || openingCanvas,
+                ready: canvasState !== null,
+                onOpen: () => void openCanvas()
+              })}
+              {@render entryCard({
+                icon: PlayingCardsFan,
+                name: 'Live preview',
+                shot: liveShot,
+                label: `Open the live preview of this ${noun} in the in-app browser`,
+                empty: liveEntryNote,
+                busy: opening,
+                ready: liveReady,
+                onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+              })}
+            {/if}
+            {#each designScreens as screen (screen.entry)}
+              {@render screenCard(screen, video)}
+            {/each}
+          </div>
+          {#if !video && designScreens.length === 0}
+            {#if galleryBusy}
+              <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+                <LoaderCircle size={12} class="animate-spin" />
+                Capturing the {noun}…
+              </p>
+            {:else}
+              <p class="mt-2 text-center text-[0.6875rem] text-muted">
+                {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+              </p>
+            {/if}
           {/if}
         {/if}
-      {/if}
-    </div>
+      </div>
+    {/if}
     {#key `${projectId}:${threadId}:${selected.directory}`}
       <DesignHistoryPanel
         {projectId}

@@ -396,8 +396,7 @@
   {:else}
     {#if !tab}
       <p class="mt-2 text-xs text-dimmed">
-        Open the composition preview to play, scrub and step. The timeline still shows what the
-        composition declares.
+        Waiting for the composition to load. The timeline still shows what it declares.
       </p>
     {/if}
 

@@ -13,11 +13,16 @@
    *
    * A composition is a page served on a loopback origin, and the app plays it in
    * a native `WebContentsView` that the compositor draws above every DOM node.
-   * This stage is the board's own frame for that view: it measures its rectangle,
-   * claims the tab for the `panel` surface, and tells main where to place the
-   * page, exactly the way the browser panel does for the sidebar. The board then
-   * has the real composition above its timeline, so scrubbing, stepping and the
-   * controls edit what the user is watching rather than a still of it.
+   * This stage is the board's own frame for that view: it measures its pane,
+   * fits the composition's own aspect ratio inside it, and tells main where to
+   * place the page, exactly the way the browser panel does for the sidebar.
+   *
+   * The frame is fitted here rather than by CSS because the view is native. A
+   * native view cannot be clipped by `overflow`, so a stage that filled the pane
+   * would draw over the panel at the sizes where the composition is taller than
+   * the visible area, and the composition's ratio would be whatever the panel
+   * happened to be. Fitting the rectangle is what makes every panel size show the
+   * whole frame, with the pane's own background as the letterbox.
    *
    * The app shows one native view at a time, so the store resolves this claim
    * against every other surface: while the board is on screen it owns the view,
@@ -36,13 +41,39 @@
   const nativeFrameKey = `native-panel-${tab.tabId}`
 
   let host = $state<HTMLDivElement>()
-  /** The stage's current on-screen rectangle, refreshed by the same observers
-   *  that align the native view. */
-  let contentRect = $state<BrowserViewBounds | null>(null)
+  /** The pane's on-screen rectangle, which is the area the frame is fitted into. */
+  let paneRect = $state<BrowserViewBounds | null>(null)
 
-  let placed = $derived(browserVisibility.isVisible(tab.tabId, contentRect))
+  /**
+   * The composition's rectangle: its own ratio, contained in the pane, centred.
+   *
+   * Contain rather than fill, so a panel narrower or wider than the composition
+   * letterboxes instead of stretching or cutting it. A composition that declares
+   * no size falls back to 16:9, which is the ratio the export uses when the
+   * manifest names none.
+   */
+  function fittedBounds(pane: BrowserViewBounds | null): BrowserViewBounds | null {
+    if (!pane) return null
+    const declaredWidth = tab.width > 0 ? tab.width : 16
+    const declaredHeight = tab.height > 0 ? tab.height : 9
+    const ratio = declaredWidth / declaredHeight
+    const paneRatio = pane.width / pane.height
+    const fittedWidth = ratio > paneRatio ? pane.width : Math.round(pane.height * ratio)
+    const fittedHeight = ratio > paneRatio ? Math.round(pane.width / ratio) : pane.height
+    return {
+      x: pane.x + Math.floor((pane.width - fittedWidth) / 2),
+      y: pane.y + Math.floor((pane.height - fittedHeight) / 2),
+      width: Math.max(1, fittedWidth),
+      height: Math.max(1, fittedHeight)
+    }
+  }
 
-  function contentBounds(): BrowserViewBounds | null {
+  /** The frame the page occupies, derived from the pane it is fitted into. */
+  let pageRect = $derived(fittedBounds(paneRect))
+
+  let placed = $derived(browserVisibility.isVisible(tab.tabId, pageRect))
+
+  function measurePane(): BrowserViewBounds | null {
     if (!host) return null
     // A mounted panel is not automatically a painted one: the rail keeps its
     // panels alive across view switches, so an element that is laid out but
@@ -69,16 +100,18 @@
 
   async function showAtCurrentBounds(): Promise<void> {
     await loadBrowser()
-    const bounds = contentBounds()
-    // Publish the frame before the visibility check: the store needs the current
+    const pane = measurePane()
+    // Publish the pane before the visibility check: the store needs the current
     // rectangle even while the view is detached, so this stage notices as soon as
     // an overlay stops covering it.
-    contentRect = bounds
-    if (!bounds) return
+    paneRect = pane
+    if (!pane) return
+    const frame = fittedBounds(pane)
+    if (!frame) return
     // Ask the store directly instead of reading `placed`: this also runs from
     // observers and continuations, after the effect that owns a derived may have
     // been torn down.
-    if (!browserVisibility.isVisible(tab.tabId, bounds)) return
+    if (!browserVisibility.isVisible(tab.tabId, frame)) return
     try {
       await invoke(
         'browser:show',
@@ -86,14 +119,15 @@
         tab.projectId,
         tab.threadId,
         tab.url,
-        bounds,
+        frame,
         tab.boxId
       )
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, or an overlay may appear. Only one native
       // view can exist at a time, so a stale attach would leave the page over
       // the surface that now owns it.
-      if (!browserVisibility.isVisible(tab.tabId, contentBounds())) {
+      const current = fittedBounds(measurePane())
+      if (!current || !browserVisibility.isVisible(tab.tabId, current)) {
         void invoke('browser:hide', tab.tabId).catch(() => {})
       }
     } catch {
@@ -103,14 +137,14 @@
 
   /** The single native rectangle this stage owns while it is really on screen. */
   $effect(() => {
-    const bounds = contentRect
-    if (bounds) browserVisibility.publishPageFrame(nativeFrameKey, tab.tabId, bounds)
+    const frame = pageRect
+    if (frame) browserVisibility.publishPageFrame(nativeFrameKey, tab.tabId, frame)
     else browserVisibility.clearPageFrame(nativeFrameKey)
     return () => browserVisibility.clearPageFrame(nativeFrameKey)
   })
 
   $effect(() => {
-    const frame = placed && contentRect ? contentRect : null
+    const frame = placed && pageRect ? pageRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
       return
@@ -120,7 +154,7 @@
   })
 
   /**
-   * The page's frame, and the observers that keep the native view on it.
+   * The pane's frame, and the observers that keep the native view on it.
    *
    * The measurement follows the rectangle rather than a single placement: the
    * board scrolls, the rail resizes and the window moves, and the page has to
@@ -165,7 +199,7 @@
   <div
     {@attach attachHost}
     data-native-composition-stage
-    class="min-h-0 flex-1 bg-surface"
+    class="min-h-0 flex-1 bg-app"
     aria-label={`Live composition ${tab.directory}`}
   ></div>
 </div>

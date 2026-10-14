@@ -1,11 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { AudioLines, Captions, ChevronDown, SlidersHorizontal } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { VideoJob, VideoStudioDocument, VideoValue } from '$shared/video/studio'
 
+  /**
+   * What the composition declares as values, and what it is doing.
+   *
+   * The board reads the composition from the timeline and the picture; this card is
+   * the editable half of the same file. It carries the parameters the composition
+   * reads at draw time, the caption text and its style, the audio tracks, and the
+   * jobs that are turning any of it into a file.
+   *
+   * It is a card like the timeline, not a second panel: the same icon-and-title
+   * header, the same `text-xs` rows, the same inputs and pickers as the rest of the
+   * app. Nothing here is titled "video controls", because the board is already the
+   * video board and a label that restates its own surface is noise.
+   */
   interface Props {
     projectId: string
     threadId: string
@@ -29,18 +44,30 @@
     onDirtyChange?: (dirty: boolean) => void
   }
   let { projectId, threadId, directory, jobs, onCancelJob, onDirtyChange }: Props = $props()
-  let document = $state<VideoStudioDocument | null>(null)
+  let studio = $state<VideoStudioDocument | null>(null)
   let revision = ''
   let error = $state('')
   let busy = $state(false)
   let dirty = $state(false)
   let cancelledJob = $state<VideoJob | null>(null)
   let captionPage = $state(0)
+  let captionsOpen = $state(false)
+  let tracksOpen = $state(false)
   let visibleCaptions = $derived(
-    document?.captions.slice(captionPage * 25, captionPage * 25 + 25) ?? []
+    studio?.captions.slice(captionPage * 25, captionPage * 25 + 25) ?? []
   )
   let mounted = false
   let panel: HTMLElement | null = null
+  /** The caption styles the studio accepts, as the app's own picker form. */
+  const CAPTION_STYLES = [
+    { id: 'plain', label: 'Plain', hint: 'One line of text, drawn as it is written.' },
+    {
+      id: 'highlight',
+      label: 'Highlight word',
+      hint: 'The word being spoken is drawn in the accent colour.'
+    },
+    { id: 'karaoke', label: 'Karaoke', hint: 'Words fill in as they are spoken.' }
+  ] as const
   const labels: Record<string, string> = {
     filmstrip: 'Footage frames',
     waveform: 'Waveform',
@@ -70,7 +97,7 @@
     try {
       const result = await invoke('video:studio', projectId, directory)
       if (!mounted) return
-      document = result.document
+      studio = result.document
       revision = result.revision
       dirty = false
       error = ''
@@ -95,24 +122,24 @@
     onDirtyChange?.(dirty)
   })
   function setControl(key: string, value: VideoValue): void {
-    const control = document?.controls.find((item) => item.key === key)
+    const control = studio?.controls.find((item) => item.key === key)
     if (control) {
       control.value = value
       dirty = true
     }
   }
   async function save(): Promise<void> {
-    if (!document || busy) return
+    if (!studio || busy) return
     busy = true
     try {
       const result = await invoke(
         'video:save',
         projectId,
         directory,
-        $state.snapshot(document),
+        $state.snapshot(studio),
         revision
       )
-      document = result.document
+      studio = result.document
       revision = result.revision
       dirty = false
       error = ''
@@ -149,17 +176,19 @@
       panel = null
     }
   }}
-  class="mb-3 space-y-2 border-b border-border pb-3"
-  aria-label="Video controls"
+  class="mb-3 rounded-xl border border-border bg-surface p-3"
+  aria-label="Composition settings"
 >
-  <div class="flex items-center justify-between gap-2">
-    <span class="text-xs font-semibold">Video controls</span>
-    {#if dirty}<span class="text-[0.625rem] text-dimmed">Unsaved changes</span>{/if}
-  </div>
-  {#if error}<p role="alert" class="text-xs text-danger">{error}</p>{/if}
-  {#if document}
+  {#if error}
+    <p
+      class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-xs text-danger"
+      role="alert"
+    >
+      {error}
+    </p>
+  {/if}
+  {#if studio}
     <form
-      class="space-y-2"
       onsubmit={(event) => {
         event.preventDefault()
         void save()
@@ -167,8 +196,28 @@
     >
       <fieldset disabled={busy} class="space-y-2">
         <legend class="sr-only">Composition settings</legend>
-        {#each document.controls as control (control.key)}
-          <div class="flex items-center justify-between gap-2 text-xs">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex min-w-0 items-center gap-1.5">
+            <SlidersHorizontal size={13} class="text-accent" aria-hidden="true" />
+            <span class="text-xs font-semibold text-foreground">Settings</span>
+            {#if dirty}
+              <span class="truncate text-[0.6875rem] text-muted">Unsaved changes</span>
+            {/if}
+          </div>
+          {#if dirty}
+            <button
+              type="submit"
+              class="flex h-7 shrink-0 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            >
+              Save changes
+            </button>
+          {/if}
+        </div>
+        {#each studio.controls as control (control.key)}
+          <div class="flex items-center justify-between gap-2">
+            <label for={`video-${control.key}`} class="min-w-0 truncate text-xs text-muted">
+              {control.label}
+            </label>
             {#if control.kind === 'switch'}
               <Switch
                 checked={control.value === true}
@@ -177,16 +226,21 @@
                 aria-label={control.label}
                 onchange={(value) => setControl(control.key, value)}
               />
-            {:else}
-              <label for={`video-${control.key}`}>{control.label}</label>
+            {:else if control.kind === 'color'}
               <input
                 id={`video-${control.key}`}
-                class="w-36 rounded border border-border bg-elevated px-2 py-1 text-xs"
-                type={control.kind === 'number'
-                  ? 'number'
-                  : control.kind === 'color'
-                    ? 'color'
-                    : 'text'}
+                class="h-7 w-12 shrink-0 cursor-pointer rounded-md border border-border bg-elevated p-0.5"
+                type="color"
+                value={String(control.value)}
+                title={control.label}
+                aria-label={control.label}
+                oninput={(event) => setControl(control.key, event.currentTarget.value)}
+              />
+            {:else}
+              <input
+                id={`video-${control.key}`}
+                class="h-7 w-28 shrink-0 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                type={control.kind === 'number' ? 'number' : 'text'}
                 value={String(control.value)}
                 min={control.min}
                 max={control.max}
@@ -202,144 +256,215 @@
             {/if}
           </div>
         {/each}
-        {#if document.captions.length}
-          <details class="text-xs">
-            <summary class="cursor-pointer">Captions ({document.captions.length})</summary>
-            <label class="mt-2 flex items-center justify-between gap-2"
-              >Style
-              <select
-                class="rounded border border-border bg-elevated p-1 text-xs"
-                bind:value={document.captionStyle}
-                onchange={() => {
-                  dirty = true
-                }}
-              >
-                <option value="plain">Plain</option><option value="highlight">Highlight word</option
-                ><option value="karaoke">Karaoke</option>
-              </select>
-            </label>
-            {#each visibleCaptions as caption (caption)}
-              <div class="mt-2 space-y-1">
-                <label class="block"
-                  >Caption at {caption.start.toFixed(2)}s
-                  <textarea
-                    class="mt-1 w-full rounded border border-border bg-elevated p-1 text-xs"
-                    rows="2"
-                    bind:value={caption.text}
-                    oninput={() => {
-                      caption.words = undefined
+        {#if studio.captions.length > 0}
+          <div class="border-t border-border pt-2">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-muted transition-colors hover:text-foreground"
+              aria-expanded={captionsOpen}
+              title={`Captions, ${studio.captions.length} in this composition`}
+              aria-label={`Captions, ${studio.captions.length} in this composition`}
+              onclick={() => (captionsOpen = !captionsOpen)}
+            >
+              <span class="flex items-center gap-1.5">
+                <Captions size={12} aria-hidden="true" />
+                <span class="font-medium text-foreground">Captions</span>
+                <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
+              </span>
+              <ChevronDown
+                size={12}
+                aria-hidden="true"
+                class={captionsOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
+              />
+            </button>
+            {#if captionsOpen}
+              <div class="mt-1 space-y-2 rounded-lg border border-border bg-app p-2">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-xs text-muted">Style</span>
+                  <EnumSelect
+                    options={CAPTION_STYLES}
+                    value={studio.captionStyle}
+                    placeholder="Plain"
+                    ariaLabel="Caption style"
+                    title="How the captions are drawn over the composition"
+                    inline
+                    compact
+                    onChange={(style) => {
+                      if (!studio) return
+                      studio.captionStyle = style
                       dirty = true
-                    }}></textarea>
-                </label>
-                <div class="flex gap-2">
-                  <label class="flex min-w-0 items-center gap-1"
-                    >Start
-                    <input
-                      type="number"
-                      class="w-20 rounded border border-border bg-elevated p-1 text-xs"
-                      min="0"
-                      step="0.01"
-                      bind:value={caption.start}
-                      onchange={() => {
-                        caption.words = undefined
-                        dirty = true
-                      }}
-                    />
-                  </label>
-                  <label class="flex min-w-0 items-center gap-1"
-                    >End
-                    <input
-                      type="number"
-                      class="w-20 rounded border border-border bg-elevated p-1 text-xs"
-                      min="0"
-                      step="0.01"
-                      bind:value={caption.end}
-                      onchange={() => {
-                        caption.words = undefined
-                        dirty = true
-                      }}
-                    />
-                  </label>
+                    }}
+                  />
                 </div>
-              </div>
-            {/each}
-            {#if document.captions.length > 25}
-              <div class="mt-2 flex justify-between">
-                <button
-                  type="button"
-                  disabled={captionPage === 0}
-                  onclick={() => {
-                    captionPage -= 1
-                  }}>Previous</button
-                >
-                <button
-                  type="button"
-                  disabled={(captionPage + 1) * 25 >= document.captions.length}
-                  onclick={() => {
-                    captionPage += 1
-                  }}>Next</button
-                >
+                {#each visibleCaptions as caption (caption)}
+                  <div class="space-y-1 border-t border-border pt-2 first:border-t-0 first:pt-0">
+                    <label class="block text-xs text-muted">
+                      Caption at {caption.start.toFixed(2)}s
+                      <textarea
+                        class="mt-1 w-full rounded-md border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
+                        rows="2"
+                        bind:value={caption.text}
+                        oninput={() => {
+                          caption.words = undefined
+                          dirty = true
+                        }}></textarea>
+                    </label>
+                    <div class="flex gap-2">
+                      <label class="flex items-center gap-1 text-xs text-muted">
+                        Start
+                        <input
+                          type="number"
+                          class="h-7 w-20 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                          min="0"
+                          step="0.01"
+                          bind:value={caption.start}
+                          onchange={() => {
+                            caption.words = undefined
+                            dirty = true
+                          }}
+                        />
+                      </label>
+                      <label class="flex items-center gap-1 text-xs text-muted">
+                        End
+                        <input
+                          type="number"
+                          class="h-7 w-20 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                          min="0"
+                          step="0.01"
+                          bind:value={caption.end}
+                          onchange={() => {
+                            caption.words = undefined
+                            dirty = true
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                {/each}
+                {#if studio.captions.length > 25}
+                  <div class="flex items-center justify-between gap-2 border-t border-border pt-2">
+                    <button
+                      type="button"
+                      class="h-7 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      disabled={captionPage === 0}
+                      onclick={() => {
+                        captionPage -= 1
+                      }}
+                    >
+                      Previous
+                    </button>
+                    <span class="text-[0.6875rem] text-dimmed tabular-nums">
+                      {captionPage * 25 + 1}–{Math.min(
+                        (captionPage + 1) * 25,
+                        studio.captions.length
+                      )} of {studio.captions.length}
+                    </span>
+                    <button
+                      type="button"
+                      class="h-7 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      disabled={(captionPage + 1) * 25 >= studio.captions.length}
+                      onclick={() => {
+                        captionPage += 1
+                      }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                {/if}
               </div>
             {/if}
-          </details>
+          </div>
         {/if}
-        {#if document.audioTracks.length}
-          <details class="text-xs">
-            <summary class="cursor-pointer">Audio tracks ({document.audioTracks.length})</summary>
-            {#each document.audioTracks as track (track)}
-              <div class="mt-2 space-y-1">
-                <p class="truncate">{track.source}</p>
-                <div class="flex flex-wrap gap-2">
-                  {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
-                    {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
-                    <label class="flex items-center gap-1"
-                      >{field}
-                      <input
-                        type="number"
-                        class="w-16 rounded border border-border bg-elevated p-1 text-xs"
-                        min="0"
-                        step="0.01"
-                        bind:value={track[key]}
-                        onchange={() => {
-                          dirty = true
-                        }}
-                      />
-                    </label>
-                  {/each}
-                </div>
+        {#if studio.audioTracks.length > 0}
+          <div class="border-t border-border pt-2">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-muted transition-colors hover:text-foreground"
+              aria-expanded={tracksOpen}
+              title={`Audio tracks, ${studio.audioTracks.length} in this composition`}
+              aria-label={`Audio tracks, ${studio.audioTracks.length} in this composition`}
+              onclick={() => (tracksOpen = !tracksOpen)}
+            >
+              <span class="flex items-center gap-1.5">
+                <AudioLines size={12} aria-hidden="true" />
+                <span class="font-medium text-foreground">Audio tracks</span>
+                <span class="tabular-nums text-dimmed">{studio.audioTracks.length}</span>
+              </span>
+              <ChevronDown
+                size={12}
+                aria-hidden="true"
+                class={tracksOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
+              />
+            </button>
+            {#if tracksOpen}
+              <div class="mt-1 space-y-2 rounded-lg border border-border bg-app p-2">
+                {#each studio.audioTracks as track (track)}
+                  <div class="space-y-1.5 border-t border-border pt-2 first:border-t-0 first:pt-0">
+                    <p class="truncate font-mono text-[0.625rem] text-muted" title={track.source}>
+                      {track.source}
+                    </p>
+                    <div class="grid grid-cols-2 gap-1.5">
+                      {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
+                        {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
+                        <label
+                          class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
+                        >
+                          {field}
+                          <input
+                            type="number"
+                            class="h-7 w-16 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                            min="0"
+                            step="0.01"
+                            bind:value={track[key]}
+                            onchange={() => {
+                              dirty = true
+                            }}
+                          />
+                        </label>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
               </div>
-            {/each}
-          </details>
+            {/if}
+          </div>
         {/if}
       </fieldset>
-      {#if dirty}<button
-          type="submit"
-          disabled={busy}
-          class="rounded bg-primary px-2 py-1 text-xs text-on-primary disabled:opacity-50"
-          >Save changes</button
-        >{/if}
     </form>
   {/if}
   {#each jobs as job (job.id)}
-    <div class="space-y-1 text-xs">
-      <div class="flex justify-between gap-2">
-        <span>{labels[job.operation] ?? 'Video processing'}: {job.stage}</span>
-        {#if job.state === 'running'}<button
+    <div class="mt-2 space-y-1 rounded-lg border border-border bg-app p-2">
+      <div class="flex items-center justify-between gap-2 text-xs">
+        <span class="min-w-0 truncate">
+          {labels[job.operation] ?? 'Video processing'}
+          <span class="text-muted">· {job.stage}</span>
+        </span>
+        {#if job.state === 'running'}
+          <button
             type="button"
-            class="text-danger"
+            class="shrink-0 text-[0.6875rem] text-danger transition-colors hover:underline"
             onclick={() => {
               cancelledJob = job
-            }}>Cancel</button
-          >{/if}
+            }}
+          >
+            Cancel
+          </button>
+        {/if}
       </div>
-      {#if job.state === 'running'}<progress
+      {#if job.state === 'running'}
+        <progress
           class="h-1 w-full accent-primary"
           value={job.progress}
           max="1"
           aria-label={`${job.operation} progress`}
-        ></progress>{/if}
-      {#if job.error}<p class="text-danger">{job.error}</p>{/if}
-      {#each job.files as file (file)}<p class="break-all text-muted">{file}</p>{/each}
+        ></progress>
+      {/if}
+      {#if job.error}
+        <p class="text-[0.6875rem] text-danger">{job.error}</p>
+      {/if}
+      {#each job.files as file (file)}
+        <p class="truncate font-mono text-[0.625rem] text-muted" title={file}>{file}</p>
+      {/each}
     </div>
   {/each}
 </section>
