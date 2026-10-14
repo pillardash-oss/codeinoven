@@ -2427,7 +2427,19 @@
   /** The message file parts a fullscreen preview can render, and which one is
    *  open. Parts no preview can render stay out of `items`, so the pager walks
    *  only the attachments that can be shown. */
-  let messageViewer = $state<{ items: PreviewableFilePart[]; index: number } | null>(null)
+  let messageViewer = $state<{
+    items: PreviewableFilePart[]
+    index: number
+    /** The message the parts came from, so a mark can name what it was drawn on. */
+    messageId: string
+    /**
+     * Whether this message published its parts as an inline artifact, which is
+     * what makes its pictures annotatable. A mark is answered back to the agent
+     * as an attachment beside the comment, so the lane is for the material the
+     * agent delivered, not for what the user attached themselves.
+     */
+    annotatable: boolean
+  } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
@@ -2450,8 +2462,8 @@
    *
    * Kept apart from `commentEditorReferenceId` on purpose: that one draws the
    * app's range-anchored editor, which a mark has no range for. The picture's
-   * own surface owns the mark's editor, so an edit requested from the composer
-   * only has to name the mark and scroll its picture into view.
+   * viewer owns the mark's editor, so an edit requested from the composer only
+   * has to name the mark and open that viewer on the picture.
    */
   let imageMarkEditorId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
@@ -2737,18 +2749,32 @@
     )
   }
 
+  /** The comment editor of a mark closed, so its edit request is spent. */
+  function clearImageMarkEditor(): void {
+    imageMarkEditorId = null
+  }
+
   /**
-   * Bring a marked picture back on screen and open the mark's comment.
+   * Bring a marked picture back in front of the reader and open the mark's comment.
    *
-   * A picture outside the mounted window has no badge to anchor an editor to, so
-   * the message is scrolled to first and the mark is handed to the picture's own
-   * surface, which opens the editor once its badge is measured. A frame mark's
-   * surface also seeks its video to the mark's second before the editor opens,
-   * because a comment about a moment has to be written over that moment.
+   * A mark is drawn on a picture in the fullscreen viewer and its badge lives
+   * there, so the edit action opens that viewer on the very part the mark names:
+   * the reference carries the message and the media URL it was drawn on, and the
+   * viewer hands the mark to the picture's surface, which opens the editor once
+   * its badge is measured. A frame mark's surface also seeks its video to the
+   * mark's second before the editor opens, because a comment about a moment has
+   * to be written over that moment.
    */
   async function editMediaMark(reference: ResponseReferenceAnchor): Promise<void> {
     if (reference.messageId) await jumpToMessage(reference.messageId)
     if (!alive) return
+    const message = messages.find((entry) => entry.id === reference.messageId)
+    const part = message?.parts.find(
+      (entry): entry is Extract<AgentPart, { type: 'file' }> =>
+        entry.type === 'file' && entry.url === reference.mediaUrl
+    )
+    if (!message || !part) return
+    openMessageViewer(message, part)
     imageMarkEditorId = reference.id
   }
 
@@ -7674,7 +7700,12 @@
     const items = previewableFileParts(msg)
     const index = items.findIndex((item) => item.url === part.url)
     if (index === -1) return
-    messageViewer = { items, index }
+    messageViewer = {
+      items,
+      index,
+      messageId: msg.id,
+      annotatable: msg.inlineArtifact === true
+    }
     loadViewerItem(items[index])
   }
 
@@ -7684,7 +7715,12 @@
     if (!viewer) return
     const index = viewer.index + delta
     if (index < 0 || index >= viewer.items.length) return
-    messageViewer = { items: viewer.items, index }
+    messageViewer = {
+      items: viewer.items,
+      index,
+      messageId: viewer.messageId,
+      annotatable: viewer.annotatable
+    }
     loadViewerItem(viewer.items[index])
   }
 
@@ -7704,6 +7740,19 @@
       onPrevious: () => stepMessageViewer(-1),
       onNext: () => stepMessageViewer(1)
     }
+  })
+
+  /**
+   * The item the open lightbox is showing when it is material a mark can be
+   * drawn on: an artifact picture or an artifact video. Null for everything
+   * else, which is what keeps the plain lightbox plain.
+   */
+  const viewerAnnotatableItem = $derived.by(() => {
+    const viewer = messageViewer
+    if (!viewer || !viewer.annotatable) return null
+    const item = viewer.items[viewer.index]
+    if (!item) return null
+    return isImageMime(item.mime) || isVideoMime(item.mime) ? item : null
   })
 
   /**
@@ -12068,6 +12117,42 @@
   {/await}
 {/snippet}
 
+<!-- The annotatable surface the lightbox draws in place of the plain media
+     element: an artifact picture or video with its marks, its pen and its
+     numbered badges. The conversation itself shows the artifact plain, because
+     the pen and the badges are decisions about the picture and belong where the
+     picture is big enough to make them. -->
+{#snippet viewerAnnotationSurface()}
+  {@const item = viewerAnnotatableItem}
+  {#if item}
+    {#if isVideoMime(item.mime)}
+      <ArtifactVideoAnnotator
+        projectId={thread.projectId}
+        threadId={thread.id}
+        url={item.url}
+        filename={item.filename}
+        messageId={messageViewer?.messageId}
+        marks={marksFor(item.url)}
+        editingId={imageMarkEditorId}
+        onEditClosed={clearImageMarkEditor}
+        onLoadError={(element) => void imageUrls.bindMedia(item.url, item.mime, element)}
+      />
+    {:else}
+      <ArtifactImageAnnotator
+        projectId={thread.projectId}
+        threadId={thread.id}
+        url={item.url}
+        src={imageUrls.getUrl(item.url)}
+        filename={item.filename}
+        messageId={messageViewer?.messageId}
+        marks={marksFor(item.url)}
+        editingId={imageMarkEditorId}
+        onEditClosed={clearImageMarkEditor}
+      />
+    {/if}
+  {/if}
+{/snippet}
+
 {#if messageViewer}
   {@const viewerItem = messageViewer.items[messageViewer.index]}
   {@const viewerArtifact = viewerItem ? viewerArtifactPath(viewerItem.url) : null}
@@ -12078,6 +12163,7 @@
       filename={viewerItem.filename}
       mime={viewerItem.mime}
       pager={messageViewerPager}
+      annotate={viewerAnnotatableItem ? viewerAnnotationSurface : undefined}
       onClose={closeMessageViewer}
       onReveal={viewerArtifact ? () => revealViewerArtifact(viewerArtifact) : undefined}
       onLoadError={(el) => {
@@ -12577,34 +12663,22 @@
                       annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                     />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
-                    <ArtifactImageAnnotator
-                      projectId={thread.projectId}
-                      threadId={thread.id}
+                    <!-- An artifact picture is shown plain here: its marks, its
+                         pen and its numbered badges are drawn in the expanded
+                         viewer, which is what its expand affordance opens. -->
+                    <InlineImageFigure
                       url={part.url}
                       mime={part.mime}
                       filename={part.filename ?? 'Image'}
                       {imageUrls}
-                      messageId={msg.id}
-                      marks={marksFor(part.url)}
-                      editingId={imageMarkEditorId}
                       onExpand={() => openMessageViewer(msg, part)}
-                      onEditClosed={() => {
-                        if (imageMarkEditorId) imageMarkEditorId = null
-                      }}
                     />
                   {:else if part.type === 'file' && isVideoMime(part.mime)}
-                    <ArtifactVideoAnnotator
-                      projectId={thread.projectId}
-                      threadId={thread.id}
-                      url={part.url}
+                    <InlineMediaFigure
+                      src={part.url}
+                      kind="video"
                       filename={part.filename ?? 'Video'}
-                      messageId={msg.id}
-                      marks={marksFor(part.url)}
-                      editingId={imageMarkEditorId}
                       onExpand={() => openMessageViewer(msg, part)}
-                      onEditClosed={() => {
-                        if (imageMarkEditorId) imageMarkEditorId = null
-                      }}
                     />
                   {:else if part.type === 'file' && isAudioMime(part.mime)}
                     <InlineMediaFigure

@@ -73,7 +73,16 @@
         )
       : null
   )
-  const inspecting = $derived(manualInspecting || focusRequest !== null)
+  /**
+   * The expanded viewer, which is the only surface that offers the inspector.
+   *
+   * A pick is a decision about the artifact, and the artifact at full size is
+   * where a user makes it, so the inline card stays a plain preview. A composer
+   * jump opens the viewer as well: the pick it names has nowhere else to be
+   * commented on.
+   */
+  const viewerOpen = $derived(expanded || focusRequest !== null)
+  const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
 
   onDestroy(() => clearTimeout(copyResetTimer))
@@ -95,6 +104,13 @@
     if (request) artifactElementFocusState.consume(request.token)
   }
 
+  /** Close the expanded viewer. A jump it was serving is spent either way. */
+  function closeViewer(): void {
+    releaseFocusRequest()
+    manualInspecting = false
+    expanded = false
+  }
+
   function toggleInspect(): void {
     if (!canInspect) return
     // Read the mode before releasing a jump: consuming the request is what the
@@ -111,16 +127,14 @@
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
   {:else if inspecting && annotationScope}
-    <div class={fullscreen ? 'h-full min-h-0' : 'h-80'}>
-      <!-- Only the inline card answers a composer jump: the expanded copy draws
-           the same picks, and both opening the editor would show two of them. -->
+    <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
         {artifactKey}
         projectId={annotationScope.projectId}
         threadId={annotationScope.threadId}
         {picks}
-        editingId={fullscreen ? null : inspectorEditingId}
+        editingId={inspectorEditingId}
         onEditClosed={releaseFocusRequest}
         onExit={() => {
           releaseFocusRequest()
@@ -172,23 +186,6 @@
           <span class="flex items-center gap-1"><Code2 size={12} />Code</span>
         </button>
       </div>
-      {#if canInspect}
-        <button
-          type="button"
-          class={[
-            'rounded p-1 transition-colors',
-            inspecting
-              ? 'bg-overlay text-accent'
-              : 'text-dimmed hover:bg-overlay hover:text-foreground'
-          ]}
-          aria-pressed={inspecting}
-          title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
-          aria-label={inspecting ? 'Stop inspecting this SVG' : 'Inspect this SVG'}
-          onclick={toggleInspect}
-        >
-          <SquareDashedMousePointer size={13} />
-        </button>
-      {/if}
       <button
         class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label={wrapToggleLabel(wrapped)}
@@ -224,13 +221,38 @@
   {@render artifactBody()}
 </div>
 
+{#snippet modalActions()}
+  <button
+    type="button"
+    class={[
+      'flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay',
+      inspecting ? 'border-accent text-accent' : ''
+    ]}
+    aria-pressed={inspecting}
+    title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
+    onclick={toggleInspect}
+  >
+    <SquareDashedMousePointer size={14} />
+    <span>{inspecting ? 'Stop inspecting' : 'Inspect an element'}</span>
+  </button>
+{/snippet}
+
 <Modal
-  open={expanded}
+  open={viewerOpen}
   title={label}
-  onClose={() => (expanded = false)}
+  onClose={closeViewer}
+  onEscapeKeydown={(event) => {
+    // Escape while inspecting leaves inspection rather than the viewer: the
+    // picks the user just made are still being commented on here.
+    if (!inspecting) return
+    releaseFocusRequest()
+    manualInspecting = false
+    event.preventDefault()
+  }}
   placement="fullscreen"
   panelClass="bg-app"
   contentClass="flex flex-col overflow-hidden p-0"
+  footer={canInspect ? modalActions : undefined}
 >
   <div class="min-h-0 flex-1">
     {@render artifactBody(true)}

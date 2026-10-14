@@ -204,6 +204,34 @@ export function markBadgePoint(points: readonly MarkPoint[]): MarkPoint {
   return points[0] ?? { x: 0, y: 0 }
 }
 
+/**
+ * Where a picture actually sits inside the box that shows it.
+ *
+ * A picture is fitted into the box its host gives it, so a picture whose aspect
+ * ratio differs from the box leaves letterbox bands on two sides. A mark is
+ * normalized to the box it is drawn in, so a surface that drew on the host's box
+ * rather than on the picture would put the same stroke somewhere else in the
+ * conversation and in the composed frame. A still and one frame of a video fit
+ * their picture the same way, so both hosts place their layer with this.
+ */
+export interface MarkContentBox {
+  height: number
+  left: number
+  top: number
+  width: number
+}
+
+export function markContentBox(
+  box: { width: number; height: number },
+  picture: { width: number; height: number }
+): MarkContentBox | null {
+  if (box.width <= 0 || box.height <= 0 || picture.width <= 0 || picture.height <= 0) return null
+  const fit = Math.min(box.width / picture.width, box.height / picture.height)
+  const width = picture.width * fit
+  const height = picture.height * fit
+  return { height, left: (box.width - width) / 2, top: (box.height - height) / 2, width }
+}
+
 /** `"x,y x,y"` for an SVG `<polyline points>` in normalized coordinates. */
 export function markPointsAttribute(points: readonly MarkPoint[]): string {
   return points.map((point) => `${point.x},${point.y}`).join(' ')

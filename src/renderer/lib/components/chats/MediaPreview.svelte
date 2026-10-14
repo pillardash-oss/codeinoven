@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X, Download, FolderOpen } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -32,9 +33,21 @@
      * even though `revealUrl` is not a real file path.
      */
     onReveal?: () => void
+    /**
+     * An annotatable surface to draw in place of the plain media element.
+     *
+     * An artifact picture is the material a user answers by pointing at, and
+     * the lightbox is where it is big enough to point at, so the caller that
+     * owns the marks supplies the picture and its layer instead of the plain
+     * element. It owns the whole media area, and the lightbox drops the zoom
+     * toolbar it would otherwise offer, because a pan gesture and a stroke
+     * cannot share the same pointer.
+     */
+    annotate?: Snippet
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal }: Props = $props()
+  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
+    $props()
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
@@ -148,7 +161,9 @@
       class="relative flex h-full min-h-0 w-full flex-col items-center"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
-      {#if kind === 'video'}
+      {#if annotate}
+        {@render annotate()}
+      {:else if kind === 'video'}
         <video
           {src}
           controls
@@ -193,12 +208,12 @@
         </div>
       {/if}
     </div>
-    {#if kind === 'image' || pager}
+    {#if pager || (kind === 'image' && !annotate)}
       <div class="absolute right-4 bottom-4 flex items-center gap-2">
         {#if pager}
           <PreviewPager {pager} />
         {/if}
-        {#if kind === 'image'}
+        {#if kind === 'image' && !annotate}
           <PanZoomToolbar {panZoom} viewport={imageViewport} />
         {/if}
       </div>

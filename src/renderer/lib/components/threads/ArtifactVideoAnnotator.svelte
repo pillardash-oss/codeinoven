@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { Expand } from '@lucide/svelte'
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
-  import { markDescriptor, type MarkCapture } from '$lib/annotation-marks'
+  import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
@@ -9,7 +8,7 @@
   import { videoTimecode } from '$shared/video/timeline'
 
   /**
-   * The mark surface for one inline artifact video.
+   * The mark surface for one artifact video, drawn in the expanded viewer.
    *
    * A video the agent published is the artifact a user most often wants to answer
    * with "that moment, there", and neither a time nor a freeze frame is something
@@ -18,6 +17,10 @@
    * and writes why. Every stroke is stored with the second it was drawn at, which
    * is the whole difference between this and a mark on a still, and the send
    * composes that second's frame with the strokes on it.
+   *
+   * The conversation shows the video plain. The player, the strip and the pen are
+   * all decisions about the video, so this host is the lightbox
+   * (`chats/MediaPreview.svelte`), which hands it the whole media area.
    *
    * The drawing itself is {@link AnnotationMarkLayer}, the same component an image
    * uses, so the pen, the numbered badges, the comment bubble and the composed
@@ -34,10 +37,10 @@
     marks: ResponseReferenceAnchor[]
     /** A mark whose comment the user asked to edit from elsewhere. */
     editingId: string | null
-    /** Open the fullscreen viewer. */
-    onExpand: () => void
     /** The comment editor closed, so the caller can clear its request. */
     onEditClosed: () => void
+    /** Repair hook for a source that failed to load (a blob not ready yet). */
+    onLoadError?: (element: HTMLMediaElement) => void
   }
 
   let {
@@ -48,14 +51,20 @@
     messageId,
     marks,
     editingId,
-    onExpand,
-    onEditClosed
+    onEditClosed,
+    onLoadError
   }: Props = $props()
 
-  // Deliberately not `$state`: the element reference is only ever read by the
-  // playhead sync below, and making it reactive would turn that write to a DOM
-  // property into a write to state.
+  // Held rather than bound through `bind:this`: only `pause`, `seek` and the
+  // playhead sync read the element, and turning the reference into state would
+  // turn those DOM writes into state writes.
   let video: HTMLVideoElement | null = null
+  const videoAttachment = (node: HTMLVideoElement): (() => void) => {
+    video = node
+    return () => {
+      if (video === node) video = null
+    }
+  }
   /** Whether the pointer draws on the picture instead of driving the player. */
   let armed = $state(false)
   /** Bound to the element, so a scrubbed frame and a drawn mark agree on the second. */
@@ -63,31 +72,25 @@
   let duration = $state(0)
   let videoWidth = $state(0)
   let videoHeight = $state(0)
-  /** The video element's own box, which the picture is letterboxed inside. */
+  /** The player's own box, which the picture is letterboxed inside. */
   let boxWidth = $state(0)
   let boxHeight = $state(0)
 
   /**
-   * Where the picture actually is inside the video element.
+   * Where the picture actually is inside the player.
    *
-   * A video keeps its own aspect ratio inside whatever box it is given, so the
-   * element's edges are not the picture's edges whenever the two disagree. A mark
-   * normalized to the element would be drawn on the letterbox and land off the
-   * picture both in the conversation and in the composed frame, so the layer is
-   * placed on this box instead, and both ends of the round trip agree.
+   * The player is given the whole media area, so its edges are not the picture's
+   * edges whenever the two disagree on aspect ratio. A mark normalized to the
+   * player would be drawn on the letterbox and land off the picture both in the
+   * conversation and in the composed frame, so the layer is placed on this box
+   * instead, and both ends of the round trip agree.
    */
-  const contentBox = $derived.by(() => {
-    if (boxWidth <= 0 || boxHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return null
-    const fit = Math.min(boxWidth / videoWidth, boxHeight / videoHeight)
-    const width = videoWidth * fit
-    const height = videoHeight * fit
-    return {
-      height,
-      left: (boxWidth - width) / 2,
-      top: (boxHeight - height) / 2,
-      width
-    }
-  })
+  const contentBox = $derived(
+    markContentBox(
+      { width: boxWidth, height: boxHeight },
+      { width: videoWidth, height: videoHeight }
+    )
+  )
 
   /** The second of the mark the user is editing, so its own frame can be shown. */
   const editingMarkSeconds = $derived.by(() => {
@@ -109,6 +112,10 @@
     // frame they are looking at, and it has to still be that frame when the stroke
     // lands.
     if (next) video?.pause()
+  }
+
+  function handleMediaError(event: Event): void {
+    onLoadError?.(event.currentTarget as HTMLMediaElement)
   }
 
   function seek(seconds: number): void {
@@ -159,21 +166,11 @@
   }
 </script>
 
-<figure class="w-full min-w-0 overflow-hidden rounded-lg border border-border bg-surface">
-  <figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted">
-    <span class="truncate">{filename}</span>
-    <button
-      type="button"
-      class="shrink-0 rounded p-1 text-muted hover:bg-elevated hover:text-foreground"
-      title={`Expand ${filename}`}
-      aria-label={`Expand ${filename}`}
-      onclick={onExpand}><Expand size={14} /></button
-    >
-  </figcaption>
-  <div class="relative" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
+<div class="flex h-full min-h-0 w-full flex-col">
+  <div class="relative min-h-0 flex-1" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
     <video
-      bind:this={video}
-      class="block max-h-96 w-full"
+      {@attach videoAttachment}
+      class="absolute inset-0 h-full w-full object-contain"
       src={url}
       controls={!armed}
       preload="metadata"
@@ -182,11 +179,12 @@
       bind:duration
       bind:videoWidth
       bind:videoHeight
+      onerror={handleMediaError}
     >
       <track kind="captions" />
     </video>
     {#if contentBox}
-      <!-- The layer fills the picture rather than the element: outside this box
+      <!-- The layer fills the picture rather than the player: outside this box
            there is letterbox, and a mark belongs on the picture. -->
       <div
         class="absolute"
@@ -205,7 +203,6 @@
           {armed}
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
-          activeSeconds={currentTime}
           badgeVisibility="while-annotating"
           hint="Pick the frame, then draw · Esc to finish"
         />
@@ -213,8 +210,8 @@
     {/if}
   </div>
   {#if armed}
-    <div class="flex items-center gap-2 border-t border-border px-3 py-2">
-      <span class="shrink-0 font-mono text-xs text-muted">{videoTimecode(currentTime)}</span>
+    <div class="flex shrink-0 items-center gap-2 border-t border-white/10 px-3 py-2 text-white/80">
+      <span class="shrink-0 font-mono text-xs">{videoTimecode(currentTime)}</span>
       <input
         type="range"
         class="min-w-0 flex-1"
@@ -226,7 +223,7 @@
         aria-label="Frame to annotate"
         oninput={(event) => seek(Number(event.currentTarget.value))}
       />
-      <span class="shrink-0 text-xs text-muted">Frame {Math.round(currentTime * 1000)}ms</span>
+      <span class="shrink-0 text-xs">Frame {Math.round(currentTime * 1000)}ms</span>
     </div>
   {/if}
-</figure>
+</div>

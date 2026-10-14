@@ -312,6 +312,10 @@
     outline(null)
     hoveredElement = null
     hoverName = null
+    // Leaving inspection claims the key. The inspector can be drawn inside the
+    // expanded artifact viewer, and an Escape that dismissed that viewer as well
+    // would throw away the picks the user just made.
+    event.preventDefault()
     onExit()
   }
 
