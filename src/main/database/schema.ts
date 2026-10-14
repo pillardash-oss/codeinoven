@@ -693,6 +693,26 @@ CREATE TABLE IF NOT EXISTS workflow_owners (
   PRIMARY KEY (project_id, coordinator_thread_id)
 );
 
+-- ─── Thread Transfer Locks ───────────────────────────────────────────
+-- Moving a run between instances is a two-sided hand-off, and a thread may
+-- only have one in flight. Each side takes the row it needs   the receiving
+-- instance holds the adopt claim for the whole transfer, the sending
+-- instance holds the release claim while it stops and settles   and the
+-- primary key makes the write the lock, because a second claimant's INSERT is
+-- refused. A row is a lease, not a permanent record: it is ignored once
+-- expires_at passes or its holder process is gone, so a crash never strands a
+-- thread.
+CREATE TABLE IF NOT EXISTS thread_transfer_locks (
+  project_id  TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  role        TEXT NOT NULL CHECK(role IN ('release','adopt')),
+  holder_pid  INTEGER NOT NULL,
+  token       TEXT NOT NULL,
+  acquired_at INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, thread_id, role)
+);
+
 -- ─── Assignment Plans ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assignment_versions (
   assignment_id        TEXT NOT NULL,

@@ -17,6 +17,14 @@
  * Ownership is never guessed: both sides read `active_turns.owner_pid`, exactly
  * as restart recovery and the foreign-run notice do, so a thread cannot be
  * transferred out from under a process that is not actually running it.
+ *
+ * Only one hand-off may be in flight per thread. Two windows asking at the same
+ * moment would otherwise both pass the owner's "is this still my turn" check
+ * before either stopped anything, both get an ack, and both adopt, leaving two
+ * harness writers on one session. A shared mutex   see
+ * {@link ThreadTransferLock}   closes that: the receiving side holds `adopt` for
+ * the whole hand-off and hands its token to the owner, and the owner holds
+ * `release` while it stops and settles.
  */
 
 import type { ThreadTransferResult } from '../../lib/types'
@@ -24,6 +32,7 @@ import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { InstanceHandoffBus, instanceHandoffBus } from '../system/instance-handoff-bus'
 import type { HandoffRequest } from '../system/instance-handoff-bus'
 import { instanceRegistry } from '../system/instance-registry'
+import type { ThreadTransferLock } from '../system/thread-transfer-lock'
 import { Logger } from '../system/logger'
 import type { ChatEngine } from './chat-engine'
 
@@ -49,6 +58,12 @@ export interface ThreadTransferServiceOptions {
   liveInstancePids?: () => number[] | null
   /** The peer-to-peer bus this service asks for a release over. */
   bus?: InstanceHandoffBus
+  /**
+   * The per-thread transfer mutex. Both sides of a hand-off share one through
+   * the config root database, so a second transfer of the same thread is refused
+   * instead of racing the first into a second harness writer.
+   */
+  locks?: ThreadTransferLock
 }
 
 export class ThreadTransferService {
@@ -57,6 +72,7 @@ export class ThreadTransferService {
   private readonly isRunOwnerAlive: (pid: number) => boolean
   private readonly liveInstancePids: () => number[] | null
   private readonly bus: InstanceHandoffBus
+  private readonly locks: ThreadTransferLock | null
   private detachPromptPreflight: (() => void) | null = null
 
   constructor(
@@ -67,6 +83,7 @@ export class ThreadTransferService {
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
     this.liveInstancePids = options.liveInstancePids ?? (() => instanceRegistry.liveInstancePids())
     this.bus = options.bus ?? instanceHandoffBus
+    this.locks = options.locks ?? null
     this.detachPromptPreflight =
       this.chatEngine.attachThreadTransferPreflight?.((projectId, threadId) =>
         this.prepareIdleCodexThreadForPrompt(projectId, threadId)
@@ -126,14 +143,35 @@ export class ThreadTransferService {
           reason: 'The instance running this thread is no longer running.'
         }
       }
-      const ack = await this.bus.request(ownerPid, projectId, target.rootThreadId)
-      if (ack.status !== 'accepted') {
-        return {
-          ok: false,
-          reason: ack.reason ?? 'The instance running this thread did not hand it over.'
+      // One transfer per thread. The receiving side takes `adopt` for the whole
+      // hand-off and hands its token to the owner, so a second window asking at
+      // the same moment is refused before anything on the owner is stopped, and
+      // the owner can tell a real transfer from a request with no claim behind
+      // it.
+      const lock = await this.locks?.acquire(projectId, target.rootThreadId, 'adopt')
+      if (this.locks && lock === null) {
+        return { ok: false, reason: 'Another transfer of this thread is already in progress.' }
+      }
+      try {
+        const ack = await this.bus.request(
+          ownerPid,
+          projectId,
+          target.rootThreadId,
+          'release-run',
+          lock ?? undefined
+        )
+        if (ack.status !== 'accepted') {
+          return {
+            ok: false,
+            reason: ack.reason ?? 'The instance running this thread did not hand it over.'
+          }
+        }
+        return await this.chatEngine.adoptTransferredThread(projectId, target.rootThreadId)
+      } finally {
+        if (this.locks && lock) {
+          await this.locks.release(projectId, target.rootThreadId, 'adopt', lock)
         }
       }
-      return await this.chatEngine.adoptTransferredThread(projectId, target.rootThreadId)
     } catch (error) {
       Logger.error('Cross-instance thread transfer failed:', error)
       return { ok: false, reason: 'The transfer could not be completed.' }
@@ -159,32 +197,51 @@ export class ThreadTransferService {
       const peers = pids.filter((pid) => pid !== this.bus.localPid && this.isRunOwnerAlive(pid))
       if (peers.length === 0) return { ok: true }
 
-      const pending = new Map(
-        peers.map((pid) => [
-          pid,
-          this.bus.request(pid, projectId, target.rootThreadId, 'release-idle-codex-thread')
-        ])
-      )
-      while (pending.size > 0) {
-        const settled = await Promise.race(
-          [...pending].map(async ([pid, request]) => ({ pid, ack: await request }))
+      // Releasing a sibling's idle writer is still a hand-off of this thread, so
+      // it takes the same mutex: a window that is already moving the thread has
+      // the claim, and this prompt waits rather than racing it.
+      const lock = await this.locks?.acquire(projectId, target.rootThreadId, 'adopt')
+      if (this.locks && lock === null) {
+        return { ok: false, reason: 'This thread is already being transferred.' }
+      }
+      try {
+        const pending = new Map(
+          peers.map((pid) => [
+            pid,
+            this.bus.request(
+              pid,
+              projectId,
+              target.rootThreadId,
+              'release-idle-codex-thread',
+              lock ?? undefined
+            )
+          ])
         )
-        pending.delete(settled.pid)
-        if (settled.ack.status === 'accepted') return { ok: true }
-        if (
-          settled.ack.status === 'not-owner' ||
-          settled.ack.reason === 'This instance is no longer running that thread.'
-        ) {
-          continue
+        while (pending.size > 0) {
+          const settled = await Promise.race(
+            [...pending].map(async ([pid, request]) => ({ pid, ack: await request }))
+          )
+          pending.delete(settled.pid)
+          if (settled.ack.status === 'accepted') return { ok: true }
+          if (
+            settled.ack.status === 'not-owner' ||
+            settled.ack.reason === 'This instance is no longer running that thread.'
+          ) {
+            continue
+          }
+          return {
+            ok: false,
+            reason:
+              settled.ack.reason ??
+              'The instance holding this Codex thread could not release its writer.'
+          }
         }
-        return {
-          ok: false,
-          reason:
-            settled.ack.reason ??
-            'The instance holding this Codex thread could not release its writer.'
+        return { ok: true }
+      } finally {
+        if (this.locks && lock) {
+          await this.locks.release(projectId, target.rootThreadId, 'adopt', lock)
         }
       }
-      return { ok: true }
     } catch (error) {
       Logger.error('Idle Codex thread transfer failed:', error)
       return { ok: false, reason: 'The Codex thread could not be transferred to this instance.' }
@@ -194,7 +251,39 @@ export class ThreadTransferService {
   /** Answer a sibling that asked this process to release a thread. */
   private async handleRequest(request: HandoffRequest): Promise<void> {
     if (request.targetPid !== this.bus.localPid) return
+    // The sending side takes `release` so two requests for one thread cannot both
+    // run the stop-and-settle on top of each other.
+    const lock = await this.locks?.acquire(request.projectId, request.threadId, 'release')
+    if (this.locks && lock === null) {
+      await this.bus.respond(
+        request,
+        'refused',
+        'Another transfer of this thread is already in progress.'
+      )
+      return
+    }
     try {
+      // When the requester named the claim it is acting under, honour only that
+      // exact claim: a request whose lock is gone, expired, or held by someone
+      // else must not stop a run. A legacy request carries no token and is left
+      // to the release lock alone.
+      if (this.locks && request.lockToken) {
+        const held = await this.locks.holds(
+          request.projectId,
+          request.threadId,
+          'adopt',
+          request.requesterPid,
+          request.lockToken
+        )
+        if (!held) {
+          await this.bus.respond(
+            request,
+            'refused',
+            'The transfer lock is not held by the requesting instance.'
+          )
+          return
+        }
+      }
       if (request.operation === 'release-idle-codex-thread') {
         if (!this.chatEngine.releaseIdleCodexThreadForTransfer) {
           await this.bus.respond(request, 'not-owner')
@@ -223,6 +312,10 @@ export class ThreadTransferService {
         'refused',
         'The instance running this thread could not stop its run.'
       )
+    } finally {
+      if (this.locks && lock) {
+        await this.locks.release(request.projectId, request.threadId, 'release', lock)
+      }
     }
   }
 }

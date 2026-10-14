@@ -190,6 +190,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { DirectoryPreviewService },
     { ForeignRunService },
     { ThreadTransferService },
+    { ThreadTransferLock },
     { RoutineManager },
     { RoutineSchedulerService },
     {
@@ -222,6 +223,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../preview/directory-preview-service'),
     import('../chat/foreign-run-service'),
     import('../chat/thread-transfer-service'),
+    import('../system/thread-transfer-lock'),
     import('../../lib/engines/routine-manager'),
     import('../scheduler/routine-scheduler-service'),
     import('../scheduler/assistant-events'),
@@ -811,7 +813,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
-  state.threadTransfer = new ThreadTransferService(state.chatEngine)
+  state.threadTransfer = new ThreadTransferService(state.chatEngine, {
+    // One mutex, shared through the config root database, so two instances cannot
+    // both claim the same thread's transfer.
+    locks: new ThreadTransferLock(database)
+  })
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
   state.featuresReady = true

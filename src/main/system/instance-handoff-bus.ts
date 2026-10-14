@@ -72,6 +72,14 @@ export interface HandoffRequest {
   createdAt: number
   /** Omitted requests are legacy run transfers. */
   operation?: 'release-run' | 'release-idle-codex-thread'
+  /**
+   * The requester's `adopt` transfer-lock token. The target refuses to act for a
+   * request whose token no longer matches the lock the requester holds, so a
+   * thread cannot be claimed by a transfer that is not really held. Absent on a
+   * legacy requester, which the target tolerates (it still takes its own
+   * `release` lock).
+   */
+  lockToken?: string
 }
 
 export interface HandoffAck {
@@ -167,7 +175,8 @@ export class InstanceHandoffBus {
     targetPid: number,
     projectId: string,
     threadId: string,
-    operation: HandoffRequest['operation'] = 'release-run'
+    operation: HandoffRequest['operation'] = 'release-run',
+    lockToken?: string
   ): Promise<HandoffAck> {
     const requestId = `${this.localPid}-${Date.now()}-${(this.sequence += 1)}`
     const request: HandoffRequest = {
@@ -177,7 +186,8 @@ export class InstanceHandoffBus {
       projectId,
       threadId,
       createdAt: Date.now(),
-      ...(operation === 'release-run' ? {} : { operation })
+      ...(operation === 'release-run' ? {} : { operation }),
+      ...(lockToken ? { lockToken } : {})
     }
     try {
       this.writeFile(`${requestId}${REQUEST_SUFFIX}`, request)
@@ -384,7 +394,8 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     typeof candidate.threadId === 'string' &&
     (candidate.operation === undefined ||
       candidate.operation === 'release-run' ||
-      candidate.operation === 'release-idle-codex-thread')
+      candidate.operation === 'release-idle-codex-thread') &&
+    (candidate.lockToken === undefined || typeof candidate.lockToken === 'string')
   )
 }
 

@@ -6,10 +6,13 @@ import { tmpdir } from 'node:os'
 import type { ThreadTransferResult } from '../../src/lib/types'
 import type { HandoffAck, HandoffRequest } from '../../src/main/system/instance-handoff-bus'
 import { InstanceHandoffBus } from '../../src/main/system/instance-handoff-bus'
+import { ThreadTransferLock } from '../../src/main/system/thread-transfer-lock'
+import type { Database } from '../../src/main/database/database'
 import {
   ThreadTransferService,
   type ThreadTransferEngine
 } from '../../src/main/chat/thread-transfer-service'
+import { createTestDb, destroyTestDb } from './database/test-helper'
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => process.cwd() },
@@ -35,6 +38,7 @@ const THREAD_ID = 'thread1'
 
 const directories: string[] = []
 const services: ThreadTransferService[] = []
+const testDatabases: Database[] = []
 
 async function handoffDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'codeinoven-handoff-'))
@@ -89,6 +93,23 @@ interface Harness {
   /** The window that owns the run: speaks as the recorded sibling. */
   owner: ThreadTransferService
   ownerEngine: EngineStub
+  /** The mutex both peers share, through one database. */
+  lock: ThreadTransferLock
+  /** Another live instance's view of the same mutex. */
+  lockFor: (localPid: number) => ThreadTransferLock
+}
+
+/** The transfer mutex both peers of one hand-off share. */
+async function sharedLocks(): Promise<{
+  db: Database
+  lockFor: (localPid: number) => ThreadTransferLock
+}> {
+  const db = await createTestDb()
+  testDatabases.push(db)
+  return {
+    db,
+    lockFor: (localPid) => new ThreadTransferLock(db, { localPid, isRunOwnerAlive: () => true })
+  }
 }
 
 async function harness(
@@ -105,19 +126,30 @@ async function harness(
 
   const adopterEngine = engineStub({ ownerPid, adopt: options.adopt })
   const ownerEngine = engineStub({ release: options.release })
+  const { lockFor } = await sharedLocks()
 
   const adopter = new ThreadTransferService(adopterEngine.engine, {
     bus: new InstanceHandoffBus(directory),
-    isRunOwnerAlive: () => options.ownerAlive ?? true
+    isRunOwnerAlive: () => options.ownerAlive ?? true,
+    locks: lockFor(process.pid)
   })
   const owner = new ThreadTransferService(ownerEngine.engine, {
-    bus: new InstanceHandoffBus(directory, OWNER_PID)
+    bus: new InstanceHandoffBus(directory, OWNER_PID),
+    locks: lockFor(OWNER_PID)
   })
   services.push(adopter, owner)
   adopter.start()
   if (options.startOwner ?? true) owner.start()
 
-  return { directory, adopter, adopterEngine, owner, ownerEngine }
+  return {
+    directory,
+    adopter,
+    adopterEngine,
+    owner,
+    ownerEngine,
+    lock: lockFor(process.pid),
+    lockFor
+  }
 }
 
 /** The JSON files peers have left in the shared handoff directory. */
@@ -159,6 +191,7 @@ async function settle(): Promise<void> {
 
 afterEach(async () => {
   for (const service of services.splice(0)) service.dispose()
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
@@ -331,5 +364,91 @@ describe('ThreadTransferService', () => {
       reason: 'This instance is shutting down.'
     })
     expect(adopterEngine.adopt).not.toHaveBeenCalled()
+  })
+
+  it('refuses a second transfer of a thread whose hand-off is already in flight', async () => {
+    const directory = await handoffDirectory()
+    const { lockFor } = await sharedLocks()
+    const live = () => true
+    const ownerEngine = engineStub({})
+    const owner = new ThreadTransferService(ownerEngine.engine, {
+      bus: new InstanceHandoffBus(directory, OWNER_PID),
+      locks: lockFor(OWNER_PID)
+    })
+    const firstEngine = engineStub({ ownerPid: OWNER_PID })
+    const first = new ThreadTransferService(firstEngine.engine, {
+      bus: new InstanceHandoffBus(directory),
+      isRunOwnerAlive: live,
+      locks: lockFor(process.pid)
+    })
+    const secondEngine = engineStub({ ownerPid: OWNER_PID })
+    const second = new ThreadTransferService(secondEngine.engine, {
+      bus: new InstanceHandoffBus(directory, OTHER_PID),
+      isRunOwnerAlive: live,
+      locks: lockFor(OTHER_PID)
+    })
+    services.push(owner, first, second)
+    owner.start()
+    first.start()
+    second.start()
+
+    const results = await Promise.all([
+      first.transferToThisInstance(PROJECT_ID, THREAD_ID),
+      second.transferToThisInstance(PROJECT_ID, THREAD_ID)
+    ])
+
+    // Exactly one adopter wins; the other is refused before it can stop anything
+    // on the owning instance.
+    expect(results.filter((result) => result.ok)).toHaveLength(1)
+    expect(results.filter((result) => !result.ok)).toEqual([
+      { ok: false, reason: 'Another transfer of this thread is already in progress.' }
+    ])
+  })
+
+  it('refuses a request whose transfer lock is not held by the requester', async () => {
+    const { directory, ownerEngine } = await harness()
+    const request: HandoffRequest = {
+      ...requestFrom(OTHER_PID, OWNER_PID, 'unheld-lock-1'),
+      lockToken: 'forged'
+    }
+    await writeRequestFile(directory, request)
+
+    await vi.waitFor(
+      async () => {
+        await expect(readAck(directory, request.requestId)).resolves.toMatchObject({
+          requestId: request.requestId,
+          status: 'refused',
+          reason: 'The transfer lock is not held by the requesting instance.'
+        })
+      },
+      { timeout: 10_000, interval: 25 }
+    )
+    expect(ownerEngine.release).not.toHaveBeenCalled()
+  })
+
+  it('refuses a release while another release of the thread is already in progress', async () => {
+    const { directory, ownerEngine, lockFor } = await harness()
+    // A rival instance is already mid-release for this thread.
+    await expect(
+      lockFor(OTHER_PID).acquire(PROJECT_ID, THREAD_ID, 'release')
+    ).resolves.not.toBeNull()
+
+    const request: HandoffRequest = {
+      ...requestFrom(OTHER_PID, OWNER_PID, 'release-busy-1'),
+      lockToken: 'nobody-holds-this'
+    }
+    await writeRequestFile(directory, request)
+
+    await vi.waitFor(
+      async () => {
+        await expect(readAck(directory, request.requestId)).resolves.toMatchObject({
+          requestId: request.requestId,
+          status: 'refused',
+          reason: 'Another transfer of this thread is already in progress.'
+        })
+      },
+      { timeout: 10_000, interval: 25 }
+    )
+    expect(ownerEngine.release).not.toHaveBeenCalled()
   })
 })

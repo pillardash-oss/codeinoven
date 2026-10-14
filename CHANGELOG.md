@@ -206,6 +206,20 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **Only one transfer of a thread can be in flight.** Two windows could ask an
+  owning instance to hand a run over at the same moment, and both requests passed
+  the owner's "is this still my turn" check before either stopped anything: both
+  were accepted and both asked their window to adopt, which put two harness
+  writers on one session and interleaved their output. Moving a run between
+  instances now takes a per-thread mutex, a lease row in the shared config-root
+  database. The receiving side holds the `adopt` claim for the whole hand-off and
+  hands its token to the owner; the owner holds the `release` claim while it stops
+  and settles, and refuses to act for any request whose claim it does not actually
+  hold. A second claimant is refused before a run is stopped, a claim outlives its
+  holder only briefly (its process dying or its lease running out frees the
+  thread), and a legacy request without a token is still served under the release
+  claim alone.
+
 - An update can no longer hang on ghost active threads. The install gate read the
   chat engine's `working` status, which is recorded when a turn is dispatched and
   never revised unless the harness reports the turn's end, so a turn the harness
