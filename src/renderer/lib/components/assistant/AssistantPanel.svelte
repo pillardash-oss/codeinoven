@@ -481,35 +481,35 @@
     return scopeState.allScopeThreads.find((thread) => thread.id === run.runThreadId) ?? null
   }
 
-  /** Run problems: rate limits, failures, and interrupted runs. Each entry is a
-   *  thread   usually one run, since that is where the execution status lives. */
+  /** Run problems: rate limits, waiting on the user, failures, and interrupted
+   *  runs. Tasks and their run threads are both checked, since execution status
+   *  lives on the run thread. */
   const runIssues = $derived.by(() => {
     const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
-    for (const entry of routineTasks) {
-      const retryAt = agentRuns.retryAt(entry.projectId, entry.id)
+    const seen = new Set<string>()
+    const pushIssue = (thread: Thread, kind: string, detail: string): void => {
+      const id = `${thread.id}:${kind}`
+      if (seen.has(id)) return
+      seen.add(id)
+      issues.push({ id, task: thread, kind, detail })
+    }
+    const collectFrom = (thread: Thread): void => {
+      const retryAt = agentRuns.retryAt(thread.projectId, thread.id)
       if (retryAt !== null) {
-        issues.push({
-          id: `${entry.id}:limit`,
-          task: entry,
-          kind: 'Rate limited',
-          detail: `Retrying ${describeRelativeTime(retryAt, Date.now())}`
-        })
+        pushIssue(thread, 'Rate limited', `Retrying ${describeRelativeTime(retryAt, Date.now())}`)
       }
-      if (entry.status === 'failed') {
-        issues.push({
-          id: `${entry.id}:failed`,
-          task: entry,
-          kind: 'Failed',
-          detail: 'The last run failed'
-        })
-      } else if (entry.status === 'interrupted') {
-        issues.push({
-          id: `${entry.id}:interrupted`,
-          task: entry,
-          kind: 'Interrupted',
-          detail: 'The last run was interrupted'
-        })
+      if (thread.status === 'awaiting_approval') {
+        pushIssue(thread, 'Needs attention', 'Waiting on you')
+      } else if (thread.status === 'failed') {
+        pushIssue(thread, 'Failed', 'The last run failed')
+      } else if (thread.status === 'interrupted') {
+        pushIssue(thread, 'Interrupted', 'The last run was interrupted')
       }
+    }
+    for (const entry of routineTasks) collectFrom(entry)
+    for (const run of backgroundRuns) {
+      const thread = runThreadFor(run)
+      if (thread) collectFrom(thread)
     }
     return issues
   })
@@ -1216,7 +1216,7 @@
         <section aria-label="Run issues">
           <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run issues</h2>
           {#if runIssues.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">No rate limits, failures, or interruptions.</p>
+            <p class="text-[0.6875rem] text-dimmed">No waiting runs, rate limits, failures, or interruptions.</p>
           {:else}
             <div class="flex flex-col gap-1.5">
               {#each runIssues as issue (issue.id)}

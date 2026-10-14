@@ -19,13 +19,15 @@
     runCount: number
     /** True while any task in this routine is running. */
     working: boolean
+    /** At least one task or run waits on the user or has failed. */
+    attention?: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
     /** Next intended fire for the routine, or null when unscheduled. */
     nextRunAt: number | null
   }
 
-  let { routine, runCount, working, missed, nextRunAt }: Props = $props()
+  let { routine, runCount, working, missed, nextRunAt, attention = false }: Props = $props()
 
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
@@ -52,24 +54,28 @@
         ? gapLabel
         : !scheduled
           ? 'On demand'
-          : missed
-            ? 'Missed run'
-            : working
-              ? 'Working'
-              : nextRunAt
-                ? 'Scheduled'
-                : 'Ready'
+          : attention
+            ? 'Needs attention'
+            : missed
+              ? 'Missed run'
+              : working
+                ? 'Working'
+                : nextRunAt
+                  ? 'Scheduled'
+                  : 'Ready'
   )
   const statusColor = $derived(
     routine.paused
       ? 'var(--color-warning)'
       : incomplete
         ? 'var(--color-warning)'
-        : missed
-          ? 'var(--color-missed)'
-          : working
-            ? 'var(--color-thread-working)'
-            : 'var(--color-dimmed)'
+        : attention
+          ? 'var(--color-warning)'
+          : missed
+            ? 'var(--color-missed)'
+            : working
+              ? 'var(--color-thread-working)'
+              : 'var(--color-dimmed)'
   )
 </script>
 
@@ -81,7 +87,7 @@
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Status</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      {#if incomplete || missed}
+      {#if incomplete || missed || attention}
         <AlertTriangle size={12} style="color: {statusColor}" />
       {:else}
         <span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {statusColor}"></span>

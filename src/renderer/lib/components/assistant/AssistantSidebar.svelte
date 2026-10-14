@@ -187,6 +187,27 @@
   })
 
   /**
+   * Routines with a thread parked on the user (awaiting approval) or failed,
+   * across tasks and runs. The rail already counts these as attention, but the
+   * routine row only wore unread/missed, so a waiting run was invisible until
+   * its row was opened.
+   */
+  const attentionRoutineIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    const isAttention = (thread: Thread): boolean =>
+      thread.status === 'awaiting_approval' || thread.status === 'failed'
+    for (const task of tasks) {
+      if (task.routineId && isAttention(task)) ids.add(task.routineId)
+    }
+    for (const runs of runsByRoutine.values()) {
+      for (const run of runs) {
+        if (run.routineId && isAttention(run)) ids.add(run.routineId)
+      }
+    }
+    return ids
+  })
+
+  /**
    * Pinned routines first, then the user's manual arrangement, then creation
    * (newest first). `sortRoutines` is the same order the main process lists
    * routines in, so dragging a row and seeing it stay put agree on one rule.
@@ -515,6 +536,7 @@
           expanded={isExpanded}
           workingCount={routineWorkingCount(routine.id)}
           unread={unreadRoutineIds.has(routine.id)}
+          attention={attentionRoutineIds.has(routine.id)}
           missed={missedRoutineIds.has(routine.id)}
           runCount={routineRunList.length}
           iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}

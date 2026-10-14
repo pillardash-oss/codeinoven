@@ -36,6 +36,8 @@
     workingCount: number
     /** At least one task or run in the routine has unread activity. */
     unread: boolean
+    /** At least one task or run waits on the user or has failed. */
+    attention: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
     /** How many times this routine has run: one row per execution. The routine's
@@ -70,6 +72,7 @@
     expanded,
     workingCount,
     unread,
+    attention,
     missed,
     runCount,
     iconUrl = null,
@@ -328,7 +331,9 @@
           <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
-        {#if unread}
+        {#if attention}
+          <StatusBadge tone="attention" title="A task or run needs attention" size="sm" />
+        {:else if unread}
           <StatusBadge stage="unread" title="Unread task or run" size="sm" />
         {/if}
       </span>
@@ -527,7 +532,7 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
     >
-      <AssistantRoutineHoverPopover {routine} {runCount} {working} {missed} {nextRunAt} />
+      <AssistantRoutineHoverPopover {routine} {runCount} {working} {missed} {nextRunAt} {attention} />
     </div>
   </Portal>
 {/if}
