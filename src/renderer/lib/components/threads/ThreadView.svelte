@@ -176,6 +176,7 @@
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -2457,6 +2458,10 @@
   function saveResponseReferenceComment(id: string, comment: string): void {
     responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
     commentEditorReferenceId = null
+    // Saving closes the editor that held the caret, so the comment is now only
+    // attached to the chat component. Hand focus back to the composer: the very
+    // next primary-modifier Enter sends the comment as the message it annotates.
+    focusVisibleComposer()
   }
 
   function persistResponseReferenceCommentDraft(id: string, comment: string): void {
