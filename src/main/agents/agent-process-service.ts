@@ -285,20 +285,14 @@ export class AgentProcessService implements AgentProcessObserver {
    */
   async listAll(): Promise<TaskManagerProcess[]> {
     await this.scan()
-    const snapshotByPid = new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
+    const snapshotByPid = this.snapshotTable()
     // One row reports the resources of that one process. A harness root is not
     // given its descendants' totals: every descendant it spawns is listed as its
     // own row, so folding a tree into the root would show the same bytes twice
     // and read as the root process using them (a 2.3 GB `svelte-check` child
     // made its `pi` parent look like it used 2.5 GB). Totals live on the owner
     // and app nodes, which sum the rows actually listed.
-    const resourcesFor = (pid: number) => {
-      const entry = snapshotByPid.get(pid)
-      return {
-        cpuPercent: finiteOrNull(entry?.cpuPercent),
-        memoryBytes: finiteOrNull(entry?.memoryBytes)
-      }
-    }
+    const resourcesFor = (pid: number) => this.ownResources(pid, snapshotByPid)
     const pids = new Set<number>()
     for (const processes of this.tracked.values()) {
       for (const process of processes.values()) pids.add(process.pid)
@@ -371,6 +365,43 @@ export class AgentProcessService implements AgentProcessObserver {
       })
     }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
+  }
+
+  /**
+   * Own-process CPU and memory for arbitrary pids, read after a snapshot scan.
+   *
+   * A registered service is the app's own child (a thread's stdio MCP server,
+   * the model gateway), so no harness root reaches it and it is never a row in
+   * `listAll()`. The task manager still needs those numbers to make an owner
+   * node's total the total of everything under it. A pid the snapshot does not
+   * know reports null rather than zero, so a stale pid never reads as idle.
+   */
+  async processResources(
+    pids: readonly number[]
+  ): Promise<Map<number, { cpuPercent: number | null; memoryBytes: number | null }>> {
+    const resources = new Map<number, { cpuPercent: number | null; memoryBytes: number | null }>()
+    if (pids.length === 0) return resources
+    await this.scan()
+    const snapshotByPid = this.snapshotTable()
+    for (const pid of pids) resources.set(pid, this.ownResources(pid, snapshotByPid))
+    return resources
+  }
+
+  /** Snapshot of the last scan, indexed by pid. */
+  private snapshotTable(): Map<number, ProcessSnapshotEntry> {
+    return new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
+  }
+
+  /** Own-process resources for one pid, out of a snapshot table. */
+  private ownResources(
+    pid: number,
+    snapshotByPid: ReadonlyMap<number, ProcessSnapshotEntry>
+  ): { cpuPercent: number | null; memoryBytes: number | null } {
+    const entry = snapshotByPid.get(pid)
+    return {
+      cpuPercent: finiteOrNull(entry?.cpuPercent),
+      memoryBytes: finiteOrNull(entry?.memoryBytes)
+    }
   }
 
   /**

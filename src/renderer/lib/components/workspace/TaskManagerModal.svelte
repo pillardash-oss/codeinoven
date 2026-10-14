@@ -233,19 +233,30 @@
   }
 
   /**
-   * Aggregate resource use for a set of rows. Every row reports one process and
-   * every descendant a harness spawns is listed as its own row, so the total is
-   * the plain sum of the rows being displayed.
+   * Aggregate resource use for a set of rows. Every process row reports one
+   * process and every descendant a harness spawns is listed as its own row, so
+   * processes are a plain sum. A service backed by its own pid is usually the
+   * app's child with no process row of its own, so it is added too, skipping
+   * any pid already counted as a row.
    */
-  function aggregateResources(rows: readonly TaskManagerProcess[]): {
+  function aggregateResources(
+    processes: readonly TaskManagerProcess[],
+    services: readonly TaskManagerService[] = []
+  ): {
     memoryBytes: number
     cpuPercent: number
   } {
     let memoryBytes = 0
     let cpuPercent = 0
-    for (const row of rows) {
+    const processPids = processes.map((row) => row.pid)
+    for (const row of processes) {
       memoryBytes += row.memoryBytes ?? 0
       cpuPercent += row.cpuPercent ?? 0
+    }
+    for (const service of services) {
+      if (service.pid !== null && processPids.includes(service.pid)) continue
+      memoryBytes += service.memoryBytes ?? 0
+      cpuPercent += service.cpuPercent ?? 0
     }
     return { memoryBytes, cpuPercent }
   }
@@ -322,7 +333,7 @@
     const list = [...groups.values()]
     for (const group of list) {
       group.pids = group.processes.map((process) => process.pid)
-      const totals = aggregateResources(group.processes)
+      const totals = aggregateResources(group.processes, group.services)
       group.memoryBytes = totals.memoryBytes
       group.cpuPercent = totals.cpuPercent
     }
@@ -341,7 +352,7 @@
 
   const appOwnedPids = $derived(appScopedProcesses.map((process) => process.pid))
 
-  const appOwnedTotals = $derived(aggregateResources(appScopedProcesses))
+  const appOwnedTotals = $derived(aggregateResources(appScopedProcesses, appOwnedServices))
 
   function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
     if (sortMode === 'name') {
@@ -400,8 +411,8 @@
     else selected.add(process.pid)
   }
 
-  /** Aggregate use across every managed process, counting a harness tree once. */
-  const processTotals = $derived(aggregateResources(processes))
+  /** Aggregate use across every managed runtime, counting each process once. */
+  const processTotals = $derived(aggregateResources(processes, services))
   const totalRamBytes = $derived(processTotals.memoryBytes)
   const totalCpuPercent = $derived(processTotals.cpuPercent)
 
@@ -887,6 +898,20 @@
                 class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
               >
                 {#if service.pid !== null}
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title="CPU used by the process behind this service"
+                  >
+                    <Cpu size={11} />
+                    {formatCpu(service.cpuPercent)}
+                  </span>
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title="Memory used by the process behind this service"
+                  >
+                    <MemoryStick size={11} />
+                    {formatMemory(service.memoryBytes)}
+                  </span>
                   <span>PID {service.pid}</span>
                 {/if}
                 <span>{formatDuration(service.startedAt)}</span>
@@ -1178,16 +1203,16 @@
           </p>
           <span
             class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-            title="Total memory used by listed processes"
-            aria-label="Total memory used by listed processes"
+            title="Total memory used by the listed processes and services"
+            aria-label="Total memory used by the listed processes and services"
           >
             <MemoryStick size={13} aria-hidden="true" />
             {formatMemory(totalRamBytes)}
           </span>
           <span
             class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-            title="Total CPU usage of listed processes"
-            aria-label="Total CPU usage of listed processes"
+            title="Total CPU usage of the listed processes and services"
+            aria-label="Total CPU usage of the listed processes and services"
           >
             <Cpu size={13} aria-hidden="true" />
             {formatCpu(totalCpuPercent)}

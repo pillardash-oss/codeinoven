@@ -6675,9 +6675,24 @@ export class ChatEngine {
       ...(service.projectId ? { projectName: projectNames.get(service.projectId) ?? null } : {}),
       ...(service.threadId ? { threadTitle: threadTitles.get(service.threadId) ?? null } : {})
     }))
+    // A service backed by its own process is invisible to the process list: it
+    // is the app's child, so no harness tree reaches it. Attaching its OS
+    // metrics here is what lets an owner node total everything under it, and
+    // what makes the service readable as more than a name and a pid.
+    const servicePids = resolvedServices.flatMap((service) =>
+      service.pid === null ? [] : [service.pid]
+    )
+    const serviceResources = await this.agentProcesses.processResources(servicePids)
+    const servicesWithResources = resolvedServices.map((service) => ({
+      ...service,
+      cpuPercent:
+        service.pid === null ? null : (serviceResources.get(service.pid)?.cpuPercent ?? null),
+      memoryBytes:
+        service.pid === null ? null : (serviceResources.get(service.pid)?.memoryBytes ?? null)
+    }))
     return {
       processes: resolvedProcesses,
-      services: resolvedServices,
+      services: servicesWithResources,
       power: {
         source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
         thermalState:

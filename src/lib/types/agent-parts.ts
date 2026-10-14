@@ -100,6 +100,14 @@ export interface TaskManagerService {
   startedAt: number
   /** True when the service can be ended from the task manager. */
   stoppable: boolean
+  /**
+   * Best-effort CPU use the OS reports for the process backing this service.
+   * `null` for a service with no process of its own (an in-process loopback
+   * server) and for a pid the process snapshot does not know.
+   */
+  cpuPercent: number | null
+  /** Resident/working-set memory of the process backing this service. */
+  memoryBytes: number | null
   /** Display name of the owning project, resolved at IPC time. */
   projectName?: string | null
   /** Display title of the owning thread, resolved at IPC time. */
