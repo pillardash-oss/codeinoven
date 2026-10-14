@@ -1627,6 +1627,27 @@
     }
   }
 
+  /**
+   * A web address an extension asked to open in a window, or null.
+   *
+   * `chrome.windows.create` with an `http(s)` URL opens a window on the web, and
+   * the app has no second window to put one in: a browser window here is the
+   * app's own, so the page belongs in a new tab of the browser that asked, which
+   * is what the app opens it as. Only an absolute `http(s)` address with no
+   * credentials is a candidate; the app validates it again before any tab loads.
+   */
+  const webWindowUrl = (url) => {
+    if (typeof url !== 'string' || url.length === 0) return null
+    try {
+      const candidate = new URL(url)
+      if (candidate.protocol !== 'http:' && candidate.protocol !== 'https:') return null
+      if (candidate.username !== '' || candidate.password !== '') return null
+      return candidate.toString()
+    } catch {
+      return null
+    }
+  }
+
   const routePopupWindowRequest = (kind, url) => {
     const tabId = tabActivity.activeTabId
     if (typeof tabId !== 'number' || !Number.isFinite(tabId) || tabId < 0) return false
@@ -1715,23 +1736,49 @@
         const args = Array.prototype.slice.call(arguments)
         const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
         const requested = Array.isArray(data.url) ? data.url[0] : data.url
-        const url = ownExtensionPageUrl(requested)
-        if (!url) return originalCreate.apply(this, args)
-        const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
-        return routeRequestWhenTabKnown('open-window', url).then(
-          (routed) => {
-            if (!routed) return originalCreate.apply(this, args)
-            hostedPopout.url = url
-            hostedPopout.focused = true
-            return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
-          },
-          (error) => {
-            // This file must never throw, so a wait that failed is a window the
-            // runtime is asked for instead of a promise the caller cannot settle.
-            state.errors.push('windows-create-route: ' + String(error))
-            return originalCreate.apply(this, args)
-          }
-        )
+        const ownUrl = ownExtensionPageUrl(requested)
+        // A popup window on the extension's own page is the popout this shim has
+        // always hosted in the rail. Any other window   a normal window, or a
+        // window on the web   has no second window to open in, because the
+        // browser window here is the app's own, so it becomes a tab of the
+        // browser that asked.
+        if (ownUrl && data.type === 'popup') {
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          return routeRequestWhenTabKnown('open-window', ownUrl).then(
+            (routed) => {
+              if (!routed) return originalCreate.apply(this, args)
+              hostedPopout.url = ownUrl
+              hostedPopout.focused = true
+              return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+            },
+            (error) => {
+              // This file must never throw, so a wait that failed is a window the
+              // runtime is asked for instead of a promise the caller cannot settle.
+              state.errors.push('windows-create-route: ' + String(error))
+              return originalCreate.apply(this, args)
+            }
+          )
+        }
+        const tabUrl = ownUrl || webWindowUrl(requested)
+        if (tabUrl) {
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          return routeRequestWhenTabKnown('open-tab', tabUrl).then(
+            (routed) => {
+              if (!routed) return originalCreate.apply(this, args)
+              // The answer is the browser window, without tabs, which is what
+              // Chromium returns for a `windows.create` that did not ask to be
+              // populated; the new tab announces itself as `onCreated`.
+              return answerWith(callback, hostedWindow(0, true))
+            },
+            (error) => {
+              state.errors.push('windows-create-tab-route: ' + String(error))
+              return originalCreate.apply(this, args)
+            }
+          )
+        }
+        return originalCreate.apply(this, args)
       }
       wrapped.__cioHostedPopoutWrapped = true
       install('create', wrapped)

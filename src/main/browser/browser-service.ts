@@ -905,7 +905,7 @@ export class BrowserService {
       },
       closeSidePanel: (extensionId, extensionTabId) =>
         this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
-      openPopup: (request) => this.openExtensionPopupFromWorker(request)
+      openPopup: (request) => this.openExtensionWindowFromWorker(request)
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -3821,12 +3821,32 @@ export class BrowserService {
     }
   }
 
-  /** Resolve a worker popup request and route its extension page to the rail. */
-  private openExtensionPopupFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
+  /** Resolve a worker window request and route it to the surface it belongs on. */
+  private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     const owner = this.tabForContents(request.extensionTabId)
     if (!owner) return
     const tab = owner.tab
     if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+
+    if (request.kind === 'open-tab') {
+      // The extension asked for a window that is not its own popout, and this app
+      // has one browser window: the page becomes a tab beside the one the
+      // extension is acting on. The URL is held to the same rule a link click is,
+      // so a web page is admitted and nothing else is.
+      try {
+        const url = this.validateTabNavigationUrl(request.projectId, tab.boxId, request.url)
+        this.openNewTabFor(
+          { tabId: owner.id, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+          url
+        )
+      } catch (error: unknown) {
+        Logger.dev('An extension window request used an invalid URL:', {
+          extensionId: request.extensionId,
+          error
+        })
+      }
+      return
+    }
 
     if (request.kind === 'focus-browser') {
       if (!this.window.isDestroyed()) {
