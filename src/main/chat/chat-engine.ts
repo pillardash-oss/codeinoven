@@ -210,6 +210,7 @@ import { CapabilityDiscoveryService } from '../agents/capability-discovery-servi
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
+import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
@@ -1523,6 +1524,8 @@ export class ChatEngine {
 
   /** Proves an MCP server connects, on demand from the Utilities page and editor. */
   private mcpConnectionTest: McpConnectionTestService
+  /** OAuth authorization for remote MCP utilities, shared with the Utilities page. */
+  private readonly mcpOAuthService: McpOAuthService
 
   private baseUrlProviders: BaseUrlProviderService
 
@@ -1699,10 +1702,23 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry, storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
+    this.mcpOAuthService = new McpOAuthService({
+      registry: this.utilityRegistry,
+      vault: this.secretVault,
+      // Any window showing the Utilities page follows the same flow, so a second
+      // one never reports a grant the first one already moved past.
+      broadcast: (payload) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (window.isDestroyed()) continue
+          sendToRenderer(window.webContents, 'utilities:mcpOAuthEvent', payload)
+        }
+      }
+    })
     this.mcpConnectionTest = new McpConnectionTestService({
       registry: this.utilityRegistry,
       resolveSecret: (secretRef) => this.secretVault.resolve(secretRef),
-      readNativeMcp: (source) => this.capabilityDiscovery.readMcp(source)
+      readNativeMcp: (source) => this.capabilityDiscovery.readMcp(source),
+      oauth: this.mcpOAuthService
     })
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
@@ -1726,7 +1742,12 @@ export class ChatEngine {
         this.broadcast(event)
       }
     )
-    this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
+    this.utilityOrchestration = new UtilityOrchestrationService(
+      storage,
+      database,
+      undefined,
+      this.mcpOAuthService
+    )
     this.utilityOrchestration.setArtifactExecutor(async (_operation, input, context) => {
       const thread = await this.threadManager.getThread(context.projectId, context.threadId)
       if (!thread) throw new Error('Artifact thread no longer exists')
@@ -2142,6 +2163,14 @@ export class ChatEngine {
    */
   async applyUtilityRegistryChange(utilityId: string): Promise<void> {
     await this.utilityOrchestration.applyRegistryChange(utilityId)
+  }
+
+  /**
+   * The one MCP OAuth service, so the Utilities page authorizes exactly the
+   * grant a turn's gateway uses.
+   */
+  get mcpOAuth(): McpOAuthService {
+    return this.mcpOAuthService
   }
 
   /**

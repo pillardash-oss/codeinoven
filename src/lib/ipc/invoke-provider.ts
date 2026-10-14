@@ -26,6 +26,8 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   McpConnectionTestResult,
+  McpOAuthAuthorizeRequest,
+  McpOAuthStatus,
   McpProbeTarget,
   NativeMcpContent,
   NativeSkillContent,
@@ -256,6 +258,18 @@ export const invokeProviderContract = {
   >,
   'utilities:resolve': {} as Contract<[context: UtilityResolutionContext], ResolvedUtility[]>,
   'utilities:testMcp': {} as Contract<[target: McpProbeTarget], McpConnectionTestResult>,
+  /**
+   * OAuth 2.1 authorization for a remote MCP server that refuses anonymous and
+   * API-key access: where it stands, the interactive browser flow, its cancel,
+   * and forgetting the grant.
+   */
+  'utilities:mcpOAuthStatus': {} as Contract<[utilityId: string], McpOAuthStatus>,
+  'utilities:authorizeMcpOAuth': {} as Contract<
+    [utilityId: string, request?: McpOAuthAuthorizeRequest],
+    McpOAuthStatus
+  >,
+  'utilities:cancelMcpOAuth': {} as Contract<[utilityId: string], McpOAuthStatus>,
+  'utilities:disconnectMcpOAuth': {} as Contract<[utilityId: string], McpOAuthStatus>,
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   /**

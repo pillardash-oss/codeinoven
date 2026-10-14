@@ -976,7 +976,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // A capability the user switches off must stop being callable in the turns
       // that are already running, without the user restarting anything.
       (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve(),
-      utilityFootprint
+      utilityFootprint,
+      // The same OAuth service the gateway resolves tokens from, so authorizing
+      // a server in Utilities is what a turn then connects with.
+      state.chatEngine?.mcpOAuth
     )
     state.gatewaySupervisor = registerGatewayIpc(
       storage,

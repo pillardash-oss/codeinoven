@@ -22,6 +22,24 @@ function providerTokenRef(accountId: string): string {
 }
 
 /**
+ * Vault ref holding one MCP utility's OAuth state: the tokens, the PKCE
+ * verifier, the client registration, and the discovered authorization server
+ * metadata. Keyed by utility id, so a server that is authorized once stays
+ * authorized across projects and turns.
+ */
+function mcpOAuthStateRef(utilityId: string): string {
+  return `mcp_oauth_state_${utilityId}`
+}
+
+/**
+ * Vault ref holding the secret of an OAuth client the user registered with an
+ * authorization server by hand, for a server that issues no client dynamically.
+ */
+function mcpOAuthClientRef(utilityId: string): string {
+  return `mcp_oauth_client_${utilityId}`
+}
+
+/**
  * Main-process-only credential vault.
  *
  * Ciphertext is stored under CodeInOven's config root. Callers persist only
@@ -97,6 +115,52 @@ export class SecretVault {
   /** Remove the stored provider account token from the vault. */
   async removeProviderToken(accountId: string): Promise<void> {
     await this.remove(providerTokenRef(accountId))
+  }
+
+  /**
+   * Persist one MCP utility's OAuth state, encrypted.
+   *
+   * The state is stored as an opaque string because it belongs to the MCP OAuth
+   * client that produced it; the vault's job is to keep the ciphertext, not to
+   * know the shape. It is keyed deterministically by utility id so a grant can
+   * be replaced, read, or forgotten without a reference being persisted in a
+   * utility definition.
+   */
+  async saveMcpOAuthState(utilityId: string, state: string): Promise<void> {
+    await this.save(state, mcpOAuthStateRef(utilityId))
+  }
+
+  /** One MCP utility's stored OAuth state, or null when it has none or the vault is locked. */
+  async resolveMcpOAuthState(utilityId: string): Promise<string | null> {
+    if (!this.isAvailable()) return null
+    try {
+      return await this.resolve(mcpOAuthStateRef(utilityId))
+    } catch {
+      return null
+    }
+  }
+
+  async removeMcpOAuthState(utilityId: string): Promise<void> {
+    await this.remove(mcpOAuthStateRef(utilityId))
+  }
+
+  /** Store the secret of an OAuth client the user registered by hand. */
+  async saveMcpOAuthClientSecret(utilityId: string, secret: string): Promise<void> {
+    await this.save(secret, mcpOAuthClientRef(utilityId))
+  }
+
+  /** The stored client secret for one MCP utility, or null when none is stored. */
+  async resolveMcpOAuthClientSecret(utilityId: string): Promise<string | null> {
+    if (!this.isAvailable()) return null
+    try {
+      return await this.resolve(mcpOAuthClientRef(utilityId))
+    } catch {
+      return null
+    }
+  }
+
+  async removeMcpOAuthClientSecret(utilityId: string): Promise<void> {
+    await this.remove(mcpOAuthClientRef(utilityId))
   }
 
   async resolve(ref: string): Promise<string> {

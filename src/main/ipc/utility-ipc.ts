@@ -19,6 +19,8 @@ import type { UtilityScopeFootprintService } from '../utilities/utility-scope-fo
 import { CuaBridgeService } from '../utilities/cua-bridge-service'
 import { Logger } from '../system/logger'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
+import type { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
+import { parseMcpOAuthAuthorizeRequest } from '../utilities/mcp-oauth/mcp-oauth-config'
 
 /** Register the strict renderer boundary for utility configuration. */
 export function registerUtilityIpc(
@@ -30,7 +32,13 @@ export function registerUtilityIpc(
   /** Applied to turns that are already running, after a successful write. */
   onRegistryChanged?: (utilityId: string) => Promise<void>,
   /** Keeps a project- or thread-scoped utility installed on disk in step. */
-  footprint?: UtilityScopeFootprintService
+  footprint?: UtilityScopeFootprintService,
+  /**
+   * The one MCP OAuth service, shared with the turn gateway. Absent in a session
+   * with no utility surface, where the OAuth channels report why instead of
+   * pretending an authorization happened.
+   */
+  mcpOAuth?: McpOAuthService
 ): void {
   /**
    * A write has to reach the turns that are already running, or a capability the
@@ -158,6 +166,12 @@ export function registerUtilityIpc(
     const safeId = validateEntityId(id, 'Utility ID', 256)
     const utility = await registry.get(safeId)
     if (!utility) return false
+    // The OAuth grant, its dynamically registered client and any client secret
+    // the user typed live in the vault, not in the definition, so deleting the
+    // utility has to forget them explicitly.
+    await mcpOAuth?.forget(safeId).catch((error: unknown) => {
+      Logger.dev('MCP OAuth state could not be cleared for a deleted utility:', error)
+    })
     for (const credential of utility.credentials) {
       await vault.remove(credential.secretRef)
     }
@@ -219,6 +233,45 @@ export function registerUtilityIpc(
   ipcMain.handle('utilities:resolve', (_, context: UtilityResolutionContext) =>
     registry.resolve(context)
   )
+  ipcMain.handle('utilities:mcpOAuthStatus', async (_, utilityId: unknown) => {
+    const safeId = validateEntityId(utilityId, 'Utility ID', 256)
+    return await requireMcpOAuth(mcpOAuth).status(safeId)
+  })
+  ipcMain.handle(
+    'utilities:authorizeMcpOAuth',
+    async (_, utilityId: unknown, request?: unknown) => {
+      const safeId = validateEntityId(utilityId, 'Utility ID', 256)
+      return await requireMcpOAuth(mcpOAuth).authorize(
+        safeId,
+        parseMcpOAuthAuthorizeRequest(request)
+      )
+    }
+  )
+  ipcMain.handle('utilities:cancelMcpOAuth', async (_, utilityId: unknown) => {
+    const safeId = validateEntityId(utilityId, 'Utility ID', 256)
+    return await requireMcpOAuth(mcpOAuth).cancel(safeId)
+  })
+  ipcMain.handle('utilities:disconnectMcpOAuth', async (_, utilityId: unknown) => {
+    const safeId = validateEntityId(utilityId, 'Utility ID', 256)
+    const updated = await requireMcpOAuth(mcpOAuth).disconnect(safeId)
+    // The OAuth block just left the configuration, so running turns have to see
+    // the same utility the next read will.
+    await afterRegistryChange(safeId)
+    return updated
+  })
+}
+
+/**
+ * The OAuth service this session registered, or a failure that says so.
+ *
+ * A channel that silently resolved would report an unconnected server as if an
+ * authorization had been attempted, which is worse than an honest error.
+ */
+function requireMcpOAuth(mcpOAuth: McpOAuthService | undefined): McpOAuthService {
+  if (!mcpOAuth) {
+    throw new Error('MCP OAuth authorization is unavailable in this session')
+  }
+  return mcpOAuth
 }
 
 function validateBundleInstallRequest(value: unknown): UtilityBundleInstallRequest {

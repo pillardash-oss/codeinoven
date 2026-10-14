@@ -43,6 +43,7 @@ import {
   ARTIFACT_CAPABILITY_SUMMARY
 } from '../../lib/artifact-skill'
 import type { StorageEngine } from '../storage/storage-engine'
+import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
@@ -871,7 +872,8 @@ function parseConfig(kind: UtilityKind, value: unknown): UtilityConfigMap[Utilit
           : { environment: stringRecord(value['environment'], 'MCP environment') }),
         ...(value['headers'] === undefined
           ? {}
-          : { headers: stringRecord(value['headers'], 'MCP headers') })
+          : { headers: stringRecord(value['headers'], 'MCP headers') }),
+        ...(value['oauth'] === undefined ? {} : { oauth: parseMcpOAuthConfig(value['oauth']) })
       }
     }
     case 'skill':

@@ -159,8 +159,10 @@ import type { UtilitySuggestionDecision } from '../../lib/utility-suggestion'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 import {
   connectMcpServer,
-  credentialEnvironment as resolveCredentialEnvironment
+  credentialEnvironment as resolveCredentialEnvironment,
+  mcpOAuthChallengeHeader
 } from './mcp-connection'
+import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { notifyNativeMcpFailure } from './native-mcp-notice'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
@@ -630,7 +632,13 @@ export class UtilityOrchestrationService {
   constructor(
     private readonly storage: StorageEngine,
     private readonly database?: import('../database/database').Database,
-    private readonly cuaBridge = new CuaBridgeService(storage)
+    private readonly cuaBridge = new CuaBridgeService(storage),
+    /**
+     * The one OAuth authorization service, shared with the Utilities page, so a
+     * token a turn uses is a token the user authorized there. Absent in a
+     * session that has no utility surface of its own.
+     */
+    private readonly mcpOAuth: McpOAuthService | null = null
   ) {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
@@ -3019,11 +3027,58 @@ export class UtilityOrchestrationService {
       config: utility.config,
       environment: await this.credentialEnvironment(utility),
       credentials: utility.credentials,
+      // Resolved here, where the vault lives: an authorized server is connected
+      // with the bearer its grant issued, and an expired one is renewed from its
+      // refresh token before the request leaves.
+      authorization: (await this.mcpOAuth?.accessToken(utility)) ?? null,
       owner: { name: utility.name, credentials: utility.credentials },
       // Attribute the running server to the turn that started it, so the task
       // manager can say which thread an MCP belongs to.
       context: { projectId: state.request.projectId, threadId: state.request.threadId }
+    }).catch(async (error: unknown) => {
+      await this.noteMcpOAuthChallenge(utility, error)
+      throw error
     })
+  }
+
+  /**
+   * Remember that a server refused for lack of authorization, so the Utilities
+   * page offers the browser flow instead of the user reading a bare 401 in a
+   * turn's trace.
+   */
+  private async noteMcpOAuthChallenge(
+    utility: UtilityDefinitionFor<'mcp'>,
+    error: unknown
+  ): Promise<void> {
+    const challenge = mcpOAuthChallengeHeader(error)
+    if (!challenge) return
+    await this.mcpOAuth?.noteChallenge(utility.id, challenge).catch((cause: unknown) => {
+      Logger.dev('MCP OAuth challenge could not be recorded:', cause)
+    })
+  }
+
+  /**
+   * A utility as a harness-owned MCP host should receive it.
+   *
+   * A harness runs the server itself, outside this process, so an authorized
+   * remote server is handed the bearer as a header: the published configuration
+   * is the harness's only way to know the grant. A grant that cannot be renewed
+   * silently is left out, and the app gateway   which can report why   keeps
+   * serving that utility instead.
+   */
+  private async withOAuthAuthorization(
+    utility: UtilityDefinitionFor<'mcp'>
+  ): Promise<UtilityDefinitionFor<'mcp'>> {
+    if (!utility.config.oauth?.enabled || utility.config.transport === 'stdio') return utility
+    const token = await this.mcpOAuth?.accessToken(utility)
+    if (!token) return utility
+    return {
+      ...utility,
+      config: {
+        ...utility.config,
+        headers: { ...(utility.config.headers ?? {}), Authorization: `Bearer ${token}` }
+      }
+    }
   }
 
   private async credentialEnvironment(utility: UtilityDefinition): Promise<Record<string, string>> {
@@ -3071,7 +3126,7 @@ export class UtilityOrchestrationService {
     for (const resolved of this.nativeMcpUtilities(state)) {
       if (resolved.utility.kind !== 'mcp') continue
       bindings.push({
-        utility: resolved.utility,
+        utility: await this.withOAuthAuthorization(resolved.utility),
         environment: await this.credentialEnvironment(resolved.utility)
       })
     }

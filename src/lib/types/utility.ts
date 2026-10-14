@@ -30,6 +30,100 @@ export interface UtilityCredentialMetadata {
   environmentVariable?: string
 }
 
+/**
+ * OAuth 2.1 authorization state for a remote MCP server.
+ *
+ * Only non-secret values live here. The access and refresh tokens, the PKCE
+ * verifier, a confidential client's secret, and the discovered authorization
+ * server metadata are ciphertext in the credential vault, so this config can be
+ * exported, diffed, or shown without carrying a grant.
+ */
+export interface McpOAuthConfig {
+  /**
+   * Whether connections to this server carry the stored bearer token. Turning it
+   * off keeps the grant so it can be switched back on without a new sign-in.
+   */
+  enabled: boolean
+  /** Authorization server issuer the grant belongs to. */
+  issuer?: string
+  /** OAuth client the authorization server knows this app by. */
+  clientId?: string
+  /**
+   * Whether the authorization server issued this client a secret that the vault
+   * holds. Named for the OAuth 2.1 client type so no config field ever reads as
+   * a secret value, which the registry refuses to store.
+   */
+  confidentialClient?: boolean
+  /** Scopes the grant covers, as the authorization server reported them. */
+  scope?: string
+  /** RFC 8707 resource indicator the token was issued for. */
+  resource?: string
+  /** Epoch ms the stored access token expires; absent when the server issued no lifetime. */
+  expiresAt?: number
+  /** Who authorized, when the authorization server identifies the account. */
+  accountLabel?: string
+  /** Epoch ms of the last completed authorization. */
+  authorizedAt?: number
+}
+
+/** Where a remote MCP server's OAuth grant currently stands. */
+export type McpOAuthConnectionState =
+  | 'not_connected'
+  | 'connected'
+  /** A grant is stored whose access token expired and which carries no way to renew it. */
+  | 'expired'
+  /** A browser flow is open right now. */
+  | 'authorizing'
+  /** The last attempt failed; `error` says why. */
+  | 'error'
+
+/**
+ * One MCP utility's OAuth state, as the Utilities page renders it. A status
+ * never carries a token: it names what is granted, never what was issued.
+ */
+export interface McpOAuthStatus {
+  utilityId: string
+  /** Whether connections to this server use the stored grant. */
+  enabled: boolean
+  state: McpOAuthConnectionState
+  /** Whether the server itself asked for OAuth (a challenge reached the app). */
+  required: boolean
+  issuer?: string
+  clientId?: string
+  /** Whether the vault holds a client secret for this client. */
+  confidentialClient: boolean
+  /** Scopes the grant covers. */
+  scope?: string
+  resource?: string
+  expiresAt?: number
+  accountLabel?: string
+  authorizedAt?: number
+  /** Why the last attempt failed, when it did. */
+  error?: string
+  /** Whether this device can hold a grant at all; the vault needs an OS keychain. */
+  secureStorageAvailable: boolean
+}
+
+/** Live progress of one interactive MCP authorization, pushed to the renderer. */
+export type McpOAuthEventPayload =
+  | { utilityId: string; kind: 'progress'; message: string }
+  /** The URL the browser must open to continue; the renderer routes it like any link. */
+  | { utilityId: string; kind: 'authorize'; authUrl: string }
+  | { utilityId: string; kind: 'complete'; status: McpOAuthStatus }
+  | { utilityId: string; kind: 'failed'; error: string }
+
+/** What one interactive authorization was asked to do. */
+export interface McpOAuthAuthorizeRequest {
+  /** A client the user registered with the authorization server, when it issues none dynamically. */
+  clientId?: string
+  /** Transient secret typed into the editor; it is stored in the vault, never in the config. */
+  clientSecret?: string
+  /** Authorization server issuer to trust instead of discovering one. */
+  issuer?: string
+  /** Scopes to request; the authorization server's own scope list is the default. */
+  scope?: string
+}
+
 export interface McpUtilityConfig {
   transport: 'stdio' | 'http' | 'sse'
   command?: string
@@ -43,6 +137,12 @@ export interface McpUtilityConfig {
    * server that reads its secret from a header other than `Authorization`.
    */
   headers?: Record<string, string>
+  /**
+   * OAuth 2.1 authorization for a remote server that refuses anonymous or
+   * API-key access. Present only when the server was authorized or the user
+   * turned authorization on, so an API-key server keeps working untouched.
+   */
+  oauth?: McpOAuthConfig
 }
 
 export interface SkillUtilityConfig {
@@ -295,6 +395,11 @@ export interface McpConnectionTestResult {
   serverVersion?: string
   /** Why the test failed. Present only when `ok` is false. */
   error?: string
+  /**
+   * Set when the server refused the request and asked for OAuth, so the surface
+   * can offer authorization instead of leaving the user with a bare 401.
+   */
+  oauthRequired?: boolean
   /** Credential variables the configuration expects but had no value for. */
   missingCredentials: string[]
 }

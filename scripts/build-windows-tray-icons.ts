@@ -33,7 +33,16 @@ function frameTrayArtwork(svg: string): string {
   return svg.replace('viewBox="0 0 1254 1254"', `viewBox="${x} ${y} ${extent} ${extent}"`)
 }
 
-/** Build native Windows ICOs from the same normal/attention mark as macOS. */
+/**
+ * Build native Windows ICOs from the same normal/attention mark as macOS,
+ * weighted for the notification area.
+ *
+ * The caller passes artwork already stroked at `WINDOWS_TRAY_STROKE_WIDTH`,
+ * which is lighter than the macOS menu bar template. Windows draws the 16px
+ * entry at 100% display scaling, where the macOS weight inks over the artwork's
+ * own sub-pixel walls and closes the gaps between the oven's window, handle, and
+ * code glyph. Do not pass the macOS masters here.
+ */
 export async function buildWindowsTrayIcons(
   normal: string,
   attention: string,

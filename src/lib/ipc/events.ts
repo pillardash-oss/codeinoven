@@ -228,6 +228,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Background pass over the skills CodeInOven installed (progress and result). */
   'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
   /**
+   * Live stages of one MCP OAuth authorization: the URL the browser has to
+   * open, what it is waiting for, and how it ended. Pushed so an editor that
+   * started the flow can follow it without polling, and so any other surface
+   * showing the same utility never reports a stale grant.
+   */
+  'utilities:mcpOAuthEvent': [] as unknown as [payload: import('../types').McpOAuthEventPayload],
+  /**
    * Progress of a manual ranking grade run, pushed after every pass so a queue
    * of conversations graded three at a time never looks like a hang. The run
    * itself answers over `account:gradeRankingQueue`; this stream carries only

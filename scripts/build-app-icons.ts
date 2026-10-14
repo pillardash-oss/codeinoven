@@ -121,6 +121,20 @@ const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
   'color:#000000'
 )
 const TRAY_STROKE_WIDTH = 24
+/**
+ * The Windows notification area gets the same artwork at a lighter weight, and
+ * the two must not be unified.
+ *
+ * Windows draws this mark at 16 device pixels on a 100% display. At that size
+ * the artwork's own walls are a fraction of a pixel wide, so the macOS stroke
+ * lands on top of them and closes the gaps that separate the oven's window,
+ * handle, and code glyph: the mark reads as a smudge. Measured from the 16px
+ * entry, the macOS weight inks 81% of the mark's bounding box and leaves 32
+ * pixels of interior space, against 75% and 42 pixels at the weight below. The
+ * macOS template survives it because the menu bar normally draws the `@2x` file,
+ * where the extra ink resolves as legible thickness instead of clog.
+ */
+const WINDOWS_TRAY_STROKE_WIDTH = 8
 const TRAY_ATTENTION_SCALE = 0.78
 
 /** Thicken a template's outline with a same-colour stroke. */
@@ -134,18 +148,17 @@ function boldenTray(svg: string, strokeWidth: number): string {
 const monoMaster = boldenTray(monoBase, TRAY_STROKE_WIDTH)
 // The attention variant scales the mark down and sets a bold exclamation beside
 // it, so the two shapes stay legible at menu bar size instead of overlapping.
-const attentionMaster = boldenTray(
-  monoBase
-    .replace(
-      '<g id="svg"',
-      `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
-    )
-    .replace(
-      '</svg>',
-      '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
-    ),
-  TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE
-)
+// Held unweighted so each platform can apply its own stroke below.
+const attentionBase = monoBase
+  .replace(
+    '<g id="svg"',
+    `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
+  )
+  .replace(
+    '</svg>',
+    '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
+  )
+const attentionMaster = boldenTray(attentionBase, TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE)
 const trayOutputs: Array<[string, Buffer]> = [
   ['trayTemplate.png', renderPng(monoMaster, 16)],
   ['trayTemplate@2x.png', renderPng(monoMaster, 32)],
@@ -160,5 +173,9 @@ if (!Bun.argv.includes('--windows-tray-only')) {
     `[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`
   )
 }
-await buildWindowsTrayIcons(monoMaster, attentionMaster, join(staticDir, 'windows'))
+await buildWindowsTrayIcons(
+  boldenTray(monoBase, WINDOWS_TRAY_STROKE_WIDTH),
+  boldenTray(attentionBase, WINDOWS_TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE),
+  join(staticDir, 'windows')
+)
 Logger.dev('[build-app-icons] Done.')
