@@ -209,6 +209,29 @@
     return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
   }
 
+  /** Fold the trace so its header keeps the screen position it already had.
+   *  While the body is mounted and the reader is inside it the header is pinned
+   *  to the top of the transcript, so collapsing the body without touching the
+   *  scroller would throw the header off the top and drop the reader wherever
+   *  that scroll offset now lands. Moving the scroller to the header's own
+   *  content offset leaves the header exactly where the eye last saw it and
+   *  slides the work below up to meet it. A reader parked below the trace on the
+   *  answer, or already above the header, keeps their place. */
+  function foldToHeader(): void {
+    const root = scrollRoot
+    const trace = traceRootEl
+    if (!root || !trace) return
+    const rootRect = root.getBoundingClientRect()
+    const headerOffset = trace.getBoundingClientRect().top - rootRect.top + root.scrollTop
+    const body = traceBodyEl
+    if (body) {
+      const bodyBottom = body.getBoundingClientRect().bottom - rootRect.top + root.scrollTop
+      if (root.scrollTop > bodyBottom) return
+    }
+    if (root.scrollTop <= headerOffset) return
+    root.scrollTop = headerOffset
+  }
+
   // The transcript scroller drives this trace now. Reaching the top of the
   // mounted work on a scroll-up loads one older page; following the live tail
   // and keeping the reader's place across content growth stay the transcript's
@@ -222,6 +245,7 @@
       const scrolledUp = top < previousTop
       previousTop = top
       if (!scrolledUp) return
+      if (!isOpen) return
       if (!traceTopReached()) {
         atTraceTop = false
         return
@@ -322,6 +346,7 @@
     // A trace the user opened is left exactly as they left it. A turn still in
     // progress (done === false) never folds.
     if (done && !busy && isOpen && !userOpened) {
+      foldToHeader()
       isOpen = false
       notify()
     }
@@ -329,6 +354,7 @@
 
   function onSummaryClick(event: MouseEvent): void {
     event.preventDefault()
+    if (isOpen) foldToHeader()
     isOpen = !isOpen
     userOpened = isOpen
     userFolded = !isOpen
