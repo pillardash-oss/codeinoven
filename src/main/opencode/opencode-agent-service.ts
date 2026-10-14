@@ -33,9 +33,12 @@ export async function syncOpenCodeLeanAgents(
     const record = version !== null ? await recordedDenyCompliance(version) : null
     if (!forced && record?.compliant !== true) {
       Logger.dev(
-        'opencode lean-agent merge skipped: installed harness is not proven deny-compliant',
+        version === null
+          ? 'opencode lean-agent merge skipped: the installed harness version could not be detected (see the preceding version-detection attempt log)'
+          : 'opencode lean-agent merge skipped: installed harness is not proven deny-compliant',
         {
           opencodeVersion: version ?? 'unknown',
+          versionResolved: version !== null,
           recorded: record?.compliant ?? null,
           gated: true,
           overrideEnv: MERGE_OVERRIDE_ENV

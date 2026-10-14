@@ -3,7 +3,13 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { OPENCODE_COMMAND_CANDIDATES } from '../../lib/opencode-version'
+import {
+  buildProcessEnvironment,
+  commandRequiresShell,
+  resolveExecutablePath
+} from '../drivers/cli-environment'
+import { Logger } from '../system/logger'
 
 /**
  * Dev-only compliance probe for the installed opencode harness.
@@ -95,21 +101,55 @@ export interface DenyProbeResult {
   note: string
 }
 
-/** Installed opencode CLI version, or null when the CLI is unavailable. */
+/**
+ * Installed opencode CLI version, or null when the CLI is unavailable.
+ *
+ * Resolution goes through the app's process-resolution boundary rather than a
+ * bare `execFileSync('opencode')`. A package-managed opencode on Windows is an
+ * `opencode.cmd`/`.bat` shim, and Windows `CreateProcess` never resolves or runs
+ * those without a shell: a bare, shell-less spawn looks in vain for an
+ * `opencode.exe` and fails, which is why detection used to answer `unknown`.
+ * Resolving the executable against the app PATH first and running a resolved
+ * shim through a shell (see `commandRequiresShell`) makes detection answer for
+ * every native install shape. Every candidate is tried; when none answers, the
+ * full attempt list is logged at dev level so `unknown` is diagnosable.
+ */
 export function openCodeVersion(): string | null {
-  try {
-    const raw = execFileSync('opencode', ['--version'], {
-      encoding: 'utf8',
-      env: buildProcessEnvironment(),
-      timeout: 15_000
-    })
-      .trim()
-      .split(/\r?\n/u)[0]
-      .trim()
-    return raw.length > 0 ? raw : null
-  } catch {
-    return null
+  const env = buildProcessEnvironment()
+  const attempts: Array<{ command: string; executable: string | null; reason: string }> = []
+  for (const command of OPENCODE_COMMAND_CANDIDATES) {
+    const executable = resolveExecutablePath(command, env)
+    if (!executable) {
+      attempts.push({ command, executable: null, reason: 'not found on the app PATH' })
+      continue
+    }
+    try {
+      const raw = execFileSync(executable, ['--version'], {
+        encoding: 'utf8',
+        env,
+        timeout: 15_000,
+        shell: commandRequiresShell(executable),
+        windowsHide: true
+      })
+        .trim()
+        .split(/\r?\n/u)[0]
+        ?.trim()
+      if (raw && raw.length > 0) return raw
+      attempts.push({ command, executable, reason: 'answered an empty --version line' })
+    } catch (error) {
+      attempts.push({
+        command,
+        executable,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
+  Logger.dev('opencode version detection could not resolve an installed harness', {
+    candidates: [...OPENCODE_COMMAND_CANDIDATES],
+    platform: process.platform,
+    attempts
+  })
+  return null
 }
 
 async function startServe(projectDir: string): Promise<{
