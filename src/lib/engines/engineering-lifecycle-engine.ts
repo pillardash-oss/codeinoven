@@ -122,6 +122,14 @@ export interface EngineeringLifecycleAdvanceInput {
   terminal?: boolean
 }
 
+/** The switches a sibling thread inherits, plus the source's highlight marker. */
+export interface EngineeringLifecycleInheritInput {
+  stages: EngineeringLifecycleStage[]
+  autopilot: boolean
+  /** The source's permanent `started_at`; carried only when nothing is selected. */
+  startedAt?: number
+}
+
 interface LifecycleRow {
   project_id: string
   thread_id: string
@@ -262,6 +270,59 @@ export class EngineeringLifecycleEngine {
       selectedStages,
       autopilot,
       completedStages: [],
+      failure: undefined,
+      updatedAt: now
+    }
+  }
+
+  /**
+   * Seed a sibling thread from a source Engineering thread.
+   *
+   * The source's switches (and Auto Pilot) travel as a fresh run: a brand-new
+   * selection with no started marker, so a send on the sibling starts the stage
+   * it is showing. The exception is a source with no switch on   a parked,
+   * completed or cancelled run   whose Toolbox stays filled through its
+   * permanent `started_at`. There the marker travels too, so the sibling mirrors
+   * the source's highlight instead of arriving neutral. A manually turned-off
+   * source has no marker, so the sibling arrives neutral exactly as it does.
+   *
+   * Transient run state (active stage, human gate, resume token, failure) is
+   * never copied: the sibling is a fresh run, not a resumed one.
+   */
+  inherit(
+    destinationProjectId: string,
+    destinationThreadId: string,
+    input: EngineeringLifecycleInheritInput
+  ): EngineeringLifecycleState {
+    const autopilot = input.autopilot === true
+    const selectedStages = autopilot ? [] : normalizeLifecycleStages(input.stages)
+    const selection = representativeLifecycleSelection(selectedStages, autopilot)
+    const carryStartedAt =
+      !autopilot && selectedStages.length === 0 && input.startedAt !== undefined
+    const current = this.ensure(destinationProjectId, destinationThreadId)
+    const now = this.now()
+    this.db.run(
+      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, autopilot=?, completed_stages_json=?, active_stage=NULL, human_gate=NULL, started_at=?, resume_token=NULL, last_consumed_resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
+      selection,
+      JSON.stringify(selectedStages),
+      autopilot ? 1 : 0,
+      '[]',
+      carryStartedAt ? input.startedAt : null,
+      now,
+      destinationProjectId,
+      destinationThreadId
+    )
+    return {
+      ...current,
+      selection,
+      selectedStages,
+      autopilot,
+      completedStages: [],
+      activeStage: undefined,
+      humanGate: undefined,
+      startedAt: carryStartedAt ? input.startedAt : undefined,
+      resumeToken: undefined,
+      lastConsumedResumeToken: undefined,
       failure: undefined,
       updatedAt: now
     }

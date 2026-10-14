@@ -3719,7 +3719,7 @@
             .then((updated) => upsertThreadInList(updated))
             .catch(() => {})
         }
-        if (activeThread) {
+        if (activeThread && activeThread.projectId === project.id) {
           void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
         }
       }
@@ -3798,7 +3798,7 @@
         // durable: fired concurrently with creation, its internal `thread:get`
         // can race ahead of the insert and the "Thread not found" failure is
         // swallowed   leaving the toolbox icon lit while every switch reads off.
-        if (activeThread) {
+        if (activeThread && activeThread.projectId === project.id) {
           void inheritEngineeringLifecycle(project.id, activeThread.id, optimisticId)
         }
         if (activeThread?.settings) {

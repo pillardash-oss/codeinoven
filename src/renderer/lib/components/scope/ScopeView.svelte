@@ -230,10 +230,16 @@
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
           navigateToScopedThreads?.()
-          if (activeThread) {
-            await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+          // Adopt the inherited row: it carries the Engineering marker the
+          // opened view reads to keep its Toolbox filled.
+          let opened = thread
+          if (activeThread && activeThread.projectId === activeProject.id) {
+            opened =
+              (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
+              thread
+            scopeState.updateThread(opened)
           }
-          workspaceState.openThread(thread, activeProject)
+          workspaceState.openThread(opened, activeProject)
         } catch (error) {
           actionError = errorMessage(error, 'The thread could not be opened.')
         }
@@ -255,12 +261,18 @@
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToScopedThreads?.()
-      if (activeThread) {
-        await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+      // Adopt the inherited row: it carries the Engineering marker the opened
+      // view reads to keep its Toolbox filled.
+      let opened = thread
+      if (activeThread && activeThread.projectId === activeProject.id) {
+        opened =
+          (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
+          thread
+        scopeState.updateThread(opened)
       }
-      workspaceState.openThread(thread, activeProject)
+      workspaceState.openThread(opened, activeProject)
       if (activeThread?.settings) {
-        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+        void persistInheritedThreadSettings(opened, inheritedSettings).catch((error) => {
           actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
         })
       }

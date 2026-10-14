@@ -6,7 +6,14 @@ import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
-import type { AgentMessage, AgentPart, CreateThreadInput, Thread, ThreadStatus } from '../types'
+import {
+  isOrchestrationChildThread,
+  type AgentMessage,
+  type AgentPart,
+  type CreateThreadInput,
+  type Thread,
+  type ThreadStatus
+} from '../types'
 
 /**
  * Re-key copied messages and their parts so they can live in a new thread
@@ -151,15 +158,26 @@ export class ThreadForkService {
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
+    // A fork of an Engineering thread is an Engineering thread. An Engineering
+    // thread stays one for its lifetime, even with every switch off (a parked,
+    // completed or cancelled run), so the marker must travel from the durable
+    // row or the lifecycle's permanent started marker. Independent-audit and
+    // orchestration-child threads are never Engineering and seed nothing.
+    const sourceLifecycle =
+      parent.independentAudit === true || isOrchestrationChildThread(parent)
+        ? null
+        : this.lifecycle.get(projectId, threadId)
+    const sourceIsEngineering =
+      parent.engineering === true ||
+      sourceLifecycle?.startedAt !== undefined ||
+      (sourceLifecycle?.selection ?? 'none') !== 'none'
     const forked = await this.host.createThread({
       projectId: destinationProjectId,
       providerId: parent.providerId,
       title,
       titleSource: 'manual',
       settings: parent.settings,
-      // A fork of an Engineering thread is an Engineering thread: it inherits
-      // the parent's lifecycle switches below, so its row keeps the marker.
-      engineering: parent.engineering === true,
+      engineering: sourceIsEngineering,
       // Forks into another project (e.g. a chat continued in a project) never
       // inherit the parent's feature work-directory or scope bucket.
       featureSlug:
@@ -174,19 +192,21 @@ export class ThreadForkService {
     // destination scope inside `createThread`, so a stale parent directory
     // can never override the authoritative root.
     // A fork of an Engineering thread must open with the same switches lit:
-    // carry the parent's stage selection (and Auto Pilot) into the fork so
-    // the toolbox reflects exactly what the user had turned on.
-    {
-      const sourceLifecycle = this.lifecycle.get(projectId, threadId)
-      if (sourceLifecycle && sourceLifecycle.selection !== 'none') {
-        try {
-          this.lifecycle.select(destinationProjectId, forked.id, {
-            stages: sourceLifecycle.selectedStages ?? [],
-            autopilot: sourceLifecycle.autopilot === true
-          })
-        } catch {
-          // Lifecycle inheritance is cosmetic   never fail the fork on it.
-        }
+    // carry the parent's stage selection (and Auto Pilot), and   for a parked
+    // source with every switch off   its permanent started marker, so the
+    // fork's Toolbox mirrors the parent's instead of arriving neutral.
+    if (
+      sourceLifecycle &&
+      (sourceLifecycle.selection !== 'none' || sourceLifecycle.startedAt !== undefined)
+    ) {
+      try {
+        this.lifecycle.inherit(destinationProjectId, forked.id, {
+          stages: sourceLifecycle.selectedStages ?? [],
+          autopilot: sourceLifecycle.autopilot === true,
+          startedAt: sourceLifecycle.startedAt
+        })
+      } catch {
+        // Lifecycle inheritance is cosmetic   never fail the fork on it.
       }
     }
     if (cutoff) {

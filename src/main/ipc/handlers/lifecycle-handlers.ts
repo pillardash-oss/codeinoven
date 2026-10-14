@@ -1,3 +1,5 @@
+import type { EngineeringLifecycleSelectionInput } from '../../../lib/types'
+import { isOrchestrationChildThread } from '../../../lib/types'
 import {
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
@@ -9,6 +11,47 @@ import type { IpcHandlerContext } from './context'
 
 export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): void {
   const { chatEngine, storage, threadManager, engineeringLifecycleEngine, waitForThreadReady } = ctx
+
+  /**
+   * Attach the senior-engineer/auditor defaults the moment a thread first
+   * gains an active Engineering selection. Engineering is expressed purely
+   * through the lifecycle selection, so the role defaults ride the first
+   * selection (previously tied to a creation-time flag).
+   */
+  async function applyEngineeringDefaults(projectId: string, threadId: string): Promise<void> {
+    const thread = await threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) return
+    const defaults = (await storage.getConfig()).agentDefaults
+    const baseSettings = { ...thread.settings }
+    delete baseSettings.loopAuditor
+    await threadManager.updateSettings(projectId, threadId, {
+      ...baseSettings,
+      ...(defaults.seniorEngineer ?? {}),
+      ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
+    })
+  }
+
+  /**
+   * Apply a selection and its attached side effects: the durable Engineering
+   * marker (so the sidebar and Toolbox read Engineering without a lifecycle
+   * round trip) and the senior-engineer/auditor defaults the first selection
+   * attaches.
+   */
+  async function applySelection(
+    projectId: string,
+    threadId: string,
+    selectionInput: EngineeringLifecycleSelectionInput
+  ): Promise<ReturnType<typeof engineeringLifecycleEngine.select>> {
+    const previous = engineeringLifecycleEngine.get(projectId, threadId)
+    const next = engineeringLifecycleEngine.select(projectId, threadId, selectionInput)
+    if (next.autopilot || next.selectedStages.length > 0) {
+      await threadManager.updateThread(projectId, threadId, { engineering: true })
+    }
+    if ((previous?.selection ?? 'none') === 'none' && next.selection !== 'none') {
+      await applyEngineeringDefaults(projectId, threadId)
+    }
+    return next
+  }
 
   ipcMain.handle('engineeringLifecycle:get', async (_, projectId: unknown, threadId: unknown) => {
     const ids = await waitForThreadReady(projectId, threadId)
@@ -29,32 +72,81 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
           )
         }
       }
-      const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
-      const next = engineeringLifecycleEngine.select(ids.projectId, ids.threadId, selectionInput)
-      // The durable Engineering marker rides the thread row, so the sidebar can
-      // draw the Engineering indicator without a lifecycle round trip. Turning
-      // every stage off never clears it: a thread that ran Engineering stays an
-      // Engineering thread for its lifetime.
-      if (next.autopilot || next.selectedStages.length > 0) {
-        await threadManager.updateThread(ids.projectId, ids.threadId, { engineering: true })
+      return applySelection(ids.projectId, ids.threadId, selectionInput)
+    }
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:inherit',
+    async (
+      _,
+      projectId: unknown,
+      sourceThreadId: unknown,
+      destinationThreadId: unknown,
+      selection: unknown
+    ) => {
+      const source = await waitForThreadReady(
+        projectId,
+        sourceThreadId,
+        'Project ID',
+        'Source thread ID'
+      )
+      const destination = await waitForThreadReady(
+        source.projectId,
+        destinationThreadId,
+        'Project ID',
+        'Destination thread ID'
+      )
+      const sourceThread = await threadManager.getThread(source.projectId, source.threadId)
+      if (!sourceThread) return null
+      // The independent audit owns its thread's workflow and is never an
+      // Engineering thread, and an orchestration child (auditor, Assignment
+      // worker) is an internal that must never gain Engineering modes.
+      if (sourceThread.independentAudit === true || isOrchestrationChildThread(sourceThread)) {
+        return null
       }
-      // Engineering is now expressed purely through the lifecycle selection, so
-      // the senior-engineer/auditor defaults attach the moment a thread first
-      // gains an active selection (previously tied to the creation-time flag).
-      if ((previous?.selection ?? 'none') === 'none' && next.selection !== 'none') {
-        const thread = await threadManager.getThread(ids.projectId, ids.threadId)
-        if (thread?.settings) {
-          const defaults = (await storage.getConfig()).agentDefaults
-          const baseSettings = { ...thread.settings }
-          delete baseSettings.loopAuditor
-          await threadManager.updateSettings(ids.projectId, ids.threadId, {
-            ...baseSettings,
-            ...(defaults.seniorEngineer ?? {}),
-            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-          })
-        }
+      // The staged (not-yet-sent) Toolbox intent is what the user actually sees,
+      // so it wins over the persisted row when one was sent. `null` means "no
+      // override", an empty selection means "the user turned every switch off".
+      const hasOverride = selection !== undefined && selection !== null
+      const staged = hasOverride ? validateEngineeringLifecycleSelectionInput(selection) : null
+      const stagedActive = staged !== null && (staged.autopilot || staged.stages.length > 0)
+      const sourceLifecycle = engineeringLifecycleEngine.get(source.projectId, source.threadId)
+      const persistedSelection: EngineeringLifecycleSelectionInput | null =
+        sourceLifecycle && sourceLifecycle.selection !== 'none'
+          ? {
+              stages: sourceLifecycle.selectedStages ?? [],
+              autopilot: sourceLifecycle.autopilot === true
+            }
+          : null
+      const sourceIsEngineering =
+        sourceThread.engineering === true ||
+        sourceLifecycle?.startedAt !== undefined ||
+        persistedSelection !== null ||
+        stagedActive
+      if (!sourceIsEngineering) return null
+      const effective = staged ?? persistedSelection
+      const hasActiveSelection =
+        effective !== null && (effective.autopilot || effective.stages.length > 0)
+      // The switches travel as a fresh run; a parked source (every switch off)
+      // also hands over its permanent started marker so the sibling's Toolbox
+      // stays filled exactly as the source's does.
+      engineeringLifecycleEngine.inherit(destination.projectId, destination.threadId, {
+        stages: effective?.stages ?? [],
+        autopilot: effective?.autopilot === true,
+        startedAt: hasActiveSelection ? undefined : sourceLifecycle?.startedAt
+      })
+      // The durable Engineering marker rides the thread row, so the sidebar
+      // indicator and Toolbox read Engineering without a lifecycle round trip.
+      await threadManager.updateThread(destination.projectId, destination.threadId, {
+        engineering: true
+      })
+      if (hasActiveSelection) {
+        await applyEngineeringDefaults(destination.projectId, destination.threadId)
       }
-      return next
+      // Return the destination as persisted (marker and any attached defaults),
+      // so a caller that opens the thread afterwards never adopts a stale
+      // pre-inheritance snapshot its Toolbox would read as neutral.
+      return threadManager.getThread(destination.projectId, destination.threadId)
     }
   )
   ipcMain.handle(
