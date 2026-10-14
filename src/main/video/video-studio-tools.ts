@@ -81,7 +81,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'export',
-      'Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. Await media seeks in cioRenderFrame.' +
+      'Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. The renderer encodes H.264 for the canvas the composition names with CIOVideo.useCanvas, at the manifest size; a composition without that canvas falls back to capturing the window frame by frame. Await media seeks in cioRenderFrame.' +
         jobNote,
       { directory },
       ['directory']
@@ -133,7 +133,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'remove-background',
-      'Produce opaque base and transparent foreground WebM layers through local GPU matting. Processes a bounded 720p/30fps clip, up to 60 seconds. Downloads the selected model on first use into project scratch; GPU support is checked and failures are reported.' +
+      'Produce opaque base and transparent foreground WebM layers through local GPU matting. Processes a bounded 720p/30fps clip, up to 60 seconds. Needs the optional video pack, a one-time download from Settings > Design and video; the selected model downloads on first use into the app model cache, GPU support is checked, and failures are reported.' +
         jobNote,
       {
         source,

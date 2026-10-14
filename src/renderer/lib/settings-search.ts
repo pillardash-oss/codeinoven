@@ -2,6 +2,7 @@ import {
   BrainCircuit,
   ChartColumn,
   Cloud,
+  Download,
   FolderTree,
   Globe,
   HeartPulse,
@@ -122,12 +123,32 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: Sparkles
   },
   {
+    id: 'design-video-packages',
+    section: 'design',
+    blockId: 'design-video-packages',
+    title: 'Video pack',
+    description: 'The optional download that enables GPU background removal.',
+    keywords: [
+      'video pack',
+      'background removal',
+      'matting',
+      'gpu',
+      'onnxruntime',
+      'mediabunny',
+      'transformers',
+      'install'
+    ],
+    icon: Download
+  },
+  {
     id: 'design',
     section: 'design',
-    title: 'Design',
-    description: 'Who does each kind of design work: copy, images, video, voice-over.',
+    title: 'Design and video',
+    description:
+      'Where design and video work is saved, who does each kind of it, and the optional video pack.',
     keywords: [
       'design',
+      'video',
       'assignments',
       'copywriter',
       'illustrator',
@@ -139,7 +160,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'storyboard',
       'delegate',
       'image generation',
-      'video'
+      'background removal',
+      'video pack'
     ],
     icon: Palette
   },

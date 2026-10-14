@@ -380,6 +380,13 @@ export const IPC_EVENT_CONTRACT = {
    */
   'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
   /**
+   * The optional video pack's install state. The Design and video settings
+   * block mirrors this so a long package install reports live progress.
+   */
+  'video:packages:progress': [] as unknown as [
+    state: import('./video-packages').VideoPackagesProgressEvent
+  ],
+  /**
    * One live stage of a managed-worktree creation/adoption job. The renderer
    * keeps its docked job panel on these so the user sees real progress while
    * git, the environment copy and the setup commands run.

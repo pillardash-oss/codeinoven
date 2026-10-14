@@ -16,6 +16,7 @@ import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
 import type { VideoStudioDocument, VideoJob } from '../video/studio'
+import type { VideoPackagesState } from './video-packages'
 
 export const invokeDesignContract = {
   'video:studio': {} as Contract<
@@ -29,6 +30,15 @@ export const invokeDesignContract = {
   'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
   'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
   'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
+  /**
+   * The optional video inference pack the GPU background-removal operation
+   * needs. It installs at runtime into the app's config folder, so the shipped
+   * installer never carries the heavy matting stack.
+   */
+  'video:packages:state': {} as Contract<[], VideoPackagesState>,
+  'video:packages:install': {} as Contract<[], void>,
+  'video:packages:remove': {} as Contract<[], void>,
+  'video:packages:cancel': {} as Contract<[], boolean>,
   'design:rankings': {} as Contract<[startAt: number, endAt: number], DesignModelRanking[]>,
   'design:export': {} as Contract<
     [projectId: string, directory: string, entry: string | null, format: DesignExportFormat],

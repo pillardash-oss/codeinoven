@@ -86,6 +86,7 @@
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import VideoPackagesSettings from './VideoPackagesSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
@@ -1330,9 +1331,10 @@
     {:else if section === 'design'}
       <div class="p-6 pb-24">
         <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">Design</h1>
+          <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Where design work is saved, and which model does each kind of it.
+            Where design and video work is saved, which model does each kind of it, and the optional
+            video pack.
           </p>
           {#if error}
             <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -1345,6 +1347,9 @@
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
+        </div>
+        <div class="mb-6">
+          <VideoPackagesSettings />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>

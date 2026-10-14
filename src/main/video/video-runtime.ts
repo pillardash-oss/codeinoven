@@ -254,6 +254,17 @@ function installVideoRuntime(): void {
     trackingAt,
     seekMedia,
     mediaReady,
+    /**
+     * Name the canvas the export should encode.
+     *
+     * The export encodes this canvas in the renderer, which keeps full-frame
+     * bitmaps out of the main process. Without it the export has to guess from the
+     * document, and falls back to capturing the window frame by frame when the
+     * guess is not unambiguous, so calling this is what makes an export cheap.
+     */
+    useCanvas(canvas: HTMLCanvasElement): void {
+      ;(window as typeof window & { cioVideoCanvas?: HTMLCanvasElement }).cioVideoCanvas = canvas
+    },
     async bind(draw: (seconds: number) => void | Promise<void>): Promise<void> {
       const initializing = (async () => {
         await ready

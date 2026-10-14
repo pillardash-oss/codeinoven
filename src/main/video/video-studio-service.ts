@@ -1,4 +1,4 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain, app, BrowserWindow } from 'electron'
 import { join, relative, extname } from 'node:path'
 import { mkdir, rm, readFile, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -23,11 +23,13 @@ import {
   videoScratch
 } from './video-paths'
 import { VideoJobs } from './video-jobs'
+import { VideoPackagesService } from './video-packages'
 import { exportVideo } from './video-export'
 import { probeVideo, inspectVideo } from './video-inspection'
 import { videoProcess } from './video-process'
 import { videoRuntimeSource } from './video-runtime'
 import { videoWorkerJob } from './video-worker-job'
+import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { Database } from '../database/database'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import type { SpeechService } from '../speech/speech-service'
@@ -61,8 +63,12 @@ function revision(document: VideoStudioDocument): string {
 
 export class VideoStudioService {
   readonly jobs = new VideoJobs()
+  /** The optional GPU matting stack, installed on demand from Settings. */
+  readonly packages = new VideoPackagesService()
   private readonly writes = new Map<string, Promise<unknown>>()
-  constructor(private readonly options: VideoStudioOptions) {}
+  constructor(private readonly options: VideoStudioOptions) {
+    void this.packages.initialize()
+  }
   private async folder(
     projectId: string,
     directory: unknown
@@ -142,6 +148,7 @@ export class VideoStudioService {
           'CIOVideo.ready',
           'CIOVideo.parameters',
           'CIOVideo.bind(draw)',
+          'CIOVideo.useCanvas(canvas)',
           'CIOVideo.drawCaptions(ctx, seconds, width, height)',
           'CIOVideo.progress(seconds,start,duration)',
           'CIOVideo.interpolate(from,to,progress)',
@@ -192,6 +199,14 @@ export class VideoStudioService {
       return probeVideo(root, videoText(input.source, 'source'), AbortSignal.timeout(30000))
     if (!VIDEO_STUDIO_OPERATIONS.some((name) => name === operation))
       throw new Error('Unsupported video operation')
+    // Fail before a job or a worker is started when the optional pack is absent.
+    if (operation === 'remove-background') {
+      await this.packages.refresh()
+      if (!this.packages.state().installed)
+        throw new Error(
+          'Background removal needs the optional video pack. Install it in Settings > Design and video.'
+        )
+    }
     const folder = operation === 'export' ? await videoFolder(root, input.directory) : null
     const source = folder ? null : await videoFile(root, input.source)
     const config = operation === 'transcribe' ? await this.options.config() : null
@@ -284,16 +299,17 @@ export class VideoStudioService {
           )
           await mkdir(join(root, '.cio/tmp'), { recursive: true })
           await videoFolder(root, '.cio/tmp')
-          const cache = join(root, '.cio/tmp/video-models')
+          // Weights live in the durable app config root, not project scratch:
+          // CIO Cleanup sweeps `.cio/tmp`, which would re-download them.
+          const cache = this.packages.modelsDir
           await mkdir(cache, { recursive: true })
-          await videoFolder(root, '.cio/tmp/video-models')
           const model = input.model ?? 'modnet'
           if (model !== 'modnet' && model !== 'ben2-base')
             throw new Error('model must be modnet or ben2-base')
           return await videoWorkerJob(
             'remove-background',
             root,
-            { source: prepared, output, cache, model },
+            { source: prepared, output, cache, packages: this.packages.packagesDir, model },
             job
           )
         } finally {
@@ -327,6 +343,22 @@ export class VideoStudioService {
     ipcMain.handle('video:export', (_event, projectId, threadId, directory) =>
       this.execute('export', { directory }, { projectId: id(projectId), threadId: id(threadId) })
     )
-    app.once('before-quit', () => this.jobs.dispose())
+    const stopPackProgress = this.packages.onProgress((state) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+        sendToRenderer(window.webContents, 'video:packages:progress', state)
+      }
+    })
+    ipcMain.handle('video:packages:state', async () => {
+      await this.packages.initialize()
+      return this.packages.state()
+    })
+    ipcMain.handle('video:packages:install', () => this.packages.install())
+    ipcMain.handle('video:packages:remove', () => this.packages.remove())
+    ipcMain.handle('video:packages:cancel', () => this.packages.cancel())
+    app.once('before-quit', () => {
+      stopPackProgress()
+      this.jobs.dispose()
+    })
   }
 }
