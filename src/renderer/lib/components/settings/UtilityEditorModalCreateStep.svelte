@@ -3,10 +3,12 @@
 
   interface Props {
     onChooseCreate: (id: 'skill' | 'mcp' | 'plugin') => void
-    onBeginAgentSetup: () => void
+    onStartSetupThread: () => void
+    /** Why the assisted path did not open a thread, when it could not. */
+    error?: string
   }
 
-  let { onChooseCreate, onBeginAgentSetup }: Props = $props()
+  let { onChooseCreate, onStartSetupThread, error = '' }: Props = $props()
 
   const createChoices: Array<{
     id: 'skill' | 'mcp' | 'plugin'
@@ -36,6 +38,11 @@
 </script>
 
 <div>
+  {#if error}
+    <p class="mb-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {error}
+    </p>
+  {/if}
   <div class="mb-5 rounded-xl bg-raised p-4">
     <p class="text-sm font-semibold">What do you want to set up?</p>
     <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -66,14 +73,15 @@
     <div>
       <p class="text-sm font-semibold">Prefer setup by an agent?</p>
       <p class="mt-1 text-xs leading-relaxed text-muted">
-        Let a CIO agent build the skill, MCP server, or plugin for the harnesses you use.
+        CodeInOven opens a thread with @cio-utility already written for you: say what you want set
+        up, then watch the agent build it and steer where it goes.
       </p>
     </div>
     <button
       type="button"
       class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
-      title="Set up a utility with a disposable agent session"
-      onclick={onBeginAgentSetup}
+      title="Open a thread that sets this utility up with an agent"
+      onclick={onStartSetupThread}
     >
       <Sparkles size={14} />
       Setup with agent

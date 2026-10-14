@@ -1058,16 +1058,21 @@ value and editable where the user must.
   A row that still needs setup carries a **Set up** button that opens the
   **Add capability** modal the Utilities page uses, so the user can wire the
   capability up without leaving the panel. A capability the library does not
-  carry yet lands on the create step, and the agent-assisted path is prefilled:
+  carry yet lands on the create step, and its agent-assisted path is prefilled:
   when the authoring agent could not install a connection itself it records a
   `setup` prompt on that connection (in the plan's `connections` entry), and
-  `ConnectionRow` hands it to `UtilityEditorModal` as `agentRequestSeed`. The user
-  only picks a model and runs it. A capability the library already has but that
-  is switched off or half-configured opens its own editor instead, because asking
-  the user to add what they already have would be nonsense. Installing reloads
-  both catalogs through `loadConnectionLibrary`, so the row flips to ready in
-  place; a required connection relinks by label, so a later `Slack MCP` install
-  satisfies a connection the plan named `Slack`.
+  `ConnectionRow` hands it to `UtilityEditorModal` as `setupRequestSeed`.
+  Pressing **Setup with agent** then opens a new thread of the routine
+  (`openRoutineUtilitySetupThread` in `src/renderer/lib/utility-setup-thread.ts`)
+  whose composer already carries `@cio-utility` plus that recorded request, on
+  the routine's primary model and off the routine's clock, so the user watches
+  the agent work, steers it, and answers any credential card it raises. A
+  capability the library already has but that is switched off or
+  half-configured opens its own editor instead, because asking the user to add
+  what they already have would be nonsense. Installing through that editor
+  reloads both catalogs through `loadConnectionLibrary`, so the row flips to
+  ready in place; a required connection relinks by label, so a later
+  `Slack MCP` install satisfies a connection the plan named `Slack`.
 
   The library is the same union the Utilities page renders, built by
   `buildConnectionLibrary` in `connection-library.ts`: the registry utilities the

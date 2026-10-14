@@ -21,6 +21,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
+  import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
@@ -53,6 +54,8 @@
     navigate: (view: MainView) => void
     /** Open an assistant task, so the workspace owns the selection. */
     onOpenAssistantTask: (task: Thread) => void
+    /** Open one routine connection's setup as a new thread of that routine. */
+    onSetupRoutineConnection: (input: ConnectionSetupRequest) => void
   }
 
   let {
@@ -71,7 +74,8 @@
     onContinueInThread,
     onOpenSubagent,
     navigate,
-    onOpenAssistantTask
+    onOpenAssistantTask,
+    onSetupRoutineConnection
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -305,6 +309,7 @@
               bind:panelTab={activeContextTab.panelTab}
               {navigate}
               onOpenTask={onOpenAssistantTask}
+              onSetupConnection={onSetupRoutineConnection}
             />
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}

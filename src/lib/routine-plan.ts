@@ -32,7 +32,7 @@ export interface RoutinePlanConnection {
   /**
    * How to set this connection up when the agent could not install it itself:
    * what the capability is, where it comes from, and what the user has to
-   * provide. Prefills the agent-assisted utility setup.
+   * provide. It becomes the request an assisted setup thread opens with.
    */
   setup?: string
 }

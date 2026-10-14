@@ -245,13 +245,6 @@ export interface SkillUpdateStatus {
   error?: string
 }
 
-/** Result of an explicit utility-setup turn run in a disposable agent session. */
-export interface UtilitySetupReport {
-  taskId: string
-  summary: string
-  installed: UtilityDefinition[]
-}
-
 /** One tool the tested MCP server advertised. */
 export interface McpConnectionTool {
   name: string

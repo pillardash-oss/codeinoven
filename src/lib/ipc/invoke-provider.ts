@@ -47,7 +47,6 @@ import type {
   SkillRelocationRequest,
   SkillUninstallReport,
   SkillUpdateStatus,
-  ThreadSettings,
   UtilityBundleInstallRequest,
   UtilityCatalog,
   UtilityCredentialInput,
@@ -56,7 +55,6 @@ import type {
   UtilityDefinitionPatch,
   UtilityResolutionContext,
   UtilitySearchOptions,
-  UtilitySetupReport,
   VisionModelRecord
 } from '../types'
 import type { WorkerNameSettings } from '../assignment/worker-names'
@@ -234,10 +232,6 @@ export const invokeProviderContract = {
   'utilities:installBundle': {} as Contract<
     [request: UtilityBundleInstallRequest],
     UtilityDefinition[]
-  >,
-  'utilities:setupWithAgent': {} as Contract<
-    [projectId: string, taskId: string, settings: ThreadSettings, request: string],
-    UtilitySetupReport
   >,
   'utilities:searchSkillMarket': {} as Contract<[query: string], SkillMarketSearchResult>,
   'utilities:listSkillMarket': {} as Contract<[view: SkillMarketView], SkillMarketLeaderboard>,

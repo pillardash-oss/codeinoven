@@ -161,8 +161,8 @@ export interface RoutineConnection {
   /**
    * The setup prompt the authoring agent recorded when it could not supply this
    * connection itself: what the capability is, where it comes from, and how to
-   * wire it up. It prefills the agent-assisted utility setup, so the user only
-   * has to pick a model and run it.
+   * wire it up. It becomes the request an assisted setup thread opens with, so
+   * the user only has to read it and press send.
    */
   setup?: string
 }

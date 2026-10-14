@@ -1,12 +1,5 @@
 <script lang="ts">
-  import { ChevronLeft, Loader2, Sparkles } from '@lucide/svelte'
-  import type {
-    ProviderCatalog,
-    ThreadSettings,
-    ThinkingLevel,
-    UtilitySetupReport
-  } from '$shared/types'
-  import ModelPicker from '../shared/ModelPicker.svelte'
+  import { ChevronLeft, Loader2 } from '@lucide/svelte'
 
   interface Props {
     setupPreset: string | null
@@ -14,25 +7,11 @@
     hasDraftId: boolean
     isAppOwned: boolean
     saving: boolean
-    agentReport: UtilitySetupReport | null
-    agentSettings: ThreadSettings | null
-    agentProviders: ProviderCatalog[]
-    agentProjectId: string
-    canRunAgentSetup: boolean
     canImportPlugin: boolean
     onBack: () => void
     onClose: () => void
-    onRunAgentSetup: () => void
     onImportPlugin: () => void
     onRequestDelete: () => void
-    onSelectAgentModel: (
-      providerId: string,
-      modelId: string,
-      harnessId: string,
-      accountId?: string
-    ) => void
-    onSelectAgentRuntime: (runtime: import('$shared/types').ModelRuntimeSettings) => void
-    onSelectAgentThinking: (level: ThinkingLevel) => void
   }
 
   let {
@@ -41,20 +20,11 @@
     hasDraftId,
     isAppOwned,
     saving,
-    agentReport,
-    agentSettings,
-    agentProviders,
-    agentProjectId,
-    canRunAgentSetup,
     canImportPlugin,
     onBack,
     onClose,
-    onRunAgentSetup,
     onImportPlugin,
-    onRequestDelete,
-    onSelectAgentModel,
-    onSelectAgentThinking,
-    onSelectAgentRuntime
+    onRequestDelete
   }: Props = $props()
 
   const showBack = $derived(!isNative && !hasDraftId && setupPreset !== null)
@@ -74,46 +44,7 @@
     {/if}
   </div>
   <div class="flex items-center gap-2">
-    {#if setupPreset === 'agent'}
-      <button
-        class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-        type="button"
-        data-modal-dismiss
-        onclick={onClose}
-      >
-        {agentReport ? 'Done' : 'Cancel'}
-      </button>
-      {#if !agentReport}
-        {#if agentSettings}
-          <ModelPicker
-            providers={agentProviders}
-            projectId={agentProjectId}
-            harnessId={agentSettings.harnessId}
-            providerId={agentSettings.providerId}
-            modelId={agentSettings.modelId}
-            accountId={agentSettings.accountId}
-            runtimeSettings={agentSettings}
-            onSelectRuntime={onSelectAgentRuntime}
-            thinkingLevel={agentSettings.thinkingLevel}
-            variant="action"
-            side="top"
-            disabled={saving}
-            onSelect={onSelectAgentModel}
-            onSelectThinking={onSelectAgentThinking}
-          />
-        {/if}
-        <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          data-modal-primary
-          disabled={saving || !canRunAgentSetup}
-          onclick={onRunAgentSetup}
-        >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{:else}<Sparkles size={13} />{/if}
-          {saving ? 'Setting up…' : 'Set up utility'}
-        </button>
-      {/if}
-    {:else if setupPreset === 'plugin-bundle'}
+    {#if setupPreset === 'plugin-bundle'}
       <button
         class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"

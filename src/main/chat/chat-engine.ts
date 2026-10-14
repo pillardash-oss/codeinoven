@@ -10857,9 +10857,10 @@ export class ChatEngine {
     const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
+    // Isolation is opt-in per caller: a task that must not appear in the user's
+    // own harness sessions asks for it, and everyone else runs a normal one.
     const isolated =
-      supportsIsolatedSessions(driver) &&
-      (options.isolateOpenCode ?? options.utilityManagement === true)
+      supportsIsolatedSessions(driver) && options.isolateOpenCode === true
         ? await driver.createIsolatedSession(projectPath, title)
         : undefined
     const sessionId = isolated?.sessionId ?? (await driver.createSession(projectPath, title))
@@ -10877,36 +10878,14 @@ export class ChatEngine {
     const initialCompletion = this.waitForSessionCompletion(sessionId, 180_000, title)
 
     try {
-      const utilityInstructions = options.utilityManagement
-        ? await this.prepareTurnUtilities(
-            driver,
-            projectId,
-            virtualTaskId,
-            sessionId,
-            projectPath,
-            settings,
-            {
-              selectedModelInputTokens: 200_000,
-              composedTurnTokens: 0,
-              parentTurnId: turnId
-            },
-            title,
-            // A virtual utility-setup task has no thread row, so it owns no scope.
-            undefined,
-            false,
-            true,
-            true
-          )
-        : ''
       const request: SendPromptOptions = {
         sessionId,
         settings,
         text,
         attachments: [],
-        systemPrompt:
-          [options.systemPrompt, utilityInstructions].filter(Boolean).join('\n\n') || undefined,
+        systemPrompt: options.systemPrompt,
         readOnly: options.readOnly ?? false,
-        agent: leanAgentNameForMode(options.utilityManagement ? 'utility-setup' : 'pr-compose'),
+        agent: leanAgentNameForMode('pr-compose'),
         ...(options.allowedTools === undefined ? {} : { allowedTools: options.allowedTools }),
         ...(options.structuredOutput === undefined || driver.capabilities.structuredOutput !== true
           ? {}

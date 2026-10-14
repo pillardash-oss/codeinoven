@@ -998,6 +998,25 @@ export interface ConnectionView {
   detail: string
 }
 
+/**
+ * A connection whose setup the user handed to an agent.
+ *
+ * The setup runs as its own thread of the routine, so the panel opens it
+ * instead of running anything here: the thread carries the request, shows the
+ * work, and takes the steering and the credentials the capability needs.
+ */
+export interface ConnectionSetupRequest {
+  /** The routine the setup thread belongs to. */
+  routineId: string
+  /** The connection's label, which titles the setup thread. */
+  label: string
+  /**
+   * What the authoring agent recorded about this capability, or an empty string
+   * when it recorded nothing and the user writes the request themselves.
+   */
+  request: string
+}
+
 /** Lowercase alphanumeric form used for name matching. */
 const normalizeName = normalizeConnectionName
 
@@ -1128,8 +1147,9 @@ export function resolveConnections(
  * duplicated, and a plain string is accepted as shorthand for `{ name }`.
  *
  * A plan may also carry a `setup` prompt for a connection the agent could not
- * install itself. That prompt lands on the connection so the panel can prefill
- * the agent-assisted utility setup, and a later plan that refines it wins.
+ * install itself. That prompt lands on the connection so the panel can seed the
+ * assisted setup thread's request with it, and a later plan that refines it
+ * wins.
  */
 export function connectionsFromPlan(
   entries: readonly (string | RoutinePlanConnection)[],

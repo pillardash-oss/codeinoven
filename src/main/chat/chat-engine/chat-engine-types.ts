@@ -533,7 +533,10 @@ export interface PersistedAuditAttempt {
   artifactPath: string
 }
 export interface VirtualTaskOptions {
-  utilityManagement?: boolean
+  /**
+   * Run in a disposable driver session instead of a normal one, for tasks that
+   * must not appear among the user's own harness sessions.
+   */
   isolateOpenCode?: boolean
   readOnly?: boolean
   systemPrompt?: string

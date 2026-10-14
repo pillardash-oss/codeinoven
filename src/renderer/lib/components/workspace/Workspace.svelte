@@ -62,6 +62,8 @@
     workspaceState
   } from '$lib/stores/workspace.svelte'
   import { logRendererError } from '$lib/system/renderer-logger'
+  import { openRoutineUtilitySetupThread } from '$lib/utility-setup-thread'
+  import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -4274,6 +4276,34 @@
   }
 
   /**
+   * Run one routine connection's setup in a thread of the routine's own.
+   *
+   * The connection is the routine's, so the thread is too: it lands beside the
+   * routine's other tasks where this panel reports on it, and it starts on the
+   * routine's primary model. Nothing is docked and no tab is switched, because
+   * the user came here from the routine's Connections tab and stays on it while
+   * the agent works: the row they pressed Set up on is what flips to Ready.
+   */
+  async function openRoutineConnectionSetup(input: ConnectionSetupRequest): Promise<void> {
+    const project = assistantProject
+    if (!project) return
+    const routine = assistantRoutines.routines.find((candidate) => candidate.id === input.routineId)
+    if (!routine) return
+    try {
+      upsertThreadInList(
+        await openRoutineUtilitySetupThread({
+          project,
+          routine,
+          label: input.label,
+          request: input.request
+        })
+      )
+    } catch (error) {
+      reportError(error, 'The setup thread could not be opened.')
+    }
+  }
+
+  /**
    * A task created inside a routine starts on the routine's primary model, so
    * the composer shows the model the routine actually runs on. Best-effort: the
    * scheduled run applies the routine's primary regardless, so a failed write
@@ -4862,6 +4892,7 @@
             onOpenSubagent={openNestedSubagent}
             {navigate}
             onOpenAssistantTask={openAssistantTask}
+            onSetupRoutineConnection={openRoutineConnectionSetup}
           />
         {/snippet}
         <div

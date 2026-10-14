@@ -67,6 +67,7 @@
     serializeHowToSections,
     missedRunReasonText,
     TASK_RUN_PREVIEW,
+    type ConnectionSetupRequest,
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
@@ -97,6 +98,12 @@
     navigate: (view: MainView) => void
     /** Open one of the routine's tasks, so the workspace owns the selection. */
     onOpenTask: (task: Thread) => void
+    /**
+     * Hand one connection's setup to the workspace, which opens it as a new
+     * thread of the routine: the panel owns the request, the workspace owns
+     * thread creation and the selection.
+     */
+    onSetupConnection: (input: ConnectionSetupRequest) => void
   }
 
   let {
@@ -105,7 +112,8 @@
     routineId,
     panelTab = $bindable(),
     navigate,
-    onOpenTask
+    onOpenTask,
+    onSetupConnection
   }: Props = $props()
 
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
@@ -411,7 +419,9 @@
    */
   let connectionSetupOpen = $state(false)
   let connectionSetupTarget = $state<UtilityEditorTarget | null>(null)
-  let connectionSetupSeed = $state('')
+  let connectionSetupRequest = $state('')
+  /** Label of the connection the modal is showing, used for the setup thread's title. */
+  let connectionSetupLabel = $state('')
 
   function openConnectionDetails(view: ConnectionView): void {
     if (view.entry?.utility) {
@@ -421,12 +431,14 @@
     } else {
       return
     }
-    connectionSetupSeed = ''
+    connectionSetupRequest = ''
+    connectionSetupLabel = ''
     connectionSetupOpen = true
   }
 
   function openConnectionSetup(view: ConnectionView): void {
-    connectionSetupSeed = view.connection.setup ?? ''
+    connectionSetupRequest = view.connection.setup ?? ''
+    connectionSetupLabel = view.connection.label
     if (view.entry?.utility) {
       connectionSetupTarget = { kind: 'registry', utility: view.entry.utility }
     } else if (view.entry?.capability) {
@@ -435,6 +447,24 @@
       connectionSetupTarget = null
     }
     connectionSetupOpen = true
+  }
+
+  /**
+   * Run this connection's setup in a thread of its own.
+   *
+   * The thread belongs to the routine rather than to the project the user
+   * happens to be in: a connection is the routine's, its setup runs on the
+   * routine's model, and the conversation lands beside the routine's other
+   * tasks where the panel can point the user back at it.
+   */
+  function setupConnectionInThread(request: string): void {
+    const routineIdValue = routine?.id
+    if (!routineIdValue) return
+    onSetupConnection({
+      routineId: routineIdValue,
+      label: connectionSetupLabel,
+      request
+    })
   }
 
   // ─── Issues ───────────────────────────────────────────────────────────────
@@ -1354,14 +1384,16 @@
 {#if connectionSetupOpen}
   <!--
     The same Add capability modal the Utilities page uses, opened from a
-    connection that still needs setup. The agent-assisted step is prefilled
-    with the prompt the authoring agent recorded, and the connection library is
-    reloaded afterwards so an install flips the row to ready in place.
+    connection that still needs setup. Its assisted path is seeded with the
+    prompt the authoring agent recorded and opens a setup thread of this
+    routine; the library is reloaded afterwards, so a capability installed
+    through the editor flips the row to ready in place.
   -->
   <UtilityEditorModal
     open
     target={connectionSetupTarget}
-    agentRequestSeed={connectionSetupSeed}
+    setupRequestSeed={connectionSetupRequest}
+    onOpenSetupThread={setupConnectionInThread}
     onClose={() => (connectionSetupOpen = false)}
     onChanged={() => void loadConnectionLibrary()}
     onSaved={() => void loadConnectionLibrary()}
