@@ -50,10 +50,12 @@ const dock: NativeDockRequest = {
     }
   ]
 }
-function render() {
+function render(request: NativeDockRequest = dock) {
   const target = document.createElement('div')
   document.body.append(target)
-  instances.push(mount(BrowserOverlayDock, { target, props: { dock, onDragging: () => {} } }))
+  instances.push(
+    mount(BrowserOverlayDock, { target, props: { dock: request, onDragging: () => {} } })
+  )
   flushSync()
   return target
 }
@@ -134,6 +136,42 @@ describe('native overlay drawing and interactions', () => {
       id: dock.id,
       kind: 'commit',
       key: 'thread-2'
+    })
+  })
+})
+
+describe('passive tooltips and non-modal overlay panels', () => {
+  it('draws passive tooltip content without a backdrop or keyboard focus', () => {
+    const request: NativeDockRequest = {
+      ...dock,
+      id: 'app-tooltip',
+      modal: false,
+      passive: true,
+      nodes: [{ tag: 'span', attributes: {}, children: ['Tooltip'] }]
+    }
+    const target = render(request)
+    expect(target.textContent?.trim()).toBe('Tooltip')
+    expect(
+      target
+        .querySelector('[data-native-overlay-passive]')
+        ?.classList.contains('pointer-events-none')
+    ).toBe(true)
+    expect(target.querySelector('[aria-label="Dismiss dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+    expect(bridge.invoke).toHaveBeenCalledWith('browser:overlayDockDrawn', {
+      id: request.id,
+      revision: request.revision
+    })
+  })
+  it('draws non-modal panels without the full-window modal backdrop', () => {
+    const request = { ...dock, id: 'floating-sidebar', modal: false, panel: true }
+    const target = render(request)
+    expect(target.querySelector('[data-native-modal-panel]')).toBeNull()
+    expect(target.querySelector('[aria-label="Dismiss dialog"]')).toBeNull()
+    expect(target.querySelector('input')?.value).toBe('Original')
+    expect(bridge.invoke).toHaveBeenCalledWith('browser:overlayDockDrawn', {
+      id: request.id,
+      revision: request.revision
     })
   })
 })

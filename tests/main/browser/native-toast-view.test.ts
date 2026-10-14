@@ -35,7 +35,8 @@ class View {
 vi.mock('electron', () => ({
   BrowserWindow: class {},
   WebContentsView: View,
-  webContents: { getFocusedWebContents: mocks.focused }
+  webContents: { getFocusedWebContents: mocks.focused },
+  screen: { getCursorScreenPoint: () => ({ x: 5000, y: 5000 }) }
 }))
 vi.mock('../../../src/main/browser/child-window-support', () => ({
   resolveChildWindowPreload: mocks.preload,
@@ -43,6 +44,7 @@ vi.mock('../../../src/main/browser/child-window-support', () => ({
   loadRendererDocument: mocks.load
 }))
 vi.mock('../../../src/main/ipc/renderer-delivery', () => ({ sendToRenderer: mocks.send }))
+const { NativeStripView } = await import('../../../src/main/browser/native-strip-view')
 const { NativeToastView } = await import('../../../src/main/browser/native-toast-view')
 
 function windowFixture() {
@@ -136,5 +138,44 @@ describe('native Sonner toast host', () => {
     host.setHost(window as unknown as BrowserWindow)
     expect(window.contentView.children.at(-1)).toBe(toast)
     expect(window.contentView.removeChildView).not.toHaveBeenCalledWith(window.browser)
+  })
+})
+
+describe('native floating browser sidebar host', () => {
+  it('raises the sidebar above the page and detaches only the sidebar after its exit', async () => {
+    vi.useFakeTimers()
+    const window = windowFixture()
+    const host = new NativeStripView(window as unknown as BrowserWindow)
+    const request = {
+      id: 'sidebar',
+      revision: 1,
+      panel: true,
+      bounds: { x: 10, y: 20, width: 260, height: 500 },
+      theme: 'dark' as const,
+      nodes: []
+    }
+    try {
+      host.applyDock(request)
+      const sidebar = window.contentView.children.at(-1)!
+      expect(sidebar).not.toBe(window.browser)
+      expect(window.contentView.children[0]).toBe(window.browser)
+      expect(window.contentView.removeChildView).not.toHaveBeenCalledWith(window.browser)
+      expect(mocks.load).toHaveBeenCalledWith(sidebar.webContents, 'browser-overlay.html', {
+        surface: 'strip',
+        theme: 'dark'
+      })
+      sidebar.webContents.emit('did-finish-load')
+      expect(mocks.send).toHaveBeenCalledWith(sidebar.webContents, 'browser:overlay:docks', [
+        { ...request, images: {} }
+      ])
+      host.applyDock(null)
+      await vi.advanceTimersByTimeAsync(160)
+      expect(window.contentView.children).toEqual([window.browser])
+      expect(window.browser.webContents.close).not.toHaveBeenCalled()
+      expect(window.browser.webContents.focus).not.toHaveBeenCalled()
+    } finally {
+      host.dispose()
+      vi.useRealTimers()
+    }
   })
 })
