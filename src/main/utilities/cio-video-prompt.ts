@@ -53,7 +53,11 @@ How to run the session:
    save the preview for the end: the user is watching that tab, and watching the
    cut appear and change is the point of the session. The tab refreshes itself as
    you write, so you do not re-preview after every edit.
-4. Capture frames and look at them. This is the loop the session exists for:
+4. Capture frames and look at them, in this thread's own in-app browser:
+   \`capture\` hands you the picture, and activating the \`cio:browser\` capability
+   lets you click, scrub and measure on the preview tab. Never render the
+   composition with a browser of your own, such as a cached headless Chrome or
+   \`npx playwright\`. This is the loop the session exists for:
    capture the first frame, the last frame, and every moment something changes,
    then fix what you see. Text that overflows, a caption against a busy area, a
    colour that vanishes into the background and labels that collide are all
