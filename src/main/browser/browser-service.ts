@@ -104,6 +104,7 @@ import {
   validateExtensionInstallInput,
   validateExtensionUpdatePatch
 } from './extensions/browser-extension-validation'
+import { ownedExtensionPageUrl } from './extensions/browser-extension-page-url'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
@@ -3779,26 +3780,6 @@ export class BrowserService {
     return { action: 'deny' }
   }
 
-  /** Accept only a popout page belonging to the requesting extension. */
-  private ownedExtensionPageUrl(extensionId: string, rawUrl: string | undefined): string | null {
-    if (!rawUrl) return null
-    try {
-      const url = new URL(rawUrl)
-      if (
-        url.protocol !== 'chrome-extension:' ||
-        url.host !== extensionId ||
-        url.username !== '' ||
-        url.password !== '' ||
-        url.searchParams.get('uilocation') !== 'popout'
-      ) {
-        return null
-      }
-      return url.toString()
-    } catch {
-      return null
-    }
-  }
-
   /**
    * Host the popup window a page asked for, or answer null to let the caller
    * fall back to opening it as a tab.
@@ -3869,7 +3850,7 @@ export class BrowserService {
 
     const requestedUrl =
       request.kind === 'open-window' || request.kind === 'focus-window'
-        ? (this.ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
+        ? (ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
         : undefined
     if ((request.kind === 'open-window' || request.kind === 'focus-window') && !requestedUrl) {
       Logger.dev('An extension popup request used an invalid extension URL:', {

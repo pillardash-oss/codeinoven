@@ -131,6 +131,16 @@ material way, and the difference is deliberate.
   extension document (`WebContents` of type `remote` on a `chrome-extension://`
   URL) on every load. The document is never shown, so the window the user is
   working in keeps the keyboard, and it stays focused for the document's life.
+- **An extension's own window is hosted by the app.** Electron has no
+  `chrome.windows` at all, so an extension that opens its settings, a dialog or a
+  report with `chrome.windows.create({ type: 'popup', url })` (uBlock Origin Lite's
+  matched-rules window, for example) got nothing. The compatibility preamble
+  resolves the URL against the extension root, admits only a page on that
+  extension's own origin, and routes it over the bridge: the app hosts that page
+  as an extension popup (`BrowserPopupWindows.hostExtension`), and `remove`,
+  `update`, `get` and the hosted tab's `chrome.tabs.query` entry are answered for
+  it. The acceptance rule lives once, in `browser-extension-page-url.ts`, so the
+  worker's shim and `browser-service.ts` cannot disagree about the boundary.
 - **An extension's own popup is told which tab it is acting on.** The app hosts an
   action's popup in a rail popup and gives it the keyboard on first show, so the
   runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's

@@ -1604,24 +1604,26 @@
   const HOSTED_POPUP_TAB_ID = 2147483645
   const hostedPopout = { url: null, focused: false }
 
-  const isExtensionPopoutUrl = (url) => {
-    if (
-      typeof url !== 'string' ||
-      !chromeApi.runtime ||
-      typeof chromeApi.runtime.getURL !== 'function'
-    ) {
-      return false
-    }
+  /**
+   * One of this extension's own pages, as an absolute URL, or null.
+   *
+   * `chrome.windows.create` takes a page of the calling extension and the runtime
+   * resolves a relative one against the extension root, so a plain
+   * `/matched-rules.html?tab=1` and a fully-qualified
+   * `chrome-extension://<id>/popup.html` both name the same sort of window. Only
+   * the extension's own origin is admitted: a web URL is not this shim's to host,
+   * and the app refuses it on the same rule.
+   */
+  const ownExtensionPageUrl = (url) => {
+    if (typeof url !== 'string' || url.length === 0) return null
+    if (!chromeApi.runtime || typeof chromeApi.runtime.getURL !== 'function') return null
     try {
       const root = new URL(chromeApi.runtime.getURL(''))
-      const candidate = new URL(url)
-      return (
-        candidate.protocol === root.protocol &&
-        candidate.host === root.host &&
-        candidate.searchParams.get('uilocation') === 'popout'
-      )
+      const candidate = new URL(url, root)
+      if (candidate.protocol !== root.protocol || candidate.host !== root.host) return null
+      return candidate.toString()
     } catch {
-      return false
+      return null
     }
   }
 
@@ -1676,6 +1678,7 @@
               id: HOSTED_POPUP_TAB_ID,
               index: 0,
               windowId: HOSTED_POPUP_WINDOW_ID,
+              windowType: 'popup',
               active: false,
               highlighted: false,
               pinned: false,
@@ -1711,8 +1714,9 @@
       const wrapped = function () {
         const args = Array.prototype.slice.call(arguments)
         const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
-        const url = typeof data.url === 'string' ? data.url : ''
-        if (!isExtensionPopoutUrl(url)) return originalCreate.apply(this, args)
+        const requested = Array.isArray(data.url) ? data.url[0] : data.url
+        const url = ownExtensionPageUrl(requested)
+        if (!url) return originalCreate.apply(this, args)
         const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
         return routeRequestWhenTabKnown('open-window', url).then(
           (routed) => {
@@ -2521,6 +2525,7 @@
               id: HOSTED_POPUP_TAB_ID,
               index: 0,
               windowId: HOSTED_POPUP_WINDOW_ID,
+              windowType: 'popup',
               active: hostedPopout.focused,
               highlighted: hostedPopout.focused,
               pinned: false,
@@ -2698,8 +2703,14 @@
       for (const root of roots) {
         const tabsApi = root && root.tabs
         if (!tabsApi || typeof tabsApi !== 'object') continue
+        // `chrome.tabs` and `browser.tabs` are the same object in this runtime, so
+        // this loop meets it twice and a second wrap would answer every query
+        // twice, stacking a second copy of the hosted window's tab. A mark on the
+        // object keeps the repair to one wrap, however many roots alias it.
+        if (tabsApi.__cioTabsQueryRepaired) continue
         const nativeQuery = typeof tabsApi.query === 'function' ? tabsApi.query.bind(tabsApi) : null
         if (!nativeQuery) continue
+        tabsApi.__cioTabsQueryRepaired = true
         const nativeGet = typeof tabsApi.get === 'function' ? tabsApi.get.bind(tabsApi) : null
         try {
           const answerQuery = (list, query, callback) => {
