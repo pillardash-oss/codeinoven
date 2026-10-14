@@ -497,8 +497,13 @@
 {/snippet}
 
 {#if mode === 'dialog'}
-  <!-- Keep the query in one document: projected header changes can move the
-       focused input and interrupt typing before the native paint restores it. -->
+  <!--
+    Drawn through the native projection like every other dialog, so the panel
+    paints above the browser's page view and the page stays up behind it. Its
+    footer filter keeps its pickers inside the panel for the same reason (see
+    `MultiSelectPicker`), so nothing here forces a fall back to the app-window
+    DOM presentation, which would detach the browser to show the panel.
+  -->
   <Modal
     {open}
     {title}
@@ -506,7 +511,6 @@
     placement="palette"
     size="lg"
     chrome={false}
-    nativePresentation={false}
     onEscapeKeydown={handleEscapeKeydown}
     onCloseAutoFocus={(event) => {
       if (onRestoreFocus?.()) event.preventDefault()
