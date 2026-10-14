@@ -7,7 +7,7 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
-  import { trafficLightState } from '$lib/stores/traffic-light.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
 
   interface Props {
     src: string
@@ -94,13 +94,47 @@
   }}
 >
   <!-- A media lightbox is chrome-less, so nothing would otherwise keep its
-       content out of the window controls drawn over the top-left corner. Reserve
-       the same title-bar band the app header occupies (and keep it draggable
-       like every other full screen surface) so no preview renders under the
-       macOS traffic lights. -->
-  {#if trafficLightState.present}
-    <div class="titlebar-drag h-12 shrink-0" aria-hidden="true"></div>
-  {/if}
+       content out of the window controls drawn over the top-left corner. The
+       band doubles as the lightbox header: it reserves the same inset the app
+       header occupies, stays draggable like every other full screen surface,
+       and names the file with its actions here instead of below the content. -->
+  <div
+    class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-white/10 pr-3"
+    style={trafficLightInsetStyle()}
+  >
+    <span class="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">
+      {filename}
+    </span>
+    {#if revealable}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+        aria-label={`Reveal path of ${filename}`}
+        title="Reveal path"
+        onclick={revealFromButton}
+      >
+        <FolderOpen size={14} />
+      </button>
+    {/if}
+    <a
+      href={src}
+      download={filename}
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      aria-label={downloadLabel}
+      title={downloadLabel}
+    >
+      <Download size={14} />
+    </a>
+    <button
+      type="button"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      aria-label="Close preview"
+      title="Close (Esc)"
+      onclick={onClose}
+    >
+      <X size={14} />
+    </button>
+  </div>
   <div
     role="presentation"
     class="relative flex min-h-0 flex-1 items-center justify-center"
@@ -158,9 +192,6 @@
           />
         </div>
       {/if}
-      <div class="mt-3 flex shrink-0 items-center gap-3">
-        <span class="text-xs text-white/70">{filename}</span>
-      </div>
     </div>
     {#if kind === 'image' || pager}
       <div class="absolute right-4 bottom-4 flex items-center gap-2">
@@ -172,37 +203,5 @@
         {/if}
       </div>
     {/if}
-    <div class="absolute right-4 top-4 flex flex-col gap-2">
-      <button
-        type="button"
-        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-        aria-label="Close preview"
-        title="Close (Esc)"
-        onclick={onClose}
-      >
-        <X size={18} />
-      </button>
-      {#if revealable}
-        <button
-          type="button"
-          class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-          aria-label={`Reveal path of ${filename}`}
-          title="Reveal path"
-          onclick={revealFromButton}
-        >
-          <FolderOpen size={16} />
-        </button>
-      {/if}
-      <a
-        href={src}
-        download={filename}
-        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-        aria-label={downloadLabel}
-        title={downloadLabel}
-        onclick={(e: MouseEvent) => e.stopPropagation()}
-      >
-        <Download size={16} />
-      </a>
-    </div>
   </div>
 </Modal>
