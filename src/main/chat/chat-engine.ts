@@ -24590,44 +24590,52 @@ export class ChatEngine {
 
   /** Timestamp of the prompt that opened the current logical turn.
    *
-   *  A logical turn is a contiguous run of user messages: the prompt plus any
-   *  steers sent while it ran. Activity-only notices (compaction, sub-agent
-   *  envelopes) and app-issued continuation prompts (origin `orchestrator`) ride
-   *  mid-turn and are skipped, so the boundary is the run's oldest real prompt
-   *  rather than a message that only re-prompts the same work. Returns undefined
-   *  when no such prompt exists (fresh thread, orchestrator-only transcript), in
-   *  which case the fold keeps the whole log as before. */
+   *  The boundary is the newest real prompt, and nothing more. A steer the
+   *  harness has taken is a real prompt: its work is a turn of its own with its
+   *  own working trace, so the boundary moves to it the moment it is delivered
+   *  and the fold stops at the work that came before it.
+   *
+   *  Two kinds of prompt are skipped instead of becoming the boundary:
+   *
+   *  - An activity-only notice (compaction, sub-agent envelope) or an app-issued
+   *    continuation prompt (origin `orchestrator`) only re-prompts work already
+   *    streaming, and its timestamp would empty a live trace.
+   *  - A steer still held for its undo window has not reached the harness, so it
+   *    has not opened a turn yet and the fold must keep feeding the turn it is
+   *    steering. It becomes the boundary the instant delivery clears the hold.
+   *
+   *  The walk deliberately does not extend back over a contiguous run of user
+   *  messages: a steer follows the interrupted prompt in the mirror (the
+   *  assistant rows between them are only persisted when the turn settles), and
+   *  folding the run back to its oldest prompt is exactly what kept one trace
+   *  growing past a steer. Returns undefined when no such prompt exists (fresh
+   *  thread, orchestrator-only transcript), in which case the fold keeps the
+   *  whole log as before. */
   private async currentTurnStartTs(
     projectId: string,
     threadId: string
   ): Promise<number | undefined> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
     const messages = page.messages
-    // Newest real prompt: skip the app-issued continuations and the activity-only
-    // notices rather than letting one of them become the boundary.
-    let newest = -1
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
       if (!message || message.role !== 'user') continue
       if (!isTurnBoundaryPrompt(message)) continue
-      newest = i
-      break
+      if (heldSteerIds.has(message.id)) continue
+      return message.createdAt || undefined
     }
-    if (newest === -1) return undefined
-    // A run of contiguous user messages is one logical turn   the prompt plus any
-    // steers the user sent while it ran, and the app's own unbound continuations.
-    // The boundary is the run's oldest prompt, so a steer extends the turn's
-    // trace instead of scoping it down to only the work that followed. This is
-    // the same grouping the renderer's turn index uses, so the durable fold and
-    // the transcript agree on where the turn starts.
-    let start = newest
-    for (let i = newest - 1; i >= 0; i--) {
-      const message = messages[i]
-      if (!message || message.role !== 'user') break
-      if (!isTurnBoundaryPrompt(message)) continue
-      start = i
+    return undefined
+  }
+
+  /** User-message ids for steers this thread is still holding for their undo
+   *  window, across whichever session is carrying them. */
+  private heldSteerMessageIds(threadId: string): Set<string> {
+    const ids = new Set<string>()
+    for (const steer of this.heldSteers.values()) {
+      if (steer.conversationId === threadId) ids.add(steer.userMessageId)
     }
-    return messages[start]?.createdAt || undefined
+    return ids
   }
 
   /** Re-announce the coordinator thread so every view of its Assignment plan

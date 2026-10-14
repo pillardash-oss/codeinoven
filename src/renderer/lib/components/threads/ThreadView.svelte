@@ -219,6 +219,7 @@
   } from '$lib/reveal-file'
   import { openPassageInNewThread } from '$lib/quoted-passage'
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
+  import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
@@ -782,6 +783,32 @@
     }
     return -1
   })
+
+  /**
+   * Whether no assistant row renders the work of the turn ending at `index`.
+   *
+   * A turn's trace normally mounts inside its own assistant message. A run that
+   * has not mirrored one yet   a follow-up before its first assistant row, or a
+   * steer still held under the running trace   has no such mount point, so its
+   * trace has to render on its own. Reading this prevents mounting a second copy
+   * beside the assistant row that already carries it.
+   */
+  function turnAboveHasAssistantRow(index: number): boolean {
+    for (let i = index - 1; i >= 0; i--) {
+      const message = structureMessages[i]
+      if (!message) break
+      if (message.role === 'assistant') return true
+      if (message.role === 'user' && !isTransparentTurnMessage(message)) break
+    }
+    return false
+  }
+
+  /** Durable parts for a turn whose work is on screen with no assistant row to
+   *  render it: a live follow-up before its first assistant row lands, or a
+   *  steer still held under the running trace. */
+  let unmirroredTraceParts = $derived(
+    pendingLiveTurn || heldSteerAbsIndex !== -1 ? streamWorkingPartsForPendingTurn() : []
+  )
   /**
    * The durable work of a turn that settled without ever mirroring an assistant
    * message: a provider error, a user stop, a paused will-retry wait.
@@ -1200,6 +1227,17 @@
    *  An older-page read started before it must not resurrect entries from the
    *  turn the reader has left. */
   let streamFoldVersion = 0
+  /** Which logical turn the mounted fold belongs to, from the page that
+   *  delivered it. The boundary moves when the harness takes a steer, and that
+   *  move is the signal that the turn on screen is over and a new one opened. */
+  let streamTurnStartTs = $state<number | null>(null)
+  /** The turn the reader was watching when the boundary moved, kept as its own
+   *  settled trace. It renders just before the message that opened the new turn,
+   *  so the work the steer interrupted keeps its place above the message instead
+   *  of vanishing with the fold it streamed through. */
+  let completedTurnTrace = $state<{ parts: AgentPart[]; totalSteps: number } | null>(null)
+  /** Message id the completed turn's trace renders in front of. */
+  let completedTurnAnchorId = $state<string | null>(null)
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
@@ -1210,6 +1248,54 @@
     streamTodoParts = []
     streamTodoTurnStart = null
     streamCursor = null
+    streamTurnStartTs = null
+    completedTurnTrace = null
+    completedTurnAnchorId = null
+  }
+
+  /** True when a read landed on a different logical turn than the one mounted:
+   *  the harness took a steer, and the boundary moved with it. */
+  function foldBoundaryMoved(page: TurnStreamPartsPage | TurnStreamPartsChange): boolean {
+    if (typeof page.turnStartTs !== 'number') return false
+    if (streamTurnStartTs === null) return false
+    return page.turnStartTs !== streamTurnStartTs
+  }
+
+  /**
+   * The fold moved to a new turn: the steer was delivered.
+   *
+   * The turn that was running keeps the work that was on screen as its own
+   * settled trace, anchored in front of the message that opens the new turn
+   * (the steered message). The new turn mounts its own fold, so its step list
+   * starts from its own first step instead of continuing the interrupted
+   * turn's count.
+   *
+   * The frozen copy is skipped when the interrupted turn has an assistant row of
+   * its own: that row already renders the turn's trace from the mirror, and a
+   * second copy would show the same work twice.
+   */
+  async function handleFoldBoundaryMove(
+    nextTurnStartTs: number,
+    generation: number
+  ): Promise<void> {
+    const previous = streamTurnStartTs
+    streamTurnStartTs = nextTurnStartTs
+    if (previous !== null && previous !== nextTurnStartTs) {
+      const anchor = structureMessages.find(
+        (message) => message.role === 'user' && (message.createdAt ?? 0) >= nextTurnStartTs
+      )
+      const previousTurnHasAssistantRow = structureMessages.some(
+        (message) =>
+          message.role === 'assistant' &&
+          (message.createdAt ?? 0) >= previous &&
+          (message.createdAt ?? 0) < nextTurnStartTs
+      )
+      if (!previousTurnHasAssistantRow && latestWorkingTraceParts(streamParts).length > 0) {
+        completedTurnTrace = { parts: streamParts, totalSteps: streamTotalSteps }
+        completedTurnAnchorId = anchor?.id ?? null
+      }
+    }
+    await remountNewestStreamParts(generation)
   }
 
   /** Adopt a durable read's task-list snapshot together with the turn it was
@@ -2700,6 +2786,22 @@
    * message is then brought on screen, the range rebuilt, and the highlight
    * scrolled to.
    */
+  /**
+   * Bring a commented SVG element back in front of the reader.
+   *
+   * The pin and the comment editor are drawn by the artifact card that renders
+   * the SVG, so the edit action scrolls that card into view and hands it the
+   * pick. The key an artifact carries is derived from its own source and is
+   * always `[a-z0-9-]`, so it needs no selector escaping.
+   */
+  function editSvgElement(reference: ResponseReferenceAnchor): void {
+    const key = reference.artifactKey
+    if (!key) return
+    const card = document.querySelector(`[data-artifact-key="${key}"]`)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    artifactElementFocusState.request(thread.projectId, thread.id, key, reference.id)
+  }
+
   async function editResponseReference(id: string): Promise<void> {
     const reference = responseReferences.find((candidate) => candidate.id === id)
     if (!reference) return
@@ -2723,6 +2825,13 @@
     // the comment: the reference has no text range to jump to.
     if (reference.kind === 'image') {
       await editImageMark(reference)
+      return
+    }
+    // An element picked inside an inline SVG is pinned by the artifact card that
+    // draws it, so its edit action brings that card up and lets it open the
+    // comment.
+    if (reference.kind === 'svg') {
+      editSvgElement(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -7350,11 +7459,11 @@
     }
     clearQueuedState()
     showQueueMenu = false
-    // The steer opens a fresh trace under the steered message. Drop the
-    // durable fold loaded at mount (and its todo snapshot)   it describes the
-    // turn the steer is interrupting, and a steered continuation keeps the
-    // old turn's stream anchor, so it must never feed the new trace.
-    clearStreamParts()
+    // The running trace stays exactly as it is: the harness has not taken the
+    // message yet, so the work still streaming belongs to the turn it steers and
+    // must keep rendering above the message. The durable fold moves to the new
+    // turn on its own when delivery clears the hold, and that move is what
+    // freezes this turn's trace and opens the next one under the message.
     // The steered message lands at the tail. A reader scrolled up into the
     // running turn keeps their position and their mounted messages   releasing
     // the tail lock here would re-window the conversation and hide on-screen
@@ -11677,7 +11786,12 @@
     closingTextId: string | null,
     holdsClosingText: boolean
   ): AgentPart[] {
-    if (live || pendingLiveTurn) {
+    // Only the turn that is actually live merges the durable fold. A pending
+    // turn elsewhere in the transcript must never let this turn's trace pull the
+    // log's newest entries: they belong to the pending turn, which renders them
+    // from its own block, and merging them here is what kept an interrupted
+    // turn's trace growing past a steer.
+    if (live) {
       return buildTurnTrace(startIndex, closingTextId, holdsClosingText, true)
     }
     let byStart = settledTurnTraces.get(transcriptIndex)
@@ -11735,7 +11849,12 @@
       )
       if (!alive || generation !== streamPartsLoadGeneration) return
       if (page.kind === 'window') {
+        if (foldBoundaryMoved(page)) {
+          await handleFoldBoundaryMove(page.turnStartTs as number, generation)
+          return
+        }
         // No cursor yet (a mount read that has not landed): adopt the window.
+        streamTurnStartTs = page.turnStartTs ?? null
         streamParts = mergeWorkingParts(streamParts, page.parts)
         streamHasOlder = page.hasOlder
         streamTotalSteps = page.totalSteps
@@ -11743,12 +11862,17 @@
         streamCursor = page.cursor
         return
       }
+      if (foldBoundaryMoved(page)) {
+        await handleFoldBoundaryMove(page.turnStartTs as number, generation)
+        return
+      }
+      streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
       streamCursor = page.cursor
       streamTotalSteps = page.totalSteps
       applyTodoSnapshot(page)
-      // A fold that shrank under us belongs to another turn (a steered
-      // continuation, or a log rewritten after the fact): remount the newest
-      // page instead of keeping entries that no longer belong here.
+      // A fold that shrank under us with the same boundary belongs to a log
+      // rewritten after the fact: remount the newest page instead of keeping
+      // entries that no longer belong here.
       if (page.total < streamParts.length) {
         await remountNewestStreamParts(generation)
         return
@@ -11775,6 +11899,11 @@
         limit: WORKING_TRACE_PAGE_SIZE
       })
       if (!alive || page.kind !== 'window') return
+      if (foldBoundaryMoved(page)) {
+        await handleFoldBoundaryMove(page.turnStartTs as number, streamPartsLoadGeneration)
+        return
+      }
+      streamTurnStartTs = page.turnStartTs ?? null
       streamParts = mergeWorkingParts(streamParts, page.parts)
       streamHasOlder = page.hasOlder
       streamTotalSteps = page.totalSteps
@@ -11792,6 +11921,7 @@
       limit: WORKING_TRACE_PAGE_SIZE
     })
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
+    streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
     streamParts = page.parts
     streamHasOlder = page.hasOlder
     streamTotalSteps = page.totalSteps
@@ -11844,6 +11974,31 @@
       clearInterval(poll)
       streamPartsLoadGeneration += 1
     }
+  })
+
+  /** How many durable parts one trace mounts while it fills its own step list.
+   *  The rows are one-line fold controls whose content renders only on open, so
+   *  the whole list is what the reader wants at a glance; the cap keeps a
+   *  monster turn from mounting without end. */
+  const EAGER_STREAM_PARTS_CAP = 400
+
+  // A trace's step list is complete the moment the reader looks at it. The rows
+  // are folded and cheap and their content stays lazy, so the trace fills the
+  // rest of its own fold in the background instead of streaming steps in as the
+  // reader scrolls. One page per frame and bounded, so nothing blocks a frame.
+  $effect(() => {
+    void streamParts.length
+    void streamHasOlder
+    void streamFoldVersion
+    if (!active || appQuitState.quitting) return
+    if (!streamHasOlder) return
+    if (streamParts.length >= EAGER_STREAM_PARTS_CAP) return
+    const foldVersion = streamFoldVersion
+    const frame = requestAnimationFrame(() => {
+      if (!alive || foldVersion !== streamFoldVersion) return
+      void loadOlderStreamParts()
+    })
+    return () => cancelAnimationFrame(frame)
   })
 
   // The transcript can advance to a new turn without this view ever observing
@@ -12363,16 +12518,60 @@
               onCiteFile={openFileCitation}
             />
           {/snippet}
+          <!-- The interrupted turn, frozen with the work it had when the steer
+               landed. It owns no session any more, so it renders settled: no
+               spinner, no paging, and its own step total. -->
+          {#snippet completedTurnTraceBlock()}
+            {#if completedTurnTrace}
+              <WorkingTrace
+                parts={completedTurnTrace.parts}
+                done
+                busy={false}
+                totalSteps={completedTurnTrace.totalSteps}
+                {active}
+                projectId={thread.projectId}
+                threadId={thread.id}
+                modelLabel={currentWorkingTraceAttribution.modelLabel}
+                thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+                providerName={currentWorkingTraceAttribution.providerName}
+                providerId={currentWorkingTraceAttribution.providerId}
+                harnessId={currentWorkingTraceAttribution.harnessId}
+                harnessName={currentWorkingTraceAttribution.harnessName}
+                accountLabel={currentWorkingTraceAttribution.accountLabel}
+                accountId={currentWorkingTraceAttribution.accountId}
+                ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+                ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+                ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
+                isFast={currentWorkingTraceAttribution.isFast}
+                onOpenSubagent={openSubagent}
+                onCiteFile={openFileCitation}
+              />
+            {/if}
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
-            {#if pendingLiveTurn && absIndex === heldSteerAbsIndex}
-              {@render liveTurnTrace(pendingLiveTurnParts, true)}
+            <!-- The turn a steer interrupted keeps the work that was on screen,
+                 right above the message that opened the new turn. It renders
+                 here because a run that never mirrored an assistant row has no
+                 other mount point, and the new turn's trace follows the
+                 message below. -->
+            {#if completedTurnTrace && completedTurnAnchorId === msg.id}
+              {@render completedTurnTraceBlock()}
+            {/if}
+            <!-- A steer still held under the running trace: its work is the
+                 interrupted turn's, so that trace renders above the message. -->
+            {#if absIndex === heldSteerAbsIndex && !turnAboveHasAssistantRow(absIndex)}
+              {@render liveTurnTrace(unmirroredTraceParts, true)}
             {/if}
             {#if msg.inlineArtifact}
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
+                    <MarkdownView
+                      text={part.text}
+                      citationThread={citationThreadContext}
+                      annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
+                    />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
                     <ArtifactImageAnnotator
                       projectId={thread.projectId}
@@ -12526,6 +12725,7 @@
                               ? (explicitPresentation.body ?? '')
                               : messageText(msg)}
                             citationThread={citationThreadContext}
+                            annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                             inlineFileTags={explicitPresentation ? undefined : inlineTags}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
@@ -12879,6 +13079,7 @@
                             <MarkdownView
                               text={turnClosingText.text}
                               citationThread={citationThreadContext}
+                              annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />
@@ -13085,7 +13286,7 @@
 
           {#if (pendingLiveTurn && heldSteerAbsIndex === -1) || settledTurnParts.length > 0}
             {@render liveTurnTrace(
-              pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts,
+              pendingLiveTurn ? unmirroredTraceParts : settledTurnParts,
               Boolean(pendingLiveTurn)
             )}
           {/if}
