@@ -126,7 +126,7 @@ function percent(value: number): string {
  * The number the user sees on the mark is not baked in here. Labels are
  * renumbered by the store whenever a reference is removed, and the badge a mark
  * shows is that label, so the number belongs to the reference rather than to the
- * stroke. `referenceMarkNumber` recovers it from the label at render time.
+ * stroke   see `referenceLabelNumber` in `$lib/reference-labels`.
  */
 export function imageMarkDescriptor(filename: string, points: readonly ImageMarkPoint[]): string {
   const name = filename.trim() || 'the image'
@@ -140,17 +140,4 @@ export function imageMarkDescriptor(filename: string, points: readonly ImageMark
   return `Freehand mark on "${name}": an area from x ${percent(bounds.x)} to ${percent(
     bounds.x + bounds.width
   )}, y ${percent(bounds.y)} to ${percent(bounds.y + bounds.height)} of the picture.`
-}
-
-/**
- * The number a reference displays.
- *
- * A mark's badge and the prompt block that names it both read this, so the `1`
- * drawn on the screenshot is the `[Mark 1]` the agent is asked to address. The
- * store numbers labels by position; a label that carries no trailing number
- * (a hand-written one, a restored older draft) falls back to the position.
- */
-export function referenceMarkNumber(label: string, position: number): number {
-  const match = /(\d+)\s*$/u.exec(label)
-  return match ? Number(match[1]) : position + 1
 }

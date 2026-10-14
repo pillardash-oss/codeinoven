@@ -17,9 +17,9 @@
     imageMarkDescriptor,
     imageMarkPointsAttribute,
     normalizeImageMark,
-    referenceMarkNumber,
     type ImageMarkPoint
   } from '$lib/image-annotation'
+  import { referenceLabelNumber } from '$lib/reference-labels'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte.ts'
 
   /**
@@ -291,7 +291,7 @@
 
   {#each marks as mark, index (mark.id)}
     {@const badge = imageMarkBadgePoint(mark.points ?? [])}
-    {@const number = referenceMarkNumber(mark.label, index)}
+    {@const number = referenceLabelNumber(mark.label, index)}
     <button
       type="button"
       class="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"

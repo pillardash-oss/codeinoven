@@ -73,6 +73,14 @@
     onAnnotateMermaid?: (code: string, event: MouseEvent) => void
     /** Explicit transcript owner used while a thread is restoring its messages. */
     citationThread?: CitationThreadContext
+    /**
+     * The conversation this markdown is drawn in, when it is drawn in one.
+     *
+     * An artifact fence can be inspected for an element only when the pick has a
+     * conversation to be stored against, so this is handed down to the artifact
+     * card rather than reached for from the renderer.
+     */
+    annotationScope?: { projectId: string; threadId: string }
   }
 
   let {
@@ -85,7 +93,8 @@
     onCiteFile,
     onOpenLocalFile,
     onAnnotateMermaid,
-    citationThread
+    citationThread,
+    annotationScope
   }: Props = $props()
 
   /**
@@ -458,7 +467,7 @@
       {#if language === 'mermaid' && isCompleteFence(node.token)}
         <MermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
       {:else if artifactKind && isCompleteFence(node.token) && !artifactNeedsCodeFallback(node.token.text)}
-        <ArtifactCard code={node.token.text} kind={artifactKind} />
+        <ArtifactCard code={node.token.text} kind={artifactKind} {annotationScope} />
       {:else}
         <CodeBlock code={node.token.text} lang={language} />
       {/if}

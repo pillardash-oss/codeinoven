@@ -7,9 +7,9 @@ import {
   IMAGE_MARK_BADGE_SIZE,
   imageMarkBadgePoint,
   isImageMarkTap,
-  referenceMarkNumber,
   type ImageMarkPoint
 } from '$lib/image-annotation'
+import { referenceLabelNumber } from '$lib/reference-labels'
 import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 
 /**
@@ -78,7 +78,7 @@ function groupMarks(references: readonly ResponseReferenceAnchor[]): MarkGroup[]
     }
     group.marks.push({
       points: [...points],
-      number: referenceMarkNumber(reference.label, position)
+      number: referenceLabelNumber(reference.label, position)
     })
     groups.set(reference.imageUrl, group)
   })

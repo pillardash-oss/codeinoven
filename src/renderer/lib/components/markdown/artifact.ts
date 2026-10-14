@@ -35,6 +35,21 @@ export function artifactNeedsCodeFallback(code: string): boolean {
 }
 
 /**
+ * Sanitize SVG artifact source to the SVG profile.
+ *
+ * One policy for both renderings of an SVG artifact: the preview, which embeds
+ * the result as an `<img>` data URL, and the inspector, which places it inline
+ * in a shadow root so its elements can be picked. Scripts, foreign objects and
+ * event handlers are stripped either way, so the sanitized markup is safe to
+ * insert into the document.
+ */
+export function sanitizedSvgArtifact(code: string): string {
+  return DOMPurify.sanitize(code.trim(), {
+    USE_PROFILES: { svg: true, svgFilters: true }
+  })
+}
+
+/**
  * Build a sandboxed `iframe srcdoc` document for an artifact.
  *
  * HTML goes through the shared `htmlPreviewFrame` sanitizer (scripts, forms
@@ -44,10 +59,7 @@ export function artifactNeedsCodeFallback(code: string): boolean {
  */
 export function buildArtifactSrcdoc(kind: ArtifactKind, code: string, themeStyles = ''): string {
   if (kind === 'html') return htmlPreviewFrame(code, undefined, themeStyles)
-  const svg = DOMPurify.sanitize(code.trim(), {
-    USE_PROFILES: { svg: true, svgFilters: true }
-  })
-  const themedSvg = svg.replace(
+  const themedSvg = sanitizedSvgArtifact(code).replace(
     /<svg\b[^>]*>/iu,
     (opening) =>
       `${opening}<style>${themeStyles}svg{font-family:var(--font-app);color:var(--color-foreground);fill:currentColor;}</style>`
