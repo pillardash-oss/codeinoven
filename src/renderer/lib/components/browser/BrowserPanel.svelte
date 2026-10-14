@@ -24,6 +24,7 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
@@ -263,6 +264,33 @@
   $effect(claimRequestedAddressFocus)
 
   /**
+   * Continue typing started in the empty state when the fullscreen surface
+   * mounts: the bar already mirrors the shared draft, so only the caret has
+   * to be placed where typing stopped. Runs once per fullscreen mount while
+   * the tab is still blank and a draft exists; the sidebar instance behind it
+   * is not visible and leaves focus alone.
+   */
+  let continuedBlankDraft = $state(false)
+  $effect(() => {
+    if (!fullscreen) return
+    if (continuedBlankDraft) return
+    if (!panelVisible) return
+    const bar = addressBar
+    if (!bar) return
+    if (!isBlank) return
+    const stored = browserBlankDraft.get(tabId)
+    if (!stored) return
+    continuedBlankDraft = true
+    void tick().then(() => {
+      try {
+        bar.focusWithCaret(stored.caret ?? stored.text.length)
+      } catch {
+        // Focus alone is the fallback.
+      }
+    })
+  })
+
+  /**
    * Tell the keyboard owner whether the focus that just moved belongs to this
    * browser.
    *
@@ -411,6 +439,7 @@
   /** Open a resolved address in this tab. */
   function navigate(url: string): void {
     address = url
+    browserBlankDraft.clear(tabId)
     contextSidebarState.updateBrowserTab(tabId, url)
     void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
   }
@@ -599,6 +628,7 @@
     {/if}
     <BrowserAddressBar
       bind:this={addressBar}
+      tabId={tabId}
       url={address}
       projectId={tabProjectId}
       threadId={tabThreadId}
@@ -752,6 +782,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
+        tabId={tabId}
         projectId={tabProjectId}
         threadId={tabThreadId}
         boxId={tabBoxId}

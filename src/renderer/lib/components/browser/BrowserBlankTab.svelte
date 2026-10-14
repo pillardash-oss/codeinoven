@@ -14,8 +14,12 @@
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
+  import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
 
   interface Props {
+    /** Tab that owns this empty state. Keys the shared draft so the toolbar
+     *  and the fullscreen surface continue the same text and caret. */
+    tabId?: string | null
     /** Scope that owns the history offered under the field. */
     projectId: string
     threadId: string
@@ -31,6 +35,7 @@
   }
 
   let {
+    tabId = null,
     projectId,
     threadId,
     boxId,
@@ -55,9 +60,11 @@
   const listId = $props.id()
 
   let input = $state<HTMLInputElement | null>(null)
-  let draft = $state('')
+  // svelte-ignore state_referenced_locally
+  let draft = $state(tabId ? (browserBlankDraft.get(tabId)?.text ?? '') : '')
   let highlight = $state(-1)
-  let touched = $state(false)
+  // svelte-ignore state_referenced_locally
+  let touched = $state(tabId ? browserBlankDraft.get(tabId) !== null : false)
 
   const scope = $derived(browserHistory.scopeFor(projectId, threadId, boxId))
   const suggestions = $derived(browserHistory.suggestionsFor(scope, draft, 5))
@@ -93,10 +100,25 @@
   }
 
   $effect(() => {
-    if (autofocus) input?.focus()
+    if (autofocus) {
+      input?.focus()
+      // A restored draft continues where typing stopped instead of restarting
+      // at the end: the shared store remembers the exact caret offset.
+      if (tabId && draft !== '') {
+        const caret = browserBlankDraft.get(tabId)?.caret
+        if (caret !== null && caret !== undefined && input) {
+          try {
+            input.setSelectionRange(caret, caret)
+          } catch {
+            // Non-text edge; focus alone is the fallback.
+          }
+        }
+      }
+    }
   })
 
   function open(url: string): void {
+    if (tabId) browserBlankDraft.clear(tabId)
     onNavigate(url)
   }
 
@@ -110,12 +132,28 @@
     if (resolution) open(resolution.url)
   }
 
+  function syncDraft(value: string, element: HTMLInputElement | null): void {
+    if (!tabId) return
+    const caret = element?.selectionStart ?? value.length
+    browserBlankDraft.set(tabId, value, caret)
+  }
+
   function onInput(event: Event): void {
     const target = event.currentTarget
     if (!(target instanceof HTMLInputElement)) return
     draft = target.value
     highlight = -1
     touched = true
+    syncDraft(draft, target)
+  }
+
+  /** Caret-only moves (arrows, click) must also reach the shared draft so the
+   *  fullscreen bar restores the exact point typing stopped at. */
+  function onCaretMove(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLInputElement)) return
+    if (draft === '') return
+    syncDraft(draft, target)
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -169,6 +207,9 @@
         autocomplete="off"
         value={draft}
         oninput={onInput}
+        onkeyup={onCaretMove}
+        onclick={onCaretMove}
+        onselect={onCaretMove}
         onkeydown={onKeydown}
       />
       <button

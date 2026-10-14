@@ -311,6 +311,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
+        tabId={tabId}
         projectId={GLOBAL_BROWSER_CONTEXT.projectId}
         threadId={GLOBAL_BROWSER_CONTEXT.threadId}
         boxId={tab.boxId}
