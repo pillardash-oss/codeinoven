@@ -56,6 +56,7 @@ import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import { budgetSearchSummaryPrompt, validateSearchSummary } from '../search/thread-search-summary'
 import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
+import { latestAgentTodo } from '../../lib/agent-todos'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
@@ -611,6 +612,7 @@ import {
   SPEC_CONTRACT_CONTINUATION_PROMPT,
   SPEC_GENERATION_FAILURE_USER_MESSAGE,
   SPEC_GENERATION_MAX_ATTEMPTS,
+  taskReconcilePrompt,
   SPEC_GENERATION_TIMEOUT_MS,
   SPEC_MEMORY_MAX_LESSONS,
   SUPERSEDED_TURN_MESSAGE,
@@ -1006,6 +1008,15 @@ export class ChatEngine {
 
   /** One automatic utility-search nudge per active turn, per session. */
   private searchNudgeAttempts = new Map<string, number>()
+
+  /**
+   * One app-issued task-list reconcile turn per user prompt, per session. The
+   * guard fires when a turn settles while the list it published still shows
+   * unfinished work, so the app's task card never freezes mid-run. Resetting
+   * only on a genuine user prompt (like the other nudges) is what caps it at
+   * one extra turn and keeps it from looping.
+   */
+  private todoReconcileAttempts = new Map<string, number>()
 
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
@@ -6024,6 +6035,7 @@ export class ChatEngine {
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.engineeringImplementationSessions.delete(sessionId)
     this.searchNudgeAttempts.delete(sessionId)
+    this.todoReconcileAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
@@ -9777,6 +9789,7 @@ export class ChatEngine {
       this.mermaidRepairAttempts.delete(sessionId)
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.searchNudgeAttempts.delete(sessionId)
+      this.todoReconcileAttempts.delete(sessionId)
     }
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
@@ -26807,6 +26820,80 @@ export class ChatEngine {
           liveSessionId: threadBeforeFinalize?.sessionId ?? null
         })
         return
+      }
+      // Task-list guard: an agent that finished its work but never updated the
+      // list it published leaves the app's task card frozen mid-run, reading as
+      // abandoned work. A harness may reconcile this itself (pi's core-tools
+      // extension does, and declares `handlesTaskReconcile`); for every other
+      // harness the engine issues one hidden reconcile turn on the same thread
+      // and session, so the agent makes the list match what it actually did.
+      // Runs only on an otherwise-final turn with no artifact capture pending,
+      // after every repair continuation above has already had its chance, and
+      // is capped at one reconcile per user prompt by `todoReconcileAttempts`,
+      // so it can never loop.
+      if (
+        !failure &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        !contractBlocked &&
+        !userAborted &&
+        assignmentContinuation === null &&
+        !revisedSpec &&
+        !revisedBrainstorm &&
+        !createdPrd &&
+        !createdAssignment &&
+        !hasPendingRevision &&
+        !pendingBrainstormTurn &&
+        !pendingPrdTurn &&
+        !pendingAssignmentTurn &&
+        liveThread?.settings &&
+        driver.capabilities.handlesTaskReconcile !== true &&
+        (this.todoReconcileAttempts.get(sessionId) ?? 0) < 1
+      ) {
+        const latestTodo = latestAgentTodo(messages)
+        const unfinishedLabels = latestTodo
+          ? latestTodo.items.filter((item) => item.status !== 'completed').map((item) => item.label)
+          : []
+        if (unfinishedLabels.length > 0) {
+          this.todoReconcileAttempts.set(sessionId, 1)
+          await this.finishCheckpoint(
+            sessionId,
+            info,
+            'interrupted',
+            'Reconciling the task list before finishing.'
+          )
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+          turnUtilitiesCleaned = true
+          if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+          try {
+            await this.sendPrompt(
+              info.projectId,
+              info.threadId,
+              liveThread.settings,
+              taskReconcilePrompt(unfinishedLabels),
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              'internal'
+            )
+          } catch (error) {
+            this.pendingMemoryDecisions.delete(sessionId)
+            const issue = this.fallbackProviderIssue(
+              info.driverId,
+              rawErrorMessage(error),
+              rawErrorDetail(error)
+            )
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+              error: issue.message,
+              errorDetail: issue.rawError
+            })
+            await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+          }
+          return
+        }
       }
       // A live usage-reset wait owns this turn's outcome: the harness reported
       // its limit as the waiting card and the engine already persisted

@@ -4,6 +4,7 @@ const TODO_TOOL_NAMES = new Set([
   'todo',
   'todos',
   'todowrite',
+  'todolist',
   'writetodo',
   'writetodos',
   'updatetodo',
@@ -17,8 +18,7 @@ const TODO_TOOL_NAMES = new Set([
   'checklist',
   'settasks',
   'taskcreate',
-  'taskupdate',
-  'tasklist'
+  'taskupdate'
 ])
 
 const QUESTION_TOOL_NAMES = new Set([

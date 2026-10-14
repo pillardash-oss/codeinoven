@@ -108,6 +108,13 @@ export interface HarnessCapabilities {
   compaction: boolean
   /** Emits provider-normalized child-agent lifecycle activity. */
   subagents: boolean
+  /**
+   * The driver itself reconciles a settled turn's task list from inside the
+   * harness (pi's core-tools extension wakes the agent on `agent_settled`).
+   * The chat engine's task-list guard skips such drivers so a stale list is
+   * never nudged twice for the same turn.
+   */
+  handlesTaskReconcile?: boolean
   /** Can force a model response through a validated JSON-schema output tool. */
   structuredOutput?: boolean
   /** Utility capabilities already supplied natively by this harness. */

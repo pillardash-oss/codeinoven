@@ -301,6 +301,10 @@ export class PiDriver extends PersistentCliDriver {
     compaction: true,
     subagents: true,
     scheduledRetry: true,
+    // The core-tools extension reconciles the task list on `agent_settled`
+    // (src/main/drivers/pi/tools/core-tools-events.ts), so the chat engine's
+    // generic guard must not nudge the same turn again.
+    handlesTaskReconcile: true,
     nativeUtilities: []
   }
 
