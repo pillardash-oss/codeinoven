@@ -178,20 +178,6 @@
     return ids
   })
 
-  /** Routine rows surface unread work without requiring each task list to open. */
-  const unreadRoutineIds = $derived.by(() => {
-    const ids = new SvelteSet<string>()
-    for (const task of tasks) {
-      if (task.routineId && !task.read) ids.add(task.routineId)
-    }
-    for (const runs of runsByRoutine.values()) {
-      for (const run of runs) {
-        if (run.routineId && !run.read) ids.add(run.routineId)
-      }
-    }
-    return ids
-  })
-
   /**
    * Routines with a thread parked on the user (awaiting approval) or failed,
    * across tasks and runs. The rail already counts these as attention, but the
@@ -224,13 +210,17 @@
     for (const [routineId, list] of tasksByRoutine) {
       map.set(
         routineId,
-        countThreadStates([...list, ...(runsByRoutine.get(routineId) ?? EMPTY_RUNS)])
+        countThreadStates([...list, ...(runsByRoutine.get(routineId) ?? EMPTY_RUNS)], {
+          includeUnread: true
+        })
       )
     }
     // A run can outlive the routine's task list (its task was removed), so any
     // routine left with only runs still gets a breakdown.
     for (const [routineId, runs] of runsByRoutine) {
-      if (!map.has(routineId)) map.set(routineId, countThreadStates(runs))
+      if (!map.has(routineId)) {
+        map.set(routineId, countThreadStates(runs, { includeUnread: true }))
+      }
     }
     return map
   })
@@ -560,7 +550,6 @@
           {routine}
           expanded={isExpanded}
           stateCounts={routineStateCounts.get(routine.id) ?? EMPTY_STATE_COUNTS}
-          unread={unreadRoutineIds.has(routine.id)}
           attention={attentionRoutineIds.has(routine.id)}
           missed={missedRoutineIds.has(routine.id)}
           runCount={routineRunList.length}
