@@ -15,8 +15,20 @@ import type {
 import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
+import type { VideoStudioDocument, VideoJob } from '../video/studio'
 
 export const invokeDesignContract = {
+  'video:studio': {} as Contract<
+    [projectId: string, directory: string],
+    { document: VideoStudioDocument; revision: string }
+  >,
+  'video:save': {} as Contract<
+    [projectId: string, directory: string, document: VideoStudioDocument, revision: string],
+    { document: VideoStudioDocument; revision: string }
+  >,
+  'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
+  'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
+  'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
   'design:rankings': {} as Contract<[startAt: number, endAt: number], DesignModelRanking[]>,
   'design:export': {} as Contract<
     [projectId: string, directory: string, entry: string | null, format: DesignExportFormat],

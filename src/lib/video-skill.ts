@@ -134,7 +134,27 @@ Your soundtrack stops with the picture. A play is refused while the player is pa
 
 The page plays the files named in \`audio\` for a viewing. The app reads the same list from the manifest to mux them into an exported file, because a page cannot hand back its own mixed audio. Name them in the order they should layer, and keep speech above music by a wide margin.
 
-## Watching it, and checking your own work
+## Footage, captions and delivery
+
+Use \`probe\` before editing source media. \`filmstrip\` extracts up to 24 small frames at reported timestamps; open those pictures. \`waveform\` returns a waveform PNG, and \`listen\` returns a mono WAV excerpt. \`cut\` saves a trimmed clip with its audio into a new folder. Sources are project-relative files and originals are kept.
+
+\`transcribe\` uses the installed ASR selected in Sounds, never a model you choose. Recognizer-supplied word timing is retained when available. Otherwise the output explicitly reports chunk timing; never describe it as word aligned. Import JSON or SRT with \`captions\`, using \`from\` and \`to\` for the source trim and \`at\` for its timeline placement. Supplied word timing survives trims. Caption styles are \`plain\`, \`highlight\` and \`karaoke\`.
+
+Use \`studio\` to read the composition's \`studio.json\` and revision. Write back the full document and that revision to change controls, captions or audio tracks. Controls hold \`key\`, \`label\`, \`kind\` (text, number, color, switch), \`value\` and optional number bounds. Audio tracks hold composition-relative \`source\`, timeline \`start\`, source \`trim\`, \`duration\` and \`gain\`. The video panel edits the same file, so read it again after a user edit. A stale revision is refused rather than overwriting the user's work.
+
+Install the CIO-authored helper script with \`runtime\`, then include \`<script src="./cio-video.js"></script>\` before your own script. Await \`CIOVideo.bind(draw)\` to load saved parameters, audio tracks and fonts before defining the render function. Read \`CIOVideo.parameters\` in your draw function and call \`CIOVideo.drawCaptions(ctx, seconds, width, height)\` after the scene. Do not echo the document or tool instructions onto the stage.
+
+The helpers expose progress, interpolation and easing; SVG path reveals and animated dashed strokes through \`strokePath\`; polygons, matching-command path morphs and fixed group pivots; and \`trackingAt\` for interpolating a tracked position. Canvas supplies ellipse and conic-gradient drawing. Always save and restore the drawing context around a group transform.
+
+For footage on the stage, await \`CIOVideo.mediaReady(video)\` once and \`CIOVideo.seekMedia(video, sourceSeconds)\` before drawing an exact frame. The render function may return a promise; both capture and export wait for it, and preview does not overlap asynchronous draws.
+
+\`track\` follows a selected rectangular region through up to 60 seconds, with normalized x/y/width/height coordinates. It returns center positions and confidence, not a semantic object mask. Inspect low-confidence frames and occlusions. \`remove-background\` creates an opaque base and transparent foreground WebM locally using a supported GPU, with a bounded 720p/30fps clip and a first-use model download into project scratch. MODNet is for people; BEN2 is for general subjects. Report hardware failures instead of inventing a transparent result.
+
+\`export\` renders the composition to MP4 with audio in a dedicated hidden renderer, up to 4K pixel count, and writes SRT when captions exist. Its audio comes from studio tracks when present, otherwise the manifest's audio list. Audio embedded in source clips must be declared as tracks to be heard in the export. The source composition stays intact.
+
+Analysis, cuts, tracking, background removal and export return a job immediately. Poll \`jobs\` for progress and terminal success, files or errors; never report delivery while it is running. One expensive job runs at a time. The user can cancel with confirmation in Video controls or the task manager. Inspect the resulting MP4 before calling the work delivered.
+
+## Preview and frame review
 
 Invoke this capability with operation \`preview\`:
 

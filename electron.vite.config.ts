@@ -237,7 +237,29 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
+          // The video studio's inference stack is external for two reasons. It
+          // loads native binaries (onnxruntime-node's NAPI binding, sharp) whose
+          // `require('../bin/<platform>/<arch>/...node')` only resolves from the
+          // package's own directory, never from a bundled chunk under out/main;
+          // and mediabunny keeps a module-level decoder registry, so a bundled
+          // copy would be a second instance and the NodeAV decoders that
+          // registerMediabunnyServer() installs would never reach the copy
+          // @remotion/video-matting decodes with (background removal then fails
+          // with `The primary video track cannot be decoded.`). Resolving them at
+          // runtime keeps one copy of each, which is also what the package layout
+          // now guarantees.
+          external: [
+            'electron',
+            'node-pty',
+            'better-sqlite3',
+            'electron-updater',
+            '@huggingface/transformers',
+            '@mediabunny/server',
+            '@remotion/video-matting',
+            'mediabunny',
+            'onnxruntime-node',
+            'sharp'
+          ],
           input: {
             index: resolve(__dirname, 'src/main/entry.ts')
           },

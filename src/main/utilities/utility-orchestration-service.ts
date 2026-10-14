@@ -2412,6 +2412,24 @@ export class UtilityOrchestrationService {
         ['preview', this.videoPreviewExecutor],
         ['checkpoint', this.videoPreviewExecutor],
         ['generate', this.mediaGenerationExecutor],
+        ...[
+          'probe',
+          'filmstrip',
+          'waveform',
+          'listen',
+          'transcribe',
+          'cut',
+          'export',
+          'jobs',
+          'studio',
+          'runtime',
+          'captions',
+          'track',
+          'remove-background'
+        ].map((name): [string, VideoCapabilityExecutor | null] => [
+          name,
+          this.videoPreviewExecutor
+        ]),
         ['capture', this.videoCaptureExecutor]
       ])
       const executor = executors.get(operation)

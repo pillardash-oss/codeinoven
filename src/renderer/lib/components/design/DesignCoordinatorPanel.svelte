@@ -25,6 +25,7 @@
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
+  import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
@@ -1276,6 +1277,11 @@
         </p>
       {/if}
 
+      {#if video && selected.directory !== ''}
+        {#key `${projectId}:${threadId}:${selected.directory}`}
+          <VideoStudioControls {projectId} {threadId} directory={selected.directory} />
+        {/key}
+      {/if}
       {#if video && gallery.length === 0}
         <div
           class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"

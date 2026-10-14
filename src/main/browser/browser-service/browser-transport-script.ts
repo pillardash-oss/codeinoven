@@ -99,6 +99,8 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   // Negative until the first tick, rather than zero: a synthetic clock can hand
   // out a timestamp of exactly zero, and that must not read as "no baseline yet".
   let lastAt = -1;
+  let pendingFrame = null;
+  let queuedFrame = null;
   const transport = {
     duration: DURATION,
     fps: FPS,
@@ -276,9 +278,23 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   /** Draw one frame, and report rather than throw: a frame that fails must not
    *  take the transport down with it, and the message is shown to the user. */
   function renderAt(seconds) {
+    if (pendingFrame) { queuedFrame = seconds; return true; }
     try {
-      render(seconds);
+      const drawn = render(seconds);
       transport.error = null;
+      if (drawn && typeof drawn.then === 'function') {
+        pendingFrame = Promise.resolve(drawn).catch((error) => {
+          transport.error = String(error);
+          transport.playing = false;
+          stopDriver(); syncMedia(false);
+        }).finally(() => {
+          pendingFrame = null;
+          if (queuedFrame !== null) {
+            const next = queuedFrame; queuedFrame = null;
+            renderAt(next);
+          }
+        });
+      }
       return true;
     } catch (error) {
       transport.error = String(error);
@@ -296,9 +312,13 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function syncMedia(playing) {
     for (const element of mediaElements()) {
       try {
-        if (playing) {
-          if (Math.abs(element.currentTime - transport.time) > RESYNC) {
-            element.currentTime = transport.time;
+        const trackStart = Number(element.dataset && element.dataset.cioTrackStart || 0);
+        const trackTrim = Number(element.dataset && element.dataset.cioTrackTrim || 0);
+        const trackDuration = Number(element.dataset && element.dataset.cioTrackDuration || Infinity);
+        const local = transport.time - trackStart;
+        if (playing && local >= 0 && local < trackDuration) {
+          if (Math.abs(element.currentTime - (local + trackTrim)) > RESYNC) {
+            element.currentTime = local + trackTrim;
           }
           const started = element.play();
           if (started && typeof started.catch === 'function') started.catch(() => {});
@@ -324,6 +344,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function tick(now) {
     pending = 0;
     if (!transport.playing) return;
+    if (pendingFrame) { lastAt = now; pending = raf(tick); return; }
     if (lastAt < 0) lastAt = now;
     const elapsed = Math.min(Math.max((now - lastAt) / 1000, 0), MAX_TICK);
     lastAt = now;
@@ -392,12 +413,13 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   }
 
   /** Freeze on one frame, for a capture: the frame is the answer, not playback. */
-  function freezeAt(seconds) {
+  async function freezeAt(seconds) {
     transport.playing = false;
     stopDriver();
     transport.time = clampTime(seconds);
     syncMedia(false);
     renderAt(transport.time);
+    while (pendingFrame) await pendingFrame;
     return state();
   }
 

@@ -707,8 +707,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // shows it. `capture` adds the frame render and the screenshot on top of the
   // same serve-and-show path, so the two operations cannot drift.
   const { createVideoPreviewExecutor } = await import('../video/video-preview-executor')
+  const { VideoStudioService } = await import('../video/video-studio-service')
+  const videoStudio = new VideoStudioService({
+    database,
+    previews: state.directoryPreviewService,
+    speech: () => state.speechService,
+    config: () => storage.getConfig()
+  })
+  videoStudio.registerIpc()
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
+      studio: videoStudio.execute,
       previews: state.directoryPreviewService,
       database,
       checkpoint: (projectId, threadId, input) =>

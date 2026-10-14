@@ -7,6 +7,7 @@ import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
+import { videoStudioTools } from '../../video/video-studio-tools'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 
@@ -422,6 +423,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
 export function videoUtilityTools(roots: WorkRoots): McpTool[] {
   const videoRoot = workRootForKind(roots, 'video')
   return [
+    ...videoStudioTools(),
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {

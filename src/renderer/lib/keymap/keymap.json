@@ -885,6 +885,13 @@
           "scenario": "A modal overlay is open."
         },
         {
+          "id": "video-primary-action",
+          "keys": ["mod", "enter"],
+          "label": "Run video primary action",
+          "description": "Saves edited video controls, or exports MP4 when there are no unsaved changes.",
+          "scenario": "Focus is inside Video controls."
+        },
+        {
           "id": "ui-close-modal",
           "keys": ["escape"],
           "label": "Close modal / sheet",

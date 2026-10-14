@@ -2836,7 +2836,7 @@ export class BrowserService {
     const drawn: unknown = tab.view.webContents.executeJavaScript(`(async () => {
       const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
       if (transport && typeof transport.freezeAt === 'function') {
-        const state = transport.freezeAt(${JSON.stringify(seconds)});
+        const state = await transport.freezeAt(${JSON.stringify(seconds)});
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const failure = state && state.error;
         return failure ? { rendered: false, reason: String(failure) } : { rendered: true };

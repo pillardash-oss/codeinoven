@@ -19,6 +19,11 @@ export interface SpeechTranscribeInput {
   language: string | 'auto'
 }
 
+export interface SpeechTimedTranscript {
+  text: string
+  words?: { text: string; start: number; end: number }[]
+}
+
 export interface SpeechSynthesisInput {
   artifact: SpeechBackendArtifact
   text: string
@@ -43,6 +48,10 @@ export interface SpeechBackend {
   isResident(): boolean
   warmup?(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void>
   transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string>
+  transcribeTimed?(
+    input: SpeechTranscribeInput,
+    signal: AbortSignal
+  ): Promise<SpeechTimedTranscript>
   cleanup(
     transcript: string,
     artifact: SpeechBackendArtifact,
