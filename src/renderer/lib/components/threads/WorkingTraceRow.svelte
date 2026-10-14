@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Archive, FileText, Loader2 } from '@lucide/svelte'
+  import { Archive, ChevronRight, FileText, Loader2 } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { isImageMime } from '$lib/mime'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { AgentPart } from '$shared/types'
@@ -38,6 +40,9 @@
     checkpointPaths,
     onOpenSubagent
   }: Props = $props()
+
+  /** Expansion state of the compaction disclosure, which is not a chain step. */
+  let compactionOpen = $state(false)
 </script>
 
 {#if part.type === 'reasoning'}
@@ -58,16 +63,20 @@
     <span class="text-[0.625rem] text-dimmed">Step complete · {part.reason}</span>
   {/if}
 {:else if part.type === 'compaction'}
-  <details class="rounded-lg border border-border bg-elevated">
-    <summary
-      class="flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors hover:bg-overlay"
+  <div class="rounded-lg border border-border bg-elevated">
+    <button
+      type="button"
+      class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-overlay"
+      aria-expanded={compactionOpen}
+      title={compactionOpen ? 'Hide compaction summary' : 'Show compaction summary'}
+      onclick={() => (compactionOpen = !compactionOpen)}
     >
       {#if busy && !part.summary}
         <Loader2 size={12} class="shrink-0 animate-spin text-info" />
       {:else}
         <Archive size={12} class="shrink-0 text-info" />
       {/if}
-      <div class="min-w-0">
+      <div class="min-w-0 flex-1">
         <p class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] font-medium text-foreground">
           {part.auto ? 'Automatic compaction' : 'Compact Work'}
           {#if !part.summary && !busy}
@@ -87,13 +96,20 @@
               : 'Summarizing earlier work to free context'}
         </p>
       </div>
-    </summary>
-    {#if part.summary}
-      <div class="border-t border-border px-3 py-2 text-sm text-muted">
+      <ChevronRight
+        size={12}
+        class="shrink-0 text-dimmed transition-transform {compactionOpen ? 'rotate-90' : ''}"
+      />
+    </button>
+    {#if compactionOpen && part.summary}
+      <div
+        transition:slide={foldSlide()}
+        class="border-t border-border px-3 py-2 text-sm text-muted"
+      >
         <MarkdownView text={part.summary} {onCiteFile} />
       </div>
     {/if}
-  </details>
+  </div>
 {:else if part.type === 'file'}
   <div class="flex items-center gap-1.5 text-[0.625rem] text-dimmed">
     {#if isImageMime(part.mime)}

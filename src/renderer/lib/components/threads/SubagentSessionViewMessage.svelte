@@ -38,7 +38,6 @@
         parts={traceParts}
         open={busy}
         {busy}
-        latest={busy}
         {startTime}
         {modelLabel}
         {providerName}

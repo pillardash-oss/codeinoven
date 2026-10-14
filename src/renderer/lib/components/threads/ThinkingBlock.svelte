@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Brain, ChevronRight } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
@@ -54,9 +56,13 @@
 </script>
 
 {#if body.trim() || summary.trim()}
-  <details class="min-w-0" bind:open>
-    <summary
+  <div class="min-w-0">
+    <button
+      type="button"
       class="flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+      aria-expanded={open}
+      title={open ? 'Hide thinking' : 'Show thinking'}
+      onclick={() => (open = !open)}
     >
       <Brain size={13} class="shrink-0 text-info/70" />
       <span class="shrink-0">Thinking</span>
@@ -71,26 +77,28 @@
         size={12}
         class="shrink-0 text-muted transition-transform {open ? 'rotate-90' : ''}"
       />
-    </summary>
-    <div class="border-l border-border/60 py-1 pl-3">
-      <div class="max-h-80 overflow-y-auto">
-        {#if body.trim()}
-          <SmoothMarkdown
-            text={body}
-            streaming={active && live}
-            class="text-xs text-muted"
-            {onCiteFile}
-          />
-        {/if}
-        {#if summary.trim()}
-          <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
-            <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
-              Thinking summary
-            </p>
-            <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
-          </div>
-        {/if}
+    </button>
+    {#if open}
+      <div transition:slide={foldSlide()} class="border-l border-border/60 py-1 pl-3">
+        <div class="max-h-80 overflow-y-auto">
+          {#if body.trim()}
+            <SmoothMarkdown
+              text={body}
+              streaming={active && live}
+              class="text-xs text-muted"
+              {onCiteFile}
+            />
+          {/if}
+          {#if summary.trim()}
+            <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
+              <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
+                Thinking summary
+              </p>
+              <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
+            </div>
+          {/if}
+        </div>
       </div>
-    </div>
-  </details>
+    {/if}
+  </div>
 {/if}

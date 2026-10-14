@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Bot } from '@lucide/svelte'
   import { onDestroy, tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { isCodeModeToolName } from '$shared/agent-interactions'
@@ -36,7 +38,6 @@
     parts: AgentPart[]
     open?: boolean
     busy?: boolean
-    latest?: boolean
     /** True once this trace's turn produced a completed assistant message   the
      *  only condition under which the trace may fold itself. */
     done?: boolean
@@ -95,7 +96,6 @@
     parts,
     open = false,
     busy = false,
-    latest = false,
     done = false,
     rehydrated = false,
     foreignRun = false,
@@ -129,15 +129,14 @@
   }: Props = $props()
 
   // Intentional initial-value capture   props are only used to seed local state.
+  // A settled turn opens folded (its answer lives outside the trace), and a
+  // trace the user opened themselves stays open.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(!initiallyFolded && (open || initialOpen))
+  let isOpen = $state(initialUserOpened || (!done && !initiallyFolded && (open || initialOpen)))
   // svelte-ignore state_referenced_locally
   let userOpened = $state(initialUserOpened)
   // svelte-ignore state_referenced_locally
   let userFolded = $state(initiallyFolded)
-  // svelte-ignore state_referenced_locally
-  let wasLatest = $state(latest)
-  let closeTimer: ReturnType<typeof setTimeout> | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   /** How close to the trace scroller's edges counts as "there". */
@@ -358,45 +357,22 @@
   }
 
   $effect(() => {
+    // A live turn keeps its work on screen; a trace the user explicitly folded
+    // stays folded while it works, so a harness busy blip never re-opens it.
     if (busy && visibleParts.length > 0) {
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
-      // A trace the user explicitly folded stays folded while it works.
       if (!isOpen && !userFolded) {
         isOpen = true
         notify()
       }
-    } else if (done && !busy && wasLatest && !latest && isOpen && !userOpened) {
-      // Turn finished and a newer turn superseded it   fold immediately.
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
+      return
+    }
+    // The moment the turn settles, its answer is already outside the trace, so
+    // the log folds itself by default and the reader opens it for the detail.
+    // A trace the user opened is left exactly as they left it. A turn still in
+    // progress (done === false) never folds.
+    if (done && !busy && isOpen && !userOpened) {
       isOpen = false
       notify()
-    } else if (done && !busy && !latest && isOpen && !userOpened) {
-      // Older completed turns fold after a short grace. The latest turn stays
-      // open so a refreshed thread never hides its only context by default.
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
-      closeTimer = setTimeout(() => {
-        isOpen = false
-        closeTimer = null
-        notify()
-      }, 2000)
-    }
-    // A turn still in progress (done === false) never folds itself: a transient
-    // busy=false from a harness activity blip must never hide the live trace.
-    wasLatest = latest
-  })
-
-  $effect(() => {
-    return () => {
-      if (closeTimer) clearTimeout(closeTimer)
     }
   })
 
@@ -405,10 +381,6 @@
     isOpen = !isOpen
     userOpened = isOpen
     userFolded = !isOpen
-    if (closeTimer) {
-      clearTimeout(closeTimer)
-      closeTimer = null
-    }
     notify()
   }
 
@@ -482,7 +454,7 @@
   }
 </script>
 
-<details class="min-w-0" open={isOpen}>
+<div class="min-w-0">
   <WorkingTraceSummary
     open={isOpen}
     {busy}
@@ -504,6 +476,7 @@
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
+      transition:slide={foldSlide()}
       class="flex max-h-[min(75vh,48rem)] min-w-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-2"
       onscroll={onTraceScroll}
       onwheel={onTraceWheel}
@@ -548,7 +521,7 @@
       {/if}
     </div>
   {/if}
-</details>
+</div>
 
 {#if coarsePointer}
   <ActionSheet

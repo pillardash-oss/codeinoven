@@ -56,56 +56,72 @@
   )
 </script>
 
-<summary
-  class="flex w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 border-b border-border py-1 text-left text-[0.75rem] font-medium text-muted transition-colors hover:text-foreground"
-  onclick={onToggle}
->
-  <span class="flex h-5 w-5 shrink-0 items-center justify-center">
-    {#if open && busy}
-      <ThinkingOrb size={20} label="Working" />
-    {:else}
-      <Cog size={12} />
-    {/if}
-  </span>
-  Working Trace
-  <span class="tabular-nums text-dimmed"
-    >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
+<div class="py-1 text-left text-[0.75rem] font-medium text-muted">
+  <!-- The rule under the header belongs to the content, not the row: it spans
+       only what is on screen, from the title to the last badge, so a short fold
+       is underlined short and a row full of badges is underlined across. -->
+  <div
+    class="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1"
   >
-  {#if hasCompaction || subagentCount > 0 || hasCodeMode}
-    <span class="flex items-center gap-1.5">
-      {#if hasCodeMode}
-        <span
-          class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
-          title="This activity includes code-mode scripts that call tools in one run."
-          aria-label="This activity includes code-mode scripts."
-        >
-          <CodeXml size={10} />
-          Code
-        </span>
-      {/if}
-      {#if hasCompaction}
-        <span
-          class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
-          title="This trace includes compacted context. Forking from here restores the compaction summary."
-          aria-label="Compacted context. Forking from here restores the compaction summary."
-        >
-          <Archive size={10} />
-          Compacted
-        </span>
-      {/if}
-      {#if subagentCount > 0}
-        <WorkingTraceSubagentBadge
-          {coarsePointer}
-          {title}
-          {label}
-          {subagentCount}
-          {activeSubagentCount}
-          parts={subagentParts}
-          {elapsedFor}
-          {onOpen}
-          {onOpenSheet}
-        />
-      {/if}
-    </span>
-  {/if}
-</summary>
+    <!-- The toggle is its own button so the sub-agent dropdown stays a sibling,
+         not a button nested inside a button. -->
+    <button
+      type="button"
+      class="flex min-w-0 cursor-pointer items-center gap-x-2 text-left transition-colors hover:text-foreground"
+      aria-expanded={open}
+      title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+      onclick={onToggle}
+    >
+      <!-- Icons share one left gutter with every step below, so the orb and the
+         cog sit on the same edge as the thinking and tool marks. -->
+      <span class="flex h-5 w-5 shrink-0 items-center">
+        {#if open && busy}
+          <ThinkingOrb size={20} label="Working" />
+        {:else}
+          <Cog size={12} />
+        {/if}
+      </span>
+      Working Trace
+      <span class="tabular-nums text-dimmed"
+        >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
+      >
+    </button>
+    {#if hasCompaction || subagentCount > 0 || hasCodeMode}
+      <span class="flex items-center gap-1.5">
+        {#if hasCodeMode}
+          <span
+            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
+            title="This activity includes code-mode scripts that call tools in one run."
+            aria-label="This activity includes code-mode scripts."
+          >
+            <CodeXml size={10} />
+            Code
+          </span>
+        {/if}
+        {#if hasCompaction}
+          <span
+            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
+            title="This trace includes compacted context. Forking from here restores the compaction summary."
+            aria-label="Compacted context. Forking from here restores the compaction summary."
+          >
+            <Archive size={10} />
+            Compacted
+          </span>
+        {/if}
+        {#if subagentCount > 0}
+          <WorkingTraceSubagentBadge
+            {coarsePointer}
+            {title}
+            {label}
+            {subagentCount}
+            {activeSubagentCount}
+            parts={subagentParts}
+            {elapsedFor}
+            {onOpen}
+            {onOpenSheet}
+          />
+        {/if}
+      </span>
+    {/if}
+  </div>
+</div>

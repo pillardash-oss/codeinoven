@@ -1,5 +1,7 @@
 <script lang="ts">
   import { ChevronRight } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -55,7 +57,6 @@
    */
   let userChoice = $state<boolean | null>(null)
   const open = $derived(userChoice ?? (active && chain.output === null))
-  const indented = $derived(showHeader && chain.steps.length > 0)
 
   const span = $derived(traceChainSpan(chain))
   const durationStart = $derived(span?.start)
@@ -84,7 +85,7 @@
 
 <div class="min-w-0">
   {#snippet stepList()}
-    <div class="flex min-w-0 flex-col gap-1.5" class:pl-4={indented}>
+    <div transition:slide={foldSlide()} class="flex min-w-0 flex-col gap-1.5">
       {#each chain.steps as step (step.id)}
         <WorkingTraceRow
           part={step}
@@ -125,7 +126,7 @@
     {/if}
   {/if}
   {#if chain.output}
-    <div class="min-w-0 text-[0.8125rem] text-foreground" class:pl-4={indented}>
+    <div class="min-w-0 text-[0.8125rem] text-foreground">
       <MarkdownView text={chain.output.text} {onCiteFile} />
     </div>
   {/if}

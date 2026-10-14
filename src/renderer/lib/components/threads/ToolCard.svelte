@@ -15,6 +15,8 @@
     XCircle
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
@@ -244,7 +246,7 @@
   </button>
 
   {#if open}
-    <div class="space-y-2 border-l border-border/60 py-1 pl-3">
+    <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pl-3">
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}

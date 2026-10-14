@@ -12396,7 +12396,6 @@
                         parts={turnParts}
                         open={isCurrentAssistantTurn || traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
-                        latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         foreignRun={traceRunIsForeign}
@@ -12744,7 +12743,6 @@
               open
               busy={Boolean(pendingLiveTurn)}
               note={workingStatusNote}
-              latest
               {active}
               olderPartsAvailable={streamHasOlder}
               onLoadOlderParts={loadOlderStreamParts}
@@ -12784,7 +12782,6 @@
               parts={specGenerationTraceParts}
               open
               busy
-              latest
               startTime={specGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
@@ -12796,7 +12793,6 @@
               parts={assignmentGenerationTraceParts}
               open
               busy
-              latest
               startTime={assignmentGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
