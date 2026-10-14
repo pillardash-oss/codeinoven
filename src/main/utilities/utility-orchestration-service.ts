@@ -1144,11 +1144,16 @@ export class UtilityOrchestrationService {
       if (isEngineeringTool(name)) {
         return request.artifactTools === true
       }
-      // The app-control tools are granted by the same session tag: they let a
-      // `@cio-hey` turn drive the app itself, so an ordinary turn is offered
-      // none of them and the gateway refuses a route it never received.
+      // The app-control tools let a turn drive the app itself. A thread running
+      // in full access reaches them with no tag, which is the starting block for
+      // the per-channel permission gates to come; every other thread reaches
+      // them only after the user opens an @cio-hey session. The gateway refuses
+      // a route the turn never received.
       if (isAppControlTool(name)) {
-        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+        return (
+          request.permissionLevel === 'full_access' ||
+          (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
+        )
       }
       return hasOnDemand
     })
@@ -1200,6 +1205,14 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
+    // A real project thread (the same turns that may create the thread's own
+    // engineering artifacts) that is neither in full access nor in an @cio-hey
+    // session does not receive the app-control tools. It is still told they
+    // exist, so it asks the user to tag it instead of working around them.
+    const appControlAskRequired =
+      request.artifactTools === true &&
+      request.permissionLevel !== 'full_access' &&
+      (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     const toolInstructions = [
       BACKGROUND_AGENT_CONTROL_INSTRUCTION,
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
@@ -1208,6 +1221,11 @@ export class UtilityOrchestrationService {
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
             `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
+          ]
+        : []),
+      ...(appControlAskRequired
+        ? [
+            `You can read and drive the app itself (its panels, settings, git and cloud deployments) with ${APP_CONTROL_CATALOG_TOOL_NAME} and ${APP_CONTROL_CALL_TOOL_NAME}. This thread is not running in full access and no @cio-hey session is open, so those tools are not in your tool list. When the task needs them, say so and ask the user to tag their next message with @cio-hey, or to switch the thread to full access. Do not try to reach the app's channels another way.`
           ]
         : []),
       ...(hasScopeCapability
