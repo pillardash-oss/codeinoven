@@ -327,6 +327,14 @@ export type AgentEvent =
       userMessageId: string
     }
   | {
+      /** A held steer was released without reaching the harness (a stop, a
+       *  teardown, or a driver reset) and kept in the transcript. The undo
+       *  window is closed, but the user's message is never deleted. */
+      type: 'steer.released'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
       /** A held steer was discarded by the user; the harness never saw it. */
       type: 'steer.discarded'
       sessionId: string

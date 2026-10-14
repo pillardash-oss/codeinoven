@@ -729,6 +729,17 @@
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
   let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
+  /** Absolute index of a held steer in view, or -1. A held steer has not
+   *  reached the harness yet, so it does not open a turn: the live trace still
+   *  belongs to the turn it steers and must render above the message. */
+  let heldSteerAbsIndex = $derived.by(() => {
+    for (let index = structureMessages.length - 1; index >= 0; index--) {
+      const message = structureMessages[index]
+      if (message?.role !== 'user') continue
+      if (threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)) return index
+    }
+    return -1
+  })
   /**
    * The durable work of a turn that settled without ever mirroring an assistant
    * message: a provider error, a user stop, a paused will-retry wait.
@@ -12163,8 +12174,54 @@
               <span class="max-w-32 truncate">{name}</span>
             </button>
           {/snippet}
+          <!-- The live or settled trace for a turn with no mirrored assistant
+               row. It renders as its own block so a held steer can be placed
+               after it instead of above the work it interrupts. -->
+          {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean)}
+            <WorkingTrace
+              parts={traceParts}
+              open
+              busy={traceBusy}
+              note={traceBusy ? workingStatusNote : null}
+              {active}
+              olderPartsAvailable={streamHasOlder}
+              onLoadOlderParts={loadOlderStreamParts}
+              totalSteps={streamTotalSteps}
+              startTime={activeTurnStartTime}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
+              isFast={currentWorkingTraceAttribution.isFast}
+              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
+              initiallyFolded={agentRuns.isTraceUserFolded(thread.projectId, conversationId)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened, userFolded) =>
+                agentRuns.setTraceOpen(
+                  thread.projectId,
+                  conversationId,
+                  open,
+                  userOpened,
+                  userFolded
+                )}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
+            {#if pendingLiveTurn && absIndex === heldSteerAbsIndex}
+              {@render liveTurnTrace(pendingLiveTurnParts, true)}
+            {/if}
             {#if msg.inlineArtifact}
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
@@ -12864,45 +12921,11 @@
             {/if}
           {/each}
 
-          {#if pendingLiveTurn || settledTurnParts.length > 0}
-            <WorkingTrace
-              parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
-              open
-              busy={Boolean(pendingLiveTurn)}
-              note={workingStatusNote}
-              {active}
-              olderPartsAvailable={streamHasOlder}
-              onLoadOlderParts={loadOlderStreamParts}
-              totalSteps={streamTotalSteps}
-              startTime={activeTurnStartTime}
-              modelLabel={currentWorkingTraceAttribution.modelLabel}
-              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
-              providerName={currentWorkingTraceAttribution.providerName}
-              providerId={currentWorkingTraceAttribution.providerId}
-              harnessId={currentWorkingTraceAttribution.harnessId}
-              harnessName={currentWorkingTraceAttribution.harnessName}
-              accountLabel={currentWorkingTraceAttribution.accountLabel}
-              accountId={currentWorkingTraceAttribution.accountId}
-              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
-              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
-              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
-              isFast={currentWorkingTraceAttribution.isFast}
-              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
-              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
-              initiallyFolded={agentRuns.isTraceUserFolded(thread.projectId, conversationId)}
-              projectId={thread.projectId}
-              threadId={thread.id}
-              onToggle={(open, userOpened, userFolded) =>
-                agentRuns.setTraceOpen(
-                  thread.projectId,
-                  conversationId,
-                  open,
-                  userOpened,
-                  userFolded
-                )}
-              onOpenSubagent={openSubagent}
-              onCiteFile={openFileCitation}
-            />
+          {#if (pendingLiveTurn && heldSteerAbsIndex === -1) || settledTurnParts.length > 0}
+            {@render liveTurnTrace(
+              pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts,
+              Boolean(pendingLiveTurn)
+            )}
           {/if}
 
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}

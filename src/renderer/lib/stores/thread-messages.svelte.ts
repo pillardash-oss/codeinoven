@@ -594,15 +594,16 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
-    // Point the busy run at the steered message immediately. Without this the
-    // run keeps the original turn's user message id until the first post-steer
-    // part event arrives, so the steered message dangles under a still-live
-    // working trace instead of opening its own fresh trace shell right away.
-    // This mirrors the regular send path, where the harness 'started' update
-    // rebinds the run to the new user message as soon as the turn opens.
-    agentRuns.setBusy(projectId, threadId, true, messageId)
+    // Hold the steered message optimistically: while the engine waits for the
+    // turn's in-flight tool to end, the run stays anchored to the prompt it is
+    // steering, so the held message renders under that turn's live working
+    // trace instead of above it. An immediately-delivered steer is un-held by
+    // its own result and opens its own trace shell; a failed steer drops the
+    // hold with the optimistic message.
+    entry.heldSteerIds.add(messageId)
+    this.cache.notify(projectId, threadId)
     try {
-      const confirmed = await invoke(
+      const result = await invoke(
         'agent:steerPrompt',
         projectId,
         threadId,
@@ -615,8 +616,13 @@ class ThreadMessagesStore {
         presentation,
         taskReferences
       )
-      this.confirmOptimistic(projectId, threadId, entry, messageId, confirmed)
+      if (!result.held) {
+        entry.heldSteerIds.delete(messageId)
+        agentRuns.setBusy(projectId, threadId, true, messageId)
+      }
+      this.confirmOptimistic(projectId, threadId, entry, messageId, result.message)
     } catch (error) {
+      entry.heldSteerIds.delete(messageId)
       this.rejectOptimistic(projectId, threadId, entry, messageId, error)
       throw error
     }

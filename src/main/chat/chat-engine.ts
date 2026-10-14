@@ -2502,7 +2502,7 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:steerPrompt',
-      (
+      async (
         _,
         projectId: string,
         threadId: string,
@@ -2514,8 +2514,8 @@ export class ChatEngine {
         projectReferences?: PromptProjectReference[],
         presentation?: UserMessagePresentation,
         taskReferences?: PromptAssignmentTaskReference[]
-      ) =>
-        this.steerPrompt(
+      ) => {
+        const message = await this.steerPrompt(
           projectId,
           threadId,
           text,
@@ -2527,6 +2527,15 @@ export class ChatEngine {
           presentation,
           taskReferences
         )
+        // Tell the renderer whether the steer is held for the undo window or
+        // already reached the harness, so it anchors the running turn on the
+        // right prompt. A held steer stays under the turn it steers; a
+        // delivered one opens its own trace shell right away.
+        const held = [...this.heldSteers.values()].some(
+          (steer) => steer.userMessageId === userMessageId
+        )
+        return { message, held }
+      }
     )
     ipcMain.handle(
       'agent:sendTemporaryPrompt',
@@ -8515,24 +8524,22 @@ export class ChatEngine {
         await steer.deliverMidTurn()
       } catch (error) {
         Logger.error('Held steer delivery failed:', error)
-        // The harness never absorbed the steer   treat it as discarded so the
-        // undo state cannot get stuck and the transcript stays consistent.
-        await steer.discard().catch(() => undefined)
-        this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
+        // The harness never absorbed the steer: keep the user's message and
+        // close the undo window instead of deleting words they typed.
+        this.broadcast({ type: 'steer.released', sessionId, userMessageId: steer.userMessageId })
         return
       }
       this.broadcast({ type: 'steer.delivered', sessionId, userMessageId: steer.userMessageId })
       return
     }
     // after-turn: the whole turn finished while the steer was held. Deliver as
-    // a regular next-turn send; discard on failure (the session is gone).
+    // a regular next-turn send; release on failure (the session is gone).
     this.heldSteers.delete(sessionId)
     try {
       await steer.deliverAfterTurn()
     } catch (error) {
       Logger.error('Held steer after-turn delivery failed:', error)
-      await steer.discard().catch(() => undefined)
-      this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
+      this.broadcast({ type: 'steer.released', sessionId, userMessageId: steer.userMessageId })
       return
     }
     // The undo window closed   the steer is now an ordinary sent message.
@@ -8559,15 +8566,15 @@ export class ChatEngine {
     }
   }
 
-  /** Clear any held steer for a session (driver reset, teardown, abort). The
-   *  steer never reached the harness, so its persisted record is removed too  
-   *  the conversation must look like the steer never happened. */
+  /** Release any held steer for a session WITHOUT deleting it (driver reset,
+   *  teardown, abort). The steer never reached the harness, but the message is
+   *  the user's: it stays in the transcript so a stop or a reset can never
+   *  make typed words vanish. Only an explicit undo removes it. */
   private clearHeldSteers(sessionId: string): void {
     const steer = this.heldSteers.get(sessionId)
     if (!steer) return
     this.heldSteers.delete(sessionId)
-    void steer.discard().catch(() => undefined)
-    this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
+    this.broadcast({ type: 'steer.released', sessionId, userMessageId: steer.userMessageId })
   }
 
   /** Append a user message to the harness's currently active native turn. */
