@@ -15999,7 +15999,9 @@ export class ChatEngine {
           messages: [withoutTransportParts(userMessage), completedMessage]
         }
       })
-      await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', { read: false })
+      // The PRD stage is done: park the thread on the user for review under the
+      // engineering-specific `spec` status, never the generic needs-attention one.
+      await this.threadManager.setStatus(projectId, threadId, 'spec', { read: false })
       return created
     } catch (error) {
       if (sessionId) {
@@ -16152,7 +16154,10 @@ export class ChatEngine {
       if (lifecycle?.activeStage === 'brainstorm') {
         this.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')
         if (lifecycle.autopilot) this.prdEngine.ensureWorkflow(projectId, threadId)
-        await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', {
+        // The Brainstorm stage is done: park the thread on the user for review
+        // under the engineering-specific `spec` status, never the generic
+        // needs-attention one.
+        await this.threadManager.setStatus(projectId, threadId, 'spec', {
           read: false
         })
         return finalized
@@ -26363,8 +26368,16 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : (createdPrd || createdAssignment) && threadBeforeFinalize?.status !== 'failed'
-                ? 'awaiting_approval'
+              : // Every engineering stage that finishes (a revised Spec or Brainstorm,
+                // a freshly drafted PRD, or an unsigned Assignment) parks the thread
+                // on the user under the engineering-specific `spec` status. That
+                // status is strictly for engineering, so a stage completion must
+                // never settle as the generic `awaiting_approval` needs-attention
+                // state, which is reserved for real harness gates (permissions,
+                // questions, secrets). The `failed` guard keeps an already-failed
+                // thread from being shadowed by a late successful artifact.
+                (createdPrd || createdAssignment) && threadBeforeFinalize?.status !== 'failed'
+                ? 'spec'
                 : auxiliaryFailure
                   ? // An auxiliary artifact update failed: settle on the
                     // previous artifact's reviewable state instead of `failed`,
