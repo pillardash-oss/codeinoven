@@ -570,6 +570,52 @@ describe('PiDriver', () => {
     expect(status?.status?.state).toBe('idle')
   })
 
+  it('only emits a terminal idle after it releases the held turn', async () => {
+    // The engine drops any idle that arrives while the driver still registers
+    // the turn, so a terminal idle swallowed there would end the turn nowhere.
+    // This locks the ordering: the status extension may report idle while the
+    // turn is held (an intermediate settle the driver will resume), but the
+    // driver's own `session.idle` is emitted only after it cleared the
+    // registration, so the guard can never swallow a turn's real end.
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    const idles: Array<{ type: string; holdsTurn: boolean }> = []
+    let resolveSettled: (() => void) | null = null
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve
+    })
+    driver.onEvent((event) => {
+      const isIdle =
+        event.type === 'session.idle' ||
+        (event.type === 'session.status' && event.status.state === 'idle')
+      if (!isIdle) return
+      idles.push({ type: event.type, holdsTurn: driver.hasActiveTurn(sessionId) })
+      if (event.type === 'session.idle') resolveSettled?.()
+    })
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    expect(driver.hasActiveTurn(sessionId)).toBe(true)
+    // The status extension reports idle mid-turn; the driver still holds the
+    // turn, so the emitted idle is the intermediate one the engine ignores.
+    client.emitStatus({
+      type: 'extension_ui_request',
+      id: 'ui-idle-mid-turn',
+      method: 'setStatus',
+      statusKey: PI_STATUS_EXTENSION_KEY,
+      statusText: PI_STATUS_IDLE
+    })
+    expect(idles).toEqual([{ type: 'session.status', holdsTurn: true }])
+    // The driver's terminal idle comes from `finishTurn`, after it cleared the
+    // registration, so `hasActiveTurn` is already false when it is emitted.
+    client.emit({ type: 'agent_settled' })
+    await settled
+    expect(idles).toEqual([
+      { type: 'session.status', holdsTurn: true },
+      { type: 'session.idle', holdsTurn: false }
+    ])
+  })
+
   it('ignores status records from foreign extension keys', async () => {
     const driver = new PiDriver(await storage())
     const sessionId = await driver.createSession(projectPath(), 'Pi')
