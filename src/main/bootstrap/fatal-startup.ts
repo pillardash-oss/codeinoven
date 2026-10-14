@@ -17,6 +17,9 @@ export interface FatalStartupContext {
 
 const recovering = new WeakSet<BootstrapState>()
 const DOWNLOAD_PAGE = 'https://codeinoven.com/downloads'
+const DOWNLOAD_ACTION = 'Open download page'
+const RESTART_ACTION = 'Restart'
+const QUIT_ACTION = 'Quit'
 
 /** Keep recovery independent of the database, app configuration and renderer. */
 export async function handleFatalStartup(
@@ -43,31 +46,44 @@ export async function handleFatalStartup(
   // or parsed settings. Each action returns here, including network failures.
   while (!state.quitCleanupStarted) {
     const status = state.updaterService?.status
-    const action = !status?.canAutoUpdate
-      ? 'Open download page'
+    const canAutoUpdate = status?.canAutoUpdate === true
+    const action = !canAutoUpdate
+      ? DOWNLOAD_ACTION
       : status?.state === 'downloaded'
         ? 'Install update'
         : status?.state === 'available'
           ? 'Download update'
           : 'Check for updates'
+    // The dedicated download button only exists while the primary action does
+    // something else; adding it unconditionally would show the dialog twice
+    // whenever the primary action already opens the download page.
+    const buttons = canAutoUpdate
+      ? [action, DOWNLOAD_ACTION, RESTART_ACTION, QUIT_ACTION]
+      : [action, RESTART_ACTION, QUIT_ACTION]
+    const downloadIndex = buttons.indexOf(DOWNLOAD_ACTION)
+    const restartIndex = buttons.indexOf(RESTART_ACTION)
+    const quitIndex = buttons.indexOf(QUIT_ACTION)
     try {
       const { response } = await dialog.showMessageBox({
         type: 'warning',
         title: `${APP_NAME} recovery`,
         message: 'The workspace could not open. You can still update the application.',
         detail: `${error instanceof Error ? error.message : String(error)}\n\nUpdate status: ${status?.state ?? 'unavailable'}${status?.availableVersion ? ` (${status.availableVersion})` : ''}${status?.errorMessage ? `\n${status.errorMessage}` : ''}`,
-        buttons: [action, 'Open download page', 'Restart', 'Quit'],
+        buttons,
         defaultId: 0,
-        cancelId: 3,
+        cancelId: quitIndex,
         noLink: true
       })
-      if (response === 1) {
+      if (canAutoUpdate && response === downloadIndex) {
         await shell.openExternal(DOWNLOAD_PAGE)
-      } else if (response === 2 || response === 3) {
-        if (response === 2) app.relaunch()
+      } else if (response === restartIndex) {
+        app.relaunch()
         app.quit()
         return
-      } else if (!status?.canAutoUpdate) {
+      } else if (response === quitIndex) {
+        app.quit()
+        return
+      } else if (!canAutoUpdate) {
         await shell.openExternal(DOWNLOAD_PAGE)
       } else {
         await startStartupUpdater(state, storage)
