@@ -105,6 +105,14 @@ export interface Thread {
   dismissedSpecVersion?: number
   /** Audit gate for the latest implementation turn. */
   auditState?: 'offered' | 'running' | 'report_ready' | 'reworking'
+  /**
+   * Durable Engineering marker: set the first time this thread engages the
+   * Engineering lifecycle (a stage is selected and applied, or a run starts)
+   * and never cleared. A thread row draws its Engineering indicator straight
+   * from this field, so no lifecycle round trip stands between the persisted
+   * fact and the sidebar.
+   */
+  engineering?: boolean
   /** Independent (spec-less) audit is enabled for this thread. Excludes
    *  engineering modes for the thread's lifetime and is never inherited by
    *  forks or new threads created from this thread. */
@@ -385,6 +393,9 @@ export interface CreateThreadInput {
   achievementRole?: Thread['achievementRole']
   auditorThreadId?: string
   userInputLocked?: boolean
+  /** Seed the durable Engineering marker: a fork of an Engineering thread
+   *  opens as one too, so its row keeps the Engineering indicator. */
+  engineering?: boolean
   routineId?: string
   assistantIconType?: string
   assistantIcon?: string

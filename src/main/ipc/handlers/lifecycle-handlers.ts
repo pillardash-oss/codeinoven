@@ -31,6 +31,13 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
       }
       const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
       const next = engineeringLifecycleEngine.select(ids.projectId, ids.threadId, selectionInput)
+      // The durable Engineering marker rides the thread row, so the sidebar can
+      // draw the Engineering indicator without a lifecycle round trip. Turning
+      // every stage off never clears it: a thread that ran Engineering stays an
+      // Engineering thread for its lifetime.
+      if (next.autopilot || next.selectedStages.length > 0) {
+        await threadManager.updateThread(ids.projectId, ids.threadId, { engineering: true })
+      }
       // Engineering is now expressed purely through the lifecycle selection, so
       // the senior-engineer/auditor defaults attach the moment a thread first
       // gains an active selection (previously tied to the creation-time flag).
@@ -54,11 +61,15 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
     'engineeringLifecycle:start',
     async (_, projectId: unknown, threadId: unknown, stage: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
-      return engineeringLifecycleEngine.start(
+      const started = engineeringLifecycleEngine.start(
         ids.projectId,
         ids.threadId,
         stage === undefined || stage === null ? undefined : validateEngineeringLifecycleStage(stage)
       )
+      // Starting a stage engages Engineering even on the paths that never route
+      // through `select` (send-time auto-start, a retry, a resumed gate).
+      await threadManager.updateThread(ids.projectId, ids.threadId, { engineering: true })
+      return started
     }
   )
   ipcMain.handle(

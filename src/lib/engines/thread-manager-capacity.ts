@@ -8,11 +8,24 @@ import type { ThreadCapacityCandidate } from '../../main/database/repositories/t
  */
 export const REGULAR_BUCKET = '__regular_bucket__'
 
-/** Threads that automatic cleanup never evicts: pinned or in spec status. */
+/**
+ * Threads that automatic cleanup never evicts: pinned, in `spec` status, or
+ * driving an Assignment/Achievement orchestration.
+ *
+ * A coordinator is protected without a pin: the orchestration it owns lives on
+ * its row, and the thread parks in `spec` between stages anyway, so evicting it
+ * would destroy in-flight work. Workers and auditors are already kept out of the
+ * candidate list, so only the coordinator needs the guard here.
+ */
 export function isProtectedFromAutomaticCleanup(
-  thread: Pick<Thread, 'pinned' | 'status'>
+  thread: Pick<Thread, 'pinned' | 'status' | 'assignmentRole' | 'achievementRole'>
 ): boolean {
-  return thread.pinned || thread.status === 'spec'
+  return (
+    thread.pinned ||
+    thread.status === 'spec' ||
+    thread.assignmentRole === 'coordinator' ||
+    thread.achievementRole === 'coordinator'
+  )
 }
 
 /**

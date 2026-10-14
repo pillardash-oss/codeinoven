@@ -11,6 +11,13 @@
  * speech action of the app's own, but it is still sound the user can hear coming
  * from a thread, so it takes the same slot and competes the same way: the mark
  * must say which thread is making the noise the user is hearing.
+ *
+ * `engineering` is the durable Engineering mark: the thread has engaged the
+ * Engineering lifecycle at least once. It is not an action in flight, so it
+ * carries the oldest candidate time and yields the slot to any live action
+ * (recording, speaking, transcription, computer use, browser sound)   the
+ * transient action is the more urgent fact, and the Engineering mark returns
+ * the moment the slot is free.
  */
 export type ThreadIndicator =
   | 'recording'
@@ -20,6 +27,7 @@ export type ThreadIndicator =
   | 'transcribing-steer'
   | 'computer-use'
   | 'browser-audio'
+  | 'engineering'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator

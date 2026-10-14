@@ -51,6 +51,7 @@ interface ThreadRow {
   achievement_role: string | null
   auditor_thread_id: string | null
   user_input_locked: number
+  engineering: number
   independent_audit: number
   independent_audit_initialized: number
   routine_id: string | null
@@ -190,6 +191,7 @@ function rowToThread(row: ThreadRow): Thread {
     achievementRole: (row.achievement_role as Thread['achievementRole']) ?? undefined,
     auditorThreadId: row.auditor_thread_id ?? undefined,
     userInputLocked: row.user_input_locked === 1,
+    engineering: row.engineering === 1,
     independentAudit: row.independent_audit === 1,
     independentAuditInitialized: row.independent_audit_initialized === 1,
     routineId: row.routine_id ?? undefined,
@@ -304,6 +306,10 @@ export interface ThreadCapacityCandidate {
   lastActivity: number
   /** Owning scope bucket; `undefined` resolves to the Default scope. */
   scopeBucketId?: string
+  /** Assignment role, so an orchestration coordinator stays protected. */
+  assignmentRole?: Thread['assignmentRole']
+  /** Achievement role, so a coordinator stays protected without a pin. */
+  achievementRole?: Thread['achievementRole']
 }
 
 /**
@@ -406,14 +412,14 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
-  independent_audit, independent_audit_initialized,
+  engineering, independent_audit, independent_audit_initialized,
   routine_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -447,6 +453,7 @@ ON CONFLICT(id) DO UPDATE SET
   achievement_role=excluded.achievement_role,
   auditor_thread_id=excluded.auditor_thread_id,
   user_input_locked=excluded.user_input_locked,
+  engineering=excluded.engineering,
   independent_audit=excluded.independent_audit,
   independent_audit_initialized=excluded.independent_audit_initialized,
   routine_id=excluded.routine_id,
@@ -503,6 +510,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.achievementRole ?? null,
     thread.auditorThreadId ?? null,
     thread.userInputLocked ? 1 : 0,
+    thread.engineering ? 1 : 0,
     thread.independentAudit ? 1 : 0,
     thread.independentAuditInitialized ? 1 : 0,
     thread.routineId ?? null,
@@ -785,7 +793,7 @@ export class ThreadRepo {
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, pinned, status, last_activity, scope_bucket_id
+      `SELECT id, pinned, status, last_activity, scope_bucket_id, assignment_role, achievement_role
        FROM threads
        WHERE project_id = ?
          AND archived = 0
@@ -802,7 +810,15 @@ export class ThreadRepo {
       pinned: row['pinned'] === 1,
       status: String(row['status']) as ThreadStatus,
       lastActivity: Number(row['last_activity']),
-      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id'])
+      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id']),
+      assignmentRole:
+        row['assignment_role'] == null
+          ? undefined
+          : (String(row['assignment_role']) as Thread['assignmentRole']),
+      achievementRole:
+        row['achievement_role'] == null
+          ? undefined
+          : (String(row['achievement_role']) as Thread['achievementRole'])
     }))
   }
 

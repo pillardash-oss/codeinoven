@@ -863,6 +863,7 @@ export class Database {
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
+      this.migrateThreadEngineeringColumn(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
       this.migrateThreadAssistantColumns(connection)
@@ -1494,6 +1495,33 @@ export class Database {
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
     }
+  }
+
+  /**
+   * Existing databases predate the durable Engineering marker on a thread. The
+   * marker is set the first time a thread engages the Engineering lifecycle and
+   * never cleared, so the row can draw its Engineering indicator without a
+   * lifecycle round trip. Threads that already engaged engineering are
+   * backfilled from the persisted lifecycle (`selection` moved off `none`, or a
+   * run was ever started). `SELECT`-based, so it costs one grouped pass and is
+   * idempotent on re-run.
+   */
+  private migrateThreadEngineeringColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('engineering')) return
+    connection.exec('ALTER TABLE threads ADD COLUMN engineering INTEGER NOT NULL DEFAULT 0')
+    connection.exec(
+      `UPDATE threads
+          SET engineering = 1
+        WHERE id IN (
+          SELECT thread_id FROM engineering_lifecycle
+           WHERE selection != 'none' OR started_at IS NOT NULL
+        )`
+    )
   }
 
   /** Existing databases predate the in-flight turn owner recorded for cross-instance recovery. */

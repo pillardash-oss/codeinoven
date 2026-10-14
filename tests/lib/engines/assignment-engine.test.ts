@@ -157,7 +157,10 @@ describe('AssignmentEngine', () => {
     ])
     expect(coordinator?.userInputLocked).toBe(false)
     expect(coordinator?.assignmentRole).toBe('coordinator')
-    expect(coordinator?.pinned).toBe(true)
+    // Engaging Assignment never pins the coordinator: pinning is the user's
+    // call, and a coordinator parked for review is already protected from
+    // automatic eviction by its `spec` status.
+    expect(coordinator?.pinned).toBe(false)
     // The coordinator keeps its workspace scope; orchestration no longer
     // moves threads into a dedicated assignment bucket.
     expect(coordinator?.scopeBucketId).toBe('default')

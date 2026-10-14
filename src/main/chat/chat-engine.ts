@@ -17667,7 +17667,6 @@ export class ChatEngine {
       scopeBucketId: coordinator.scopeBucketId,
       userInputLocked: true
     })
-    await this.threadManager.setPinned(projectId, auditor.id, true)
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       auditorThreadId: auditor.id
     })
@@ -17893,7 +17892,6 @@ export class ChatEngine {
       scopeBucketId: coordinator.scopeBucketId,
       userInputLocked: true
     })
-    await this.threadManager.setPinned(projectId, auditor.id, true)
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       auditorThreadId: auditor.id
     })
@@ -18288,7 +18286,6 @@ export class ChatEngine {
       achievementRole: 'coordinator',
       scopeBucketId: coordinator.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     })
-    await this.threadManager.setPinned(projectId, coordinatorThreadId, true)
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
   }
 
@@ -18375,7 +18372,6 @@ export class ChatEngine {
       scopeBucketId: scopedCoordinator.scopeBucketId,
       userInputLocked: true
     })
-    await this.threadManager.setPinned(projectId, auditor.id, true)
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       achievementRole: 'coordinator',
       auditorThreadId: auditor.id
@@ -18414,7 +18410,6 @@ export class ChatEngine {
     }
     await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.threadManager.updateThread(projectId, auditor.id, { userInputLocked: true })
-    await this.threadManager.setPinned(projectId, auditor.id, true)
     return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
   }
 

@@ -450,6 +450,10 @@
    * playback, so the speech candidates cannot both be live; the speech
    * controller reports when each began and computer use reports the agent's
    * most recent action.
+   *
+   * The durable Engineering mark is not an action in flight. It is pushed last
+   * with the oldest candidate time, so any live action takes the slot and the
+   * mark returns the moment the slot is free.
    */
   let indicator = $derived.by((): ThreadIndicator | null => {
     const candidates: Array<{ indicator: ThreadIndicator; at: number }> = []
@@ -472,6 +476,9 @@
     }
     if (browserAudioAt !== null) {
       candidates.push({ indicator: 'browser-audio', at: browserAudioAt })
+    }
+    if (thread.engineering === true) {
+      candidates.push({ indicator: 'engineering', at: 0 })
     }
     return resolveThreadIndicator(candidates)
   })

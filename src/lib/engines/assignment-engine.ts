@@ -432,12 +432,9 @@ export class AssignmentEngine {
         // managed-worktree scope is preserved untouched.
         scopeBucketId: coordinator.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
         userInputLocked: false,
-        pinned: true,
-        // The thread upsert never refreshes `pinned_at` on conflict, so the pin
-        // time has to be stamped here: without it the row lands pinned with a
-        // NULL pin time and sorts last in the Pinned slice. A thread the user
-        // already pinned keeps its original pin time.
-        pinnedAt: coordinator.pinnedAt ?? now,
+        // Pinning is the user's call alone: a coordinator parked for review is
+        // already protected from automatic eviction by its `spec` status, so
+        // engaging Assignment never pins the thread behind their back.
         updatedAt: now
       })
     })

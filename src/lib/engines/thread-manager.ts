@@ -342,6 +342,8 @@ export class ThreadManager {
       achievementRole: input.achievementRole,
       auditorThreadId: input.auditorThreadId,
       userInputLocked: input.userInputLocked,
+      // Always a boolean, matching what a read returns for the column.
+      engineering: input.engineering === true,
       // Assistant-space fields must be part of the created row itself: the
       // creation broadcast carries this object, so grouping a task after the
       // fact would be wiped by the very next thread:updated payload.
@@ -688,6 +690,7 @@ export class ThreadManager {
         | 'achievementRole'
         | 'auditorThreadId'
         | 'userInputLocked'
+        | 'engineering'
         | 'independentAudit'
         | 'independentAuditInitialized'
         | 'activeAuditId'
@@ -729,6 +732,9 @@ export class ThreadManager {
       achievementRole: input.achievementRole ?? existing.achievementRole,
       auditorThreadId: input.auditorThreadId ?? existing.auditorThreadId,
       userInputLocked: input.userInputLocked ?? existing.userInputLocked,
+      // The Engineering marker is durable: once set it stays set, so a later
+      // partial update that omits it (or passes false) can never clear it.
+      engineering: input.engineering === true ? true : existing.engineering,
       independentAudit: input.independentAudit ?? existing.independentAudit,
       independentAuditInitialized:
         input.independentAuditInitialized ?? existing.independentAuditInitialized,

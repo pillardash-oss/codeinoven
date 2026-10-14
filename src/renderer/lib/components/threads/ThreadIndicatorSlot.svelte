@@ -4,6 +4,7 @@
   import VoiceSendIndicator from '$lib/components/speech/VoiceSendIndicator.svelte'
   import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import ComputerUseIndicator from './ComputerUseIndicator.svelte'
+  import EngineeringIndicator from './EngineeringIndicator.svelte'
   import type { ThreadIndicator } from './thread-indicator'
 
   interface Props {
@@ -26,6 +27,8 @@
   <VoiceSendIndicator stage="steer" label="Transcribing: will steer the running turn" />
 {:else if indicator === 'browser-audio'}
   <SpeakingIndicator label="A browser tab on this thread is playing sound" />
+{:else if indicator === 'engineering'}
+  <EngineeringIndicator label="Engineering thread" />
 {:else}
   <ComputerUseIndicator label="Agent using the computer" />
 {/if}

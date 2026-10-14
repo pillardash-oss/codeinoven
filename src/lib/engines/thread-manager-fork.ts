@@ -157,6 +157,9 @@ export class ThreadForkService {
       title,
       titleSource: 'manual',
       settings: parent.settings,
+      // A fork of an Engineering thread is an Engineering thread: it inherits
+      // the parent's lifecycle switches below, so its row keeps the marker.
+      engineering: parent.engineering === true,
       // Forks into another project (e.g. a chat continued in a project) never
       // inherit the parent's feature work-directory or scope bucket.
       featureSlug:
