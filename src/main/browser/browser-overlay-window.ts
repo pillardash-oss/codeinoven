@@ -513,6 +513,7 @@ export class BrowserOverlayWindow {
    * the keyboard to a card.
    */
   private reveal(popup: BrowserWindow): void {
+    if (popup.isDestroyed()) return
     this.position(popup)
     if (popup.isVisible()) return
     this.pointerOverContent = false
@@ -599,7 +600,9 @@ export class BrowserOverlayWindow {
 
   /** The regions the overlay would draw right now, for the document's pull. */
   private publish(popup: BrowserWindow): void {
-    if (!this.ready) return
+    // A queued webContents event can still fire after the window was torn down,
+    // and reading `popup.webContents` on a destroyed window throws.
+    if (!this.ready || popup.isDestroyed() || popup.webContents.isDestroyed()) return
     sendToRenderer(popup.webContents, 'browser:overlay:stack', this.stack)
     sendToRenderer(popup.webContents, 'browser:overlay:strip', this.strip)
     sendToRenderer(popup.webContents, 'browser:overlay:status', this.status)
@@ -684,6 +687,7 @@ export class BrowserOverlayWindow {
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
     popup.webContents.on('before-input-event', (event, input) => {
+      if (popup.isDestroyed()) return
       const modal = [...this.docks.values()].findLast((dock) => dock.modal)
       if (!modal && this.hoverKeyboardOwner && input.type === 'keyDown') {
         const contents = this.hoverKeyboardOwner.contents
@@ -718,6 +722,7 @@ export class BrowserOverlayWindow {
       })
     })
     popup.on('blur', () => {
+      if (popup.isDestroyed()) return
       // A real focus departure invalidates the borrowed owner. It must not be
       // restored later by a delayed cursor response after another app activates.
       if (!this.hasModalDock()) this.releaseDockHoverFocus()
@@ -806,7 +811,7 @@ export class BrowserOverlayWindow {
   }
 
   private position(popup: BrowserWindow): void {
-    if (this.parent.isDestroyed()) return
+    if (popup.isDestroyed() || this.parent.isDestroyed()) return
     popup.setBounds(browserOverlayWindowBounds(this.parent.getContentBounds()))
   }
 }

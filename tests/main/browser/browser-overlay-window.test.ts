@@ -175,6 +175,26 @@ describe('native browser overlay window', () => {
     expect(parent.hide).not.toHaveBeenCalled()
     expect(parent.destroy).not.toHaveBeenCalled()
   })
+  it('never publishes into a destroyed overlay window', () => {
+    const { host } = setup()
+    host.applyDock(request.id, request)
+    const popup = windows[1]
+    popup.webContents.emit('did-finish-load')
+    mocks.send.mockClear()
+    popup.isDestroyed = () => true
+    expect(() => popup.webContents.emit('did-finish-load')).not.toThrow()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+  it('never publishes into a destroyed overlay webContents', () => {
+    const { host } = setup()
+    host.applyDock(request.id, request)
+    const popup = windows[1]
+    popup.webContents.emit('did-finish-load')
+    mocks.send.mockClear()
+    popup.webContents.isDestroyed = () => true
+    expect(() => popup.webContents.emit('did-finish-load')).not.toThrow()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
 })
 
 it('keeps native link previews passive and click-through', () => {
