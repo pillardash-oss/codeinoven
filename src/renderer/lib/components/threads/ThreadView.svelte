@@ -745,6 +745,13 @@
     if (!conversationBusy || brainstormReportRefreshing) return null
     const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
     if (!userMessageId) return null
+    // A steer still held for its undo window has not reached the harness yet, so
+    // it must not open a pending turn of its own. Whatever streams while it is
+    // held is work on the turn it steers, and that turn's own live trace owns it
+    // above the message. Opening a second trace here is what rendered the new
+    // working trace above the steered message instead of under it once the
+    // harness took it.
+    if (threadMessages.isSteerHeld(thread.projectId, conversationId, userMessageId)) return null
     const userMessageIndex = structureMessages.findIndex((message) => message.id === userMessageId)
     const userMessage = structureMessages[userMessageIndex]
     if (
