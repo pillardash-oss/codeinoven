@@ -315,7 +315,6 @@
   onClose={cancel}
   placement="palette"
   abovePage
-  nativePresentation={false}
   nativeOverlay="thread-switcher"
   bind:nativeReady
   bind:nativeFailed
@@ -374,7 +373,9 @@
         class="w-full cursor-pointer overflow-hidden rounded-lg text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
         title={entryTitle(entry)}
         onpointerenter={(event) => {
-          if (!nativeReady && pointerMovedSinceOpen(event)) highlightedKey = entryKey
+          // Native presentation owns pointer selection. Only a failed native
+          // presentation uses the source document's pointer events.
+          if (nativeFailed && pointerMovedSinceOpen(event)) highlightedKey = entryKey
         }}
         onclick={() => void selectEntry(entry)}
       >

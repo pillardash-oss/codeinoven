@@ -1,7 +1,7 @@
 import { app, nativeTheme, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { getMainBundleDirectory } from '../bootstrap/bundle-directory'
 
 /**
  * The three things every one of the app's own child windows needs to be built
@@ -16,12 +16,11 @@ import { fileURLToPath } from 'node:url'
 
 /** Resolve the app preload bundle the child documents run with.
  *
- *  `import.meta.url` is the compiled main bundle file (which lives in
- *  `out/main`), so take its directory first; the preload is one level up in
- *  `out/preload`. Passing the full file path to `join` instead silently resolved
- *  outside the bundle tree and the popup loaded with no preload. */
+ *  Shared main code may be emitted under `out/main/chunks`. Resolve the main
+ *  output directory before finding its sibling preload, just as the app window
+ *  does, so child windows receive their IPC bridge in either bundle layout. */
 export function resolveChildWindowPreload(): string {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), '../preload')
+  const dir = join(getMainBundleDirectory(import.meta.url), '../preload')
   for (const name of ['index.mjs', 'index.js', 'index.cjs']) {
     const candidate = join(dir, name)
     if (existsSync(candidate)) return candidate
@@ -52,6 +51,6 @@ export function loadRendererDocument(
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
     return target.loadURL(url.href).catch(() => {})
   }
-  const path = join(dirname(fileURLToPath(import.meta.url)), '../renderer', document)
+  const path = join(getMainBundleDirectory(import.meta.url), '../renderer', document)
   return target.loadFile(path, { query }).catch(() => {})
 }
