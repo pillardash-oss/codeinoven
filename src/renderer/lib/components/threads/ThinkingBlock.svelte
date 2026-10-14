@@ -57,6 +57,12 @@
    * block they want without opening every one in turn.
    */
   const title = $derived(reasoningBlockTitle(part.text, part.summary ?? ''))
+
+  /** The row's label, with the run's duration when the part reported one, so the
+   *  line reads `Reasoning (47s): <summary>`. */
+  const label = $derived(
+    start === undefined ? 'Reasoning:' : `Reasoning (${formatDurationMs(elapsed * 1000)}):`
+  )
 </script>
 
 {#if body.trim() || summary.trim()}
@@ -72,11 +78,12 @@
         size={13}
         class="shrink-0 text-info/60 transition-colors group-hover/think:text-info"
       />
-      <!-- Bold label plus the muted summary reads as one sentence, and the
-           weight is what separates the label from the content it introduces. -->
+      <!-- Bold label with the run's duration, then the muted summary: the
+           weight is what separates the label from the content it introduces.
+           The row keeps its summary whether the block is open or folded. -->
       <span
         class="shrink-0 font-semibold text-muted transition-colors group-hover/think:text-foreground"
-        >Reasoning:</span
+        >{label}</span
       >
       {#if title}
         <span
@@ -85,13 +92,6 @@
         >
       {:else}
         <span class="flex-1"></span>
-      {/if}
-      {#if start !== undefined}
-        <span
-          class="shrink-0 tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
-        >
-          {formatDurationMs(elapsed * 1000)}
-        </span>
       {/if}
       {#if active}
         <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-info animate-pulse"></span>
