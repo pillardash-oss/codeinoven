@@ -189,6 +189,7 @@ import {
 } from '../utilities/cio-video-prompt'
 import {
   CIO_ORCHESTRATE_CONTINUE_PROMPT,
+  CIO_ORCHESTRATE_FULL_ACCESS_PROMPT,
   CIO_ORCHESTRATE_START_PROMPT,
   isCioOrchestrateRequest
 } from '../orchestration/cio-orchestrate-prompt'
@@ -4143,13 +4144,17 @@ export class ChatEngine {
             : ''
       // The orchestration contract is the gate for the workstation tools: it is
       // what tells the agent the tools exist and how to resolve a request to a
-      // machine, a model and an account before dispatching real work.
+      // machine, a model and an account before dispatching real work. A thread
+      // running in full access reaches the tools with no tag, so it carries the
+      // full-access contract on every turn the tag did not open.
       const orchestrationContract =
         orchestrationSession === 'start'
           ? CIO_ORCHESTRATE_START_PROMPT
           : orchestrationSession === 'continue'
             ? CIO_ORCHESTRATE_CONTINUE_PROMPT
-            : ''
+            : settings.permissionLevel === 'full_access'
+              ? CIO_ORCHESTRATE_FULL_ACCESS_PROMPT
+              : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their

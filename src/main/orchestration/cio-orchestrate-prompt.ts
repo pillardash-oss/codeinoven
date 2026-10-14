@@ -60,3 +60,13 @@ If the user is asking about work already dispatched, read cio_orchestrate_status
 
 /** The compact contract for later turns of a thread that already opened the session. */
 export const CIO_ORCHESTRATE_CONTINUE_PROMPT = `This thread's workstation control session continues: the user opened it with ${CIO_ORCHESTRATE_TAG}, so both tool families stay active. Read cio_orchestrate_targets for current machine, model and account ids, read cio_app_catalog for the app's own channels and UI actions, ask with the application question tool for anything still unresolved, dispatch with cio_orchestrate_dispatch, drive the app with cio_app_call, and report an outcome when the app steers one back. Keep every id and channel name exact, and never invent a machine, a model, an account or a channel.`
+
+/**
+ * The compact contract for a thread running in full access, where both tool
+ * families are open with no session tag. The permission level is the grant here,
+ * not `${CIO_ORCHESTRATE_TAG}`, so the contract names full access instead of the
+ * tag and keeps the same obligations: read the workstation, resolve against its
+ * ids, ask rather than guess, and never invent a machine, model, account or
+ * channel.
+ */
+export const CIO_ORCHESTRATE_FULL_ACCESS_PROMPT = `This thread runs in full access, so the workstation control tools (cio_orchestrate_targets, cio_orchestrate_dispatch, cio_orchestrate_status) and the app tools (cio_app_catalog, cio_app_call) are open to you with no session tag. Read cio_orchestrate_targets before anything else: it is the only source of machine, model and account ids, and it also returns the current project, the default Oven and the default harness. Resolve the user's words against it, use the application question tool for any field the user did not name and the app does not supply, and ask first before a destructive app call and only then pass destructiveConfirmed: true. Dispatch with cio_orchestrate_dispatch, drive the app with cio_app_call, and report an outcome when the app steers one back. Keep every id and channel name exact, and never invent a machine, a model, an account or a channel.`
