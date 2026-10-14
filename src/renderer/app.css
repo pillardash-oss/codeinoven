@@ -939,7 +939,19 @@ html body [data-sonner-toaster] {
      dismissed the modal instead and left the toast stranded on screen.
 
      `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
-     panel; `lib/toast-layer.ts` owns the selector both sides share. */
+     panel; `lib/layer-above-modal.ts` owns the selector both sides share. */
+  pointer-events: auto;
+}
+
+html body vite-error-overlay {
+  /* Vite's development error overlay is appended to `document.body`, so it
+     inherits the same `body { pointer-events: none }` a modal bits-ui Dialog
+     locks the page with. Left inherited, the card was painted yet invisible to
+     the mouse (hit-testing skipped straight to `<html>`), so neither the
+     click-outside nor the Esc route could dismiss it while a modal held the
+     lock, and it blocked the window until the compile error was fixed. Opting
+     the host back in restores Vite's own dismissal; `lib/layer-above-modal.ts`
+     owns the selector `ui/Modal.svelte` shares to ignore presses aimed at it. */
   pointer-events: auto;
 }
 
