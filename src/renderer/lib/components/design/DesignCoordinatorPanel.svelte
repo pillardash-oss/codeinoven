@@ -4,6 +4,7 @@
     Check,
     ChevronDown,
     Copy,
+    Download,
     Ellipsis,
     Film,
     Frame,
@@ -24,6 +25,8 @@
   } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
   import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
@@ -40,6 +43,7 @@
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { openInBrowser } from '$lib/open-in-browser'
   import { designContractRequest } from '$shared/design/design-contract'
+  import type { VideoJob } from '$shared/video/studio'
   import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
@@ -146,6 +150,35 @@
   let historyOpen = $state(false)
 
   /**
+   * The composition's jobs, read by the board.
+   *
+   * The board draws the export above the controls and the controls report progress
+   * below, so the board holds the one list and hands it down: two readers could
+   * disagree about whether an export is running. A design has no jobs, so this
+   * stays empty for it.
+   */
+  let videoJobs = $state.raw<VideoJob[]>([])
+  /** Whether the studio controls hold unsaved edits, which a reload would discard. */
+  let studioDirty = $state(false)
+  /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
+  let boardRevision = $state(0)
+  /** Whether the user asked to reload over unsaved video controls. */
+  let reloadRequested = $state(false)
+  /**
+   * Undo and Redo for the folder in front, published by the history pane.
+   *
+   * The pane owns the history read; the board only shows the two steps, so the
+   * checkpoint is one click away without opening the pane. A design and a
+   * composition share this, which is the point: the same control, the same place.
+   */
+  let historyActions = $state<{
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  } | null>(null)
+
+  /**
    * The folder the user is looking at, when it is not the thread's own.
    *
    * A design tab is a view change, not a preview: picking another design shows its
@@ -178,6 +211,14 @@
    *  rail opened carries its kind instead of reading it from the thread. */
   let requestedKind = $derived<AuthoredWorkKind>(forcedKind ?? designState?.kind ?? 'design')
   let video = $derived(requestedKind === 'video')
+  /** The newest finished export, played in the board above the timeline. */
+  let exportPath = $derived.by(() => {
+    if (!video) return null
+    const files = videoJobs.flatMap((job) =>
+      job.operation === 'export' && job.state === 'completed' ? job.files : []
+    )
+    return files.at(-1) ?? null
+  })
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
@@ -658,10 +699,77 @@
     if (appeared || rewritten) await loadGallery()
   }
 
-  /** Refresh the board's own reading of the work: the screens and the canvas. */
+  /**
+   * Refresh the board's own reading of the work.
+   *
+   * A design re-pictures its screens and its canvas. A composition also re-reads
+   * its jobs and remounts its timeline and controls, so the one Refresh in the
+   * header is the whole board's reload and the controls do not need their own. The
+   * remount discards unsaved control edits, so those are confirmed first.
+   */
   function refreshBoard(): void {
+    if (video) {
+      if (studioDirty) {
+        reloadRequested = true
+        return
+      }
+      reloadVideoBoard()
+      return
+    }
     void loadGallery(true)
     void loadCanvas()
+  }
+
+  /** Re-read a composition after a refresh: picture, jobs, timeline and controls. */
+  function reloadVideoBoard(): void {
+    boardRevision += 1
+    void loadGallery(true)
+    void readVideoJobs()
+  }
+
+  /** Read the composition's jobs, the list the board's export stands on. */
+  async function readVideoJobs(): Promise<void> {
+    try {
+      videoJobs = await invoke('video:jobs', projectId, threadId)
+    } catch (failure) {
+      logRendererError('The video jobs could not be read.', failure)
+    }
+  }
+
+  /** Cancel a running job, which the controls ask for rather than doing themselves. */
+  async function cancelVideoJob(id: string): Promise<void> {
+    try {
+      await invoke('video:cancel', projectId, threadId, id)
+      await readVideoJobs()
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The job could not be cancelled.'
+    }
+  }
+
+  /** Start an export, so the action can live in the board's own menu. */
+  async function exportVideo(): Promise<void> {
+    if (selected.directory === '') return
+    try {
+      await invoke('video:export', projectId, threadId, selected.directory)
+      await readVideoJobs()
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The export could not be started.'
+    }
+  }
+
+  /** The controls' unsaved state, so a refresh can ask before discarding it. */
+  function setStudioDirty(value: boolean): void {
+    studioDirty = value
+  }
+
+  /** The history pane's Undo and Redo, mirrored into the board header. */
+  function handleHistoryActions(state: {
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  }): void {
+    historyActions = state
   }
 
   /**
@@ -721,6 +829,16 @@
     void loadWorkRoots()
   })
 
+  // The board owns the composition job poll, because it draws the export above the
+  // controls and both must read the same list. A design has no jobs, so nothing
+  // polls for one.
+  $effect(() => {
+    if (!video) return
+    void readVideoJobs()
+    const timer = setInterval(() => void readVideoJobs(), 1500)
+    return () => clearInterval(timer)
+  })
+
   /** A design's age, in the same compact form a thread row uses. */
   function ageLabel(value: number): string {
     return value > 0 ? formatCompactAge(value) : ''
@@ -737,6 +855,76 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
+  {#snippet videoStage()}
+    <div
+      class="mb-2 rounded-xl border border-border bg-app p-2"
+      aria-label={`${nounTitle} preview`}
+    >
+      {#if exportPath}
+        <video
+          class="block max-h-72 w-full rounded-lg bg-black"
+          src={`appfile://project/${projectId}/${exportPath}`}
+          controls
+          playsinline
+          preload="metadata"
+          aria-label={`Exported ${noun} ${selectedName}`}
+        >
+          <track kind="captions" />
+        </video>
+        <div class="mt-1.5 flex items-center justify-between gap-2">
+          <span class="min-w-0 truncate text-[0.625rem] text-dimmed"
+            >Latest export · {exportPath.split('/').at(-1)}</span
+          >
+          <button
+            type="button"
+            class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title={`Open the live ${noun} preview in the in-app browser`}
+            aria-label={`Open the live ${noun} preview in the in-app browser`}
+            onclick={() => void openPreview(selected.entry)}
+          >
+            Live preview
+          </button>
+        </div>
+      {:else}
+        <button
+          type="button"
+          class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated"
+          title={`Open the ${noun} preview to play, scrub and export`}
+          aria-label={`Open the ${noun} preview to play, scrub and export`}
+          onclick={() => void openPreview(selected.entry)}
+        >
+          {#if gallery[0]?.dataUrl}
+            <img
+              src={gallery[0].dataUrl}
+              alt={`Preview of the ${noun} ${selectedName}`}
+              class="block max-h-72 w-full object-contain"
+            />
+          {:else}
+            <span
+              class="flex aspect-video w-full flex-col items-center justify-center gap-1 text-dimmed"
+            >
+              {#if galleryBusy}
+                <LoaderCircle size={14} class="animate-spin" />
+                <span class="text-[0.625rem]">Capturing…</span>
+              {:else}
+                <ImageOff size={14} />
+                <span class="text-[0.625rem]">No preview yet.</span>
+              {/if}
+            </span>
+          {/if}
+          <span
+            class="absolute inset-0 flex items-center justify-center bg-black/40 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <span class="text-[0.625rem] font-medium text-white">Play the {noun}</span>
+          </span>
+        </button>
+        <p class="mt-1.5 text-[0.625rem] text-dimmed">
+          Export the {noun} to play it here, or open the live preview to scrub the composition as it is.
+        </p>
+      {/if}
+    </div>
+  {/snippet}
+
   {#snippet screenCard(screen: DesignScreenShot, full: boolean)}
     {@const cardLabel = video
       ? `Open the ${noun} in the in-app browser`
@@ -1019,6 +1207,16 @@
         >
           <Target size={12} />
         </button>
+        {#if historyActions && selected.directory !== ''}
+          <DesignHistoryActions
+            canUndo={historyActions.canUndo}
+            canRedo={historyActions.canRedo}
+            undoTitle={`Undo the last change to this ${noun}`}
+            redoTitle={`Redo the change to this ${noun}`}
+            onUndo={historyActions.undo}
+            onRedo={historyActions.redo}
+          />
+        {/if}
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
@@ -1077,6 +1275,17 @@
                 <Copy size={13} class="shrink-0 text-muted" />
                 Copy path
               </DropdownMenu.Item>
+              {#if video}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={selected.directory === '' ||
+                    videoJobs.some((job) => job.state === 'running')}
+                  onSelect={() => void exportVideo()}
+                >
+                  <Download size={13} class="shrink-0 text-muted" />
+                  Export MP4
+                </DropdownMenu.Item>
+              {/if}
               {#if !video}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
@@ -1278,13 +1487,31 @@
         </p>
       {/if}
 
-      {#if video && selected.directory !== ''}
-        {#key `${projectId}:${threadId}:${selected.directory}`}
-          <VideoTimeline {projectId} {threadId} directory={selected.directory} />
-          <VideoStudioControls {projectId} {threadId} directory={selected.directory} />
-        {/key}
-      {/if}
-      {#if video && gallery.length === 0}
+      {#if video}
+        {#if selected.directory === ''}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+          >
+            <ImageOff size={16} />
+            <span class="px-4 text-center text-[0.6875rem]">
+              {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+            </span>
+          </div>
+        {:else}
+          {@render videoStage()}
+          {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
+            <VideoTimeline {projectId} {threadId} directory={selected.directory} />
+            <VideoStudioControls
+              {projectId}
+              {threadId}
+              directory={selected.directory}
+              jobs={videoJobs}
+              onCancelJob={cancelVideoJob}
+              onDirtyChange={setStudioDirty}
+            />
+          {/key}
+        {/if}
+      {:else if gallery.length === 0}
         <div
           class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
         >
@@ -1348,10 +1575,28 @@
         {threadId}
         directory={selected.directory}
         {noun}
+        unit={video ? 'file' : 'screen'}
         open={historyOpen}
         onRestored={restoreBoard}
         onClose={() => (historyOpen = false)}
+        onActions={handleHistoryActions}
       />
     {/key}
   </div>
 </div>
+
+<ConfirmDialog
+  open={reloadRequested}
+  title="Discard unsaved video controls?"
+  confirmLabel="Discard and reload"
+  cancelLabel="Keep editing"
+  onCancel={() => {
+    reloadRequested = false
+  }}
+  onConfirm={() => {
+    reloadRequested = false
+    reloadVideoBoard()
+  }}
+>
+  <p>Your unsaved control and caption edits will be replaced with the saved version.</p>
+</ConfirmDialog>

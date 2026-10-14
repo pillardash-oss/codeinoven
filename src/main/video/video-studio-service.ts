@@ -60,6 +60,14 @@ export interface VideoStudioOptions {
   previews: DirectoryPreviewService
   speech: () => SpeechService | null
   config: () => Promise<AppConfig>
+  /**
+   * Called when a save rewrote the composition's studio.json.
+   *
+   * A saved edit is a change the folder's history has not seen, and the board's
+   * history pane reloads when it hears about one. The folder is the project-relative
+   * directory, the same form `design:historyChanged` carries.
+   */
+  onChanged?: (projectId: string, directory: string) => void
 }
 function revision(document: VideoStudioDocument): string {
   return createHash('sha256').update(JSON.stringify(document)).digest('hex')
@@ -113,7 +121,7 @@ export class VideoStudioService {
     revision: string
     manifest: VideoProjectManifest | null
   }> {
-    const { folder } = await this.folder(projectId, directory)
+    const { root, folder } = await this.folder(projectId, directory)
     const previous = this.writes.get(folder) ?? Promise.resolve()
     const task = previous
       .catch(() => undefined)
@@ -124,6 +132,9 @@ export class VideoStudioService {
         const document = validateVideoStudio(raw)
         for (const track of document.audioTracks) await videoFile(folder, track.source)
         await writeVideoStudio(folder, document)
+        // A saved control edit is a step in the folder's history, so the pane that
+        // shows that history is told, exactly as a design restore tells it.
+        this.options.onChanged?.(projectId, relative(root, folder).replaceAll('\\', '/'))
         return {
           document,
           revision: revision(document),

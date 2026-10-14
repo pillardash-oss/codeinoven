@@ -35,15 +35,43 @@
     directory: string
     /** The session's noun, for wording only: a design or a composition. */
     noun: string
+    /** What a revision counts: a design's screens, a composition's files. */
+    unit?: string
     /** Whether the pane is on screen; a closed pane still captures changes. */
     open: boolean
     /** Called after the folder moved, so the board re-pictures the design. */
     onRestored: () => void
     /** Called when the user dismisses the pane. */
     onClose: () => void
+    /**
+     * The pane's Undo and Redo, handed to the board.
+     *
+     * The history read lives here, so the two steps do too; the board shows them in
+     * its own header. Publishing them keeps one implementation instead of a second
+     * history read that could disagree with this one.
+     */
+    onActions?: (actions: {
+      canUndo: boolean
+      canRedo: boolean
+      undo: () => void
+      redo: () => void
+    }) => void
   }
 
-  let { projectId, threadId, directory, noun, open, onRestored, onClose }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    directory,
+    noun,
+    unit = 'screen',
+    open,
+    onRestored,
+    onClose,
+    onActions
+  }: Props = $props()
+
+  /** The session's noun, capitalised, for headings and revision labels. */
+  let nounTitle = $derived(noun.charAt(0).toUpperCase() + noun.slice(1))
 
   let history = $state.raw<DesignHistoryState | null>(null)
   /** Reading the timeline, which includes capturing the present. */
@@ -56,7 +84,7 @@
   let pendingRestore = $state('')
   let request = 0
   const scopeOptions = $derived([
-    { id: '', label: 'All screens' },
+    { id: '', label: `Whole ${noun}` },
     ...(history?.files ?? []).map((file) => ({ id: file.path, label: file.name }))
   ])
 
@@ -108,13 +136,13 @@
   /** How much a revision changed, in files. */
   function changeLabel(revision: DesignRevisionSummary): string {
     if (revision.cause === 'initial') {
-      return 'Initial design'
+      return `Initial ${noun}`
     }
     const changed = revision.changedPaths.filter((path) =>
       history?.files.some((screen) => screen.path === path)
     ).length
-    if (changed === 0) return 'Design updated'
-    return `${changed} screen${changed === 1 ? '' : 's'} changed`
+    if (changed === 0) return `${nounTitle} updated`
+    return `${changed} ${unit}${changed === 1 ? '' : 's'} changed`
   }
 
   /** Read the folder's history, capturing the present as `cause` when it changed. */
@@ -213,6 +241,23 @@
       unsubscribeHistory()
     }
   })
+
+  // Opening the pane re-reads the folder. Reading captures the present, so a change
+  // the pane has not seen (a control edit saved in the video board, or anything
+  // else) becomes the newest point the moment the user looks for it, instead of the
+  // pane showing a snapshot from when it first mounted.
+  let wasOpen = false
+  $effect(() => {
+    if (open === wasOpen) return
+    wasOpen = open
+    if (open) void load('user')
+  })
+
+  // The board shows the same two steps in its header, so they are published rather
+  // than reimplemented against a second history read.
+  $effect(() => {
+    onActions?.({ canUndo, canRedo, undo, redo })
+  })
 </script>
 
 <section
@@ -228,9 +273,9 @@
         class="min-w-0 flex-1"
         options={scopeOptions}
         value={scope}
-        placeholder="Screen history"
+        placeholder={`${nounTitle} history`}
         ariaLabel="History scope"
-        title="Choose the whole design or one screen"
+        title={`Choose the whole ${noun} or one ${unit}`}
         disabled={loading || restoring !== ''}
         onChange={(value) => {
           scope = value

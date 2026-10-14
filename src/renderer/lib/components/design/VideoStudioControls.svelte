@@ -10,22 +10,36 @@
     projectId: string
     threadId: string
     directory: string
+    /**
+     * The composition's jobs, owned by the board.
+     *
+     * The board polls them because it draws the export above these controls, so it
+     * holds the one list and hands it down instead of the controls reading a second
+     * copy that could disagree. The board also cancels a job, so the cancel action is
+     * a request rather than a second writer of the same state.
+     */
+    jobs: VideoJob[]
+    onCancelJob: (id: string) => void
+    /**
+     * Whether these controls hold unsaved edits.
+     *
+     * The board's Refresh reloads them, so it must know when that would throw work
+     * away and ask first. The board owns the question; the controls own the answer.
+     */
+    onDirtyChange?: (dirty: boolean) => void
   }
-  let { projectId, threadId, directory }: Props = $props()
+  let { projectId, threadId, directory, jobs, onCancelJob, onDirtyChange }: Props = $props()
   let document = $state<VideoStudioDocument | null>(null)
   let revision = ''
-  let jobs = $state.raw<VideoJob[]>([])
   let error = $state('')
   let busy = $state(false)
   let dirty = $state(false)
   let cancelledJob = $state<VideoJob | null>(null)
-  let reloadRequested = $state(false)
   let captionPage = $state(0)
   let visibleCaptions = $derived(
     document?.captions.slice(captionPage * 25, captionPage * 25 + 25) ?? []
   )
   let mounted = false
-  let readingJobs = false
   let panel: HTMLElement | null = null
   const labels: Record<string, string> = {
     filmstrip: 'Footage frames',
@@ -67,29 +81,18 @@
       if (mounted) busy = false
     }
   }
-  async function readJobs(): Promise<void> {
-    if (readingJobs || !mounted) return
-    readingJobs = true
-    try {
-      const result = await invoke('video:jobs', projectId, threadId)
-      if (mounted) jobs = result.slice(-6)
-    } catch (cause) {
-      if (mounted) error = cause instanceof Error ? cause.message : String(cause)
-    } finally {
-      readingJobs = false
-    }
-  }
   onMount(() => {
     mounted = true
     void load()
-    void readJobs()
-    const timer = setInterval(() => {
-      void readJobs()
-    }, 1500)
     return () => {
       mounted = false
-      clearInterval(timer)
     }
+  })
+
+  // Tell the board whether a refresh would discard anything. The board reads this
+  // to decide between reloading at once and asking first.
+  $effect(() => {
+    onDirtyChange?.(dirty)
   })
   function setControl(key: string, value: VideoValue): void {
     const control = document?.controls.find((item) => item.key === key)
@@ -124,7 +127,6 @@
     busy = true
     try {
       await invoke('video:export', projectId, threadId, directory)
-      await readJobs()
       error = ''
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause)
@@ -132,15 +134,10 @@
       busy = false
     }
   }
-  async function cancel(): Promise<void> {
+  function cancel(): void {
     if (!cancelledJob) return
-    try {
-      await invoke('video:cancel', projectId, threadId, cancelledJob.id)
-      cancelledJob = null
-      await readJobs()
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause)
-    }
+    onCancelJob(cancelledJob.id)
+    cancelledJob = null
   }
 </script>
 
@@ -157,22 +154,7 @@
 >
   <div class="flex items-center justify-between gap-2">
     <span class="text-xs font-semibold">Video controls</span>
-    <button
-      type="button"
-      class="rounded border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-50"
-      disabled={busy}
-      onclick={() => {
-        if (dirty) reloadRequested = true
-        else void load()
-      }}
-      title="Reload saved video controls">Reload</button
-    >
-    <button
-      type="button"
-      class="rounded bg-primary px-2 py-1 text-xs text-on-primary disabled:opacity-50"
-      disabled={busy || dirty || jobs.some((job) => job.state === 'running')}
-      onclick={() => void exportVideo()}>Export MP4</button
-    >
+    {#if dirty}<span class="text-[0.625rem] text-dimmed">Unsaved changes</span>{/if}
   </div>
   {#if error}<p role="alert" class="text-xs text-danger">{error}</p>{/if}
   {#if document}
@@ -373,18 +355,4 @@
   onConfirm={cancel}
 >
   <p>The unfinished output will be discarded. Your source footage and composition will be kept.</p>
-</ConfirmDialog>
-<ConfirmDialog
-  open={reloadRequested}
-  title="Discard unsaved video controls?"
-  confirmLabel="Discard and reload"
-  onCancel={() => {
-    reloadRequested = false
-  }}
-  onConfirm={() => {
-    reloadRequested = false
-    void load()
-  }}
->
-  <p>Your unsaved control and caption edits will be replaced with the saved version.</p>
 </ConfirmDialog>

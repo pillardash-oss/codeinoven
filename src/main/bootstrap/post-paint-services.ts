@@ -630,12 +630,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // actions. Both capabilities record every preview through it, so the user's
   // design or composition is not lost when the window that showed it closes.
   const { DesignService } = await import('../design/design-service')
+  // One announcement, so a saved composition edit and a design restore reach an
+  // open history pane the same way.
+  const announceHistoryChanged = (projectId: string, directory: string): void => {
+    for (const window of BrowserWindow.getAllWindows())
+      sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
+  }
   const designService = new DesignService({
     database,
-    onHistoryChanged: (projectId, directory) => {
-      for (const window of BrowserWindow.getAllWindows())
-        sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
-    },
+    onHistoryChanged: announceHistoryChanged,
     // The agent can open a design or video session by previewing into a work
     // root with no tag, so the row's authored-work marker has to reach the
     // renderer the same way the tag path's write does, in real time.
@@ -720,7 +723,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     database,
     previews: state.directoryPreviewService,
     speech: () => state.speechService,
-    config: () => storage.getConfig()
+    config: () => storage.getConfig(),
+    onChanged: announceHistoryChanged
   })
   videoStudio.registerIpc()
   state.chatEngine.setVideoPreviewExecutor(
