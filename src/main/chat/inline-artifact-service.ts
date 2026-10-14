@@ -2,26 +2,35 @@ import { open, realpath } from 'node:fs/promises'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage, AgentPart } from '../../lib/types'
-import { mimeTypeForPath } from '../../lib/mime-types'
+import { previewTypeForPath, type PreviewType } from '../../lib/preview-types'
 import { isInsideProject } from '../preview/served-folder'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 
-const MEDIA_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.webp',
-  '.gif',
-  '.avif',
-  '.mp3',
-  '.wav',
-  '.ogg',
-  '.m4a',
-  '.flac',
-  '.mp4',
-  '.webm',
-  '.mov'
-])
+/**
+ * What a requested file turned out to be. HTML and SVG arrive as text and render
+ * through the Markdown artifact fence; every media type is published as a file
+ * part streamed from `appfile://`.
+ */
+type ArtifactFormat = { kind: 'html' | 'svg' } | { kind: 'media'; type: PreviewType }
+
+/**
+ * Classify once, so the size check and the published part read one answer. Which
+ * extensions count as media, and how large each may be, comes from the shared
+ * `preview-types` table that `appfile://` serves from: a type the app can stream
+ * is exactly a type this pipeline can publish.
+ *
+ * A type served only as a document has a viewer of its own in the file tree but
+ * no inline conversation surface, so it is refused here rather than published as
+ * a chip that renders nothing.
+ */
+function artifactFormat(path: string): ArtifactFormat | null {
+  const extension = extname(path).toLowerCase()
+  if (extension === '.html' || extension === '.htm') return { kind: 'html' }
+  if (extension === '.svg') return { kind: 'svg' }
+  const type = previewTypeForPath(path)
+  if (!type || type.kind === 'document') return null
+  return { kind: 'media', type }
+}
 
 /** Resolve and validate before publishing. Media stays on disk and streams through appfile. */
 export async function inlineArtifactMessage(
@@ -33,10 +42,8 @@ export async function inlineArtifactMessage(
   const path = await realpath(isAbsolute(requested) ? requested : resolve(root, requested))
   if (!isInsideProject(root, path))
     throw new Error('Artifact path must be inside this thread workspace')
-  const extension = extname(path).toLowerCase()
-  const document = extension === '.html' || extension === '.htm' || extension === '.svg'
-  const mime = mimeTypeForPath(path)
-  if (!document && !MEDIA_EXTENSIONS.has(extension))
+  const format = artifactFormat(path)
+  if (!format)
     throw new Error('Unsupported artifact format; use HTML, SVG, an image, audio or video')
   const handle = await open(path, 'r')
   const id = `cio-artifact-${randomUUID()}`
@@ -45,9 +52,19 @@ export async function inlineArtifactMessage(
     const metadata = await handle.stat()
     if (!metadata.isFile() || metadata.size === 0)
       throw new Error('Artifact must be a nonempty file')
-    if (!document && metadata.size > (mime.startsWith('image/') ? 32 : 512) * 1024 * 1024)
-      throw new Error('Artifact exceeds the file preview size limit')
-    if (document) {
+    if (format.kind === 'media') {
+      if (metadata.size > format.type.maxBytes)
+        throw new Error('Artifact exceeds the file preview size limit')
+      const encoded = relative(root, path).split(sep).map(encodeURIComponent).join('/')
+      parts.push({
+        type: 'file',
+        id: `${id}-media`,
+        messageID: id,
+        mime: format.type.mime,
+        filename: basename(path),
+        url: `appfile://thread/${context.projectId}/${context.threadId}/${encoded}?v=${metadata.mtimeMs}`
+      })
+    } else {
       if (metadata.size >= 64000)
         throw new Error('HTML/SVG artifacts must be smaller than 64000 bytes')
       const buffer = Buffer.alloc(64000)
@@ -64,17 +81,7 @@ export async function inlineArtifactMessage(
         id: `${id}-preview`,
         messageID: id,
         phase: 'final_answer',
-        text: `${fence}artifact-${extension === '.svg' ? 'svg' : 'html'}\n${source}\n${fence}`
-      })
-    } else {
-      const encoded = relative(root, path).split(sep).map(encodeURIComponent).join('/')
-      parts.push({
-        type: 'file',
-        id: `${id}-media`,
-        messageID: id,
-        mime,
-        filename: basename(path),
-        url: `appfile://thread/${context.projectId}/${context.threadId}/${encoded}?v=${metadata.mtimeMs}`
+        text: `${fence}artifact-${format.kind === 'svg' ? 'svg' : 'html'}\n${source}\n${fence}`
       })
     }
   } finally {
