@@ -6,6 +6,7 @@ import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
 import type { UtilitySuggestionDecision } from '../../../lib/utility-suggestion'
+import type { OpenNativeMcpCall } from './native-mcp-call-window'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -126,6 +127,10 @@ export interface SessionInfo {
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** Harness-native MCP calls the app has seen start and not yet seen settle,
+   *  part id → the call and when it started. A wedged entry is what the
+   *  watchdog ends instead of extending silence by another half hour. */
+  openNativeMcpCalls?: Map<string, OpenNativeMcpCall>
   /** Whether this turn invoked a shell-like tool. Its before/after project diff
    *  is the completion fallback if command parsing or a stat window misses a write. */
   unboundedToolObserved?: boolean

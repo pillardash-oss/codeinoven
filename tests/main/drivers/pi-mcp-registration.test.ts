@@ -79,6 +79,7 @@ describe('buildPiMcpRegistrations', () => {
     expect(registration?.config).toEqual({
       description: 'Current Svelte documentation.',
       exposure: 'codemode',
+      timeout: 60,
       type: 'stdio',
       command: 'bunx',
       args: ['-y', '@sveltejs/mcp'],
@@ -167,6 +168,7 @@ describe('buildPiMcpRegistrations', () => {
     expect(registration?.config).toEqual({
       description: 'A utility.',
       exposure: 'codemode',
+      timeout: 60,
       type: 'http',
       url: 'https://mcp.firecrawl.dev/v1',
       headers: { 'X-Client': 'client-1', Authorization: 'Bearer fc-value' }

@@ -963,6 +963,7 @@ describe('PiDriver MCP server document', () => {
         config: {
           description: 'Post to Slack.',
           exposure: 'codemode',
+          timeout: 60,
           type: 'stdio',
           command: 'npx',
           args: ['-y', 'slack-mcp'],

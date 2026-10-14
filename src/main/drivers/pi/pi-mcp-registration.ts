@@ -44,6 +44,21 @@ export const PI_MCP_SERVERS_DOCUMENT_VERSION = 1
  */
 export const PI_MCP_EXPOSURE: McpExposure = 'codemode'
 
+/**
+ * Per-request timeout, in seconds, the app publishes for every pi MCP server.
+ *
+ * The app states the bound instead of inheriting pi's implicit default, so a
+ * later pi release cannot move it without the app noticing. It matches the
+ * default pi documents today, which keeps the change behaviour-preserving: the
+ * point is that the number is now the app's, and the chat engine's native-call
+ * ceiling is sized against it.
+ *
+ * Pi resets this timer on every progress notification a server sends, so a
+ * server that reports progress is not bounded by it. Nothing in the app can
+ * turn that off; the ceiling in the chat engine is what covers that case.
+ */
+export const PI_MCP_REQUEST_TIMEOUT_SECONDS = 60
+
 /** One utility to register on pi, with the credential values it reads. */
 export type PiMcpUtilityInput = NativeMcpUtilityBinding
 
@@ -254,7 +269,8 @@ function piMcpServerConfig(input: PiMcpUtilityInput): McpServerConfig {
   const { utility, environment } = input
   const base = {
     description: utility.description,
-    exposure: PI_MCP_EXPOSURE
+    exposure: PI_MCP_EXPOSURE,
+    timeout: PI_MCP_REQUEST_TIMEOUT_SECONDS
   }
   if (utility.config.transport === 'stdio') {
     if (!utility.config.command) {

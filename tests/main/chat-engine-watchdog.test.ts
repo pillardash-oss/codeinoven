@@ -59,10 +59,7 @@ function recoverWatchdogIssueOf(
 }
 
 function setDriver(engine: ChatEngine, id: string, driver: Record<string, unknown>): void {
-  const drivers = (engine as unknown as Record<string, unknown>)['drivers'] as Map<
-    string,
-    unknown
-  >
+  const drivers = (engine as unknown as Record<string, unknown>)['drivers'] as Map<string, unknown>
   drivers.set(id, driver)
 }
 
@@ -137,5 +134,101 @@ describe('ChatEngine watchdog   silent-session liveness probe', () => {
     const recover = recoverWatchdogIssueOf(engine)
     const issue = await recover('sess-1', baseInfo)
     expect(issue?.message).toBe('rate limit exceeded')
+  })
+})
+
+/** Reach the private watchdog fire and its collaborators for direct testing. */
+interface WatchdogInternals {
+  sessionRegistry: Map<string, Record<string, unknown>>
+  fireSessionWatchdog(sessionId: string): Promise<void>
+  clearSessionWatchdog(sessionId: string): void
+  broadcastThreadSessionError(...args: unknown[]): Promise<void>
+  onSessionError(...args: unknown[]): Promise<void>
+}
+
+function watchdogInternals(engine: ChatEngine): WatchdogInternals {
+  return engine as unknown as WatchdogInternals
+}
+
+describe('ChatEngine watchdog   native MCP call ceiling', () => {
+  // A call on the harness's own MCP host never passes the gateway, so the app
+  // has no transport of its own to time out. Before this ceiling, the watchdog
+  // extended the silence window by half an hour at a time and a single wedged
+  // svelte-autofixer call consumed a whole 30-minute audit run.
+
+  it('ends the turn when a native MCP call overruns its ceiling', async () => {
+    const engine = await makeEngine()
+    const internals = watchdogInternals(engine)
+    const aborted: string[] = []
+    const errors: string[] = []
+    setDriver(engine, 'pi', {
+      abort: async (_projectPath: string, sessionId: string): Promise<void> => {
+        aborted.push(sessionId)
+      }
+    })
+    internals.sessionRegistry.set('sess-1', {
+      ...baseInfo,
+      sessionId: 'sess-1',
+      permissionLevel: 'auto_review',
+      activeTurnId: 'turn-1',
+      openNativeMcpCalls: new Map([
+        [
+          'call-1',
+          {
+            server: 'svelte_mcp',
+            tool: 'svelte_autofixer',
+            utilityName: 'Svelte MCP',
+            startedAt: Date.now() - 10 * 60 * 1000
+          }
+        ]
+      ])
+    })
+    internals.broadcastThreadSessionError = async (): Promise<void> => undefined
+    internals.onSessionError = async (...args: unknown[]): Promise<void> => {
+      const message = args[1]
+      if (typeof message === 'string') errors.push(message)
+    }
+
+    await internals.fireSessionWatchdog('sess-1')
+
+    expect(aborted).toEqual(['sess-1'])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('Svelte MCP (svelte_autofixer)')
+  })
+
+  it('leaves a native MCP call within its ceiling to the normal silence path', async () => {
+    const engine = await makeEngine()
+    const internals = watchdogInternals(engine)
+    const aborted: string[] = []
+    setDriver(engine, 'pi', {
+      // The harness still answers and reports itself busy, so the silence path
+      // keeps the turn; only the ceiling may end a native call early.
+      loadMessages: async (): Promise<AgentMessage[]> => [],
+      isSessionBusy: async () => true,
+      abort: async (): Promise<void> => {
+        aborted.push('aborted')
+      }
+    })
+    internals.sessionRegistry.set('sess-1', {
+      ...baseInfo,
+      sessionId: 'sess-1',
+      permissionLevel: 'auto_review',
+      activeTurnId: 'turn-1',
+      openNativeMcpCalls: new Map([
+        [
+          'call-1',
+          {
+            server: 'svelte_mcp',
+            tool: 'svelte_autofixer',
+            startedAt: Date.now()
+          }
+        ]
+      ])
+    })
+
+    await internals.fireSessionWatchdog('sess-1')
+
+    expect(aborted).toEqual([])
+    internals.clearSessionWatchdog('sess-1')
   })
 })

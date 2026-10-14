@@ -677,6 +677,11 @@ import {
   projectRelativePath
 } from './chat-engine/chat-engine-changes'
 import {
+  describeNativeMcpCall,
+  overdueNativeMcpCall,
+  trackNativeMcpCall
+} from './chat-engine/native-mcp-call-window'
+import {
   apiFollowUpTask,
   apiString,
   apiTaskReport,
@@ -1385,6 +1390,21 @@ export class ChatEngine {
   private static readonly SILENT_WORK_GRACE_MS = 30 * 60 * 1000
 
   // 30 minutes
+
+  /**
+   * How long one harness-native MCP call may stay open before the watchdog
+   * ends the turn.
+   *
+   * A native call runs on the harness's own MCP host, so the app never sees its
+   * traffic and cannot time it out the way its gateway does. The harness bounds
+   * the call itself (pi: 60 s per request, published by the app), so a call
+   * still open minutes later is a wedged host rather than slow work. Kept below
+   * the first silence window so the first check after the last event catches
+   * it, instead of extending the window for another half hour.
+   */
+  private static readonly NATIVE_MCP_CALL_CEILING_MS = 3 * 60 * 1000
+
+  // 3 minutes
 
   /**
    * How long after a user interaction the user is still considered "active".
@@ -13592,6 +13612,7 @@ export class ChatEngine {
       info.preciseChangedPaths = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.openNativeMcpCalls = undefined
       info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
     }
@@ -23235,6 +23256,12 @@ export class ChatEngine {
                   candidate.threadId === childOwner.threadId
               )
             : undefined)
+        if (session) {
+          // A call the harness's own MCP host runs never passes the gateway, so
+          // this part is the app's only record that it started. The watchdog
+          // ends the turn when one of these overruns its ceiling.
+          trackNativeMcpCall((session.openNativeMcpCalls ??= new Map()), part, Date.now())
+        }
         if (session && !session.activeTurnId) {
           // A harness can settle a turn while the model is still working (e.g.
           // pi reported a usage-reset settle that proved premature), which
@@ -23548,6 +23575,7 @@ export class ChatEngine {
       session.changedPaths = new Set(checkpoint.changes.map((change) => change.path))
       session.preciseChangedPaths = new Map()
       session.openUnboundedTools = undefined
+      session.openNativeMcpCalls = undefined
       session.unboundedToolObserved = unboundedClaim
       session.unboundedWindowStart = undefined
       session.pendingWindowScans = undefined
@@ -28896,6 +28924,7 @@ export class ChatEngine {
       info.preciseChangedPaths = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.openNativeMcpCalls = undefined
       info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
@@ -29268,6 +29297,35 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
 
+    // A harness-native MCP call the app is waiting on has outlived every bound
+    // upstream of it, so it is wedged rather than slow. End the turn here
+    // instead of extending the silence window for another half hour, which is
+    // how one wedged svelte-autofixer call consumed a whole audit run.
+    const overdueCall = info.openNativeMcpCalls
+      ? overdueNativeMcpCall(
+          info.openNativeMcpCalls,
+          Date.now(),
+          ChatEngine.NATIVE_MCP_CALL_CEILING_MS
+        )
+      : null
+    if (overdueCall) {
+      const minutes = Math.round(ChatEngine.NATIVE_MCP_CALL_CEILING_MS / 60_000)
+      Logger.error('Native MCP call overran its ceiling   ending the turn', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId,
+        server: overdueCall.server,
+        tool: overdueCall.tool
+      })
+      await this.failWatchedSession(info, sessionId, {
+        kind: 'network',
+        message: `The ${info.driverId} session stalled on an MCP call to ${describeNativeMcpCall(overdueCall)} and was stopped after ${minutes} minutes.`,
+        harnessId: info.driverId,
+        retryable: true
+      })
+      return
+    }
+
     // A genuinely-working-but-silent session must never be aborted: a long CLI
     // action can legitimately produce no events for far longer than the
     // activity window. Extend the window (re-evaluating when it fires again) so
@@ -29366,8 +29424,19 @@ export class ChatEngine {
       return
     }
 
-    // Surface the issue to every renderer bound to the thread so the user sees
-    // the real failure (with a Retry affordance) instead of a silent fail.
+    await this.failWatchedSession(info, sessionId, issue)
+  }
+
+  /**
+   * Surface a watchdog failure to every renderer bound to the thread and stop
+   * the session, so the user sees the real failure (with a Retry affordance)
+   * instead of a silent fail.
+   */
+  private async failWatchedSession(
+    info: SessionInfo,
+    sessionId: string,
+    issue: AgentProviderIssue
+  ): Promise<void> {
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     await this.onSessionError(sessionId, issue.message, false, issue.rawError)
     try {
