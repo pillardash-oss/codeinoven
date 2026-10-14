@@ -60,6 +60,7 @@
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import ClampedText from '../shared/ClampedText.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -11486,6 +11487,16 @@
    *  Activity-only user messages are transparent to the turn span. */
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
 
+  /** The authored messages a reader has opened past the height clamp, by
+   *  message id. Session-scoped on purpose: it survives the windowed
+   *  transcript unmounting a row, and a fresh thread starts folded. */
+  const expandedMessageBodies = new SvelteSet<string>()
+
+  function toggleMessageBody(messageId: string, expanded: boolean): void {
+    if (expanded) expandedMessageBodies.add(messageId)
+    else expandedMessageBodies.delete(messageId)
+  }
+
   /** What "find in conversation" reads: every message plus the composer's own
    *  draft, so a word can be located in what was said and in what is being
    *  written. The draft lives in the bottom chrome rather than the transcript
@@ -12221,22 +12232,28 @@
                         <p class="mb-1 text-xs italic text-muted">
                           {explicitPresentation.action}
                         </p>
-                        {#if explicitPresentation.body}
+                      {/if}
+                      {#if !explicitPresentation || explicitPresentation.body}
+                        <!-- The authored text is height-clamped: a very long
+                             prompt keeps its opening lines behind an explicit
+                             reveal for the rest. Attachments are drawn below,
+                             outside the clamp, so they are never folded away. -->
+                        <ClampedText
+                          expanded={expandedMessageBodies.has(msg.id)}
+                          clamp={!showFind}
+                          label="message"
+                          onToggle={(next) => toggleMessageBody(msg.id, next)}
+                        >
                           <MarkdownView
-                            text={explicitPresentation.body}
+                            text={explicitPresentation
+                              ? (explicitPresentation.body ?? '')
+                              : messageText(msg)}
                             citationThread={citationThreadContext}
+                            inlineFileTags={explicitPresentation ? undefined : inlineTags}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
-                        {/if}
-                      {:else}
-                        <MarkdownView
-                          text={messageText(msg)}
-                          citationThread={citationThreadContext}
-                          inlineFileTags={inlineTags}
-                          onCiteFile={openFileCitation}
-                          onOpenLocalFile={(url) => void openFilePart(url)}
-                        />
+                        </ClampedText>
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
                         {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
