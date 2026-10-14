@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { atomicWrite } from '../../lib/utils'
 import { readHarnessHomeFile, writeHarnessHomeFile } from '../drivers/harness-runtime'
 
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
@@ -24,14 +25,7 @@ export const piAuthFileIo: PiAuthFileIo = {
   async write(content: string): Promise<void> {
     if (await writeHarnessHomeFile('pi', '.pi/agent/auth.json', content)) return
     await mkdir(dirname(PI_AUTH_PATH), { recursive: true })
-    const temporaryPath = `${PI_AUTH_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`
-    try {
-      await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      await rename(temporaryPath, PI_AUTH_PATH)
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-      throw error
-    }
+    await atomicWrite(PI_AUTH_PATH, content)
   }
 }
 
@@ -155,14 +149,7 @@ export class PiAuthConfigService {
       return
     }
     await mkdir(dirname(this.authPath), { recursive: true })
-    const temporaryPath = `${this.authPath}.${process.pid}.${crypto.randomUUID()}.tmp`
-    try {
-      await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      await rename(temporaryPath, this.authPath)
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-      throw error
-    }
+    await atomicWrite(this.authPath, content)
   }
 }
 
