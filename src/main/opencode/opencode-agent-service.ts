@@ -1,9 +1,10 @@
 import { Logger } from '../system/logger'
+import { openCodeInstallationVersion } from '../agents/opencode-installation'
 import {
   mergeLeanAgentsGlobalConfig,
   type OpenCodeGlobalConfigMergeOptions
 } from './opencode-global-config'
-import { openCodeVersion, recordedDenyCompliance } from './opencode-deny-probe'
+import { recordedDenyCompliance } from './opencode-deny-probe'
 
 /** Operator override: install agents without a recorded deny-compliance proof. */
 const MERGE_OVERRIDE_ENV = 'CIO_OPCODE_MERGE_AGENTS_UNVERIFIED'
@@ -28,7 +29,7 @@ export async function syncOpenCodeLeanAgents(
   options: OpenCodeGlobalConfigMergeOptions = {}
 ): Promise<void> {
   try {
-    const version = openCodeVersion()
+    const version = await openCodeInstallationVersion()
     const forced = process.env[MERGE_OVERRIDE_ENV] === '1'
     const record = version !== null ? await recordedDenyCompliance(version) : null
     if (!forced && record?.compliant !== true) {

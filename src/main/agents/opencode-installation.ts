@@ -76,6 +76,28 @@ export function warmOpenCodeInstallation(): Promise<OpenCodeInstallation | null>
   return detectionInFlight
 }
 
+/**
+ * The version line of the install the driver factory will actually use.
+ *
+ * The compliance gate and the driver must agree on one install identity.
+ * Installation detection probes every candidate and selects the NEWEST
+ * (`selectNewestCandidate`), and `opencode-harness-driver` reads that same cache,
+ * so a proof recorded and checked against this version always covers the
+ * harness the app drives rather than a lower-version candidate that merely
+ * answered first.
+ *
+ * Asynchronous and single-flight (`warmOpenCodeInstallation`), so a caller never
+ * blocks the main thread on a child process. Returns null when no install
+ * answers; detection has already logged the per-candidate attempt list.
+ */
+export async function openCodeInstallationVersion(): Promise<string | null> {
+  const installation = await warmOpenCodeInstallation().catch((error: unknown) => {
+    Logger.dev('opencode install detection failed (non-fatal):', error)
+    return null
+  })
+  return installation?.version ?? null
+}
+
 function firstLine(output: string): string {
   return output.split(/\r?\n/u)[0]?.trim() ?? ''
 }
@@ -101,6 +123,9 @@ export async function detectOpenCodeInstallation(
   }
 
   const candidates: Array<{ version: string; value: HarnessRuntime }> = []
+  // Per-candidate reasons, kept so an unanswered detection is diagnosable at
+  // dev level instead of a silent null.
+  const attempts: Array<{ command: string; executable: string | null; reason: string }> = []
   // Probe every candidate at once: each probe is an independent `--version`
   // child process, so running them sequentially only makes the pass pay the
   // slowest one once per candidate. A bounded handful of candidates keeps this
@@ -108,10 +133,25 @@ export async function detectOpenCodeInstallation(
   const probed = await Promise.all(
     OPENCODE_COMMAND_CANDIDATES.map(async (command) => {
       const runtime = runtimes.get(command)
-      if (!runtime) return null
+      if (!runtime) {
+        attempts.push({ command, executable: null, reason: 'not found on the app PATH' })
+        return null
+      }
       const result = await probeHarnessRuntime(runtime, ['--version'])
-      if (!result.ok) return null
-      return { version: firstLine(result.stdout || result.stderr), value: runtime }
+      if (!result.ok) {
+        attempts.push({ command, executable: runtime.executable, reason: result.reason })
+        return null
+      }
+      const version = firstLine(result.stdout || result.stderr)
+      if (!version) {
+        attempts.push({
+          command,
+          executable: runtime.executable,
+          reason: 'answered an empty --version line'
+        })
+        return null
+      }
+      return { version, value: runtime }
     })
   )
   for (const candidate of probed) {
@@ -126,6 +166,13 @@ export async function detectOpenCodeInstallation(
         major: parseOpenCodeMajor(best.version)
       }
     : null
+  if (!installation) {
+    Logger.dev('opencode version detection could not resolve an installed harness', {
+      candidates: [...OPENCODE_COMMAND_CANDIDATES],
+      platform: process.platform,
+      attempts
+    })
+  }
   rememberOpenCodeInstallation(installation)
   return installation
 }
