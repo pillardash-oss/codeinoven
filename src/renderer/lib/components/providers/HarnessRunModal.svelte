@@ -14,6 +14,16 @@
   } from '$lib/stores/harness-lifecycle.svelte'
 
   const store = harnessLifecycleStore
+  let stopArmed = $state<string | null>(null)
+
+  function stopRun(terminalId: string): void {
+    if (stopArmed !== terminalId) {
+      stopArmed = terminalId
+      return
+    }
+    stopArmed = null
+    void store.stopRun(terminalId)
+  }
 
   /** Shared with the panel placement, so the dock belongs to this panel alone. */
   const PANEL_STORAGE_KEY = `${APP_SLUG}.harnessTasksPanel.v1`
@@ -49,6 +59,7 @@
   }
 
   function dockTitle(run: HarnessRun): string {
+    if (run.cancelled) return `${run.harnessName} stopped`
     if (run.exitCode === undefined) {
       return run.kind === 'uninstall'
         ? `${run.harnessName} is uninstalling`
@@ -193,16 +204,40 @@
             <div class="flex min-w-0 items-center gap-2">
               <AgentIcon agentId={run.harnessId} label={run.harnessName} size={14} />
               <span class="truncate text-xs font-medium">{run.harnessName}</span>
-              <code class="truncate font-mono text-[0.625rem] text-dimmed">
-                $ {run.handoff.command}
-                {run.handoff.args.join(' ')}
-              </code>
-            </div>
-            {#if run.exitCode === undefined}
-              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info">
-                <Loader2 size={11} class="animate-spin" />
-                {activeLabel(run.kind)}
+              <span class="truncate text-[0.625rem] text-dimmed">
+                {'method' in run.handoff ? run.handoff.method : run.handoff.command}
               </span>
+            </div>
+            {#if run.cancelled && run.exitCode !== undefined}
+              <span class="shrink-0 text-[0.625rem] text-muted">Stopped</span>
+            {:else if run.exitCode === undefined}
+              <div class="flex shrink-0 items-center gap-2">
+                <button
+                  class="rounded px-2 py-1 text-xs text-danger hover:bg-elevated"
+                  title={stopArmed === run.terminalId
+                    ? 'Click again to stop this process'
+                    : 'Stop this process'}
+                  aria-label={stopArmed === run.terminalId
+                    ? 'Confirm stop process'
+                    : 'Stop process'}
+                  disabled={run.stopping}
+                  onclick={() => stopRun(run.terminalId)}
+                  onblur={() => {
+                    if (stopArmed === run.terminalId) stopArmed = null
+                  }}
+                  >{run.stopping
+                    ? 'Stopping…'
+                    : stopArmed === run.terminalId
+                      ? 'Confirm stop'
+                      : 'Stop'}</button
+                >
+                <span
+                  class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info"
+                >
+                  <Loader2 size={11} class="animate-spin" />
+                  {activeLabel(run.kind)}
+                </span>
+              </div>
             {:else if run.exitCode === 0}
               <span
                 class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success"
@@ -221,6 +256,8 @@
           <div class="h-48 overflow-hidden">
             <ProviderLoginTerminal
               terminalId={run.terminalId}
+              cancelled={run.cancelled}
+              startingLabel={`Starting ${run.harnessName} ${verb(run.kind)}…`}
               command={run.handoff.command}
               args={run.handoff.args}
               idleTimeoutMs={run.kind === 'install'

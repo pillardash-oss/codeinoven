@@ -160,12 +160,7 @@
    */
   async function resolveCapabilities(): Promise<ProviderAccountAuthCapabilities | null> {
     try {
-      const status = await invoke(
-        'providerAccounts:getAuthStatus',
-        harnessId,
-        undefined,
-        accountId
-      )
+      const status = await invoke('providerAccounts:getAuthStatus', harnessId, undefined, accountId)
       return status.capabilities
     } catch {
       const status = await invoke('providerAccounts:getAuthStatus', harnessId)
@@ -205,9 +200,7 @@
       if (destroyed) return
       mechanism = 'terminal'
       error =
-        resolveError instanceof Error
-          ? resolveError.message
-          : 'The sign-in could not be started.'
+        resolveError instanceof Error ? resolveError.message : 'The sign-in could not be started.'
     }
   }
 
@@ -330,6 +323,7 @@
           command={handoff.command}
           args={handoff.args}
           environment={handoff.environment}
+          startingLabel="Starting sign-in…"
           onExit={(exitCode) => void finishTerminal(exitCode)}
         />
       {:else if error}

@@ -15,11 +15,22 @@
     /** Kill the process after this many ms of complete silence (used for hung updates). */
     idleTimeoutMs?: number
     environment?: Record<string, string>
+    cancelled?: boolean
+    startingLabel?: string
     /** Invoked once the login process exits. */
     onExit: (exitCode: number) => void
   }
 
-  let { terminalId, command, args, idleTimeoutMs, environment, onExit }: Props = $props()
+  let {
+    terminalId,
+    command,
+    args,
+    idleTimeoutMs,
+    environment,
+    onExit,
+    cancelled = false,
+    startingLabel = 'Starting terminal…'
+  }: Props = $props()
 
   let error = $state('')
   let started = $state(false)
@@ -62,8 +73,9 @@
     try {
       const ghosttyWeb = await loadGhosttyWeb()
       const ghostty = await ghosttyWeb.Ghostty.load()
-      if (destroyed) return
+      if (destroyed || cancelled) return
       await patchSelectionCopy()
+      if (destroyed || cancelled) return
       const terminal = new ghosttyWeb.Terminal({
         ghostty,
         cursorBlink: true,
@@ -80,8 +92,8 @@
 
       const host = document.createElement('div')
       host.className = 'terminal-host'
+      container.append(host)
       terminal.open(host)
-      container.replaceChildren(host)
       fit.observeResize()
       fit.fit()
 
@@ -138,6 +150,8 @@
       })
       unsubs.push(() => resizeDisposable.dispose())
 
+      terminal.write('Starting process...\r\n')
+      if (destroyed || cancelled) return
       await invoke(
         'pty:createCommand',
         terminalId,
@@ -148,12 +162,15 @@
         idleTimeoutMs,
         environment
       )
+      if (destroyed || cancelled) {
+        await invoke('pty:destroy', terminalId)
+        return
+      }
       started = true
-      terminal.focus()
     } catch (initError) {
       if (!destroyed) {
-        error =
-          initError instanceof Error ? initError.message : 'The login terminal failed to start.'
+        error = initError instanceof Error ? initError.message : 'The terminal failed to start.'
+        onExit(1)
       }
     }
   }
@@ -174,11 +191,15 @@
   tabindex="-1"
   class="login-host relative h-full w-full overflow-hidden bg-app"
   data-floating-document
-  {@attach terminalAttachment}
 >
-  {#if !started && !error}
+  <div class="h-full w-full" {@attach terminalAttachment}></div>
+  {#if cancelled}
     <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
-      Starting sign-in…
+      Process stopped.
+    </div>
+  {:else if !started && !error}
+    <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
+      {startingLabel}
     </div>
   {:else if error}
     <div class="absolute inset-0 flex items-center justify-center bg-app p-6">

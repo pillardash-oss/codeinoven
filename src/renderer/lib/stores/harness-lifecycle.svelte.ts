@@ -23,6 +23,8 @@ export interface HarnessRun {
   handoff: HarnessInstallHandoff | HarnessUpdateHandoff | HarnessUninstallHandoff
   /** Set once the process exits. */
   exitCode?: number
+  cancelled?: boolean
+  stopping?: boolean
 }
 
 /**
@@ -228,11 +230,31 @@ class HarnessLifecycleStore {
     return undefined
   }
 
+  async stopRun(terminalId: string): Promise<void> {
+    const run = this.runs.find((entry) => entry.terminalId === terminalId)
+    if (!run || run.exitCode !== undefined || run.stopping) return
+    run.stopping = true
+    run.cancelled = true
+    try {
+      await invoke('pty:destroy', terminalId)
+      await this.handleRunExit(run.harnessId, 130)
+    } catch (error) {
+      run.cancelled = false
+      reportError(error, 'Could not stop the process.')
+    } finally {
+      run.stopping = false
+    }
+  }
+
   /** One process exited: record it, then re-probe so version/badge refresh. */
   async handleRunExit(harnessId: string, exitCode: number): Promise<void> {
     const finished = this.runs.find(
       (run) => run.harnessId === harnessId && run.exitCode === undefined
     )
+    // A stop kills the PTY, so the process's own exit event can arrive after
+    // stopRun already recorded the run as finished. Ignore that late event
+    // rather than acting on it as if a fresh run had ended.
+    if (!finished) return
     this.runs = this.runs.map((run) =>
       run.harnessId === harnessId && run.exitCode === undefined ? { ...run, exitCode } : run
     )
@@ -247,7 +269,11 @@ class HarnessLifecycleStore {
     // resident process still runs the previous build, so ask for a restart now:
     // main skips it while a thread is using the harness and applies it as soon
     // as the harness goes quiet.
-    if (exitCode === 0 && (finished?.kind === 'update' || finished?.kind === 'install')) {
+    if (
+      !finished?.cancelled &&
+      exitCode === 0 &&
+      (finished?.kind === 'update' || finished?.kind === 'install')
+    ) {
       await this.restartHarness(harnessId)
     }
 

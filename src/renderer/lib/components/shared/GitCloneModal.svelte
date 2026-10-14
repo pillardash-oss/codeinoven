@@ -260,6 +260,7 @@
             {terminalId}
             command={handoff.command}
             args={handoff.args}
+            startingLabel="Starting clone…"
             onExit={(code) => void handleExit(code)}
           />
         </div>

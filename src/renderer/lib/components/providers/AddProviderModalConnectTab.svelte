@@ -238,6 +238,7 @@
           command={loginHandoff.command}
           args={loginHandoff.args}
           environment={loginHandoff.environment}
+          startingLabel="Starting sign-in…"
           onExit={(exitCode) => onLoginExit(exitCode)}
         />
       </div>
