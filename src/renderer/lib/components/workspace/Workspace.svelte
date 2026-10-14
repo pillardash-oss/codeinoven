@@ -70,7 +70,7 @@
     threadWithInheritedSettings,
     withProjectOven
   } from '$lib/thread-settings-inheritance'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
   import { toPosixPath } from '$shared/paths'
   import {
     routinePrimaryModel,
@@ -2278,6 +2278,21 @@
         (candidate) => candidate.projectId === projectId && candidate.id === threadId
       )
       if (listed) listed.branch = branch
+    })
+  })
+
+  // The authored-work marker arrives on its own light broadcast for the same
+  // reason as the branch: the agent can open a design or video session on its
+  // own, mid-turn, and routing that through `thread:updated` would force
+  // ThreadView's message reconcile at that moment. Patch the field on the
+  // sidebar's own row so the marker appears without rebuilding any list.
+  $effect(() => {
+    return subscribe('thread:authoredWorkUpdated', (...args: unknown[]) => {
+      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
+      const listed = allThreads.find(
+        (candidate) => candidate.projectId === projectId && candidate.id === threadId
+      )
+      if (listed) listed.authoredWorkKind = kind
     })
   })
 

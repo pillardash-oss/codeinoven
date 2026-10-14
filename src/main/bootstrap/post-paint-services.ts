@@ -29,6 +29,7 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
+  broadcastThreadAuthoredWorkUpdated,
   broadcastThreadUpdate,
   subscribeThreadCorpus,
   setBackgroundAttention,
@@ -633,6 +634,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       for (const window of BrowserWindow.getAllWindows())
         sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
     },
+    // The agent can open a design or video session by previewing into a work
+    // root with no tag, so the row's authored-work marker has to reach the
+    // renderer the same way the tag path's write does, in real time.
+    onThreadKindChanged: (projectId, threadId, kind) =>
+      broadcastThreadAuthoredWorkUpdated(projectId, threadId, kind),
     previews: state.directoryPreviewService,
     browser: () => state.browserService
   })

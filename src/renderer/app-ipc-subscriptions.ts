@@ -34,6 +34,7 @@ import {
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
+  AuthoredWorkKind,
   CloseConfirmationPayload,
   ThreadClickedPayload
 } from '$shared/ipc-contract'
@@ -233,6 +234,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
+  // The authored-work marker is pushed on its own light event (see
+  // `broadcastThreadAuthoredWorkUpdated`) so the design-capability path can open
+  // a session without the full `thread:updated` reconcile. Patch the one field in
+  // place on the scope threads and the open thread, exactly as the branch update
+  // does, so the row's marker appears the moment the agent enters a session.
+  const unsubscribeThreadAuthoredWorkUpdated = subscribeGuarded(
+    'thread:authoredWorkUpdated',
+    (...args: unknown[]) => {
+      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
+      scopeState.patchAuthoredWorkKind(projectId, threadId, kind)
+      const selected = workspaceState.selectedThread
+      if (selected?.projectId === projectId && selected.id === threadId) {
+        selected.authoredWorkKind = kind
+      }
+    }
+  )
   const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
@@ -301,6 +318,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeInstanceRole()
     unsubscribeStartAtLoginOffer()
     unsubscribeThreadUpdated()
+    unsubscribeThreadAuthoredWorkUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()
     unsubscribeScopeConfirmation()

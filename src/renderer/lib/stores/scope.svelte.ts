@@ -23,6 +23,7 @@ import {
   type ScopeWorktreeSourceInfo,
   type Thread
 } from '$shared/types'
+import type { AuthoredWorkKind } from '$shared/ipc-contract'
 import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import {
   cloneBoard,
@@ -595,6 +596,11 @@ class ScopeState {
 
   updateThread(updated: Thread): void {
     this.threads.updateThread(updated)
+  }
+
+  /** Patch one thread's authored-work kind in place (light broadcast). */
+  patchAuthoredWorkKind(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+    this.threads.patchAuthoredWorkKind(projectId, threadId, kind)
   }
 
   /** Fold a list of thread snapshots into the scope store in one pass. See

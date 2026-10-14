@@ -181,6 +181,14 @@ function screenShotKey(
 export interface DesignServiceOptions {
   database: Database
   onHistoryChanged?: (projectId: string, directory: string) => void
+  /**
+   * Mirror a thread's authored-work kind to live UI the moment it is recorded.
+   *
+   * The row is what the sidebar draws its marker from, and the agent can open a
+   * design or video session on its own (a preview into a work root) with no tag,
+   * so this write has to reach the renderer just like the tag path's does.
+   */
+  onThreadKindChanged?: (projectId: string, threadId: string, kind: AuthoredWorkKind) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -504,7 +512,7 @@ export class DesignService {
     // mirror is unconditional so the row's marker never depends on which of the
     // two writers happened to run first. Fire-and-forget: the folder record above
     // is the fact this method exists to persist.
-    void this.rememberThreadKind(input.threadId, input.kind)
+    void this.rememberThreadKind(input.projectId, input.threadId, input.kind)
   }
 
   /**
@@ -591,12 +599,21 @@ export class DesignService {
    * must not fail the preview that triggered it. The repository guards the write,
    * so a navigation that records the same kind churns nothing.
    */
-  private async rememberThreadKind(threadId: string, kind: AuthoredWorkKind): Promise<void> {
+  private async rememberThreadKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind
+  ): Promise<void> {
     try {
       await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)
     } catch (error) {
       Logger.dev('Authored-work kind row update failed:', error)
+      return
     }
+    // The persisted value is the fact; telling the renderer is what makes the
+    // row's marker appear without a refresh, so the agent opening a session on
+    // its own reads the same as the user typing the tag.
+    this.options.onThreadKindChanged?.(projectId, threadId, kind)
   }
 
   forgetProject(projectId: string): void {
@@ -700,7 +717,7 @@ export class DesignService {
         entry: result.entry,
         kind
       })
-      await this.rememberThreadKind(threadId, kind)
+      await this.rememberThreadKind(projectId, threadId, kind)
     }
     if (!result.tabId) {
       throw new Error('The work opened without a browser tab to show it in.')
@@ -949,7 +966,7 @@ export class DesignService {
       return
     }
     this.designs.upsert(input)
-    await this.rememberThreadKind(input.threadId, input.kind)
+    await this.rememberThreadKind(input.projectId, input.threadId, input.kind)
   }
 
   /**

@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { AgentEvent, Thread } from '../../lib/types'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -126,6 +127,26 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
       thread.id,
       thread.branch
     )
+  }
+}
+
+/**
+ * Push just a thread's authored-work kind to every renderer window.
+ *
+ * Deliberately lighter than `broadcastThreadUpdate`, for the same reason as the
+ * branch update above: the marker lands the moment a design or video preview
+ * records the session, which is mid-turn, and routing it through the full
+ * `thread:updated` fan-out would force ThreadView's message reconcile to reload
+ * and re-merge the whole transcript at that moment. Only surfaces that draw the
+ * marker need to react, and they patch the one field in place.
+ */
+export function broadcastThreadAuthoredWorkUpdated(
+  projectId: string,
+  threadId: string,
+  kind: AuthoredWorkKind
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:authoredWorkUpdated', projectId, threadId, kind)
   }
 }
 

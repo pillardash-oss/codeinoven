@@ -1,6 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { SvelteSet } from 'svelte/reactivity'
-import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
 import { threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
 import {
   isOrchestrationChildThread,
@@ -277,6 +277,22 @@ export class ScopeThreads {
 
   threadsByStage(stage: ThreadStage): Thread[] {
     return this.currentProjectThreads.filter((thread) => this.stageForThread(thread) === stage)
+  }
+
+  /**
+   * Patch one thread's authored-work kind in place.
+   *
+   * The design-capability path pushes this field on a light event instead of the
+   * full `thread:updated` snapshot, so the row's marker appears the moment the
+   * agent opens a session without forcing a transcript reconcile. Mutating the
+   * proxied row is enough: the marker is read straight off the object, so no list
+   * rebuild is needed.
+   */
+  patchAuthoredWorkKind(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+    const thread = this.allScopeThreads.find(
+      (candidate) => candidate.projectId === projectId && candidate.id === threadId
+    )
+    if (thread !== undefined) thread.authoredWorkKind = kind
   }
 
   updateThread(updated: Thread): void {
