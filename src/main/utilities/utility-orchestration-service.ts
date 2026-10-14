@@ -51,6 +51,15 @@ import {
   APP_CONTROL_CATALOG_TOOL_NAME,
   isAppControlTool
 } from '../../lib/app-control-tools'
+import {
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME,
+  ENGINEERING_TOOL_NAMES,
+  isEngineeringTool,
+  type EngineeringToolOperation
+} from '../../lib/engineering-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
@@ -211,6 +220,13 @@ export interface UtilityTurnRequest {
    * operations, so an ordinary chat can never start a run on a machine.
    */
   orchestrationSession?: OrchestrationSessionMode
+  /**
+   * Whether this turn may create the thread's engineering artifacts (Brainstorm,
+   * PRD, specification, Assignment) through the app-owned artifact tools. Set
+   * for a real project thread's user turn, and never for a chat, an assistant
+   * task or an Assignment worker, so those turns are offered none of the routes.
+   */
+  artifactTools?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
@@ -462,6 +478,28 @@ export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
 /** The two app-control operations, mirrored from the tool catalog. */
 export type AppControlOperation = 'catalog' | 'call'
 
+/**
+ * Runs one engineering artifact tool for the turn that asked for it: it creates
+ * the thread's Brainstorm, PRD, specification or Assignment draft through the
+ * machinery the Studio buttons use. The chat engine supplies it because it owns
+ * the engines, the isolated generation sessions and the review surfaces those
+ * artifacts land on.
+ */
+export type EngineeringToolExecutor = (
+  operation: EngineeringToolOperation,
+  input: Record<string, unknown>,
+  context: EngineeringToolContext
+) => Promise<unknown>
+
+/** The turn an engineering artifact call came from. */
+export interface EngineeringToolContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
 /** The turn an app-control call came from. */
 export interface AppControlContext {
   projectId: string
@@ -586,6 +624,7 @@ export class UtilityOrchestrationService {
   private utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   private orchestrationExecutor: OrchestrationExecutor | null = null
   private appControlExecutor: AppControlExecutor | null = null
+  private engineeringExecutor: EngineeringToolExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -681,6 +720,14 @@ export class UtilityOrchestrationService {
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'call')
+      case CREATE_BRAINSTORM_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'brainstorm')
+      case CREATE_PRD_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'prd')
+      case CREATE_SPEC_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'spec')
+      case CREATE_ASSIGNMENT_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'assignment')
       default:
         return null
     }
@@ -828,6 +875,40 @@ export class UtilityOrchestrationService {
    */
   setAppControlExecutor(executor: AppControlExecutor | null): void {
     this.appControlExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the engineering artifact tools. Creating the
+   * thread's Brainstorm, PRD, specification or Assignment is an app capability:
+   * the executor owns the engines, the isolated generation sessions and the
+   * review surfaces. The chat engine supplies it because it owns all of them.
+   */
+  setEngineeringExecutor(executor: EngineeringToolExecutor | null): void {
+    this.engineeringExecutor = executor
+  }
+
+  /**
+   * Run one engineering artifact operation for the turn that asked for it.
+   *
+   * The executor owns the engines and the review gates, so this handler only
+   * forwards the operation with the turn it belongs to. A missing executor means
+   * the app was built without them, reported plainly rather than as an empty
+   * result.
+   */
+  private async engineering(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: EngineeringToolOperation
+  ): Promise<unknown> {
+    const executor = this.engineeringExecutor
+    if (!executor) throw new Error('Engineering artifact tools are unavailable in this deployment')
+    return executor(operation, input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
   }
 
   /**
@@ -1057,6 +1138,12 @@ export class UtilityOrchestrationService {
       if (isOrchestrationTool(name)) {
         return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
       }
+      // The engineering artifact tools are granted by the turn's own flag: they
+      // create a real Brainstorm, PRD, spec or Assignment for the thread, so a
+      // chat, an assistant task and a worker thread are offered none of them.
+      if (isEngineeringTool(name)) {
+        return request.artifactTools === true
+      }
       // The app-control tools are granted by the same session tag: they let a
       // `@cio-hey` turn drive the app itself, so an ordinary turn is offered
       // none of them and the gateway refuses a route it never received.
@@ -1118,6 +1205,11 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
+      ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
+        ? [
+            `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
+          ]
+        : []),
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`

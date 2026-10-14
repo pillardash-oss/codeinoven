@@ -232,6 +232,7 @@ import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignm
 import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
+  EngineeringToolContext,
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
@@ -240,6 +241,7 @@ import type {
   UtilityTurnBudgetContext,
   UtilityTurnGateway
 } from '../utilities/utility-orchestration-service'
+import type { EngineeringToolOperation } from '../../lib/engineering-tools'
 import {
   alternativeSecretNames,
   deriveSecretEnvironmentVariable,
@@ -482,7 +484,6 @@ import {
   validateAuditReportContent
 } from '../../lib/audit/audit-validation'
 import { parseGeneratedAssignmentContent } from '../../lib/assignment/assignment-validation'
-import { delegationIntent } from '../../lib/assignment/assignment-intent'
 import { mermaidRepairPrompt, validateMermaidOutput } from './mermaid-output-validator'
 import type { MermaidValidationFailure } from './mermaid-output-validator'
 import {
@@ -1694,6 +1695,13 @@ export class ChatEngine {
     // settings through the same gateway. The engine owns the gateway, so it
     // supplies this executor too.
     this.utilityOrchestration.setAppControlExecutor(createAppControlExecutor())
+    // The engineering artifact tools: creating the thread's Brainstorm, PRD,
+    // specification and Assignment through the same gateway. The engine owns the
+    // engines, the isolated generation sessions and the review surfaces, so it
+    // supplies this executor too.
+    this.utilityOrchestration.setEngineeringExecutor((operation, input, context) =>
+      this.runEngineeringTool(operation, input, context)
+    )
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -3972,7 +3980,14 @@ export class ChatEngine {
      * `continue` is every later turn of the same thread. Both grant the
      * workstation tools and add the matching dispatch contract.
      */
-    orchestrationSession: 'off' | 'start' | 'continue' = 'off'
+    orchestrationSession: 'off' | 'start' | 'continue' = 'off',
+    /**
+     * Whether this turn may create the thread's engineering artifacts (Brainstorm,
+     * PRD, specification, Assignment) through the app-owned artifact tools. Set
+     * for a real project thread's turn, and left off for a chat, an assistant task
+     * and an Assignment worker, which are offered none of those routes.
+     */
+    artifactTools = false
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -4036,6 +4051,7 @@ export class ChatEngine {
         designSession,
         videoSession,
         orchestrationSession,
+        artifactTools,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -9514,48 +9530,6 @@ export class ChatEngine {
         lifecycleForMode?.humanGate === 'assignment_approval') &&
       lifecycleForMode.autopilot !== true &&
       (ownedAssignment === null || ownedAssignment.status === 'draft')
-    // A plain thread that never entered Engineering has no Assignment contract,
-    // so a message that explicitly asks for an assignment or to hand work to
-    // workers used to be answered by the coordinator spawning its own inline
-    // sub-agents, which is not what the user asked for. Read that intent here,
-    // before any normal turn work, and build the reviewable draft instead: from
-    // the approved specification when one exists, otherwise from the
-    // conversation. The user still reviews the draft and signs it off, choosing
-    // worker models, before any task runs. A message that explicitly names
-    // sub-agents is left untouched, and so is an Engineering thread, a chat, an
-    // assistant task, and an Assignment worker or coordinator, because each
-    // already owns its own routing.
-    const delegationThread = targetThread
-    const routingSessionState = delegationThread?.sessionId
-      ? this.sessionStatuses.get(delegationThread.sessionId)?.state
-      : undefined
-    const delegationRoutingTurn =
-      origin === 'user' &&
-      specAction === undefined &&
-      !isChatThread &&
-      !isAssistantTask &&
-      !assistantTaskTurn &&
-      delegationThread !== null &&
-      !isAssistantSetupThread(delegationThread) &&
-      delegationThread.assignmentRole === undefined &&
-      !planningSpecTurn &&
-      !assignmentDiscussionTurn &&
-      !assignmentInProgress &&
-      (ownedAssignment === null || ownedAssignment.status === 'draft') &&
-      routingSessionState !== 'working' &&
-      routingSessionState !== 'waiting' &&
-      delegationIntent(text) === 'assignment'
-    if (delegationRoutingTurn && delegationThread !== null) {
-      void scheduleAutoTitle()
-      await this.routeDelegationRequestToAssignment(
-        projectId,
-        threadId,
-        settings,
-        text,
-        delegationThread.sessionId
-      )
-      return publicUserMessage
-    }
     if (
       planningSpecTurn &&
       !preloadedActiveSpec &&
@@ -9918,7 +9892,15 @@ export class ChatEngine {
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
       designSession,
       videoSession,
-      orchestrationSession
+      orchestrationSession,
+      // A real project thread may create its engineering artifacts through the
+      // artifact tools. A chat, an assistant task, the inbox and an Assignment
+      // worker are offered none of those routes.
+      !isChatThread &&
+        !isAssistantTask &&
+        targetThread !== null &&
+        targetThread.assignmentRole === undefined &&
+        projectId !== INBOX_PROJECT_ID
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -17231,49 +17213,147 @@ export class ChatEngine {
   }
 
   /**
-   * A plain thread whose message explicitly asks for an Assignment (or hands
-   * work to workers) is routed into Assignment creation instead of a normal
-   * implementation turn. The draft is built from whatever source exists: the
-   * approved specification when there is one, otherwise the thread conversation
-   * plus the user's own message. It stays unsigned until the user reviews it,
-   * chooses worker models, and signs it off. A message that names sub-agents
-   * never reaches here; the coordinator keeps delegating those inline.
+   * Run one engineering artifact tool for the turn that asked for it.
+   *
+   * Each artifact is created through the same machinery the Studio buttons use:
+   * an isolated generation session that persists a reviewable draft and
+   * broadcasts the matching `ready` event. Nothing is approved, implemented or
+   * signed off on the user's behalf, so the existing review surface keeps owning
+   * that decision. A request that cannot produce the artifact throws with a
+   * plain reason the agent can relay or act on.
    */
-  private async routeDelegationRequestToAssignment(
-    projectId: string,
-    threadId: string,
-    settings: ThreadSettings,
-    request: string,
-    sessionId: string | undefined
-  ): Promise<void> {
-    await this.threadManager.setStatus(projectId, threadId, 'planning', { read: false })
-    let assignment: AssignmentPlan
-    try {
-      // Assignment creation is gated on the mode flag, which a plain thread
-      // never carries. The gate exists to stop an ordinary turn from silently
-      // generating a board; this turn is the explicit user request for one, so
-      // the flag is supplied for this dispatch only and never persisted.
-      assignment = await this.generateAssignmentDraft(
-        projectId,
-        threadId,
-        { ...settings, assignmentMode: true },
-        request
-      )
-    } catch (error) {
-      await this.threadManager.setStatus(projectId, threadId, 'failed', {
-        error: rawErrorMessage(error),
-        errorDetail: rawErrorDetail(error)
-      })
-      throw error
+  private async runEngineeringTool(
+    operation: EngineeringToolOperation,
+    input: Record<string, unknown>,
+    context: EngineeringToolContext
+  ): Promise<unknown> {
+    const { projectId, threadId } = context
+    const rawInstructions = input['instructions']
+    const instructions = typeof rawInstructions === 'string' ? rawInstructions.trim() : ''
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) {
+      throw new Error('Select a model for this thread before creating an artifact.')
     }
-    this.broadcast({
-      type: 'assignment.ready',
-      sessionId: sessionId ?? threadId,
-      projectId,
-      threadId,
-      assignmentId: assignment.id,
-      version: assignment.version
-    })
+    const settings = validateThreadSettings(thread.settings)
+
+    switch (operation) {
+      case 'brainstorm': {
+        this.brainstormEngine.ensureWorkflow(projectId, threadId)
+        const document = await this.createBrainstormSessionReport(projectId, threadId, instructions)
+        return {
+          artifact: 'brainstorm',
+          id: document.id,
+          version: document.version,
+          message: `The Brainstorm draft v${document.version} is ready for review.`
+        }
+      }
+      case 'prd': {
+        const active = this.prdEngine.getActive(projectId, threadId)
+        if (active) {
+          return {
+            artifact: 'prd',
+            id: active.id,
+            version: active.version,
+            message: `The active PRD v${active.version} already exists.`
+          }
+        }
+        let workflow = this.prdEngine.ensureWorkflow(projectId, threadId)
+        if (workflow.stage === 'choice_pending') {
+          workflow = this.prdEngine.chooseEntry(projectId, threadId, 'start_prd')
+        }
+        if (workflow.stage === 'brainstorming') {
+          throw new Error(
+            'Finalize the Brainstorm before creating the PRD, or choose to start the PRD without it.'
+          )
+        }
+        if (workflow.stage !== 'drafting') {
+          throw new Error('The PRD workflow is not ready for a new draft.')
+        }
+        const document = await this.generatePrd(
+          projectId,
+          threadId,
+          settings,
+          instructions ||
+            'Create the product requirements document from the conversation in this thread.',
+          [],
+          createMessageId()
+        )
+        this.broadcast({
+          type: 'prd.ready',
+          sessionId: context.sessionId,
+          projectId,
+          threadId,
+          prdId: document.id,
+          version: document.version
+        })
+        return {
+          artifact: 'prd',
+          id: document.id,
+          version: document.version,
+          message: `The PRD draft v${document.version} is ready for review.`
+        }
+      }
+      case 'spec': {
+        const active = await this.getActiveSpec(projectId, threadId)
+        if (active) {
+          return {
+            artifact: 'spec',
+            id: active.id,
+            version: active.version,
+            message: `The active specification v${active.version} already exists.`
+          }
+        }
+        if (!this.engineeringLifecycleActive(projectId, threadId)) {
+          this.engineeringLifecycleEngine.select(projectId, threadId, {
+            stages: ['spec'],
+            autopilot: false
+          })
+          this.engineeringLifecycleEngine.start(projectId, threadId, 'spec')
+        }
+        const spec = await this.ensureInitialSpec(projectId, threadId)
+        return {
+          artifact: 'spec',
+          id: spec.id,
+          version: spec.version,
+          message: `The specification draft v${spec.version} is ready for review.`
+        }
+      }
+      case 'assignment': {
+        const active = this.assignmentEngine.getActive(projectId, threadId)
+        if (active && active.status !== 'draft') {
+          return {
+            artifact: 'assignment',
+            id: active.id,
+            version: active.version,
+            message: `This thread already has an Assignment with status ${active.status}.`
+          }
+        }
+        // Assignment generation is gated on the mode flag, which a plain thread
+        // does not carry. The gate stops an ordinary turn from silently raising a
+        // board; this call is the agent acting on the user's request, so the flag
+        // is supplied for this dispatch only and never persisted.
+        const assignment = await this.generateAssignmentDraft(
+          projectId,
+          threadId,
+          { ...settings, assignmentMode: true },
+          instructions || undefined
+        )
+        this.broadcast({
+          type: 'assignment.ready',
+          sessionId: context.sessionId,
+          projectId,
+          threadId,
+          assignmentId: assignment.id,
+          version: assignment.version
+        })
+        return {
+          artifact: 'assignment',
+          id: assignment.id,
+          version: assignment.version,
+          message: `The Assignment draft v${assignment.version} is ready for review and sign-off.`
+        }
+      }
+    }
   }
 
   /**

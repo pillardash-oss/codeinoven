@@ -10,6 +10,7 @@ import {
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
+import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 
 export function piCoreToolsHeaderSource(): string {
   return `import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -114,6 +115,7 @@ const CIO_SUBAGENT_TOOL_NAMES = new Set([
 // exact lines from its base prompt before the model ever sees them.
 const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+  'When the user asks to split work across workers and wants to prompt those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead of ${CIO_SPAWN_AGENT_TOOL_NAME}: both can be monitored, but only Assignment workers can be prompted independently. Ask with cio_ask_user which the user wants when they have not already said, and do not ask again once they have.',
   'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
   'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
 ]

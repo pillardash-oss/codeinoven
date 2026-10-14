@@ -41,17 +41,22 @@ The interview owns both the active Assignment stage and its `assignment_approval
 
 Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
 
-### Assignment routing from a plain thread
+### Engineering artifact tools
 
-A thread that never entered Engineering has no Assignment contract, so before this routing existed a message like "create an assignment for this" was answered by the coordinator spawning its own inline sub-agents. The user asked for an Assignment and got a different mechanism.
+A thread that never entered Engineering has no Studio buttons in front of the agent, so before these tools existed a message like "create an assignment for this" could only be answered by the coordinator spawning its own inline sub-agents, which is not the mechanism the user asked for.
 
-A plain, idle project thread now reads the delegation mechanism out of the user's own message (`src/lib/assignment/assignment-intent.ts`, `delegationIntent`):
+The agent now reaches the artifacts through four real callable tools instead of the app watching the wording of a message. They live in `src/lib/engineering-tools.ts` and travel on the same utility gateway every other app-owned tool uses, so the Pi extension, the generated MCP server and the main-process bridge stay in step from that one catalog.
 
-- **Explicit sub-agent vocabulary** (`sub-agent`, `subagents`, `spawn agent`, `cio_spawn_agent`) keeps the inline route. It is the explicit opt-out and it wins when a message names both mechanisms.
-- **Assignment or worker vocabulary** ("create an assignment", "separate assignment", "turn this into an assignment", "assign this to workers", "use workers", "worker threads") routes the turn into Assignment creation. The draft is built from whatever source exists, the approved Spec when one exists and otherwise the thread conversation plus the message, and it is surfaced unsigned on the same review card so the user picks worker models and signs off before any task runs.
-- **Anything else** stays an ordinary turn, and the coordinator may delegate inline exactly as before.
+- `cio_create_brainstorm` creates the thread's durable Brainstorm draft.
+- `cio_create_prd` creates the product requirements document.
+- `cio_create_spec` enters the Engineering spec stage and generates the specification draft.
+- `cio_create_assignment` creates the Assignment task graph for the user to sign off.
 
-The routing never fires for a chat, an assistant task, an Assignment worker or coordinator thread, an active Engineering stage (each already owns its routing), or a thread whose session is mid-turn. A message that does not name a delegation mechanism is untouched, so the generic "split this into tasks amongst various agents" wording remains a normal turn.
+Each tool runs the same machinery the Studio buttons use: an isolated generation session that persists a reviewable draft and broadcasts the matching `ready` event. Nothing is approved, implemented or signed off on the user's behalf, so the existing review surface keeps owning that decision.
+
+The tools carry the choice that used to be a guessed rule. An Assignment and the inline sub-agents from `cio_spawn_agent` can both be watched, but only Assignment workers can be prompted independently, so `cio_create_assignment` is the right tool exactly when the user wants to steer the workers themselves. When the user has not already said which they want, the tool description tells the agent to ask with `cio_ask_user` before choosing, and never to ask again once a preference is stated. The same rule is repeated in the `cio_spawn_agent` description and its prompt guidelines, so either tool leads the agent to the question.
+
+The routes are granted per turn. `prepareTurnUtilities` receives `artifactTools`, set for a real project thread's turn and left off for a chat, an assistant task, the inbox and an Assignment worker, and the gateway refuses a route a turn never received.
 
 ### Worker reporting
 

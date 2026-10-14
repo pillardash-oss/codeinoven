@@ -1,6 +1,7 @@
 import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
+import { ENGINEERING_TOOLS } from './engineering-tools'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
@@ -130,6 +131,7 @@ const UTILITY_BUNDLE_INPUT_SCHEMA: Record<string, unknown> = {
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
+  ...ENGINEERING_TOOLS,
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:

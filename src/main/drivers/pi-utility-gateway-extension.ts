@@ -55,6 +55,12 @@ import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../lib/app-control-tools'
+import {
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME
+} from '../../lib/engineering-tools'
 
 /** The gateway tools the extension registers as first-class Pi tools. */
 export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
@@ -70,7 +76,11 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   ORCHESTRATION_DISPATCH_TOOL_NAME,
   ORCHESTRATION_STATUS_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME,
-  APP_CONTROL_CALL_TOOL_NAME
+  APP_CONTROL_CALL_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME,
+  CREATE_ASSIGNMENT_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -92,6 +102,10 @@ const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
 const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
 const appCatalogTool = gatewayTool(APP_CONTROL_CATALOG_TOOL_NAME)
 const appCallTool = gatewayTool(APP_CONTROL_CALL_TOOL_NAME)
+const createBrainstormTool = gatewayTool(CREATE_BRAINSTORM_TOOL_NAME)
+const createPrdTool = gatewayTool(CREATE_PRD_TOOL_NAME)
+const createSpecTool = gatewayTool(CREATE_SPEC_TOOL_NAME)
+const createAssignmentTool = gatewayTool(CREATE_ASSIGNMENT_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -709,6 +723,90 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         ...(params.params !== undefined ? { params: params.params } : {}),
         ...(params.destructiveConfirmed !== undefined ? { destructiveConfirmed: params.destructiveConfirmed } : {})
       })
+      return textResult(result)
+    }
+  })
+
+  // Engineering artifact tools: real callable tools the agent reaches for when
+  // the user wants a durable Brainstorm, PRD, specification or Assignment.
+  // Granted by the turn's own flag, and the gateway refuses a route the turn
+  // never received.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createBrainstormTool.name)},
+    label: "Create this thread's Brainstorm",
+    description: ${JSON.stringify(createBrainstormTool.description)},
+    promptSnippet: "Create this thread's durable Brainstorm artifact",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createBrainstormTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createPrdTool.name)},
+    label: "Create this thread's PRD",
+    description: ${JSON.stringify(createPrdTool.description)},
+    promptSnippet: "Create this thread's product requirements document (PRD)",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createPrdTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createSpecTool.name)},
+    label: "Create this thread's specification",
+    description: ${JSON.stringify(createSpecTool.description)},
+    promptSnippet: "Create this thread's engineering specification",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createSpecTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createAssignmentTool.name)},
+    label: "Create this thread's Assignment",
+    description: ${JSON.stringify(createAssignmentTool.description)},
+    promptSnippet: "Create this thread's Assignment and split work across promptable workers",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the split should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createAssignmentTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
       return textResult(result)
     }
   })
