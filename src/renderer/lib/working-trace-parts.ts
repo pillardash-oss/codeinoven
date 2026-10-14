@@ -1,4 +1,5 @@
 import type { AgentPart } from '$shared/types'
+import { isCodeModeToolName } from '$shared/agent-interactions'
 import { subagentStatusIsTerminal } from './subagent-presentation'
 
 export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
@@ -122,6 +123,32 @@ function spanOfParts(parts: readonly AgentPart[]): TraceChainSpan | null {
 /** The wall-clock span a chain's steps occupied, or null when none reported one. */
 export function traceChainSpan(chain: TraceChain): TraceChainSpan | null {
   return spanOfParts(chain.steps)
+}
+
+/**
+ * What a chain of thought holds, for the per-chain markers on its header: a
+ * compaction, how many sub-agents it delegated to, and whether it ran code-mode
+ * work. It lets a reader see where an action happened without opening the
+ * steps, while the trace header keeps the turn-wide totals.
+ */
+export interface TraceChainMarkers {
+  compacted: boolean
+  subagentCount: number
+  codeMode: boolean
+}
+
+export function traceChainMarkers(chain: TraceChain): TraceChainMarkers {
+  let compacted = false
+  let subagentCount = 0
+  let codeMode = false
+  for (const step of chain.steps) {
+    if (step.type === 'compaction' || step.type === 'compaction-summary') compacted = true
+    else if (step.type === 'subagent') subagentCount += 1
+    else if (step.type === 'tool' && (step.codeMode === true || isCodeModeToolName(step.tool))) {
+      codeMode = true
+    }
+  }
+  return { compacted, subagentCount, codeMode }
 }
 
 /**

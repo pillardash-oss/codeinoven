@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ChevronRight } from '@lucide/svelte'
+  import { Archive, Bot, ChevronRight, CodeXml } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
-  import { traceChainSpan, type TraceChain } from '$lib/working-trace-parts'
+  import { traceChainMarkers, traceChainSpan, type TraceChain } from '$lib/working-trace-parts'
   import type { AgentPart } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTraceRow from './WorkingTraceRow.svelte'
@@ -81,6 +81,14 @@
   const durationLabel = $derived(durationStart === undefined ? null : formatDurationMs(durationMs))
 
   const stepLabel = $derived(`${chain.steps.length} ${chain.steps.length === 1 ? 'step' : 'steps'}`)
+
+  /**
+   * What this chain of thought holds, so the reader can see where a compaction,
+   * a delegated sub-agent, or code-mode work happened without opening the
+   * steps. The trace header still carries the turn-wide totals; these mark the
+   * exact step the action belongs to.
+   */
+  const markers = $derived(traceChainMarkers(chain))
 </script>
 
 <div class="min-w-0">
@@ -119,6 +127,39 @@
         <span class="font-medium">{stepLabel}</span>
         {#if durationLabel}
           <span class="tabular-nums">· {durationLabel}</span>
+        {/if}
+        {#if markers.compacted || markers.subagentCount > 0 || markers.codeMode}
+          <span class="flex items-center gap-1.5">
+            {#if markers.compacted}
+              <span
+                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                title="This step compacted earlier context."
+              >
+                <Archive size={10} />
+                Compacted
+              </span>
+            {/if}
+            {#if markers.subagentCount > 0}
+              <span
+                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                title={`This step delegated work to ${markers.subagentCount} sub-agent${
+                  markers.subagentCount === 1 ? '' : 's'
+                }.`}
+              >
+                <Bot size={10} />
+                {markers.subagentCount}
+              </span>
+            {/if}
+            {#if markers.codeMode}
+              <span
+                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                title="This step ran code-mode work."
+              >
+                <CodeXml size={10} />
+                Code
+              </span>
+            {/if}
+          </span>
         {/if}
       </button>
       {#if open}
