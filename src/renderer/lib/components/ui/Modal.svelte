@@ -477,12 +477,18 @@
             >
               {#if chrome}
                 <!-- A fullscreen panel is the window, so its canonical header doubles
-                     as the title bar and must reserve the OS window-control inset:
-                     without it the title sits underneath the macOS traffic lights.
+                     as the title bar. It reserves the OS window-control inset so the
+                     title never sits underneath the macOS traffic lights, and it is a
+                     fixed `h-12` like the app header and the fullscreen file editor, so
+                     the title centres on the same band the traffic lights sit in.
                      Every other placement draws a panel inset from the window edge,
-                     where the controls are outside it and nothing needs reserving. -->
+                     where the controls are outside it: it keeps the intrinsic `py-4`
+                     that matches the header of every centred dialog. -->
                 <div
-                  class="flex shrink-0 items-center justify-between border-b px-6 py-4"
+                  class={[
+                    'flex shrink-0 items-center justify-between border-b px-6',
+                    placement === 'fullscreen' ? 'h-12' : 'py-4'
+                  ]}
                   style={placement === 'fullscreen'
                     ? trafficLightInsetStyle({ mirrorRightInset: false })
                     : undefined}
