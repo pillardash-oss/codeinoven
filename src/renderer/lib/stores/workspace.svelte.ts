@@ -30,6 +30,12 @@ export { threadVisitKey }
 export interface JumpTarget {
   id: string
   content: string
+  /**
+   * True when this row records an app action (an answered question, a retry, a
+   * spec apply) rather than an authored message. The history panel draws these
+   * in italics.
+   */
+  isAction?: boolean
   /** First few work-trace snippets of the turn that follows this message. */
   tracePreview?: string[]
 }

@@ -8,6 +8,9 @@
   interface HistoryEntry {
     id: string
     content: string
+    /** App-recorded action (an answered question, a retry, a spec apply), not
+     *  an authored message. Rendered in italics so the two read differently. */
+    isAction?: boolean
     /** First few work-trace snippets of the turn that follows this message. */
     tracePreview?: string[]
   }
@@ -159,7 +162,7 @@
             onclick={() => onSelect(message.id)}
           >
             <span class="mr-1.5 tabular-nums text-dimmed">{originalIndex + 1}.</span>
-            {message.content}
+            <span class={message.isAction ? 'italic' : undefined}>{message.content}</span>
           </button>
           <button
             type="button"

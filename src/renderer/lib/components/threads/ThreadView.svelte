@@ -3694,20 +3694,46 @@
       })
   })
 
+  /**
+   * Bring one message element into view. A window that had to be remounted for
+   * the jump may not have rendered on the first tick, so the lookup retries
+   * across a few frames instead of giving up: the reader clicks once and
+   * expects the message, not a first click that loads it and a later one that
+   * finally reveals it.
+   */
+  async function revealMessageById(id: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await tick()
+      const element = document.getElementById(`msg-${id}`)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    }
+  }
+
   /** Jump target for the header's history dropdown   loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */
   async function jumpToMessage(id: string): Promise<void> {
     const { projectId, id: threadId } = thread
     if (jumpLoading) return
+    // A jump is a deliberate leave from the live tail. Detach the follow lock
+    // and mark the open as restored BEFORE the window mounts and the scroll
+    // begins: a far-back jump mounts a large stretch of the transcript, and
+    // the ResizeObserver that re-anchors a following reader would otherwise
+    // snap the viewport straight back to the bottom   the reason the first
+    // (and second) click loaded the target without revealing it.
+    userScrolledAway = true
+    scrollRestored = true
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
       // The store holds the target but the mounted window may not   move the
       // anchor back to cover it (plus context) before scrolling.
       if (!hasController && mountedStartIndex > cachedIndex) {
         windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
-        await tick()
       }
-      document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      await revealMessageById(id)
       return
     }
     jumpLoading = true
@@ -3727,10 +3753,7 @@
         if (!hasController && mountedStartIndex > targetIndex) {
           windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
         }
-        await tick()
-        document
-          .getElementById(`msg-${id}`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        await revealMessageById(id)
       }
       // Page forward in the background so the transcript stays contiguous down
       // to the already-loaded thread tail after a far-back jump.
@@ -3869,9 +3892,10 @@
   $effect(() => {
     const tracePreviews = tracePreviewByUserMessage(messages)
     const userMessages = mergedUserMessageSummaries(messages, fullUserMessageHistory).map(
-      ({ id, content }) => ({
+      ({ id, content, isAction }) => ({
         id,
         content,
+        ...(isAction ? { isAction } : {}),
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       })
     )

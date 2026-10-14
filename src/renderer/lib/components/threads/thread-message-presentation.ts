@@ -46,6 +46,18 @@ export function explicitMessagePresentation(msg: AgentMessage): UserMessagePrese
   return part?.presentation ?? null
 }
 
+/**
+ * True when a user message records an app action rather than text the user
+ * typed: an answered agent question, a connection retry, a spec apply. These
+ * carry a `user-presentation` part and no visible text, so the history panel
+ * draws them italic; they are not authored prompts.
+ */
+export function isActionUserMessage(msg: AgentMessage): boolean {
+  if (msg.role !== 'user') return false
+  if (explicitMessagePresentation(msg) === null) return false
+  return rawMessageText(msg).trim().length === 0
+}
+
 export function specActionLabel(action: SpecActionIntent): string {
   if (action === 'request') return 'Spec requested'
   return action === 'implement' ? 'Implement spec' : 'Review spec'

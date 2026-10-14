@@ -405,6 +405,13 @@ export interface TurnStreamPartsChange {
 export interface UserMessageSummary {
   id: string
   content: string
+  /**
+   * True when this row is an app-recorded action rather than text the user
+   * typed: an answered agent question, a connection retry, a spec apply, a
+   * brainstorm review. The history panel draws these in italics so they read
+   * as actions and not as authored messages.
+   */
+  isAction?: boolean
   createdAt: number
 }
 
