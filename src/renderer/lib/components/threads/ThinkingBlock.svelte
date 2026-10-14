@@ -5,9 +5,9 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
-  import { reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
+  import { reasoningBlockTitle, reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
+  import { formatDurationMs } from '$lib/format/duration'
 
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
@@ -49,6 +49,14 @@
   })
 
   const elapsed = $derived(clock.seconds(start, end))
+
+  /**
+   * The folded row's one-line title. Providers that ship thinking summaries
+   * label each block (Codex: `**Evaluating build output**`), and providers that
+   * ship only a reasoning body get their first line, so a reader can pick the
+   * block they want without opening every one in turn.
+   */
+  const title = $derived(reasoningBlockTitle(part.text, part.summary ?? ''))
 </script>
 
 {#if body.trim() || summary.trim()}
@@ -65,15 +73,24 @@
         class="shrink-0 text-info/60 transition-colors group-hover/think:text-info"
       />
       <span class="shrink-0">Thinking</span>
-      <span
-        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
-      >
-        {formatDurationSeconds(elapsed)}
-      </span>
+      {#if start !== undefined}
+        <span
+          class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/think:text-muted"
+        >
+          {formatDurationMs(elapsed * 1000)}
+        </span>
+      {/if}
       {#if active}
         <span class="h-1.5 w-1.5 rounded-full bg-info animate-pulse"></span>
       {/if}
-      <span class="flex-1"></span>
+      {#if title}
+        <span
+          class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed transition-colors group-hover/think:text-muted"
+          >{title}</span
+        >
+      {:else}
+        <span class="flex-1"></span>
+      {/if}
       <ChevronRight
         size={12}
         class="shrink-0 text-dimmed transition-transform group-hover/think:text-foreground {open

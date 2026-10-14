@@ -20,7 +20,7 @@
   import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
+  import { formatDurationMs } from '$lib/format/duration'
   import LongTextBlock from '../markdown/LongTextBlock.svelte'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
@@ -158,12 +158,19 @@
     part.state.title ?? (toolKind === 'code' ? 'Code mode' : part.tool)
   )
 
+  /** Bound on the collapsed row's input preview. The row truncates to the
+   *  width it actually has in CSS, so this only stops a pathological first
+   *  argument (a whole file's contents) being copied into a second string on
+   *  every render; it is far beyond any width the row can show. */
+  const PREVIEW_MAX_CHARS = 2_000
+
   function formatInput(input: Record<string, unknown>): string {
     const entries = Object.entries(input)
     if (entries.length === 0) return ''
     const first = entries[0]
     const value = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1])
-    const preview = value.length > 80 ? `${value.slice(0, 80)}…` : value
+    const preview =
+      value.length > PREVIEW_MAX_CHARS ? `${value.slice(0, PREVIEW_MAX_CHARS)}…` : value
     return `${first[0]}: ${preview}`
   }
 
@@ -231,7 +238,7 @@
     {#if start}
       <span
         class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
-        >{formatDurationSeconds(elapsed)}</span
+        >{formatDurationMs(elapsed * 1000)}</span
       >
     {/if}
     {#if !open && inputPreview}
