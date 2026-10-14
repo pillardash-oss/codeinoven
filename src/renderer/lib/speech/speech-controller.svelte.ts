@@ -6,12 +6,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
-import {
-  deliverTranscriptHeadless,
-  sendUnsentComposerContentNow,
-  unsentComposerContent,
-  voiceScopeTarget
-} from './voice-send'
+import { deliverTranscriptHeadless, voiceScopeTarget } from './voice-send'
 import { logRendererError } from '../system/renderer-logger'
 import type {
   SpeechDictationSpan,
@@ -156,10 +151,6 @@ class SpeechController {
   private preloadFired = false
   /** In-flight background transcription jobs, keyed by attempt id. */
   private readonly transcriptions = new Map<string, Promise<void>>()
-  /** Level-2 steers still in flight, keyed by attempt id. A transcript that
-   *  lands meanwhile must wait for the box content to leave the composer before
-   *  it reads the mirrored draft, or it delivers the same message twice. */
-  private readonly pendingSteers = new Map<string, Promise<void>>()
   /**
    * Detached transcriptions whose transcript has not landed yet, with the
    * editor and thread they belong to. Rows, mic buttons and the armed-send
@@ -424,12 +415,15 @@ class SpeechController {
    *
    * 1. the transcript is sent when it lands, together with whatever the
    *    composer already held, which waits for it instead of being sent alone;
-   * 2. the composer's text is steered into the running turn right now and the
-   *    transcript follows as its own message;
-   * 3. the transcript itself is steered, interrupting the running turn;
-   * 4. the intent is cleared again, so the transcript goes back to being pasted
+   * 2. the transcript itself is steered, interrupting the running turn;
+   * 3. the intent is cleared again, so the transcript goes back to being pasted
    *    into its editor (and written to the clipboard) with nothing sent, and
    *    the next press arms a fresh send.
+   *
+   * The ladder only ever steers the transcript. What the composer already held
+   * is never handed over on its own behalf: the page content stays where it is
+   * until the transcript lands, and even then it only leaves as part of the
+   * message the transcript is sent with.
    *
    * Returns false when nothing is armable: a dictation on a plain editor, or
    * no dictation at all, so callers can leave the event to its normal meaning.
@@ -440,8 +434,8 @@ class SpeechController {
     const existing = this.voiceSends.find((entry) => entry.attemptId === record.attemptId)
     // The press after "steer the transcript" ends the ladder instead of
     // escalating it: the intent goes away and the cycle starts over.
-    const cleared = existing?.level === 3
-    const level = nextVoiceSendLevel(existing?.level, unsentComposerContent(record.scope) !== null)
+    const cleared = existing?.level === 2
+    const level = nextVoiceSendLevel(existing?.level)
     this.voiceSends = [
       // Prune intents whose transcription already settled: only the dictation
       // in flight may carry an armed state, and a cleared one is dropped so the
@@ -468,49 +462,13 @@ class SpeechController {
     // the armed state is then the most recent claim, which is what the row's
     // last-action-wins rule compares against computer-use activity.
     this.claimThreadSlot(record.scope)
-    // Level 2 hands over what the composer holds at this instant: that text is
-    // an instruction for the running turn and must not wait for the transcript.
-    // Clearing is never level 2, so this only fires on a fresh ladder step.
-    if (level === 2) this.trackPendingSteer(record)
     return true
-  }
-
-  /** Hand the composer content to the running turn, remembering the work so a
-   *  transcript landing meanwhile waits for it instead of racing it. */
-  private trackPendingSteer(record: VoiceTranscriptionRecord): void {
-    // Never rejects: the delivery awaits this promise, and a steer that threw
-    // must not turn into a transcription failure for the transcript behind it.
-    const steering = this.steerPendingComposerContent(record).catch((cause: unknown) => {
-      logRendererError('The queued voice message could not be steered.', cause)
-    })
-    this.pendingSteers.set(record.attemptId, steering)
-    void steering.finally(() => {
-      if (this.pendingSteers.get(record.attemptId) === steering)
-        this.pendingSteers.delete(record.attemptId)
-    })
   }
 
   /** The dictation an arming gesture applies to (see the selector module). */
   private voiceSendCandidate(targetId?: string): VoiceTranscriptionRecord | null {
     const viewed = workspaceState.selectedThread
     return selectVoiceSendCandidate(this.transcribing, this.voiceSends, targetId, viewed)
-  }
-
-  /**
-   * Steer what a thread's composer already holds. A mounted composer drives its
-   * own send path so the steer obeys every gate the send button has; otherwise
-   * the mirrored draft is steered headlessly.
-   */
-  private async steerPendingComposerContent(record: VoiceTranscriptionRecord): Promise<void> {
-    const autoSend = record.target.autoSend
-    if (autoSend?.isLive()) {
-      autoSend.submit(true)
-      // A composer that dispatched clears its own buffer. One that refused (an
-      // open slash or mention menu, a locked field) left the text in place, so
-      // steer it headlessly instead of quietly dropping the intent.
-      if (unsentComposerContent(record.scope) === null) return
-    }
-    await sendUnsentComposerContentNow(record.scope)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -934,7 +892,6 @@ class SpeechController {
   private endTranscription(attemptId: string): void {
     this.transcribing = this.transcribing.filter((entry) => entry.attemptId !== attemptId)
     this.voiceSends = this.voiceSends.filter((entry) => entry.attemptId !== attemptId)
-    this.pendingSteers.delete(attemptId)
   }
 
   /**
@@ -1095,11 +1052,7 @@ class SpeechController {
    * that then holds the transcript.
    */
   private async deliverArmedVoiceSend(intent: VoiceSendIntent, landedLive: boolean): Promise<void> {
-    // A level-2 steer may still be handing the box content over. The transcript
-    // must not be read out of the mirrored draft until that text has left it, or
-    // the same message is delivered twice.
-    await this.pendingSteers.get(intent.attemptId)
-    const direct = intent.level >= 3
+    const direct = intent.level >= 2
     if (landedLive) {
       const autoSend = intent.target.autoSend
       if (autoSend?.isLive()) {

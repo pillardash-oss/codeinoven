@@ -12,21 +12,17 @@ export interface ViewedThread {
 }
 
 export function stageForLevel(level: VoiceSendLevel): VoiceSendStage {
-  return level >= 3 ? 'steer' : 'send'
+  return level === 2 ? 'steer' : 'send'
 }
 
 /**
- * The next rung of the arm/escalate ladder. With nothing typed there is nothing
- * to hand over at level 2, so asking again means the transcript itself should
- * steer: the same intent the third press expresses once the box has already
- * been handed over.
+ * The next rung of the arm/escalate ladder, and it only ever steps over the
+ * transcript: a fresh arm sends the transcript when it lands, and the next
+ * press steers that transcript into the running turn. A press past the top
+ * clears the intent instead, which the caller handles.
  */
-export function nextVoiceSendLevel(
-  current: VoiceSendLevel | undefined,
-  hasBoxContent: boolean
-): VoiceSendLevel {
-  const next: VoiceSendLevel = current === undefined ? 1 : current === 1 ? 2 : 3
-  return next === 2 && !hasBoxContent ? 3 : next
+export function nextVoiceSendLevel(current: VoiceSendLevel | undefined): VoiceSendLevel {
+  return current === undefined ? 1 : 2
 }
 
 /**
