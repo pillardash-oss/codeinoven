@@ -9,6 +9,7 @@
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -475,7 +476,17 @@
               }}
             >
               {#if chrome}
-                <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                <!-- A fullscreen panel is the window, so its canonical header doubles
+                     as the title bar and must reserve the OS window-control inset:
+                     without it the title sits underneath the macOS traffic lights.
+                     Every other placement draws a panel inset from the window edge,
+                     where the controls are outside it and nothing needs reserving. -->
+                <div
+                  class="flex shrink-0 items-center justify-between border-b px-6 py-4"
+                  style={placement === 'fullscreen'
+                    ? trafficLightInsetStyle({ mirrorRightInset: false })
+                    : undefined}
+                >
                   <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
                   {#if description}
                     <Dialog.Description class="sr-only">{description}</Dialog.Description>

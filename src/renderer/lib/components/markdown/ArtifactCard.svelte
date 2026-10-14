@@ -126,8 +126,8 @@
   open={expanded}
   title={label}
   onClose={() => (expanded = false)}
-  size="full"
-  fill
+  placement="fullscreen"
+  panelClass="bg-app"
   contentClass="flex flex-col overflow-hidden p-0"
 >
   <div class="min-h-0 flex-1">

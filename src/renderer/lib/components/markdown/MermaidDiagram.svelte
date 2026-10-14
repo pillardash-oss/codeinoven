@@ -264,8 +264,8 @@
   open={expanded}
   title="Mermaid diagram"
   onClose={() => (expanded = false)}
-  size="full"
-  fill
+  placement="fullscreen"
+  panelClass="bg-surface"
   contentClass="flex flex-col overflow-hidden p-0"
 >
   <div class="min-h-0 flex-1">
