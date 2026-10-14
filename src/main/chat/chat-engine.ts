@@ -389,8 +389,10 @@ import {
 import { capPersistedPart } from './bounded-tool-output'
 import {
   compactTurnStreamEvents,
+  foldTurnStreamDetailed,
   foldTurnStreamEvents,
-  groupStreamPartsIntoMessages
+  groupStreamPartsIntoMessages,
+  type FoldedTurnStream
 } from './turn-stream'
 import { readTurnStreamLog } from './turn-stream-log'
 import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
@@ -8706,6 +8708,10 @@ export class ChatEngine {
       await this.threadManager.markStoppedByUser(projectId, threadId)
       await activeRuntime.driver.abort(activeRuntime.projectPath, activeSessionId)
       this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+      // The dying turn reports nothing from its provider once it is aborted, so
+      // its streamed work is recovered before the new prompt moves the
+      // boundary past it.
+      await this.persistStreamedTurnWork(projectId, threadId, activeSessionId)
       this.handleSessionIdleSignal(activeSessionId)
       await this.awaitSessionIdleFinalization(activeSessionId)
       return this.sendPrompt(
@@ -20610,8 +20616,19 @@ export class ChatEngine {
           await this.ensureSession(thread.projectId, thread.id)
           continue
         }
-        if (config.resumeWorkOnRestart === false) continue
-        await this.resumeThreadFromPersistedSession(thread)
+        if (config.resumeWorkOnRestart === false) {
+          // The pre-crash turn is about to stay stopped for good, and its
+          // provider never reported it, so its streamed work is recovered into
+          // the transcript before anything else can move past it.
+          await this.persistStreamedTurnWork(thread.projectId, thread.id, thread.sessionId ?? null)
+          continue
+        }
+        const resumed = await this.resumeThreadFromPersistedSession(thread)
+        if (!resumed) {
+          // A resume the engine refused (a refused latch, a missing session, a
+          // dead harness) leaves the same gap as a stop without an idle.
+          await this.persistStreamedTurnWork(thread.projectId, thread.id, thread.sessionId ?? null)
+        }
       } catch (error) {
         // Leave the thread in its interrupted state; the user can still Retry manually.
         Logger.error('Recovered thread resume failed (non-fatal):', {
@@ -24250,10 +24267,6 @@ export class ChatEngine {
     return pageTurnStreamParts(folded, entry.events, query, turnStartTs ?? null)
   }
 
-  /** Oner inner-scroll-independent pages walked while rebuilding a turn from
-   *  the durable log. Bounded so a corrupt or endless fold can never spin here. */
-  private static readonly STREAM_RECOVERY_PAGE_ATTEMPTS = 12
-
   /**
    * Persist the work a turn streamed but never reported.
    *
@@ -24276,30 +24289,37 @@ export class ChatEngine {
     sessionId: string | null
   ): Promise<void> {
     try {
+      // A session still working owns its turn and will report it itself; the log
+      // must never race a live turn into the transcript.
+      if (sessionId && this.sessionStatuses.get(sessionId)?.state === 'working') return
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return
       const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
       const tail = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 60)
-      // The provider's own transcript wins whenever the turn has one. Its 
+      // The provider's own transcript wins whenever the turn has one. Its
       // message ids are the ones the transcript was built with; adding the
       // log's ids beside them would double the turn, not fill a gap.
       if (
         tail.messages.some(
           (message) =>
             message.role === 'assistant' &&
+            // A compaction summary is an assistant row mid-turn, not the turn's
+            // report, so it must not pass for one here.
+            message.origin !== 'compaction' &&
+            message.parts.some((part) => part.type !== 'compaction') &&
             (turnStartTs === undefined || message.createdAt >= turnStartTs)
         )
       ) {
         return
       }
-      const folded = await this.readWholeTurnStream(projectId, threadId)
-      if (folded.length === 0) return
+      const folded = await this.readWholeTurnStream(projectId, threadId, turnStartTs)
+      if (folded.parts.length === 0) return
       const existingIds = new Set(tail.messages.map((message) => message.id))
       const selection = sessionId ? this.sessionModelIds.get(sessionId) : undefined
       const settings = thread.settings
       const recovered: AgentMessage[] = []
       let previousCreatedAt: number | undefined
-      for (const rebuilt of groupStreamPartsIntoMessages(folded)) {
+      for (const rebuilt of groupStreamPartsIntoMessages(folded.parts, folded.lastActivityTs)) {
         if (existingIds.has(rebuilt.id)) continue
         // Keep the messages in stream order even when the harness reported a
         // timestamp for only some of them.
@@ -24324,7 +24344,12 @@ export class ChatEngine {
         })
       }
       if (recovered.length === 0) return
-      await this.threadManager.upsertMessages(projectId, threadId, recovered, sessionId ?? undefined)
+      await this.threadManager.upsertMessages(
+        projectId,
+        threadId,
+        recovered,
+        sessionId ?? undefined
+      )
       Logger.info('Recovered streamed turn work into the transcript', {
         projectId,
         threadId,
@@ -24339,27 +24364,19 @@ export class ChatEngine {
     }
   }
 
-  /** Read a thread's whole folded durable stream, oldest page first. */
-  private async readWholeTurnStream(projectId: string, threadId: string): Promise<AgentPart[]> {
-    const parts: AgentPart[] = []
-    let beforeId: string | undefined
-    for (
-      let attempt = 0;
-      attempt < ChatEngine.STREAM_RECOVERY_PAGE_ATTEMPTS;
-      attempt += 1
-    ) {
-      const page = await this.loadTurnStreamParts(
-        projectId,
-        threadId,
-        beforeId ? { beforeId } : {}
-      )
-      if (page.kind !== 'window') break
-      parts.unshift(...page.parts)
-      const oldest = page.parts[0]
-      if (!page.hasOlder || !oldest) break
-      beforeId = oldest.id
-    }
-    return parts
+  /** Read and fold a thread's whole durable turn stream, with activity times. */
+  private async readWholeTurnStream(
+    projectId: string,
+    threadId: string,
+    turnStartTs: number | undefined
+  ): Promise<FoldedTurnStream> {
+    const empty: FoldedTurnStream = { parts: [], lastActivityTs: new Map() }
+    const streamPath = turnStreamPath(projectId, threadId)
+    const size = await this.storage.rawSize(streamPath)
+    if (size === null || size === 0) return empty
+    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+    if (hydrated.events.length === 0) return empty
+    return foldTurnStreamDetailed(hydrated.events, hydrated.latestTurnId || undefined, turnStartTs)
   }
 
   /**
