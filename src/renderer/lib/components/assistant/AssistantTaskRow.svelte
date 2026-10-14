@@ -446,10 +446,12 @@
           title={rowBadge.title}
         />
         <span
-          class="min-w-0 flex-1 truncate text-[0.625rem] text-dimmed"
-          title={scheduleLabel ?? undefined}
+          class="min-w-0 flex-1 truncate text-[0.625rem] {foreignTransfer?.error
+            ? 'text-danger'
+            : 'text-dimmed'}"
+          title={foreignTransfer?.error ?? scheduleLabel ?? undefined}
         >
-          {runLine}
+          {foreignTransfer?.error ?? runLine}
         </span>
         {#if indicator}
           <ThreadIndicatorSlot {indicator} />

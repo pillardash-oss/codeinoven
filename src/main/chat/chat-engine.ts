@@ -13413,26 +13413,72 @@ export class ChatEngine {
     if (ownerPid !== process.pid) {
       return { released: false, reason: 'This instance is no longer running that thread.' }
     }
-    await this.abort(projectId, threadId, { reason: 'transfer' })
-    await this.settleThreadTurnForTransfer(projectId, threadId)
-    instanceRegistry.publishTurnActivity()
     const driverId =
       this.sessionRegistry.get(thread.sessionId)?.driverId ??
       thread.sessionHarnessId ??
       thread.settings.harnessId
+    const accountId =
+      this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+    // A Codex app-server can only be handed over once its thread's own turn has
+    // stopped, so the run is stopped first and the writer released second. Ask
+    // whether that release can succeed before anything is stopped: a refusal
+    // that arrived afterwards would cost the user a run this instance can no
+    // longer hand over and never restarts.
+    let writer: { driver: HarnessDriver; projectPath: string } | null = null
     if (driverId === 'codex') {
-      const accountId =
-        this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
-      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
-      const writerRelease = await driver.releaseIdleSessionForTransfer?.(
-        projectPath,
+      const resolved = await this.resolve(projectId, driverId, threadId, accountId)
+      const probe = await resolved.driver.canHandOffIdleSession?.(
+        resolved.projectPath,
+        thread.sessionId
+      )
+      if (probe?.blocked) return { released: false, reason: probe.reason }
+      if (resolved.driver.releaseIdleSessionForTransfer) writer = resolved
+    }
+    await this.abort(projectId, threadId, { reason: 'transfer' })
+    await this.settleThreadTurnForTransfer(projectId, threadId)
+    instanceRegistry.publishTurnActivity()
+    if (writer) {
+      const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
+        writer.projectPath,
         thread.sessionId
       )
       if (writerRelease?.owner && !writerRelease.released) {
-        return { released: false, reason: writerRelease.reason }
+        return await this.resumeRunAfterRefusedHandOff(thread, writerRelease.reason)
       }
     }
     return { released: true }
+  }
+
+  /**
+   * Put a run back when the hand-off it was already stopped for cannot complete.
+   *
+   * The stop comes first because a Codex app-server only hands a native thread
+   * over while no turn is running on it. When the writer release refuses anyway,
+   * leaving the thread stopped would cost the user the run they were watching for
+   * a transfer that never happened, so this instance resumes it through the same
+   * path the adopting instance would have used, and the refusal says the run
+   * stayed here.
+   */
+  private async resumeRunAfterRefusedHandOff(
+    thread: Thread,
+    reason: string
+  ): Promise<{ released: false; reason: string }> {
+    try {
+      if (await this.resumeThreadFromPersistedSession(thread, { force: true })) {
+        instanceRegistry.publishTurnActivity()
+        return { released: false, reason: `${reason} The run continued on this instance.` }
+      }
+    } catch (error) {
+      Logger.error('A refused cross-instance hand-off could not resume its run:', {
+        projectId: thread.projectId,
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+    }
+    return {
+      released: false,
+      reason: `${reason} The run was stopped and could not be handed over.`
+    }
   }
 
   /**

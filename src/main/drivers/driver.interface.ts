@@ -505,6 +505,22 @@ export interface HarnessDriver {
     sessionId: string
   ): Promise<IdleNativeSessionReleaseResult>
 
+  /**
+   * Whether {@link releaseIdleSessionForTransfer} would succeed once this
+   * thread's own turn has stopped, answered without stopping anything.
+   *
+   * A transfer stops the run before it releases the writer, because a harness
+   * that holds a native writer can only hand it over while no turn is running.
+   * A driver that can answer this read-only question lets the caller refuse
+   * while the run is still alive, instead of stopping it and then discovering
+   * the hand-off is impossible. The thread's own in-flight turn is not a
+   * blocker: the caller is about to stop it.
+   */
+  canHandOffIdleSession?(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionHandOffProbe>
+
   /** Send a prompt; responses stream back via the event callback. Non-blocking. */
   sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void>
 
@@ -871,6 +887,16 @@ export type IdleNativeSessionReleaseResult =
   | { owner: false; released: false }
   | { owner: true; released: true }
   | { owner: true; released: false; reason: string }
+
+/**
+ * Verdict of the read-only hand-off probe, taken before any run is stopped.
+ *
+ * `blocked` is a promise about this process only: it means the writer cannot be
+ * released here right now, so a transfer must be refused while the run is still
+ * alive. A driver that holds no writer at all reports `blocked: false`, because
+ * there is nothing here for a hand-off to wait on.
+ */
+export type IdleNativeSessionHandOffProbe = { blocked: false } | { blocked: true; reason: string }
 
 /** Main-process observer used by drivers to attribute process trees to sessions. */
 export interface AgentProcessObserver {
