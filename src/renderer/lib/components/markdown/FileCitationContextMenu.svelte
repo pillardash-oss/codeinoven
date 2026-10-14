@@ -71,7 +71,12 @@
   }
 
   let menuOpen = $state(false)
-  let pendingTarget = $state<CitationTarget | null>(null)
+  // Raw, not deeply reactive: an async resolution is kept only when the menu
+  // still holds the very target it began from, and a deep `$state` proxy is
+  // never equal to the plain object it was made from. A proxied target made
+  // every identity check below fail, so `resolved` stayed null and the menu's
+  // Copy path and reveal actions stayed disabled.
+  let pendingTarget = $state.raw<CitationTarget | null>(null)
   let resolved = $state<ResolvedCitation | null>(null)
   let editors = $state<EditorInfo[]>([])
   let openInEditor = $state(false)
@@ -98,22 +103,26 @@
   }
 
   /**
+   * The citation a right-click names: the fixed citation this menu wraps, or the
+   * link or chip the pointer landed on. Read once per event, because the
+   * `citation` prop is a fresh object on every parent render and a later read
+   * would name a different object than the one the resolution began from.
+   */
+  function citationFromEvent(event: MouseEvent): CitationTarget | null {
+    if (citation) return citation
+    const link = (event.target as Element | null)?.closest('a')
+    const linkCitation = link instanceof HTMLAnchorElement ? citationFromLink(link) : null
+    return linkCitation ?? citationFromChip(event)
+  }
+
+  /**
    * Gate for right-clicks. Citation links let bits-ui's trigger open the menu at
    * the pointer (this handler only records the target); everything else (plain
    * text, external links) stops the event so the native OS context menu keeps
    * working untouched.
    */
   function handleContextMenu(event: MouseEvent): void {
-    if (citation) {
-      pendingTarget = citation
-      void resolveCitation(citation).then((value) => {
-        if (pendingTarget === citation) resolved = value
-      })
-      return
-    }
-    const link = (event.target as Element | null)?.closest('a')
-    const linkCitation = link instanceof HTMLAnchorElement ? citationFromLink(link) : null
-    const target = linkCitation ?? citationFromChip(event)
+    const target = citationFromEvent(event)
     if (!target) {
       event.stopPropagation()
       return
