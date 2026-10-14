@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { Check, Copy, RefreshCw, Trash2 } from '@lucide/svelte'
+  import { Check, RefreshCw, Trash2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { copyText } from '$lib/copy-text'
-  import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
+  import { speechSettingsStore as speech, type SpeechRetryStatus } from '$lib/stores/speech.svelte'
   import { formatDateTime } from '$shared/date-time-format'
-  import type { SpeechRecordingAttempt, SpeechSettings } from '../../../../lib/speech/types'
+  import type { SpeechSettings } from '../../../../lib/speech/types'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
+  import HistoryTranscriptCopyMenu from './HistoryTranscriptCopyMenu.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'
 
   interface Props {
@@ -36,39 +36,13 @@
   })
 
   /**
-   * The transcript worth copying for an attempt. `finalTranscript` is the
-   * post-cleanup text, so fall back through the cleaned and raw stages, then
-   * the retry records, so a run that stopped halfway still has something to
-   * copy.
+   * Transient retry feedback for a row: `running` spins the retry button,
+   * `done` shows its check and highlights the copy control, `undefined` is the
+   * resting state.
    */
-  function attemptTranscript(attempt: SpeechRecordingAttempt): string {
-    const direct = attempt.finalTranscript ?? attempt.cleanedTranscript ?? attempt.rawTranscript
-    if (direct) return direct
-    for (let index = attempt.retries.length - 1; index >= 0; index -= 1) {
-      const retry = attempt.retries[index]
-      const text = retry.cleanedTranscript ?? retry.rawTranscript
-      if (text) return text
-    }
-    return ''
+  function retryStatusOf(attemptId: string): SpeechRetryStatus | undefined {
+    return speech.retryStatus[attemptId]
   }
-
-  let copiedId = $state<string | null>(null)
-  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
-
-  async function copyTranscript(attempt: SpeechRecordingAttempt): Promise<void> {
-    const text = attemptTranscript(attempt)
-    if (!text) return
-    try {
-      await copyText(text, null)
-      copiedId = attempt.id
-      clearTimeout(copyResetTimer)
-      copyResetTimer = setTimeout(() => (copiedId = null), 1500)
-    } catch {
-      // Clipboard unavailable   the button simply stays idle.
-    }
-  }
-
-  $effect(() => () => clearTimeout(copyResetTimer))
 
   async function saveHistoryLimit(
     event: Event & { currentTarget: HTMLInputElement }
@@ -123,7 +97,7 @@
                 : ''}
             </p>
           </div>
-          {#if attempt.audioAvailable && attempt.stage === 'failed'}
+          {#if attempt.audioAvailable && (attempt.stage === 'failed' || retryStatusOf(attempt.id))}
             {@const asr = speech.catalog?.artifacts.find(
               (item) =>
                 item.capability === 'asr' &&
@@ -132,29 +106,34 @@
                   (installed) => installed.available && installed.artifactId === item.id
                 )
             )}
+            {@const retryState = retryStatusOf(attempt.id)}
             <button
               type="button"
               class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated disabled:opacity-40"
-              title="Retry transcription"
-              aria-label="Retry transcription"
-              disabled={!asr}
+              title={retryState === 'running'
+                ? 'Transcribing'
+                : retryState === 'done'
+                  ? 'Transcription complete'
+                  : 'Retry transcription'}
+              aria-label={retryState === 'running'
+                ? 'Transcribing'
+                : retryState === 'done'
+                  ? 'Transcription complete'
+                  : 'Retry transcription'}
+              disabled={!asr || retryState !== undefined}
               onclick={() => asr && void speech.retry(attempt.id, asr.runtime, asr.id)}
-              ><RefreshCw size={13} aria-hidden="true" /></button
+              >{#if retryState === 'running'}<RefreshCw
+                  size={13}
+                  class="animate-spin"
+                  aria-hidden="true"
+                />{:else if retryState === 'done'}<Check
+                  size={13}
+                  class="text-success"
+                  aria-hidden="true"
+                />{:else}<RefreshCw size={13} aria-hidden="true" />{/if}</button
             >
           {/if}
-          <button
-            type="button"
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated disabled:opacity-40"
-            title="Copy transcription"
-            aria-label="Copy transcription"
-            disabled={!attemptTranscript(attempt)}
-            onclick={() => void copyTranscript(attempt)}
-            >{#if copiedId === attempt.id}<Check
-                size={13}
-                class="text-success"
-                aria-hidden="true"
-              />{:else}<Copy size={13} aria-hidden="true" />{/if}</button
-          >
+          <HistoryTranscriptCopyMenu {attempt} highlighted={retryStatusOf(attempt.id) === 'done'} />
           <button
             type="button"
             class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
