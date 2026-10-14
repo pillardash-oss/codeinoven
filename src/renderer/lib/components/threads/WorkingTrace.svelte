@@ -59,12 +59,16 @@
      *  its older durable pages, so coming back mounts what the reader is
      *  looking at instead of streaming in a turn nobody is reading. */
     active?: boolean
+    /** Total thinking and tool steps the whole turn holds, from the durable
+     *  fold. The header shows this even when only the newest window of steps is
+     *  mounted, so the count states the turn's real size instead of climbing as
+     *  older pages load. Zero when the turn's total is not known. */
+    totalSteps?: number
     /** True when the durable stream holds entries older than the oldest this
-     *  trace holds, so the trace is still missing part of its turn. */
+     *  trace holds, so the top of the trace can pull another page. */
     olderPartsAvailable?: boolean
-    /** Pull the next older durable page into this trace's parts. The trace
-     *  calls it on open until `olderPartsAvailable` is false, so the whole
-     *  structure exists before it is grouped. */
+    /** Pull the next older durable page into this trace's parts. Called once per
+     *  gesture at the trace's top, and to fill a trace whose content fits. */
     onLoadOlderParts?: () => void | Promise<void>
     /** Thinking level used for this trace's turn, when the model reasons. */
     thinkingLevel?: ThinkingLevel | null
@@ -100,6 +104,7 @@
     initiallyFolded = false,
     startTime,
     active = true,
+    totalSteps = 0,
     olderPartsAvailable = false,
     onLoadOlderParts,
     modelLabel = null,
@@ -141,48 +146,83 @@
   /** True while the reader is parked at the trace's bottom, where live output
    *  keeps following. A scroll-up pins their place and stops the follow. */
   let traceAtBottom = $state(true)
-  /** The turn's trace as chains of thought, grouped from the complete part list
-   *  in one pass. Grouping everything at once is what keeps the structure
-   *  stable: a trace that grouped only its newest page reorganized itself as
-   *  older entries arrived   a flat run of steps turning into folded chains
-   *  which broke the reader's place. */
+  /** The turn's trace as chains of thought, grouped from the mounted steps.
+   *  A chain that produced an output is keyed by that output, which is the
+   *  boundary that defines it, so paging older steps in above never remounts a
+   *  chain or replays its fold. */
   const chains = $derived(groupTraceIntoChains(visibleParts))
-  /** How much thinking and tool work the whole trace holds, for the header count. */
-  const stepCount = $derived(visibleParts.filter((part) => part.type !== 'text').length)
+  /** Thinking and tool steps currently mounted. */
+  const mountedStepCount = $derived(visibleParts.filter((part) => part.type !== 'text').length)
+  /** The header count: the whole turn's step total when the durable fold reports
+   *  it, so a trace showing only its newest window still states the real size
+   *  and the figure never climbs as older pages load. */
+  const stepCount = $derived(Math.max(mountedStepCount, totalSteps))
   /** The trace's whole wall-clock span, from its earliest entry to its latest. */
   const traceSpan = $derived(tracePartsSpan(visibleParts))
-  /** True while the rest of this turn's durable stream is being pulled in. A
-   *  plain flag, not reactive state: the effect below re-runs on the part list
-   *  growing, so writing it back must not schedule the effect itself. */
+  /** True while an older page is in flight, so one gesture pulls exactly one
+   *  page. Plain, not reactive: only the DOM handlers read it and nothing
+   *  renders from it. */
   let loadingOlderParts = false
+  /** True while the reader is parked at the trace's top, so reaching the top
+   *  pulls one page and staying there does not pull a page per scroll event. */
+  let atTraceTop = false
+  /** How close to the trace's top counts as reaching for older steps. */
+  const TRACE_TOP_REACH = 24
 
-  /** Pull the rest of this turn's durable stream in as soon as the trace is
-   *  open. The whole structure is grouped in one pass, so the header count and
-   *  every chain header are complete the moment the trace appears instead of
-   *  rebuilding themselves as the reader scrolls. One page per call, so a long
-   *  turn never blocks a frame; the loader stops when the turn's oldest entry
-   *  is mounted. */
-  $effect(() => {
-    // Re-run as each page lands, and while the trace is open on screen.
-    void visibleParts.length
-    if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
-    if (loadingOlderParts) return
+  /** Pull the next older page and hold the reader's place across the prepend:
+   *  the added rows land above what is on screen, so the scroller is moved down
+   *  by exactly the height they added. Scroll anchoring is off for this scroller
+   *  (see the style block), so this is the only correction applied. */
+  async function pullOlderPage(): Promise<void> {
+    const element = traceScrollEl
+    if (!element || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
     loadingOlderParts = true
-    void Promise.resolve(onLoadOlderParts())
-      .catch(() => {})
-      .finally(() => {
-        loadingOlderParts = false
-      })
-  })
+    const previousHeight = element.scrollHeight
+    try {
+      await onLoadOlderParts()
+    } catch {
+      // A failed page read leaves the reader where they are; the next gesture
+      // tries again.
+    } finally {
+      loadingOlderParts = false
+    }
+    await tick()
+    if (!traceScrollEl) return
+    traceScrollEl.scrollTop += traceScrollEl.scrollHeight - previousHeight
+  }
 
   /** Track the trace's own scroll: remember whether the reader is at the bottom,
-   *  where live output keeps following. */
+   *  where live output keeps following, and pull an older page when they reach
+   *  the top. */
   function onTraceScroll(): void {
     const element = traceScrollEl
     if (!element) return
     traceAtBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
+    if (element.scrollTop <= TRACE_TOP_REACH) {
+      if (!atTraceTop) {
+        atTraceTop = true
+        void pullOlderPage()
+      }
+      return
+    }
+    atTraceTop = false
   }
+
+  // A trace that fits its box hides the older steps behind no scrollbar, so fill
+  // the visible height: pull one page at a time until the box scrolls or the
+  // turn's older entries run out. Bounded by the box height, never the turn, so
+  // a long turn still opens on a fraction of its steps.
+  $effect(() => {
+    void visibleParts.length
+    void isOpen
+    void olderPartsAvailable
+    if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
+    const element = traceScrollEl
+    if (!element) return
+    if (element.scrollHeight - element.clientHeight > 1) return
+    void pullOlderPage()
+  })
 
   // New live parts follow the trace only while the reader remains at its
   // bottom. A scroll-up is preserved, and a collapsed or hidden trace mounts
@@ -411,9 +451,10 @@
 {/if}
 
 <style>
-  /* The trace mounts its whole structure up front, so its scroll position is
-     its own. Chromium's scroll anchoring is left off so a fold or unfold inside
-     never shifts the reader. */
+  /* The trace owns its scroll position: it pages older steps in at the top as
+     the reader scrolls and compensates by hand. Chromium's scroll anchoring is
+     off so it never applies a second, competing correction when a page lands or
+     a fold opens. */
   .trace-scroll {
     overflow-anchor: none;
   }

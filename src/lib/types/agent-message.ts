@@ -361,6 +361,10 @@ export interface TurnStreamPartsPage {
   parts: AgentPart[]
   /** Total trace parts the durable log currently folds for the turn. */
   total: number
+  /** Of `total`, the thinking and tool steps (text excluded). The trace header
+   *  shows this count whether or not every step is mounted, so a bounded window
+   *  still reports how much work the whole turn holds. */
+  totalSteps: number
   /** Index of `parts[0]` inside that full folded list. */
   start: number
   /** True when the fold holds trace parts older than this page. */
@@ -392,6 +396,9 @@ export interface TurnStreamPartsChange {
   parts: AgentPart[]
   /** Total trace parts the durable log currently folds for the turn. */
   total: number
+  /** Of `total`, the thinking and tool steps (text excluded). See
+   *  `TurnStreamPartsPage.totalSteps`. */
+  totalSteps: number
   /** Stream events consumed so far, to pass back as `changedSince`. */
   cursor: number
   /** Newest durable task-list tool parts for the turn. */

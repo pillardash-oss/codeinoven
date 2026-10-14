@@ -64,12 +64,16 @@ export function pageTurnStreamParts(
   const trace = folded.filter((part) => !isTodoTracePart(part))
   const todoParts = folded.filter(isTodoTracePart).slice(-TODO_PARTS_CAP)
   const cursor = events.length
+  // The header reports how much thinking and tool work the whole turn holds,
+  // independent of how many steps the renderer has mounted.
+  const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
 
   if (query.changedSince !== undefined) {
     return {
       kind: 'change',
       parts: touchedTraceParts(trace, events, query.changedSince),
       total: trace.length,
+      totalSteps,
       cursor,
       todoParts,
       turnStartTs
@@ -104,6 +108,7 @@ export function pageTurnStreamParts(
     kind: 'window',
     parts: trace.slice(start, end),
     total: trace.length,
+    totalSteps,
     start,
     hasOlder: start > 0,
     cursor,

@@ -27,9 +27,11 @@ export interface PendingContinuationRequest {
 
 /**
  * User messages that only report app activity (compaction notices, sub-agent
- * envelopes). They ride mid-turn on the user role and are never user prose.
+ * envelopes) or that the app issued itself (a continuation prompt, origin
+ * `orchestrator`). They ride mid-turn on the user role and are never user prose.
  */
 function isActivityOnlyUserMessage(message: AgentMessage): boolean {
+  if (message.origin === 'orchestrator') return true
   return (
     message.parts.length > 0 &&
     message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')

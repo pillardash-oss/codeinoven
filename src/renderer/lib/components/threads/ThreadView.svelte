@@ -1113,20 +1113,22 @@
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
-  /** Parts per read while the trace pulls the rest of its turn in. Larger than
-   *  the window page so a normal turn completes in one round trip; the main
-   *  process clamps it. */
-  const STREAM_OLDER_PAGE_SIZE = 200
-  /** Upper bound on reads in one catch-up, so a fold that never shrinks can
-   *  never spin the loader. */
-  const STREAM_OLDER_PAGE_ATTEMPTS = 25
+  /** Older backing entries one inner-scroll page pulls in. Bigger than the
+   *  render page so a scroll gesture reveals a useful run of steps, small enough
+   *  that mounting them never stalls a frame; the main process clamps it. */
+  const STREAM_OLDER_PAGE_SIZE = 60
   /** Durable working-trace parts loaded from the SSE log. They fill gaps in
    *  the live mirror and restore the latest trace after an app refresh. A trace
-   *  that is on screen pulls the rest of its turn in, so its whole structure
-   *  can be grouped once; a trace nobody is watching holds only the newest page. */
+   *  that is on screen pages older entries in as the reader scrolls its top, one
+   *  page per gesture; a trace nobody is watching holds only the newest page. */
   let streamParts = $state<AgentPart[]>([])
   /** True when the durable log still folds entries older than `streamParts[0]`. */
   let streamHasOlder = $state(false)
+  /** Thinking and tool steps the whole turn holds, from the durable fold. The
+   *  trace header shows this while only a bounded window of steps is mounted,
+   *  so the count states the turn's real size instead of climbing as older
+   *  pages load. */
+  let streamTotalSteps = $state(0)
   /** Newest durable task-list parts for the turn. They never render in the
    *  trace, so they ride beside the trace window and keep the task card correct
    *  no matter which page of the trace is mounted. */
@@ -1149,6 +1151,7 @@
     streamFoldVersion += 1
     streamParts = []
     streamHasOlder = false
+    streamTotalSteps = 0
     streamTodoParts = []
     streamTodoTurnStart = null
     streamCursor = null
@@ -11575,11 +11578,13 @@
         // No cursor yet (a mount read that has not landed): adopt the window.
         streamParts = mergeWorkingParts(streamParts, page.parts)
         streamHasOlder = page.hasOlder
+        streamTotalSteps = page.totalSteps
         applyTodoSnapshot(page)
         streamCursor = page.cursor
         return
       }
       streamCursor = page.cursor
+      streamTotalSteps = page.totalSteps
       applyTodoSnapshot(page)
       // A fold that shrank under us belongs to another turn (a steered
       // continuation, or a log rewritten after the fact): remount the newest
@@ -11612,6 +11617,7 @@
       if (!alive || page.kind !== 'window') return
       streamParts = mergeWorkingParts(streamParts, page.parts)
       streamHasOlder = page.hasOlder
+      streamTotalSteps = page.totalSteps
       applyTodoSnapshot(page)
       streamCursor = page.cursor
     } catch {
@@ -11628,42 +11634,38 @@
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
     streamParts = page.parts
     streamHasOlder = page.hasOlder
+    streamTotalSteps = page.totalSteps
     applyTodoSnapshot(page)
     streamCursor = page.cursor
   }
 
   /** Pull the next older durable page for the trace's own inner-scroll paging,
-   *  prepending it in the log's own order. The page is authoritative for the
-   *  entries it carries: an entry the poll had already appended out of place
-   *  (a part older than the mounted window that kept updating) adopts its real
-   *  position instead of staying stuck at the tail. */
+   *  prepending it in the log's own order. One page per call: the trace pages as
+   *  the reader scrolls up rather than mounting the whole turn at once, which is
+   *  what let a long turn overwhelm the screen the moment it opened.
+   *
+   *  The page is authoritative for the entries it carries: an entry the poll had
+   *  already appended out of place (a part older than the mounted window that kept
+   *  updating) adopts its real position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
-    // Pull the whole remainder of the turn's stream, a large page at a time, so
-    // the trace can group its complete structure in one pass. Bounded, and it
-    // stops on the first read that makes no progress, so a fold that never
-    // shrinks can never spin here.
-    for (let attempt = 0; attempt < STREAM_OLDER_PAGE_ATTEMPTS; attempt += 1) {
-      const oldest = streamParts[0]
-      if (!oldest || !streamHasOlder) return
-      const foldVersion = streamFoldVersion
-      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
-        beforeId: oldest.id,
-        limit: STREAM_OLDER_PAGE_SIZE
-      })
-      if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
-      if (page.parts.length === 0) {
-        streamHasOlder = false
-        return
-      }
-      const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
-      const mountedBefore = streamParts.length
-      streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
-      streamHasOlder = page.hasOlder
-      if (streamParts.length === mountedBefore) {
-        streamHasOlder = false
-        return
-      }
+    const oldest = streamParts[0]
+    if (!oldest || !streamHasOlder) return
+    const foldVersion = streamFoldVersion
+    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+      beforeId: oldest.id,
+      limit: STREAM_OLDER_PAGE_SIZE
+    })
+    if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
+    if (page.parts.length === 0) {
+      streamHasOlder = false
+      return
     }
+    const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
+    const mountedBefore = streamParts.length
+    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
+    streamHasOlder = page.hasOlder
+    streamTotalSteps = page.totalSteps
+    if (streamParts.length === mountedBefore) streamHasOlder = false
   }
 
   // While a run is streaming on screen, re-read the durable SSE log every second
@@ -12522,6 +12524,7 @@
                         {active}
                         olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
                         onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
+                        totalSteps={isCurrentAssistantTurn ? streamTotalSteps : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -12866,6 +12869,7 @@
               {active}
               olderPartsAvailable={streamHasOlder}
               onLoadOlderParts={loadOlderStreamParts}
+              totalSteps={streamTotalSteps}
               startTime={activeTurnStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}

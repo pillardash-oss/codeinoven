@@ -805,6 +805,26 @@ interface UserTerminalWindow {
   timer: NodeJS.Timeout
 }
 
+/**
+ * A user message that opens or steers a logical turn.
+ *
+ * An app-issued continuation prompt (origin `orchestrator`, persisted hidden)
+ * re-prompts the same session to finish the work it already streamed, and the
+ * activity-only notices (compaction, sub-agent envelopes) ride mid-turn. None
+ * of them is a new logical turn, so none may move the boundary that scopes the
+ * working trace   moving it past the stream is what emptied a live trace.
+ *
+ * This mirrors the renderer's `isActivityOnlyUserMessage`, which keeps the same
+ * messages transparent to turn grouping.
+ */
+function isTurnBoundaryPrompt(message: AgentMessage): boolean {
+  if (message.origin === 'orchestrator') return false
+  return !(
+    message.parts.length > 0 &&
+    message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+  )
+}
+
 export class ChatEngine {
   private readonly ovenChat: OvenChat
   /** Close deadline: an untouched conversation is graded after this much inactivity. */
@@ -24293,29 +24313,46 @@ export class ChatEngine {
     })
   }
 
-  /** Timestamp of the newest non-activity user message in the mirror   the
-   *  start of the current logical turn. Activity-only user messages (compaction
-   *  notices, sub-agent envelopes) ride mid-turn and are skipped, so the
-   *  boundary lands on the prompt that opened the turn. Returns undefined when
-   *  no such message exists (fresh thread, orchestrator-only transcript), in
+  /** Timestamp of the prompt that opened the current logical turn.
+   *
+   *  A logical turn is a contiguous run of user messages: the prompt plus any
+   *  steers sent while it ran. Activity-only notices (compaction, sub-agent
+   *  envelopes) and app-issued continuation prompts (origin `orchestrator`) ride
+   *  mid-turn and are skipped, so the boundary is the run's oldest real prompt
+   *  rather than a message that only re-prompts the same work. Returns undefined
+   *  when no such prompt exists (fresh thread, orchestrator-only transcript), in
    *  which case the fold keeps the whole log as before. */
   private async currentTurnStartTs(
     projectId: string,
     threadId: string
   ): Promise<number | undefined> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
-    for (let i = page.messages.length - 1; i >= 0; i--) {
-      const message = page.messages[i]
+    const messages = page.messages
+    // Newest real prompt: skip the app-issued continuations and the activity-only
+    // notices rather than letting one of them become the boundary.
+    let newest = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
       if (!message || message.role !== 'user') continue
-      if (
-        message.parts.length > 0 &&
-        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-      ) {
-        continue
-      }
-      return message.createdAt || undefined
+      if (!isTurnBoundaryPrompt(message)) continue
+      newest = i
+      break
     }
-    return undefined
+    if (newest === -1) return undefined
+    // A run of contiguous user messages is one logical turn   the prompt plus any
+    // steers the user sent while it ran, and the app's own unbound continuations.
+    // The boundary is the run's oldest prompt, so a steer extends the turn's
+    // trace instead of scoping it down to only the work that followed. This is
+    // the same grouping the renderer's turn index uses, so the durable fold and
+    // the transcript agree on where the turn starts.
+    let start = newest
+    for (let i = newest - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message || message.role !== 'user') break
+      if (!isTurnBoundaryPrompt(message)) continue
+      start = i
+    }
+    return messages[start]?.createdAt || undefined
   }
 
   /** Re-announce the coordinator thread so every view of its Assignment plan

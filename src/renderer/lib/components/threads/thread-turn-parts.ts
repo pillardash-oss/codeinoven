@@ -16,11 +16,16 @@ export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
 
 /**
  * Activity-only user messages (compaction notices, sub-agent envelopes) ride
- * mid-turn on the user role. They must stay invisible in the transcript but
- * also transparent to turn grouping: one prompt -> one working trace, with the
- * final output after it.
+ * mid-turn on the user role, and an app-issued continuation prompt (origin
+ * `orchestrator`, persisted hidden) re-prompts the same work. They must stay
+ * invisible in the transcript but also transparent to turn grouping: one prompt
+ * -> one working trace, with the final output after it.
+ *
+ * This mirrors the main process's `isTurnBoundaryPrompt`, which keeps the same
+ * messages from moving the working trace's durable boundary.
  */
 export function isActivityOnlyUserMessage(message: AgentMessage): boolean {
+  if (message.origin === 'orchestrator') return true
   return (
     message.parts.length > 0 &&
     message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
