@@ -4,7 +4,23 @@ import { createRawSnippet, flushSync, mount, unmount } from 'svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import DockableModal from '$lib/components/ui/DockableModal.svelte'
 import DesignElementCommentPopover from '$lib/components/browser/DesignElementCommentPopover.svelte'
+import { NativeDockController } from '$lib/native-dock-controller.svelte'
+import type { NativeDockRequest } from '$shared/native-dock'
+import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
 import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
+
+const dockBridge = vi.hoisted(() => ({
+  invoke: vi.fn().mockResolvedValue(true),
+  listeners: new Map<string, (payload: unknown) => void>()
+}))
+vi.mock('$lib/ipc.svelte', () => ({
+  invoke: dockBridge.invoke,
+  subscribe: (name: string, callback: (payload: unknown) => void) => {
+    dockBridge.listeners.set(name, callback)
+    return () => dockBridge.listeners.delete(name)
+  }
+}))
+vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
 
 const host = vi.hoisted(() => ({
   update: vi.fn(),
@@ -235,5 +251,91 @@ describe('design inspector floating comment', () => {
     expect(actions.close).toHaveBeenCalledOnce()
     await unmount(instances.pop()!)
     expect(host.dispose).toHaveBeenCalledOnce()
+  })
+})
+
+describe('native dock acknowledgement for bounded and passive hosts', () => {
+  let dockRoot: HTMLDivElement
+  let controller: NativeDockController
+  let releaseDock: () => void
+
+  function mountDock(options: { panel?: boolean; passive?: boolean }): void {
+    dockRoot = document.createElement('div')
+    dockRoot.innerHTML = '<button>Restore panel</button>'
+    document.body.append(dockRoot)
+    controller = new NativeDockController(
+      options.panel ? 'browser-tab-strip' : options.passive ? 'app-tooltip' : 'dock-test',
+      () => {},
+      () => ({ x: 0, y: 0, width: 200, height: 40 }),
+      options.passive === true,
+      options.panel
+        ? { onHover: () => {}, onDismiss: () => {}, onCommit: () => {}, panel: true }
+        : undefined
+    )
+    releaseDock = controller.mount(dockRoot)
+    controller.update(true, { x: 0, y: 0, width: 200, height: 40 })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dockBridge.listeners.clear()
+    dockBridge.invoke.mockReset().mockResolvedValue(true)
+    mountDock({ panel: true })
+  })
+
+  afterEach(() => {
+    releaseDock()
+    vi.useRealTimers()
+  })
+
+  async function projection(): Promise<NativeDockRequest> {
+    await vi.advanceTimersByTimeAsync(40)
+    const calls = dockBridge.invoke.mock.calls.filter(
+      ([channel, , request]) => channel === 'browser:setDockOverlay' && request
+    )
+    if (!calls.length) throw new Error('The dock did not publish a native projection')
+    return calls.at(-1)![2] as NativeDockRequest
+  }
+
+  it('gives the bounded panel host the generous window before it first answers', async () => {
+    const request = await projection()
+    // The old five second deadline would have expired well before this.
+    await vi.advanceTimersByTimeAsync(5100)
+    expect(controller.failed).toBe(false)
+    dockBridge.listeners.get('browser:overlay:dockDrawn')?.({
+      id: request.id,
+      revision: request.revision
+    })
+    expect(controller.ready).toBe(true)
+  })
+
+  it('holds the proven bounded panel host to the five second deadline', async () => {
+    const first = await projection()
+    dockBridge.listeners.get('browser:overlay:dockDrawn')?.({
+      id: first.id,
+      revision: first.revision
+    })
+    dockRoot.querySelector('button')!.disabled = true
+    const next = await projection()
+    expect(next.revision).toBeGreaterThan(first.revision)
+    await vi.advanceTimersByTimeAsync(5100)
+    expect(controller.failed).toBe(true)
+  })
+
+  it('keeps the passive tooltip host on the generous window once proven', async () => {
+    releaseDock()
+    mountDock({ passive: true })
+    const first = await projection()
+    dockBridge.listeners.get('browser:overlay:dockDrawn')?.({
+      id: first.id,
+      revision: first.revision
+    })
+    dockRoot.querySelector('button')!.disabled = true
+    const next = await projection()
+    expect(next.revision).toBeGreaterThan(first.revision)
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(controller.failed).toBe(false)
+    await vi.advanceTimersByTimeAsync(OVERLAY_ACK_TIMEOUT_MS)
+    expect(controller.failed).toBe(true)
   })
 })

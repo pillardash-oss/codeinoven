@@ -2,8 +2,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
 import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
-const bridge = vi.hoisted(() => ({ invoke: vi.fn().mockResolvedValue(true) }))
-vi.mock('$lib/ipc.svelte', () => ({ invoke: bridge.invoke }))
+import { NativeDockController } from '$lib/native-dock-controller.svelte'
+import type { NativeDockRequest } from '$shared/native-dock'
+import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
+const bridge = vi.hoisted(() => ({
+  invoke: vi.fn().mockResolvedValue(true),
+  listeners: new Map<string, (payload: unknown) => void>()
+}))
+vi.mock('$lib/ipc.svelte', () => ({
+  invoke: bridge.invoke,
+  subscribe: (name: string, callback: (payload: unknown) => void) => {
+    bridge.listeners.set(name, callback)
+    return () => bridge.listeners.delete(name)
+  }
+}))
 vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
 vi.mock('$lib/terminal/host-registry', () => ({ terminalEntryForHost: () => undefined }))
 let iframe: HTMLIFrameElement
@@ -119,5 +131,67 @@ describe('live floating panel controller', () => {
     await vi.advanceTimersByTimeAsync(30)
     expect(window.open).not.toHaveBeenCalled()
     expect(bridge.invoke).toHaveBeenCalledWith('app:releaseFloatingPanel', panel.id)
+  })
+})
+
+describe('native dock acknowledgement', () => {
+  let dockRoot: HTMLDivElement
+  let controller: NativeDockController
+  let releaseDock: () => void
+
+  beforeEach(() => {
+    bridge.listeners.clear()
+    bridge.invoke.mockReset().mockResolvedValue(true)
+    dockRoot = document.createElement('div')
+    dockRoot.innerHTML = '<button>Restore panel</button>'
+    document.body.append(dockRoot)
+    controller = new NativeDockController(
+      'dock-test',
+      () => {},
+      () => ({ x: 0, y: 0, width: 200, height: 40 })
+    )
+    releaseDock = controller.mount(dockRoot)
+    controller.update(true, { x: 0, y: 0, width: 200, height: 40 })
+  })
+
+  afterEach(() => releaseDock())
+
+  /** The most recent projection the controller published. */
+  async function projection(): Promise<NativeDockRequest> {
+    await vi.advanceTimersByTimeAsync(40)
+    const calls = bridge.invoke.mock.calls.filter(
+      ([channel, , request]) => channel === 'browser:setDockOverlay' && request
+    )
+    if (!calls.length) throw new Error('The dock did not publish a native projection')
+    return calls.at(-1)![2] as NativeDockRequest
+  }
+
+  it('gives a host that has never answered the generous window instead of the short one', async () => {
+    const request = await projection()
+    // The old, unconditional two-second deadline would have fallen back here.
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(controller.failed).toBe(false)
+    bridge.listeners.get('browser:overlay:dockDrawn')?.({
+      id: request.id,
+      revision: request.revision
+    })
+    expect(controller.failed).toBe(false)
+    expect(controller.ready).toBe(true)
+  })
+
+  it('holds a proven host to the short deadline on a later frame', async () => {
+    const first = await projection()
+    bridge.listeners.get('browser:overlay:dockDrawn')?.({ id: first.id, revision: first.revision })
+    dockRoot.querySelector('button')!.disabled = true
+    const next = await projection()
+    expect(next.revision).toBeGreaterThan(first.revision)
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(controller.failed).toBe(true)
+  })
+
+  it('still refuses a host that never answers at all', async () => {
+    await projection()
+    await vi.advanceTimersByTimeAsync(OVERLAY_ACK_TIMEOUT_MS + 100)
+    expect(controller.failed).toBe(true)
   })
 })
