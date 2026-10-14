@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { capPersistedParts } from '../../chat/bounded-tool-output'
+import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { Database } from '../database'
 import type {
   AgentMessage,
@@ -214,12 +215,37 @@ export interface ProviderDeltaSyncResult {
   noop: boolean
 }
 
+/**
+ * Remove a thinking tag a harness leaked into an assistant text part.
+ *
+ * The mirror keeps what arrived, and the driver strips the tag before it is
+ * persisted now. Rows written before that still hold it, so a read-side pass
+ * keeps restored conversations clean without rewriting the stored record. The
+ * array and its parts are only rebuilt when something actually changed, so a
+ * clean message keeps its identity for the cache's merge comparisons.
+ */
+function stripStoredThinkingArtifacts(role: string, parts: AgentPart[]): AgentPart[] {
+  if (role !== 'assistant') return parts
+  let changed = false
+  const cleaned = parts.map((part) => {
+    if (part.type !== 'text') return part
+    const text = stripThinkingArtifacts(part.text)
+    if (text === part.text) return part
+    changed = true
+    return { ...part, text }
+  })
+  return changed ? cleaned : parts
+}
+
 function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMessage {
   // Defensive read-side cap: threads persisted before the persist-time output
   // cap existed can still carry multi-megabyte tool outputs in their rows.
   // Capping at decode time keeps every later consumer (transcript page loads,
   // forks, exports) bounded even for legacy rows.
-  const decodedParts = capPersistedParts(JSON.parse(row.parts) as AgentPart[])
+  const decodedParts = stripStoredThinkingArtifacts(
+    row.role,
+    capPersistedParts(JSON.parse(row.parts) as AgentPart[])
+  )
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
