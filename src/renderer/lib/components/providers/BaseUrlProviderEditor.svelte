@@ -27,7 +27,10 @@
   import Switch from '../ui/Switch.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { creditsLabel } from '$lib/format/usage'
-  import { PROVIDER_USAGE_FORMATS } from '$shared/provider-usage-format'
+  import {
+    PROVIDER_USAGE_FORMATS,
+    providerUsageFormatEndpoint
+  } from '$shared/provider-usage-format'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import {
     parseModelClipboard,
@@ -282,8 +285,9 @@
   /** Result of the last usage-route Test, shown inline under the format picker. */
   let usagePreview = $state<BaseUrlProviderUsagePreview | null>(null)
   let testingUsage = $state(false)
+  const activeUsageFormat = $derived<BaseUrlProviderUsageFormat>(draft.usageFormat || 'auto')
   const usageFormatHint = $derived(
-    PROVIDER_USAGE_FORMATS.find((option) => option.value === draft.usageFormat)?.hint ?? ''
+    PROVIDER_USAGE_FORMATS.find((option) => option.value === activeUsageFormat)?.hint ?? ''
   )
   const usageFormatOptions = PROVIDER_USAGE_FORMATS.map((option) => ({
     id: option.value,
@@ -291,11 +295,31 @@
     hint: option.hint
   }))
 
+  /**
+   * Picking a format fills in the route that format knows how to read, so the
+   * user can pick and test without having to recall an endpoint. A route the
+   * user typed by hand is never clobbered   only an empty field, or one still
+   * holding the previous format's own default, is replaced.
+   */
+  function applyUsageFormat(format: BaseUrlProviderUsageFormat): void {
+    const previousEndpoint = providerUsageFormatEndpoint(activeUsageFormat)
+    const current = draft.usagePath.trim()
+    draft.usageFormat = format
+    if (!current || current === previousEndpoint) {
+      draft.usagePath = providerUsageFormatEndpoint(format) ?? ''
+    }
+    usagePreview = null
+  }
+
   /** Read the usage route as configured in the draft, before saving. */
   async function testUsage(): Promise<void> {
     const usagePath = draft.usagePath.trim()
-    if (!draft.baseURL.trim() || !usagePath) {
-      toast.error('Enter a base URL and a usage endpoint first.')
+    if (!usagePath) {
+      toast.error('Pick a response format or enter a usage endpoint first.')
+      return
+    }
+    if (!draft.baseURL.trim()) {
+      toast.error('Enter the provider base URL first.')
       return
     }
     testingUsage = true
@@ -424,7 +448,7 @@
               .join('\n')
           : '',
         usagePath: provider.usagePath ?? '',
-        usageFormat: provider.usageFormat ?? '',
+        usageFormat: provider.usageFormat ?? 'auto',
         modelsPath: provider.modelsPath ?? '',
         models: provider.models.map((model) => ({
           id: model.id,
@@ -468,7 +492,7 @@
       removeApiKey: false,
       headers: '',
       usagePath: '',
-      usageFormat: '',
+      usageFormat: 'auto',
       modelsPath: '',
       models: [],
       enabled: true
@@ -969,25 +993,12 @@
         bind:value={draft.headers}></textarea>
     </label>
 
-    <div class="space-y-2 rounded-lg border bg-surface/40 px-3 py-2.5">
-      <div class="flex items-end gap-2">
-        <label
-          class="block min-w-0 flex-1 space-y-1 text-xs font-medium"
-          for="base-url-provider-usage-path"
-        >
-          <span>Usage endpoint (optional)</span>
-          <input
-            id="base-url-provider-usage-path"
-            class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
-            placeholder="/status or https://analytics.example.com/usage"
-            autocomplete="off"
-            spellcheck="false"
-            bind:value={draft.usagePath}
-          />
-        </label>
+    <div class="space-y-3 rounded-lg border bg-surface/40 px-3 py-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs font-medium">Usage &amp; limits</span>
         <button
           type="button"
-          class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Read the usage endpoint now and show the limits it reports"
           aria-label="Test the usage endpoint"
           disabled={testingUsage || !draft.usagePath.trim() || !draft.baseURL.trim()}
@@ -1007,20 +1018,31 @@
         <span class="block text-xs font-medium">Response format</span>
         <EnumSelect
           options={usageFormatOptions}
-          value={draft.usageFormat || null}
-          onChange={(id) => {
-            draft.usageFormat = id
-            usagePreview = null
-          }}
+          value={activeUsageFormat}
+          onChange={applyUsageFormat}
           placeholder="Auto-detect"
           ariaLabel="Usage response format"
           title="How CodeInOven reads this usage endpoint"
           class="w-full"
         />
-        <p class="text-[0.6875rem] font-normal text-dimmed">
-          {usageFormatHint} A path is relative to the base URL; a full URL is used as-is.
-        </p>
+        <p class="text-[0.6875rem] font-normal text-dimmed">{usageFormatHint}</p>
       </div>
+
+      <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
+        <span>Usage endpoint</span>
+        <input
+          id="base-url-provider-usage-path"
+          class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+          placeholder="/status or https://analytics.example.com/usage"
+          autocomplete="off"
+          spellcheck="false"
+          bind:value={draft.usagePath}
+        />
+        <span class="block text-[0.6875rem] font-normal text-dimmed">
+          Picking a format fills in the route it reads. A path is resolved against the base URL; a
+          full URL is used as-is. Leave it blank for a provider with no readings to show.
+        </span>
+      </label>
 
       {#if usagePreview}
         <div class="rounded-lg border bg-elevated px-2.5 py-2">

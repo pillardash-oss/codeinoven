@@ -11,6 +11,9 @@ export interface ProviderUsageFormatOption {
   value: BaseUrlProviderUsageFormat
   label: string
   hint: string
+  /** Route a fresh pick fills into the Usage endpoint field. Relative paths are
+   *  resolved against the provider base URL; absolute URLs are used as-is. */
+  endpoint?: string
 }
 
 export const PROVIDER_USAGE_FORMATS: readonly ProviderUsageFormatOption[] = [
@@ -22,36 +25,49 @@ export const PROVIDER_USAGE_FORMATS: readonly ProviderUsageFormatOption[] = [
   {
     value: 'openai',
     label: 'OpenAI-compatible',
-    hint: 'OpenAI-style `{ data: [...] }` lists and plain `{ used, limit }` objects.'
+    hint: 'OpenAI-style `{ data: [...] }` lists and plain `{ used, limit }` objects.',
+    endpoint: '/usage'
   },
   {
     value: 'new-api',
     label: 'new-api / one-api',
-    hint: 'The `/status` quota object (`quota`, `used_quota`).'
+    hint: 'The `/status` quota object (`quota`, `used_quota`).',
+    endpoint: '/status'
   },
   {
     value: 'command-code',
     label: 'Command Code',
-    hint: '`windowLimits.fiveHour` / `windowLimits.weekly` plus the credit buckets.'
+    hint: '`windowLimits.fiveHour` / `windowLimits.weekly` plus the credit buckets.',
+    endpoint: 'https://api.commandcode.ai/alpha/billing/credits'
   },
   {
     value: 'open-design',
     label: 'Open Design',
-    hint: 'Coding-plan windows from the daemon billing route, or the wallet balance.'
+    hint: 'Wallet balance from the cloud API, or the 5-hour and weekly coding-plan windows from the desktop daemon billing route.',
+    endpoint: 'https://amr-api.open-design.ai/api/v1/wallet/balance'
   },
   {
     value: 'zai',
     label: 'Z.ai / GLM',
-    hint: '`data.limits[]` percentage windows with `unit` / `number` durations.'
+    hint: '`data.limits[]` percentage windows with `unit` / `number` durations.',
+    endpoint: 'https://api.z.ai/api/monitor/usage/quota/limit'
   },
   {
     value: 'kimi',
     label: 'Kimi Code',
-    hint: '`limits[]` session windows plus the top-level weekly `usage`.'
+    hint: '`limits[]` session windows plus the top-level weekly `usage`.',
+    endpoint: 'https://api.kimi.com/coding/v1/usages'
   }
 ] as const
 
 const FORMAT_IDS = new Set<string>(PROVIDER_USAGE_FORMATS.map((format) => format.value))
+
+/** Route a format fills into the Usage endpoint field when picked, if it declares one. */
+export function providerUsageFormatEndpoint(
+  format: BaseUrlProviderUsageFormat
+): string | undefined {
+  return PROVIDER_USAGE_FORMATS.find((option) => option.value === format)?.endpoint
+}
 
 export function isBaseUrlProviderUsageFormat(value: unknown): value is BaseUrlProviderUsageFormat {
   return typeof value === 'string' && FORMAT_IDS.has(value)
