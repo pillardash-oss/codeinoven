@@ -175,7 +175,14 @@ export class CleanShutdownStore {
       renameSync(tmpPath, path)
       syncContainingDirectorySync(path)
     } catch (error) {
-      rmSync(tmpPath, { force: true })
+      // Cleanup is best-effort: a locked or read-only path can refuse the temp
+      // file's removal (EACCES/EPERM), and that refusal must never pre-empt the
+      // log below or escape this catch on the forced-exit path.
+      try {
+        rmSync(tmpPath, { force: true })
+      } catch {
+        // A stray temp file is harmless; the marker simply was not written.
+      }
       Logger.error('Clean-shutdown marker sync write failed', error)
     }
   }
