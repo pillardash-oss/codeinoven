@@ -667,8 +667,12 @@ export class ThreadRepo {
   /**
    * Mark a thread unread without loading it through the main SQLite connection.
    * The counterpart of {@link markReadViaWorker}: a user-requested unread mark
-   * from a thread actions menu. `lastActivity` is deliberately untouched so
-   * flagging an old thread never rewrites when it actually ran.
+   * from a thread actions menu.
+   *
+   * The mark is a fresh event, so it stamps `last_activity`/`updated_at` with
+   * `now` exactly as a new turn would. Every unread rule then applies to it
+   * unchanged: the thread is sorted to the top of its list and grouped as
+   * Unread, with no special casing anywhere.
    */
   async markUnreadViaWorker(
     projectId: string,
@@ -683,17 +687,22 @@ export class ThreadRepo {
     const row = (result.rows as unknown as ThreadRow[])[0]
     if (!row) return null
 
+    const now = Date.now()
     const wasRead = row.read === 1
     if (wasRead) {
       const updated = await this.db.executeViaWorker(
-        'UPDATE threads SET read = 0 WHERE id = ? AND project_id = ? AND read = 1',
-        [id, projectId]
+        'UPDATE threads SET read = 0, last_activity = ?, updated_at = ? WHERE id = ? AND project_id = ? AND read = 1',
+        [now, now, id, projectId]
       )
       if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread unread')
     }
 
     const thread = rowToThread(row)
     thread.read = false
+    if (wasRead) {
+      thread.lastActivity = now
+      thread.updatedAt = now
+    }
     const usage = await this.db.queryViaWorker(
       `SELECT harness_id
        FROM harness_usage

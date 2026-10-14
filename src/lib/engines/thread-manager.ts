@@ -1198,8 +1198,10 @@ export class ThreadManager {
 
   /**
    * Mark a thread unread at the user's request (a thread actions menu). The
-   * broadcast lets every window settle its badge; the renderer keeps the mark
-   * from being auto-undone while the thread stays open (see `threadUnreadIntent`).
+   * mark stamps fresh activity, so every unread rule applies unchanged: the
+   * thread sorts to the top of its list and reads as Unread. The broadcast lets
+   * every window settle its badge; the renderer keeps the mark from being
+   * auto-undone while the thread stays open (see `threadUnreadIntent`).
    */
   async markUnread(projectId: string, threadId: string): Promise<Thread> {
     const result = await this.threadRepo.markUnreadViaWorker(projectId, threadId)
