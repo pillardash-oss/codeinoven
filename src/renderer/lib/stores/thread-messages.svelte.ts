@@ -245,13 +245,6 @@ class ThreadMessagesStore {
         serverMessages = await invoke('agent:loadMessages', projectId, threadId)
         entry.hasOlder = false
       } else {
-        const page = await invoke(
-          'thread:loadMessages',
-          projectId,
-          threadId,
-          undefined,
-          recentLimit
-        )
         // Bounded loads are used by thread switching and hover preloads. They
         // must remain mirror-only: a new thread, or a thread whose latest
         // mirror page contains only a user message, is a valid bounded result.
@@ -259,38 +252,9 @@ class ThreadMessagesStore {
         // an unbounded provider transcript read and can freeze the renderer on
         // long sessions. Callers that explicitly need the provider transcript
         // must use load() without a limit.
-        serverMessages = page.messages
-        entry.hasOlder = page.hasOlder
-        // Turn-aligned tail: a bounded tail window that starts mid-turn cuts
-        // the user's message out of the cached page, the view would begin at
-        // the working trace with the prompt missing until "Load earlier
-        // messages" was clicked. Extend the fetch until the page reaches the
-        // prompt that opens the turn owning the newest output, bounded so a
-        // pathological mega-turn cannot turn navigation into an unbounded read.
-        let alignmentPages = 0
-        while (
-          serverMessages.length > 0 &&
-          entry.hasOlder &&
-          !pageOpensNewestTurn(serverMessages) &&
-          alignmentPages < MAX_TURN_ALIGNMENT_PAGES
-        ) {
-          const oldest = serverMessages[0]
-          if (!oldest) break
-          const older = await invoke(
-            'thread:loadMessages',
-            projectId,
-            threadId,
-            { createdAt: oldest.createdAt, id: oldest.id },
-            Math.max(recentLimit, TURN_ALIGNMENT_PAGE_SIZE)
-          )
-          if (older.messages.length === 0) {
-            entry.hasOlder = false
-            break
-          }
-          serverMessages = [...older.messages, ...serverMessages]
-          entry.hasOlder = older.hasOlder
-          alignmentPages++
-        }
+        const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
+        serverMessages = aligned.messages
+        entry.hasOlder = aligned.hasOlder
       }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
@@ -300,6 +264,83 @@ class ThreadMessagesStore {
       entry.loading = false
       this.cache.notify(projectId, threadId)
     }
+  }
+
+  /**
+   * Read a bounded tail page, then keep reading older pages until the set holds
+   * the prompt that opens the newest turn.
+   *
+   * A raw page lands wherever the row boundary falls, and on a long turn that
+   * is deep inside the turn. The transcript then mounts a window beginning at a
+   * working trace with the prompt that produced it still unloaded, so the user
+   * message, its trace and the answer cannot be read together   the whole point
+   * of one turn rendering as one block. Bounded by `MAX_TURN_ALIGNMENT_PAGES`,
+   * so a pathological mega-turn cannot turn a navigation into an unbounded
+   * read. Every caller that only needs the newest window goes through here.
+   */
+  async #fetchTurnAlignedTail(
+    projectId: string,
+    threadId: string,
+    recentLimit: number
+  ): Promise<{ messages: AgentMessage[]; hasOlder: boolean }> {
+    const page = await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit)
+    let messages = page.messages
+    let hasOlder = page.hasOlder
+    let alignmentPages = 0
+    while (
+      messages.length > 0 &&
+      hasOlder &&
+      !pageOpensNewestTurn(messages) &&
+      alignmentPages < MAX_TURN_ALIGNMENT_PAGES
+    ) {
+      const oldest = messages[0]
+      if (!oldest) break
+      const older = await invoke(
+        'thread:loadMessages',
+        projectId,
+        threadId,
+        { createdAt: oldest.createdAt, id: oldest.id },
+        Math.max(recentLimit, TURN_ALIGNMENT_PAGE_SIZE)
+      )
+      if (older.messages.length === 0) {
+        hasOlder = false
+        break
+      }
+      messages = [...older.messages, ...messages]
+      hasOlder = older.hasOlder
+      alignmentPages++
+    }
+    return { messages, hasOlder }
+  }
+
+  /**
+   * Merge a bounded tail page into the cache, extended backwards until the
+   * cache holds the prompt that opens the newest turn.
+   *
+   * This is the mirror-only refresh path (`thread:updated`, a resumed session,
+   * a completed fork). It has to be turn-aligned for the same reason the cold
+   * load is: a raw page merge marked the thread loaded with a window that began
+   * mid-turn, and the next visit then skipped the aligned cold load because the
+   * thread already read as loaded, leaving the newest turn rendered as a working
+   * trace with no user message above it until "Load earlier messages" was
+   * clicked. Additive (`mergePage`, never `reconcile`), so pages the cache
+   * already holds stay held. Returns whether older history remains.
+   */
+  async mergeTurnAlignedTail(projectId: string, threadId: string, limit: number): Promise<boolean> {
+    const entry = this.cache.entry(projectId, threadId)
+    const cached = this.cache.messages(projectId, threadId)
+    // A cache that already reaches the newest turn's prompt needs no older
+    // page: the refresh only has to pick up rows that landed at the tail.
+    if (cached.length > 0 && pageOpensNewestTurn(cached)) {
+      const page = await invoke('thread:loadMessages', projectId, threadId, undefined, limit)
+      entry.hasOlder = page.hasOlder
+      this.cache.mergePage(projectId, threadId, page.messages)
+      return page.hasOlder
+    }
+    const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, limit)
+    entry.hasOlder = aligned.hasOlder
+    this.cache.mergePage(projectId, threadId, aligned.messages)
+    return aligned.hasOlder
   }
 
   /** Bounded warmup for the message cache so opening the thread (sidebar

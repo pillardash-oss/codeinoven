@@ -4838,13 +4838,11 @@
           // path verifies against disk and merges real history if seeding raced
           // a non-empty thread.
           if (olderMessagesAvailable !== true) {
-            void invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE)
-              .then((probe) => {
-                if (!alive || !probe) return
-                if (probe.messages.length > 0 && messages.length <= probe.messages.length) {
-                  threadMessages.mergePage(projectId, id, probe.messages)
-                }
-                olderMessagesAvailable ||= probe.hasOlder
+            void threadMessages
+              .mergeTurnAlignedTail(projectId, id, HISTORY_WINDOW_SIZE)
+              .then((hasOlder) => {
+                if (!alive) return
+                olderMessagesAvailable = hasOlder
               })
               .catch(() => {})
           }
@@ -5662,16 +5660,19 @@
     const { projectId, id } = thread
     const loadPromise = (async (): Promise<void> => {
       try {
-        const page = await invoke(
-          'thread:loadMessages',
+        // Turn-aligned, additive merge. A raw tail page could land mid-turn and
+        // leave the newest turn rendered as a working trace with its user
+        // message still unloaded, and marking the thread loaded from that page
+        // then skipped the aligned cold load on the next visit. The store owns
+        // the alignment rule, so this path and the cold load cannot disagree
+        // about where a turn begins. Assignment, never `||=`: an aligned result
+        // that reached the start of the thread must be able to clear the flag.
+        olderMessagesAvailable = await threadMessages.mergeTurnAlignedTail(
           projectId,
           id,
-          undefined,
           HISTORY_WINDOW_SIZE
         )
         if (!alive) return
-        threadMessages.mergePage(projectId, id, page.messages)
-        olderMessagesAvailable ||= page.hasOlder
         syncOpenSubagentTabs()
       } catch {
         // Non-fatal   keep what we have
