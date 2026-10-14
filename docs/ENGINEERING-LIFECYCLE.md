@@ -41,6 +41,18 @@ The interview owns both the active Assignment stage and its `assignment_approval
 
 Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
 
+### Assignment routing from a plain thread
+
+A thread that never entered Engineering has no Assignment contract, so before this routing existed a message like "create an assignment for this" was answered by the coordinator spawning its own inline sub-agents. The user asked for an Assignment and got a different mechanism.
+
+A plain, idle project thread now reads the delegation mechanism out of the user's own message (`src/lib/assignment/assignment-intent.ts`, `delegationIntent`):
+
+- **Explicit sub-agent vocabulary** (`sub-agent`, `subagents`, `spawn agent`, `cio_spawn_agent`) keeps the inline route. It is the explicit opt-out and it wins when a message names both mechanisms.
+- **Assignment or worker vocabulary** ("create an assignment", "separate assignment", "turn this into an assignment", "assign this to workers", "use workers", "worker threads") routes the turn into Assignment creation. The draft is built from whatever source exists, the approved Spec when one exists and otherwise the thread conversation plus the message, and it is surfaced unsigned on the same review card so the user picks worker models and signs off before any task runs.
+- **Anything else** stays an ordinary turn, and the coordinator may delegate inline exactly as before.
+
+The routing never fires for a chat, an assistant task, an Assignment worker or coordinator thread, an active Engineering stage (each already owns its routing), or a thread whose session is mid-turn. A message that does not name a delegation mechanism is untouched, so the generic "split this into tasks amongst various agents" wording remains a normal turn.
+
 ### Worker reporting
 
 A worker thread decides for itself whether the finished task goes back to the Sr. Engineer. The composer footer of any worker thread carries a reporting control next to the git branch pill: it reads **Reporting** in green while the worker hands its work back, and **Not reporting** in amber once the user has taken the thread over.

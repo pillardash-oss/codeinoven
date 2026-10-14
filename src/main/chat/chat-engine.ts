@@ -482,6 +482,7 @@ import {
   validateAuditReportContent
 } from '../../lib/audit/audit-validation'
 import { parseGeneratedAssignmentContent } from '../../lib/assignment/assignment-validation'
+import { delegationIntent } from '../../lib/assignment/assignment-intent'
 import { mermaidRepairPrompt, validateMermaidOutput } from './mermaid-output-validator'
 import type { MermaidValidationFailure } from './mermaid-output-validator'
 import {
@@ -9513,6 +9514,48 @@ export class ChatEngine {
         lifecycleForMode?.humanGate === 'assignment_approval') &&
       lifecycleForMode.autopilot !== true &&
       (ownedAssignment === null || ownedAssignment.status === 'draft')
+    // A plain thread that never entered Engineering has no Assignment contract,
+    // so a message that explicitly asks for an assignment or to hand work to
+    // workers used to be answered by the coordinator spawning its own inline
+    // sub-agents, which is not what the user asked for. Read that intent here,
+    // before any normal turn work, and build the reviewable draft instead: from
+    // the approved specification when one exists, otherwise from the
+    // conversation. The user still reviews the draft and signs it off, choosing
+    // worker models, before any task runs. A message that explicitly names
+    // sub-agents is left untouched, and so is an Engineering thread, a chat, an
+    // assistant task, and an Assignment worker or coordinator, because each
+    // already owns its own routing.
+    const delegationThread = targetThread
+    const routingSessionState = delegationThread?.sessionId
+      ? this.sessionStatuses.get(delegationThread.sessionId)?.state
+      : undefined
+    const delegationRoutingTurn =
+      origin === 'user' &&
+      specAction === undefined &&
+      !isChatThread &&
+      !isAssistantTask &&
+      !assistantTaskTurn &&
+      delegationThread !== null &&
+      !isAssistantSetupThread(delegationThread) &&
+      delegationThread.assignmentRole === undefined &&
+      !planningSpecTurn &&
+      !assignmentDiscussionTurn &&
+      !assignmentInProgress &&
+      (ownedAssignment === null || ownedAssignment.status === 'draft') &&
+      routingSessionState !== 'working' &&
+      routingSessionState !== 'waiting' &&
+      delegationIntent(text) === 'assignment'
+    if (delegationRoutingTurn && delegationThread !== null) {
+      void scheduleAutoTitle()
+      await this.routeDelegationRequestToAssignment(
+        projectId,
+        threadId,
+        settings,
+        text,
+        delegationThread.sessionId
+      )
+      return publicUserMessage
+    }
     if (
       planningSpecTurn &&
       !preloadedActiveSpec &&
@@ -17185,6 +17228,52 @@ export class ChatEngine {
     }
 
     throw repairError ?? lastError ?? new Error('The specification agent failed.')
+  }
+
+  /**
+   * A plain thread whose message explicitly asks for an Assignment (or hands
+   * work to workers) is routed into Assignment creation instead of a normal
+   * implementation turn. The draft is built from whatever source exists: the
+   * approved specification when there is one, otherwise the thread conversation
+   * plus the user's own message. It stays unsigned until the user reviews it,
+   * chooses worker models, and signs it off. A message that names sub-agents
+   * never reaches here; the coordinator keeps delegating those inline.
+   */
+  private async routeDelegationRequestToAssignment(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings,
+    request: string,
+    sessionId: string | undefined
+  ): Promise<void> {
+    await this.threadManager.setStatus(projectId, threadId, 'planning', { read: false })
+    let assignment: AssignmentPlan
+    try {
+      // Assignment creation is gated on the mode flag, which a plain thread
+      // never carries. The gate exists to stop an ordinary turn from silently
+      // generating a board; this turn is the explicit user request for one, so
+      // the flag is supplied for this dispatch only and never persisted.
+      assignment = await this.generateAssignmentDraft(
+        projectId,
+        threadId,
+        { ...settings, assignmentMode: true },
+        request
+      )
+    } catch (error) {
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
+      throw error
+    }
+    this.broadcast({
+      type: 'assignment.ready',
+      sessionId: sessionId ?? threadId,
+      projectId,
+      threadId,
+      assignmentId: assignment.id,
+      version: assignment.version
+    })
   }
 
   /**
