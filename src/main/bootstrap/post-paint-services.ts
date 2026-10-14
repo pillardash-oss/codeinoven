@@ -271,13 +271,21 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
-  // Resolve which OpenCode line is installed before the chat engine builds its
-  // driver map, so a V2-only machine never starts a turn on the V1 transport.
+  // The OpenCode install decides which transport a turn speaks, so it is
+  // warmed before the chat engine builds its driver map: the probe starts here
+  // (not awaited) and the driver is swapped to the detected transport when it
+  // settles, so a V2-only machine never runs a turn on the V1 transport.
   // Bounded and non-fatal: a missing binary just leaves the canonical default.
-  const { detectOpenCodeInstallation } = await import('../agents/opencode-installation')
-  await detectOpenCodeInstallation().catch((error) =>
+  const { warmOpenCodeInstallation } = await import('../agents/opencode-installation')
+  // The install decides which OpenCode transport a turn speaks, not what the
+  // workspace shows, so the probe is started here but not awaited: it runs
+  // behind the visible window, and the refresh below swaps the already-built
+  // driver when it settles instead of holding `features:ready` on the child
+  // processes.
+  const openCodeInstallationReady = warmOpenCodeInstallation().catch((error) => {
     Logger.dev('opencode install detection failed (non-fatal):', error)
-  )
+    return null
+  })
   state.chatEngine = new ChatEngine(
     storage,
     database,
@@ -294,13 +302,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   void state.chatEngine
     .recoverPendingRankingGrades()
     .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
+  // Swap the OpenCode driver to the detected transport the moment the probe
+  // settles: the map was built against the cached install, which is still
+  // empty on the first launch of a session. This is the same swap the runtime
+  // install/upgrade path uses, and it defers itself while a turn is active.
+  void openCodeInstallationReady.then(() => state.chatEngine?.refreshOpenCodeHarness())
   // Merge the app-managed lean opencode agents into the machine-wide global
-  // config. Idempotent, additive-only and non-fatal; runs after first paint
-  // so it never blocks the workspace, and logs a dev-only summary.
-  const { syncOpenCodeLeanAgents } = await import('../opencode/opencode-agent-service')
-  await syncOpenCodeLeanAgents().catch((error) =>
-    Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
-  )
+  // config. Idempotent, additive-only and non-fatal.
   const { startStartupUpdater } = await import('./startup-updater')
   await startStartupUpdater(state, storage).catch((error: unknown) =>
     Logger.error('Updater initialization failed; optional services continue', error)
@@ -793,6 +801,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.threadTransfer.start()
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
+  // The lean-agent merge is maintenance, not first interaction: it shells out
+  // for the installed version and rewrites the machine-wide opencode config, so
+  // it is deferred past `features:ready` instead of holding the feature boot.
+  setTimeout(() => {
+    void import('../opencode/opencode-agent-service')
+      .then(({ syncOpenCodeLeanAgents }) => syncOpenCodeLeanAgents())
+      .catch((error) => Logger.dev('opencode lean-agent sync failed (non-fatal):', error))
+  }, 0)
   // Every scoped utility gets its install folder back once the app is up, so a
   // registry entry written before this pass existed, or one whose project moved
   // while the app was closed, never stays an entry with nothing on disk.

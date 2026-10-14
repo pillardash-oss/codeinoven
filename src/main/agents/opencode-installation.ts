@@ -25,6 +25,9 @@ import { Logger } from '../system/logger'
 
 let cachedInstallation: OpenCodeInstallation | null = null
 
+/** The one in-flight probe, shared by every caller that wants the install. */
+let detectionInFlight: Promise<OpenCodeInstallation | null> | null = null
+
 /** The last resolved install, or null when nothing has been probed yet. */
 export function cachedOpenCodeInstallation(): OpenCodeInstallation | null {
   return cachedInstallation
@@ -38,6 +41,25 @@ export function rememberOpenCodeInstallation(installation: OpenCodeInstallation 
 /** Test seam: forget the memoized install so a fresh detection can run. */
 export function resetOpenCodeInstallationCache(): void {
   cachedInstallation = null
+  detectionInFlight = null
+}
+
+/**
+ * Start (or join) the one in-flight installation probe.
+ *
+ * The install decides which OpenCode transport a turn speaks, so callers that
+ * are about to start a turn await the result. Callers that only keep the app
+ * interactive, such as the post-paint boot, start it here instead of awaiting
+ * it: the probe runs behind a visible window, and a completed probe refreshes
+ * the already-built driver rather than holding `features:ready`. Single-flight
+ * so a second caller (the provider catalog pass, the account orchestrator)
+ * joins the same probe instead of spawning the same candidates again.
+ */
+export function warmOpenCodeInstallation(): Promise<OpenCodeInstallation | null> {
+  detectionInFlight ??= detectOpenCodeInstallation().finally(() => {
+    detectionInFlight = null
+  })
+  return detectionInFlight
 }
 
 function firstLine(output: string): string {
@@ -65,13 +87,21 @@ export async function detectOpenCodeInstallation(
   }
 
   const candidates: Array<{ version: string; value: HarnessRuntime }> = []
-  for (const command of OPENCODE_COMMAND_CANDIDATES) {
-    const runtime = runtimes.get(command)
-    if (!runtime) continue
-    const result = await probeHarnessRuntime(runtime, ['--version'])
-    if (!result.ok) continue
-    const version = firstLine(result.stdout || result.stderr)
-    candidates.push({ version, value: runtime })
+  // Probe every candidate at once: each probe is an independent `--version`
+  // child process, so running them sequentially only makes the pass pay the
+  // slowest one once per candidate. A bounded handful of candidates keeps this
+  // from hammering a low-end machine.
+  const probed = await Promise.all(
+    OPENCODE_COMMAND_CANDIDATES.map(async (command) => {
+      const runtime = runtimes.get(command)
+      if (!runtime) return null
+      const result = await probeHarnessRuntime(runtime, ['--version'])
+      if (!result.ok) return null
+      return { version: firstLine(result.stdout || result.stderr), value: runtime }
+    })
+  )
+  for (const candidate of probed) {
+    if (candidate) candidates.push(candidate)
   }
 
   const best = selectNewestCandidate(candidates)
