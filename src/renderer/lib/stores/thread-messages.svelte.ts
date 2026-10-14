@@ -11,6 +11,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
+import { composeImageMarkAttachments } from '$lib/image-annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
@@ -38,6 +39,30 @@ import type {
 } from '$shared/types'
 
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
+
+/**
+ * Add the annotated screenshots a message's image marks need.
+ *
+ * A mark is stored as coordinates over a picture the agent rendered, which the
+ * model cannot see. The picture is rebuilt with the marks drawn on it exactly
+ * once, here, so every path into a send   the composer, a queued message, a
+ * headless delivery   carries the same annotated attachment without each caller
+ * having to remember to build it.
+ */
+async function withImageMarkAttachments(
+  projectId: string,
+  threadId: string,
+  attachments: PromptAttachment[],
+  references: readonly PromptReference[] | undefined
+): Promise<PromptAttachment[]> {
+  if (!references?.some((reference) => reference.kind === 'image')) return attachments
+  const composed = await composeImageMarkAttachments({
+    projectId,
+    scope: { kind: 'project', projectId, threadId },
+    references
+  })
+  return composed.length > 0 ? [...attachments, ...composed] : attachments
+}
 
 /** One older page fetched to reach the newest turn's opening prompt. A long
  *  working trace spans dozens of rows (one row per step), so this is sized to
@@ -534,11 +559,19 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
+    // The annotated screenshot is built before the optimistic message, so the
+    // message the user sees is carrying exactly what the agent receives.
+    const outgoing = await withImageMarkAttachments(
+      projectId,
+      threadId,
+      attachments,
+      promptReferences
+    )
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
       text,
-      attachments,
+      outgoing,
       userMessageId,
       promptReferences,
       projectReferences,
@@ -553,7 +586,7 @@ class ThreadMessagesStore {
         threadId,
         settings,
         text,
-        attachments,
+        outgoing,
         specAction,
         messageId,
         promptContext,
@@ -584,11 +617,17 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
+    const outgoing = await withImageMarkAttachments(
+      projectId,
+      threadId,
+      attachments,
+      promptReferences
+    )
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
       text,
-      attachments,
+      outgoing,
       userMessageId,
       promptReferences,
       projectReferences,
@@ -608,7 +647,7 @@ class ThreadMessagesStore {
         projectId,
         threadId,
         text,
-        attachments,
+        outgoing,
         messageId,
         promptContext,
         promptReferences,

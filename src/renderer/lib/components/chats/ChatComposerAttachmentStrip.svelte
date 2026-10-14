@@ -7,6 +7,7 @@
     HardDrive,
     Image as ImageIcon,
     MessageSquare,
+    PenLine,
     SquareDashedMousePointer,
     Video,
     X
@@ -212,6 +213,8 @@
               <FileText size={11} class="shrink-0 text-accent" />
             {:else if referenceSummary.noun === 'note'}
               <Clapperboard size={11} class="shrink-0 text-accent" />
+            {:else if referenceSummary.noun === 'mark'}
+              <PenLine size={11} class="shrink-0 text-accent" />
             {:else}
               <MessageSquare size={11} class="shrink-0 text-accent" />
             {/if}

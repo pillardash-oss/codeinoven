@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, type Snippet } from 'svelte'
   import { Expand } from '@lucide/svelte'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte.ts'
 
@@ -13,9 +13,16 @@
     imageUrls: FileBlobUrlManager
     /** Open the fullscreen viewer (the caller owns the modal + pager). */
     onExpand: () => void
+    /**
+     * Anything drawn over the picture by the caller: a mark overlay, its
+     * numbered badges and its toolbar. The figure is a plain box sized by the
+     * image, so an overlay is positioned by `absolute inset-0` and needs to
+     * manage its own pointer events (the expand affordance sits underneath it).
+     */
+    overlay?: Snippet
   }
 
-  let { url, mime, filename, imageUrls, onExpand }: Props = $props()
+  let { url, mime, filename, imageUrls, onExpand, overlay }: Props = $props()
   let appfileRetryCount = 0
   let retryTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -48,12 +55,8 @@
   onDestroy(clearRetryTimer)
 </script>
 
-<button
-  type="button"
+<div
   class="group relative block max-w-full overflow-hidden rounded-lg border border-border bg-elevated transition-shadow hover:shadow-md"
-  title="Expand {filename}"
-  aria-label="Expand {filename}"
-  onclick={onExpand}
 >
   <img
     src={imageUrls.getUrl(url)}
@@ -63,10 +66,23 @@
     onerror={handleImageError}
     onload={clearRetryTimer}
   />
+  <!-- The expand affordance is a real button laid over the picture rather than
+       the box itself, so a caller's overlay can sit above it and take its own
+       clicks. -->
+  <button
+    type="button"
+    class="absolute inset-0"
+    title="Expand {filename}"
+    aria-label="Expand {filename}"
+    onclick={onExpand}
+  ></button>
+  {#if overlay}
+    {@render overlay()}
+  {/if}
   <span
     class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-black/0 px-2 py-1 text-[0.6875rem] font-medium text-white opacity-0 transition-all group-hover:bg-black/50 group-hover:opacity-100"
   >
     <span class="truncate">{filename}</span>
     <Expand size={13} class="shrink-0" />
   </span>
-</button>
+</div>

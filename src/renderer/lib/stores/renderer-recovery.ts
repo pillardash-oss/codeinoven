@@ -7,6 +7,7 @@ import type {
   UserMessagePresentation
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
+import { MAX_IMAGE_MARK_POINTS, type ImageMarkPoint } from '$lib/image-annotation'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -102,6 +103,12 @@ export interface QueuedResponseReference extends PromptReference {
   seconds?: number
   /** Video notes: the project-relative composition folder the moment belongs to. */
   directory?: string
+  /** Image marks: the artifact image part the stroke was drawn on. */
+  imageUrl?: string
+  /** Image marks: the freehand stroke, normalized to 0..1 of the image box. */
+  points?: ImageMarkPoint[]
+  /** SVG element picks: the artifact card the element was picked in. */
+  artifactKey?: string
 }
 
 /**
@@ -296,7 +303,9 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== 'selection' &&
     value.kind !== 'design' &&
     value.kind !== 'file' &&
-    value.kind !== 'video'
+    value.kind !== 'video' &&
+    value.kind !== 'image' &&
+    value.kind !== 'svg'
   )
     return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
@@ -307,8 +316,28 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
   if (value.directory !== undefined && typeof value.directory !== 'string') return false
+  if (value.imageUrl !== undefined && typeof value.imageUrl !== 'string') return false
+  if (value.artifactKey !== undefined && typeof value.artifactKey !== 'string') return false
+  if (value.points !== undefined && !isImageMarkPoints(value.points)) return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
+}
+
+/** A restored freehand stroke: every point a finite pair inside the unit square. */
+function isImageMarkPoints(value: unknown): value is ImageMarkPoint[] {
+  if (!Array.isArray(value) || value.length > MAX_IMAGE_MARK_POINTS) return false
+  return value.every(
+    (point) =>
+      isRecord(point) &&
+      typeof point.x === 'number' &&
+      Number.isFinite(point.x) &&
+      point.x >= 0 &&
+      point.x <= 1 &&
+      typeof point.y === 'number' &&
+      Number.isFinite(point.y) &&
+      point.y >= 0 &&
+      point.y <= 1
+  )
 }
 
 function isUserMessagePresentation(value: unknown): value is UserMessagePresentation {

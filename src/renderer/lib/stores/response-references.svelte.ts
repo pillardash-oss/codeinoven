@@ -1,4 +1,5 @@
 import type { PromptReference } from '$shared/types'
+import type { ImageMarkPoint } from '$lib/image-annotation'
 import { rendererRecovery } from './renderer-recovery.svelte'
 
 const MAX_REFERENCES_PER_THREAD = 20
@@ -30,6 +31,17 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Video notes: the project-relative composition folder the moment belongs
    *  to, so a note names its file the way a document annotation names its path. */
   directory?: string
+  /** Image marks: the artifact image part the stroke was drawn on. The
+   *  conversation pins the mark to that picture, and the send renders the
+   *  annotated screenshot from the same source, so the mark can never land on
+   *  a different image than the one the user circled. */
+  imageUrl?: string
+  /** Image marks: the freehand stroke, every point normalized to 0..1 of the
+   *  image box. A single point is a tap. */
+  points?: ImageMarkPoint[]
+  /** SVG element picks: a stable key for the artifact card the element was
+   *  picked in, so the card that drew the element is the one that pins it. */
+  artifactKey?: string
 }
 
 /**
@@ -60,7 +72,9 @@ export function referenceHasEditableSurface(reference: Pick<PromptReference, 'ki
     isResponseSelection(reference) ||
     reference.kind === 'file' ||
     reference.kind === 'design' ||
-    reference.kind === 'video'
+    reference.kind === 'video' ||
+    reference.kind === 'image' ||
+    reference.kind === 'svg'
   )
 }
 
@@ -151,16 +165,21 @@ class ResponseReferencesState {
           // A response selection is named by its position, and so is a picked
           // design element: both are shown as a number by the popover, and the
           // number has to agree with the surface that pins them (a highlight
-          // bubble, a page pin). A document annotation keeps the label it was
-          // created with instead: its path names it on the document pin and in
-          // the prompt, and it is what the model needs to find the passage.
+          // bubble, a page pin). A mark drawn on an image is the same deal: its
+          // number is drawn onto the screenshot the agent receives, so it must be
+          // the number the composer shows. A document annotation keeps the label
+          // it was created with instead: its path names it on the document pin
+          // and in the prompt, and it is what the model needs to find the
+          // passage.
           label: isResponseSelection(reference)
             ? `Selection ${index + 1}`
             : reference.kind === 'file'
               ? reference.label
               : reference.kind === 'video'
                 ? `Video note ${index + 1}`
-                : `Design element ${index + 1}`
+                : reference.kind === 'image'
+                  ? `Mark ${index + 1}`
+                  : `Design element ${index + 1}`
         }))
       next[key] = stored
     }

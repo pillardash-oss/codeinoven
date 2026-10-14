@@ -281,11 +281,13 @@ export interface PromptReference {
    * response; `design` is an element the user picked from a design in the
    * in-app browser; `file` is a passage the user annotated in a project
    * document's preview, whose `label` names that document's path; `video` is a
-   * moment the user noted on a composition's timeline. Main validates only
+   * moment the user noted on a composition's timeline; `image` is a freehand
+   * mark the user drew on an image an inline artifact published; `svg` is an
+   * element the user picked inside an inline SVG artifact. Main validates only
    * `id`, `label`, `text` and `comment`, so this drives presentation rather than
    * the send: every kind reaches the model the same way a selection does.
    */
-  kind?: 'selection' | 'design' | 'file' | 'video'
+  kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg'
 }
 
 /** A project-relative file or directory visibly attached to an outgoing prompt. */

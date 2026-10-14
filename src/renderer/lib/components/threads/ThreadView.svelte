@@ -86,6 +86,7 @@
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import InlineMediaFigure from './InlineMediaFigure.svelte'
   import InlineImageFigure from './InlineImageFigure.svelte'
+  import ArtifactImageAnnotator from './ArtifactImageAnnotator.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -2357,6 +2358,15 @@
    *  measured still has an anchor its editor can open at. */
   let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
+  /**
+   * The mark on an inline picture whose comment editor is open.
+   *
+   * Kept apart from `commentEditorReferenceId` on purpose: that one draws the
+   * app's range-anchored editor, which a mark has no range for. The picture's
+   * own surface owns the mark's editor, so an edit requested from the composer
+   * only has to name the mark and scroll its picture into view.
+   */
+  let imageMarkEditorId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
   function messageEditSpeechTarget() {
@@ -2627,6 +2637,32 @@
   }
 
   /**
+   * The marks drawn on one inline artifact picture, in composer order.
+   *
+   * A mark names the picture it belongs to by its part URL, so a picture is
+   * pinned only by the marks actually drawn on it and two artifacts in the same
+   * conversation can never share a mark.
+   */
+  function imageMarksFor(imageUrl: string): ResponseReferenceAnchor[] {
+    return responseReferences.filter(
+      (reference) => reference.kind === 'image' && reference.imageUrl === imageUrl
+    )
+  }
+
+  /**
+   * Bring a marked picture back on screen and open the mark's comment.
+   *
+   * A picture outside the mounted window has no badge to anchor an editor to, so
+   * the message is scrolled to first and the mark is handed to the picture's own
+   * surface, which opens the editor once its badge is measured.
+   */
+  async function editImageMark(reference: ResponseReferenceAnchor): Promise<void> {
+    if (reference.messageId) await jumpToMessage(reference.messageId)
+    if (!alive) return
+    imageMarkEditorId = reference.id
+  }
+
+  /**
    * Bring a commented design element back in front of the reader: reveal the
    * browser tab it was picked from, then highlight the element, scroll it into
    * view and open its comment. A tab the user has since closed has nothing to
@@ -2680,6 +2716,13 @@
     }
     if (reference.kind === 'video') {
       editVideoNote(reference)
+      return
+    }
+    // A mark on an inline picture is drawn by the picture's own surface, so its
+    // edit action brings that picture back on screen and lets the surface open
+    // the comment: the reference has no text range to jump to.
+    if (reference.kind === 'image') {
+      await editImageMark(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -2787,17 +2830,19 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, and may have noted moments on a video composition timeline in the video board. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         const tag =
-          reference.kind === 'design'
+          reference.kind === 'design' || reference.kind === 'svg'
             ? 'element'
             : reference.kind === 'file'
               ? 'file'
               : reference.kind === 'video'
                 ? 'video'
-                : 'selection'
+                : reference.kind === 'image'
+                  ? 'image'
+                  : 'selection'
         return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
@@ -12328,12 +12373,20 @@
                   {#if part.type === 'text'}
                     <MarkdownView text={part.text} citationThread={citationThreadContext} />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
-                    <InlineImageFigure
+                    <ArtifactImageAnnotator
+                      projectId={thread.projectId}
+                      threadId={thread.id}
                       url={part.url}
                       mime={part.mime}
                       filename={part.filename ?? 'Image'}
                       {imageUrls}
+                      messageId={msg.id}
+                      marks={imageMarksFor(part.url)}
+                      editingId={imageMarkEditorId}
                       onExpand={() => openMessageViewer(msg, part)}
+                      onEditClosed={() => {
+                        if (imageMarkEditorId) imageMarkEditorId = null
+                      }}
                     />
                   {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
                     <InlineMediaFigure

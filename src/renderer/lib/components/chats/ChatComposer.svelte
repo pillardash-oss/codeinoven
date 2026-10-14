@@ -1119,11 +1119,14 @@
   let savedValue = $state('')
   let hasText = $derived(value.trim().length > 0)
 
-  /** True when an attached selection carries a user comment, so an otherwise
-   *  empty message can still be sent (the comment is the payload). */
-  let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
+  /** True when an attached reference is a payload in its own right, so an
+   *  otherwise empty message can still be sent: a commented selection is the
+   *  comment, and a mark drawn on a picture is the mark. */
+  let hasCommentReference = $derived(
+    references.some((reference) => Boolean(reference.comment) || reference.kind === 'image')
+  )
 
-  /** Whether there is anything to send: text, an attachment, or a commented selection. */
+  /** Whether there is anything to send: text, an attachment, or a payload reference. */
   let hasSendableContent = $derived(hasText || attachments.length > 0 || hasCommentReference)
 
   /** Whether the button should show the stop icon (agent working, nothing to send). */
