@@ -1,3 +1,4 @@
+import { SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -6,7 +7,17 @@ import {
   COMPOSER_BUILT_IN_TAGS,
   type ComposerMentionEntry
 } from './composer-mentions'
-import type { AssignmentTask } from '$shared/types'
+import {
+  matchProjectEntry,
+  resolveBuiltInTag,
+  splitTypedMentionQuery,
+  typedComposerMentions
+} from './composer-mention-resolution'
+import type { AssignmentTask, ProjectFileEntry, PromptProjectReference } from '$shared/types'
+
+/** Same ceiling the manual mention picker enforces, so auto-targeting cannot
+ *  attach more references than picking them by hand could. */
+const MAX_PROJECT_REFERENCES = 20
 
 export interface ComposerMentionSearchOptions {
   getAssignmentTasks: () => AssignmentTask[]
@@ -87,6 +98,81 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
     searchTimer = setTimeout(() => void update(textBeforeCaret), 120)
   }
 
+  /**
+   * Resolve the `@` tags a user typed but never picked from the dropdown.
+   *
+   * A token that names exactly one known built-in tag or project entry is
+   * rewritten to its canonical form and, for a project entry, gains the same
+   * reference a pick would have added. Exempt positions and ambiguous or
+   * unknown tokens are left exactly as typed. Returns the resolved text plus
+   * the references to append; the caller owns applying both.
+   */
+  async function resolveTypedTargets(
+    text: string,
+    existingReferences: readonly PromptProjectReference[]
+  ): Promise<{ text: string; references: PromptProjectReference[] }> {
+    const mentions = typedComposerMentions(text)
+    if (mentions.length === 0) return { text, references: [] }
+
+    const knownTokens = new SvelteSet(existingReferences.map((reference) => `@${reference.path}`))
+    const added: PromptProjectReference[] = []
+    const addedPaths = new SvelteSet<string>()
+    const replacements: Array<{ start: number; value: string; length: number }> = []
+    const projectId = options.getFileTagProjectId()
+    const scopeBucketId = projectId ? workspaceState.activeScopeBucketIdFor(projectId) : undefined
+
+    /** The single visible project entry a typed name resolves to, or null. */
+    const matchTypedFile = async (typedName: string): Promise<ProjectFileEntry | null> => {
+      if (!projectId) return null
+      try {
+        const files = (
+          await invoke('projectFiles:search', projectId, typedName, 'all', scopeBucketId)
+        ).filter((file) => !isEntryHiddenByVisibility(file.path, file.ignored))
+        return matchProjectEntry(typedName, files)
+      } catch {
+        return null
+      }
+    }
+
+    for (const mention of mentions) {
+      if (knownTokens.has(mention.token)) continue
+      const { name, suffix } = splitTypedMentionQuery(mention.query)
+
+      const builtIn = resolveBuiltInTag(mention.query)
+      if (builtIn) {
+        const value = `${builtIn.token}${suffix}`
+        if (value !== mention.token) {
+          replacements.push({ start: mention.start, value, length: mention.token.length })
+        }
+        continue
+      }
+
+      if (!projectId || name.length < 2) continue
+      if (existingReferences.length + added.length >= MAX_PROJECT_REFERENCES) continue
+      const entry = await matchTypedFile(name)
+      if (!entry) continue
+      const token = `@${entry.path}`
+      if (knownTokens.has(token) || addedPaths.has(entry.path)) continue
+      added.push({ id: crypto.randomUUID(), name: entry.name, path: entry.path, kind: entry.kind })
+      addedPaths.add(entry.path)
+      replacements.push({
+        start: mention.start,
+        value: `${token}${suffix}`,
+        length: mention.token.length
+      })
+    }
+
+    if (replacements.length === 0) return { text, references: [] }
+    let next = text
+    for (const replacement of [...replacements].sort((left, right) => right.start - left.start)) {
+      next =
+        next.slice(0, replacement.start) +
+        replacement.value +
+        next.slice(replacement.start + replacement.length)
+    }
+    return { text: next, references: added }
+  }
+
   function dispose(): void {
     clearTimeout(searchTimer)
   }
@@ -112,6 +198,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
     },
     update,
     schedule,
+    resolveTypedTargets,
     dispose
   }
 }

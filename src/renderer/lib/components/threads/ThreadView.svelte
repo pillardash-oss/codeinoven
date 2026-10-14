@@ -12083,7 +12083,7 @@
                           {#each leftoverReferences as reference (reference.id)}
                             <span
                               class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
-                              title="Tagged {reference.kind}: {reference.name}"
+                              title="Tagged {reference.kind}: {reference.path}"
                             >
                               {#if reference.kind === 'directory'}
                                 <FolderTypeIcon name={reference.name} size={12} class="shrink-0" />

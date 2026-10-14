@@ -135,7 +135,9 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   // active theme (black on light, white on dark). The chip's
   // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
   const icon = getVendorIconSvg(APP_NAME)
-  const safeTitle = escapeHtmlForChip(`${APP_NAME} ${tag.chipLabel}`)
+  // The complete tag, not just its short label, so a hover proves which tag a
+  // send actually carried.
+  const safeTitle = escapeHtmlForChip(`${tag.token} · ${tag.description}`)
   const iconHtml = icon
     ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
     : ''

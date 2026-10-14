@@ -449,7 +449,7 @@
     ...COMPOSER_BUILT_IN_TAGS.filter((tag) => value.includes(tag.token)).map((tag) => ({
       iconSvg: codeInOvenIconSvg,
       label: tag.chipLabel,
-      title: `${APP_NAME} ${tag.chipLabel}`,
+      title: `${tag.token} · ${tag.description}`,
       value: tag.token
     })),
     ...projectReferences.map((reference) => ({
@@ -568,6 +568,8 @@
   let slashOpen = $state(false)
   let slashQuery = $state('')
   let slashIndex = $state(0)
+  /** Guards the async resolve against a second send landing inside its window. */
+  let resolvingSend = false
   let lastCaretText: string | null = null
   let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
@@ -1285,7 +1287,7 @@
     void onActionSelect?.({ action, query: selectedQuery, method })
   }
 
-  function submit(direct?: boolean): void {
+  async function submit(direct?: boolean): Promise<void> {
     if (mentions.open && mentions.entries[mentions.index]) {
       selectMention(mentions.entries[mentions.index])
       return
@@ -1301,6 +1303,16 @@
       return
     }
     cancelStop()
+    // A tag typed but never picked still targets what it names. Resolve it
+    // before anything reads the draft, so the expert gate sees a session tag
+    // and the dispatched turn carries the tagged reference.
+    if (resolvingSend) return
+    resolvingSend = true
+    try {
+      await resolveTypedTargetsIntoDraft()
+    } finally {
+      resolvingSend = false
+    }
     const msg = normalizeComposerMessage(value, projectReferences)
     if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
@@ -1414,6 +1426,28 @@
     // the rest of the text behave normally.
     if (slashOpen && slashActions.length === 0) {
       slashOpen = false
+    }
+  }
+
+  /**
+   * Rewrite the `@` tags a send was typed with but never picked from the
+   * dropdown. The mention search owns the matching; the composer only applies
+   * the resolved text and the references it returns, so a send targets the same
+   * file or built-in tag a dropdown pick would have produced.
+   */
+  async function resolveTypedTargetsIntoDraft(): Promise<void> {
+    const draft = value
+    const resolved = await mentions.resolveTypedTargets(draft, projectReferences)
+    // A keystroke that landed during the lookup owns a newer draft than the one
+    // resolved against; never overwrite what the user has since typed.
+    if (value !== draft) return
+    if (resolved.text !== value) {
+      value = resolved.text
+      onValueChange?.(value)
+    }
+    if (resolved.references.length > 0) {
+      projectReferences = [...projectReferences, ...resolved.references]
+      onProjectReferencesChange?.(projectReferences)
     }
   }
 
