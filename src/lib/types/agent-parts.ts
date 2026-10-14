@@ -53,12 +53,10 @@ export interface TaskManagerProcess extends AgentRunningProcess {
   projectId: string | null
   threadId: string | null
   ports: number[]
-  /** Best-effort CPU use reported by the operating system for this process or tree. */
+  /** Best-effort CPU use the operating system reports for this one process. */
   cpuPercent: number | null
-  /** Resident/working-set memory for this process or tree. */
+  /** Resident/working-set memory for this one process. */
   memoryBytes: number | null
-  /** Harness roots include their descendants; descendant rows describe one process. */
-  resourceScope: 'process' | 'tree'
   /** Display name of the owning project, resolved at IPC time. */
   projectName?: string | null
   /** Display title of the owning thread, resolved at IPC time. */

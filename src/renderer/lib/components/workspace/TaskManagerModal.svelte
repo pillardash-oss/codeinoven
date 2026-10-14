@@ -233,20 +233,17 @@
   }
 
   /**
-   * Aggregate resource use for a set of rows. A harness root already reports the
-   * totals for its whole tree while its descendants are also listed as their own
-   * rows, so summing every row would count them twice. Only the top-most rows
-   * (whose parent is not itself in the set) are summed, counting each once.
+   * Aggregate resource use for a set of rows. Every row reports one process and
+   * every descendant a harness spawns is listed as its own row, so the total is
+   * the plain sum of the rows being displayed.
    */
   function aggregateResources(rows: readonly TaskManagerProcess[]): {
     memoryBytes: number
     cpuPercent: number
   } {
-    const pids = new Set(rows.map((row) => row.pid))
     let memoryBytes = 0
     let cpuPercent = 0
     for (const row of rows) {
-      if (pids.has(row.parentPid)) continue
       memoryBytes += row.memoryBytes ?? 0
       cpuPercent += row.cpuPercent ?? 0
     }
@@ -991,18 +988,14 @@
                 >
                   <span
                     class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'CPU used by this process and its descendants'
-                      : 'CPU used by this process'}
+                    title="CPU used by this process"
                   >
                     <Cpu size={11} />
                     {formatCpu(process.cpuPercent)}
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'Memory used by this process and its descendants'
-                      : 'Memory used by this process'}
+                    title="Memory used by this process"
                   >
                     <MemoryStick size={11} />
                     {formatMemory(process.memoryBytes)}

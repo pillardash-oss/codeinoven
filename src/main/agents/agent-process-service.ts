@@ -174,6 +174,10 @@ async function defaultSnapshotter(): Promise<ProcessSnapshotEntry[]> {
   return process.platform === 'win32' ? snapshotWindowsProcesses() : snapshotUnixProcesses()
 }
 
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 function descendantsOf(
   rootPid: number,
   childrenByParent: ReadonlyMap<number, ProcessSnapshotEntry[]>
@@ -282,26 +286,17 @@ export class AgentProcessService implements AgentProcessObserver {
   async listAll(): Promise<TaskManagerProcess[]> {
     await this.scan()
     const snapshotByPid = new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
-    const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
-    for (const entry of this.lastSnapshot) {
-      const children = childrenByParent.get(entry.parentPid) ?? []
-      children.push(entry)
-      childrenByParent.set(entry.parentPid, children)
-    }
-    const resourcesFor = (pid: number, tree: boolean) => {
-      const root = snapshotByPid.get(pid)
-      const entries = root ? [root, ...(tree ? descendantsOf(pid, childrenByParent) : [])] : []
-      const cpuValues = entries.flatMap((entry) =>
-        entry.cpuPercent === null || !Number.isFinite(entry.cpuPercent) ? [] : [entry.cpuPercent]
-      )
-      const memoryValues = entries.flatMap((entry) =>
-        entry.memoryBytes === null || !Number.isFinite(entry.memoryBytes) ? [] : [entry.memoryBytes]
-      )
+    // One row reports the resources of that one process. A harness root is not
+    // given its descendants' totals: every descendant it spawns is listed as its
+    // own row, so folding a tree into the root would show the same bytes twice
+    // and read as the root process using them (a 2.3 GB `svelte-check` child
+    // made its `pi` parent look like it used 2.5 GB). Totals live on the owner
+    // and app nodes, which sum the rows actually listed.
+    const resourcesFor = (pid: number) => {
+      const entry = snapshotByPid.get(pid)
       return {
-        cpuPercent: cpuValues.length > 0 ? cpuValues.reduce((sum, value) => sum + value, 0) : null,
-        memoryBytes:
-          memoryValues.length > 0 ? memoryValues.reduce((sum, value) => sum + value, 0) : null,
-        resourceScope: tree ? ('tree' as const) : ('process' as const)
+        cpuPercent: finiteOrNull(entry?.cpuPercent),
+        memoryBytes: finiteOrNull(entry?.memoryBytes)
       }
     }
     const pids = new Set<number>()
@@ -327,7 +322,7 @@ export class AgentProcessService implements AgentProcessObserver {
           projectId: owner.projectId,
           threadId: owner.threadId,
           ports: portsByPid.get(root.pid) ?? [],
-          ...resourcesFor(root.pid, true)
+          ...resourcesFor(root.pid)
         })
       }
       for (const process of this.tracked.get(sessionId)?.values() ?? []) {
@@ -341,7 +336,7 @@ export class AgentProcessService implements AgentProcessObserver {
           projectId: owner.projectId,
           threadId: owner.threadId,
           ports: portsByPid.get(process.pid) ?? [],
-          ...resourcesFor(process.pid, false)
+          ...resourcesFor(process.pid)
         })
       }
     }
@@ -358,7 +353,7 @@ export class AgentProcessService implements AgentProcessObserver {
         projectId: null,
         threadId: null,
         ports: portsByPid.get(root.pid) ?? [],
-        ...resourcesFor(root.pid, true)
+        ...resourcesFor(root.pid)
       })
     }
     for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
@@ -372,7 +367,7 @@ export class AgentProcessService implements AgentProcessObserver {
         projectId: null,
         threadId: null,
         ports: portsByPid.get(process.pid) ?? [],
-        ...resourcesFor(process.pid, false)
+        ...resourcesFor(process.pid)
       })
     }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
