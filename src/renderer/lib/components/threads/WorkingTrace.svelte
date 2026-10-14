@@ -9,7 +9,7 @@
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
-  import { latestWorkingTraceParts } from '$lib/working-trace-parts'
+  import { groupTraceIntoChains, latestWorkingTraceParts } from '$lib/working-trace-parts'
   import {
     newestTraceStartId,
     olderTraceStartId,
@@ -22,7 +22,7 @@
     subagentStatusLabel,
     subagentTaskLabel
   } from '$lib/subagent-presentation'
-  import WorkingTraceRow from './WorkingTraceRow.svelte'
+  import WorkingTraceChain from './WorkingTraceChain.svelte'
   import WorkingTraceStatus from './WorkingTraceStatus.svelte'
   import WorkingTraceSummary from './WorkingTraceSummary.svelte'
   import { subagentBadgeLabel, subagentBadgeTitle } from './working-trace-subagents'
@@ -129,25 +129,35 @@
   let closeTimer: ReturnType<typeof setTimeout> | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
-  const TRACE_SCROLL_THRESHOLD = 32
-  let traceScrollEl = $state<HTMLDivElement>()
-  let traceAtBottom = $state(true)
-  /** How close to the trace scroller's top counts as "paging older entries". */
-  const TRACE_TOP_THRESHOLD = 32
+  /** How far below the transcript's top edge still counts as the trace's top. */
+  const TRACE_TOP_REACH = 240
+  /** The transcript scroller this trace lives in. The trace no longer owns a
+   *  max-height scroller, so older pages mount as the reader scrolls the
+   *  transcript itself back to the trace's top. */
+  let scrollRoot = $state<HTMLElement | null>(null)
+  /** Sits above the mounted window. When it reaches the reading edge, the next
+   *  older page mounts so the reader keeps moving backwards through the work. */
+  let sentinelEl = $state<HTMLDivElement>()
   /** Pinned start of the mounted window. `null` means "the newest page"   the
    *  state a trace opens in, the state it re-bounds to whenever it is not being
    *  watched, and the state the reader's own paging moves back from. A pinned
    *  entry never moves on its own: entries that stream in append at the tail,
    *  so nothing the reader is looking at is ever evicted while they are on the
-   *  thread. The header count reports the entries this trace holds   its newest
-   *  page plus everything appended since, growing as the reader pages older
-   *  entries in   never a number the mounted window happens to disagree with. */
+   *  thread. */
   let windowStartId = $state<string | null>(null)
   const windowStartIndex = $derived(traceWindowStartIndex(visibleParts, windowStartId))
   const pagedParts = $derived(visibleParts.slice(windowStartIndex))
+  /** The mounted window as chains of thought: the thinking and tool work, closed
+   *  by the text each chain produced. Grouping the window rather than the whole
+   *  trace is what keeps a turn with hundreds of steps   often one long chain
+   *  with no text in it at all   from mounting them all at once. */
+  const chains = $derived(groupTraceIntoChains(pagedParts))
   /** True while an older durable page is in flight, so one gesture cannot queue
    *  the same page twice. */
   let loadingOlderParts = $state(false)
+  /** Set for the duration of one wheel gesture's mount, so a momentum flick
+   *  that fires many wheel events still pages once. */
+  let wheelPagingLocked = false
 
   /** Pin the window while the trace is genuinely being watched. A collapsed or
    *  hidden trace keeps the plain newest-page window: nothing mounts while it
@@ -175,19 +185,32 @@
     loadingOlderParts = false
   })
 
-  /** Move the pinned window start one page older, keeping the reader's viewport
-   *  stable across the mount (same compensation the conversation list uses). */
+  /** Find the transcript scroller once the trace is mounted, so paging follows
+   *  the reader's own scroll instead of a scroller the trace no longer has. A
+   *  trace outside it   a sub-agent panel   shows one message's work rather
+   *  than a whole turn, so it mounts in full instead of paging. */
+  $effect(() => {
+    const sentinel = sentinelEl
+    const found = sentinel ? (sentinel.closest('.conversation-scroll') as HTMLElement | null) : null
+    scrollRoot = found
+    if (!sentinel || found) return
+    const oldest = visibleParts[0]
+    if (oldest) windowStartId = oldest.id
+  })
+
+  /** Move the pinned window start one page older, keeping the reader's place in
+   *  the transcript stable across the mount. */
   function moveWindowOlderPage(): void {
-    const el = traceScrollEl
+    const root = scrollRoot
     const nextId = olderTraceStartId(visibleParts, windowStartIndex)
     if (nextId === null) return
-    const previousHeight = el?.scrollHeight ?? 0
-    const previousTop = el?.scrollTop ?? 0
+    const previousHeight = root?.scrollHeight ?? 0
+    const previousTop = root?.scrollTop ?? 0
     windowStartId = nextId
     void tick().then(() => {
-      if (!el) return
-      const grown = el.scrollHeight - previousHeight
-      if (grown > 0) el.scrollTop = previousTop + grown
+      if (!root) return
+      const grown = root.scrollHeight - previousHeight
+      if (grown > 0) root.scrollTop = previousTop + grown
     })
   }
 
@@ -210,13 +233,65 @@
       })
   }
 
-  /** Page older entries in once the reader reaches the top of a scrollable
-   *  trace. A trace whose content fits needs no paging, and a reader parked at
-   *  the bottom must never pull pages in behind a live stream. */
-  function maybePageOlderEntries(element: HTMLDivElement): void {
-    if (element.scrollHeight - element.clientHeight <= TRACE_SCROLL_THRESHOLD) return
-    if (element.scrollTop > TRACE_TOP_THRESHOLD) return
+  /** True while the sentinel above the oldest mounted chain is at (or above)
+   *  the transcript's reading edge, where paging older entries is wanted. The
+   *  lower bound keeps a trace that is already a full screen behind the reader
+   *  from pulling pages in before they are anywhere near it. */
+  function traceTopReached(): boolean {
+    const root = scrollRoot
+    const sentinel = sentinelEl
+    if (!root || !sentinel) return false
+    const rootTop = root.getBoundingClientRect().top
+    const sentinelTop = sentinel.getBoundingClientRect().top
+    return sentinelTop <= rootTop + TRACE_TOP_REACH && sentinelTop >= rootTop - root.clientHeight
+  }
+
+  /** Page older entries as the reader scrolls back to the trace's top. The
+   *  transcript drives it because the trace no longer owns a scroller, and the
+   *  direction guard means one gesture mounts one page. */
+  $effect(() => {
+    const root = scrollRoot
+    if (!root || !isOpen) return
+    let previousTop = root.scrollTop
+    const onScroll = () => {
+      const top = root.scrollTop
+      const scrolledUp = top < previousTop
+      previousTop = top
+      if (!scrolledUp || loadingOlderParts || !traceTopReached()) return
+      if (windowStartIndex === 0 && !olderPartsAvailable) return
+      expandTracePage()
+    }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  })
+
+  /** A trace whose content fits can offer no scroll of its own, so a wheel-up
+   *  is the reader's paging gesture. It only counts at the trace's top, at the
+   *  transcript's top (where there is no scroll movement to ride), and when it
+   *  did not come from a nested scroller such as a tool's output box. The event
+   *  still bubbles: the transcript needs the wheel to move. */
+  function onTraceWheel(event: WheelEvent): void {
+    if (event.deltaY >= 0 || loadingOlderParts || wheelPagingLocked) return
+    if (windowStartIndex === 0 && !olderPartsAvailable) return
+    const root = scrollRoot
+    if (!root || root.scrollTop > TRACE_TOP_REACH) return
+    if (!traceTopReached() || wheelFromNestedScroller(event)) return
+    wheelPagingLocked = true
     expandTracePage()
+    void tick().then(() => {
+      wheelPagingLocked = false
+    })
+  }
+
+  /** True when the wheel came from an element that scrolls on its own between
+   *  the event target and the trace body   a tool's output box, a thinking
+   *  block. Those gestures belong to that box, not to trace paging. */
+  function wheelFromNestedScroller(event: WheelEvent): boolean {
+    const body = event.currentTarget
+    for (let el = event.target; el instanceof Element && el !== body; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight + 1) return true
+    }
+    return false
   }
 
   // When no explicit start is available, fall back to the earliest working
@@ -297,49 +372,6 @@
     // A turn still in progress (done === false) never folds itself: a transient
     // busy=false from a harness activity blip must never hide the live trace.
     wasLatest = latest
-  })
-
-  function onTraceScroll(): void {
-    const element = traceScrollEl
-    if (!element) return
-    traceAtBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
-    maybePageOlderEntries(element)
-  }
-
-  /** A short trace can have older entries available without overflowing its
-   *  inner scroller. In that case there is no scroll offset to reach the top,
-   *  so a wheel-up gesture on the trace itself is the paging signal. */
-  function onTraceWheel(event: WheelEvent): void {
-    const element = traceScrollEl
-    if (
-      !element ||
-      event.deltaY >= 0 ||
-      element.scrollHeight - element.clientHeight > TRACE_SCROLL_THRESHOLD ||
-      (windowStartIndex === 0 && !olderPartsAvailable) ||
-      loadingOlderParts
-    ) {
-      return
-    }
-    event.stopPropagation()
-    expandTracePage()
-  }
-
-  // New live parts follow the trace only while the user remains at its bottom.
-  // A user scroll-up is preserved. Scroll chaining is left enabled: reaching the
-  // top of a finished trace's inner scroller hands the gesture to the outer
-  // conversation so it can lazy-load older messages (compaction boundaries do
-  // not stop it). The tail-follow effect below keeps live output pinned while
-  // the trace is busy, which is where containment actually mattered.
-  $effect(() => {
-    void visibleParts.length
-    void isOpen
-    void busy
-    if (!isOpen || !traceScrollEl || !traceAtBottom) return
-    void tick().then(() => {
-      if (!traceScrollEl || !traceAtBottom) return
-      traceScrollEl.scrollTop = traceScrollEl.scrollHeight
-    })
   })
 
   $effect(() => {
@@ -429,7 +461,7 @@
   }
 </script>
 
-<details class="rounded-xl border border-border bg-surface" open={isOpen}>
+<details class="min-w-0" open={isOpen}>
   <WorkingTraceSummary
     open={isOpen}
     {busy}
@@ -448,15 +480,13 @@
     onToggle={onSummaryClick}
   />
   {#if isOpen}
-    <div
-      bind:this={traceScrollEl}
-      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
-      onscroll={onTraceScroll}
-      onwheel={onTraceWheel}
-    >
-      {#each pagedParts as part (part.id)}
-        <WorkingTraceRow
-          {part}
+    <div class="flex min-w-0 flex-col gap-1 pb-2" onwheel={onTraceWheel}>
+      <div bind:this={sentinelEl} aria-hidden="true"></div>
+      {#each chains as chain, index (chain.id)}
+        <WorkingTraceChain
+          {chain}
+          active={liveActivity && index === chains.length - 1}
+          showHeader={chains.length > 1 || chain.output !== null}
           {busy}
           live={liveActivity}
           {lastReasoningId}

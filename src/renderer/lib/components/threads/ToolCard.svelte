@@ -187,10 +187,10 @@
   const giantInput = $derived(inputJson.length > GIANT_TOOL_STRING_CHARS ? inputJson : null)
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-surface">
+<div class="min-w-0">
   <button
     type="button"
-    class="flex w-full items-center gap-2 overflow-x-auto overflow-y-hidden px-3 py-2 text-left transition-colors hover:bg-elevated"
+    class="flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-muted transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
@@ -224,7 +224,7 @@
     {:else}
       <Wrench size={12} class="shrink-0 text-dimmed" />
     {/if}
-    <span class="shrink-0 font-mono text-xs font-medium text-foreground">
+    <span class="shrink-0 font-mono font-medium text-foreground">
       {codeModeLabel}
     </span>
     {#if start}
@@ -244,7 +244,7 @@
   </button>
 
   {#if open}
-    <div class="space-y-2 border-t px-3 py-2">
+    <div class="space-y-2 border-l border-border/60 py-1 pl-3">
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}

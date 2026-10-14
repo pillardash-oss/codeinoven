@@ -54,9 +54,9 @@
 </script>
 
 {#if body.trim() || summary.trim()}
-  <details class="overflow-hidden rounded-lg border border-border/60 bg-elevated/30" bind:open>
+  <details class="min-w-0" bind:open>
     <summary
-      class="flex cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs font-medium text-dimmed transition-colors hover:bg-elevated"
+      class="flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     >
       <Brain size={13} class="shrink-0 text-info/70" />
       <span class="shrink-0">Thinking</span>
@@ -72,7 +72,7 @@
         class="shrink-0 text-muted transition-transform {open ? 'rotate-90' : ''}"
       />
     </summary>
-    <div class="border-t border-border/40 px-3 py-2">
+    <div class="border-l border-border/60 py-1 pl-3">
       <div class="max-h-80 overflow-y-auto">
         {#if body.trim()}
           <SmoothMarkdown

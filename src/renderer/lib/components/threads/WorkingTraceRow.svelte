@@ -4,7 +4,6 @@
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { AgentPart } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import ToolCard from './ToolCard.svelte'
@@ -47,10 +46,6 @@
   <ToolCard {part} {live} {projectId} {threadId} {checkpointId} {checkpointPaths} />
 {:else if part.type === 'subagent'}
   <SubagentCard {part} {live} onOpen={onOpenSubagent} />
-{:else if part.type === 'text'}
-  <div class="text-sm text-foreground">
-    <SmoothMarkdown text={part.text} streaming={busy} {onCiteFile} />
-  </div>
 {:else if part.type === 'compaction-summary'}
   <div class="rounded-lg border border-border bg-elevated px-3 py-2">
     <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>

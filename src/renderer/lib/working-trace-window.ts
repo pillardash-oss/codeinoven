@@ -1,4 +1,3 @@
-import type { AgentPart } from '$shared/types'
 import { WORKING_TRACE_PAGE_SIZE } from '$shared/types'
 
 /**
@@ -9,9 +8,14 @@ import { WORKING_TRACE_PAGE_SIZE } from '$shared/types'
  * everything on open made a long running thread expensive to re-enter. Instead
  * the trace opens on the newest page, appends entries that arrive afterwards
  * without ever evicting what the reader already has on screen, and mounts older
- * entries one page at a time only when the reader scrolls the trace's own
- * scroller to its top.
+ * entries one page at a time as the reader moves the transcript to the top of
+ * the trace.
  */
+
+/** Anything the window can key on. Parts and chains both carry a stable id. */
+export interface TraceWindowEntry {
+  id: string
+}
 
 /**
  * Index the mounted window starts at. `startId` is the pinned oldest entry;
@@ -20,7 +24,7 @@ import { WORKING_TRACE_PAGE_SIZE } from '$shared/types'
  * newest page so a replaced cache can never render an empty trace.
  */
 export function traceWindowStartIndex(
-  parts: readonly AgentPart[],
+  parts: readonly TraceWindowEntry[],
   startId: string | null,
   pageSize = WORKING_TRACE_PAGE_SIZE
 ): number {
@@ -33,7 +37,7 @@ export function traceWindowStartIndex(
 
 /** True when the pinned entry is no longer part of the rendered entry list. */
 export function traceWindowAnchorExpired(
-  parts: readonly AgentPart[],
+  parts: readonly TraceWindowEntry[],
   startId: string | null
 ): boolean {
   if (startId === null) return false
@@ -45,7 +49,7 @@ export function traceWindowAnchorExpired(
  * (or is at) the oldest entry the trace holds.
  */
 export function olderTraceStartId(
-  parts: readonly AgentPart[],
+  parts: readonly TraceWindowEntry[],
   startIndex: number,
   pageSize = WORKING_TRACE_PAGE_SIZE
 ): string | null {
@@ -56,7 +60,7 @@ export function olderTraceStartId(
 
 /** The id the newest page starts at, or null for an empty entry list. */
 export function newestTraceStartId(
-  parts: readonly AgentPart[],
+  parts: readonly TraceWindowEntry[],
   pageSize = WORKING_TRACE_PAGE_SIZE
 ): string | null {
   return parts[Math.max(0, parts.length - pageSize)]?.id ?? null
