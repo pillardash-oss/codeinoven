@@ -7,6 +7,7 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
+  import { trafficLightState } from '$lib/stores/traffic-light.svelte'
 
   interface Props {
     src: string
@@ -92,6 +93,14 @@
     return true
   }}
 >
+  <!-- A media lightbox is chrome-less, so nothing would otherwise keep its
+       content out of the window controls drawn over the top-left corner. Reserve
+       the same title-bar band the app header occupies (and keep it draggable
+       like every other full screen surface) so no preview renders under the
+       macOS traffic lights. -->
+  {#if trafficLightState.present}
+    <div class="titlebar-drag h-12 shrink-0" aria-hidden="true"></div>
+  {/if}
   <div
     role="presentation"
     class="relative flex min-h-0 flex-1 items-center justify-center"
