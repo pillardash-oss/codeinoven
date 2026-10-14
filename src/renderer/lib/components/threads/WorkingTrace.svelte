@@ -5,7 +5,6 @@
   import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
@@ -110,7 +109,6 @@
     harnessId,
     harnessName,
     accountLabel,
-    accountId,
     ovenLabel,
     ovenIsLocal,
     ovenAppearance,
@@ -311,15 +309,6 @@
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
-  // Code mode is per-part and harness-independent: the driver marks a script
-  // call and every call it made, and the shared predicate covers harnesses
-  // that report their script runner by name alone.
-  const hasCodeMode = $derived(
-    visibleParts.some(
-      (part) => part.type === 'tool' && (part.codeMode === true || isCodeModeToolName(part.tool))
-    )
-  )
-
   // One clock for the whole dropdown list: it ticks only while a worker is
   // actually live, so a finished or restored list shows frozen durations.
   const listClock = new ElapsedTimer()
@@ -355,11 +344,10 @@
 <div class="min-w-0">
   <WorkingTraceSummary
     open={isOpen}
-    {busy}
+    live={liveActivity}
     count={stepCount}
     durationSeconds={totalDurationSeconds}
     {hasCompaction}
-    {hasCodeMode}
     {subagentCount}
     {activeSubagentCount}
     {subagentParts}
@@ -367,6 +355,17 @@
     title={subagentBadgeTitleText}
     label={subagentBadgeLabelText}
     elapsedFor={subagentElapsed}
+    {modelLabel}
+    {isFast}
+    {thinkingLevel}
+    {providerName}
+    {providerId}
+    {harnessId}
+    {harnessName}
+    {accountLabel}
+    {ovenLabel}
+    {ovenIsLocal}
+    {ovenAppearance}
     onOpen={(part) => onOpenSubagent?.(part)}
     onOpenSheet={() => (subagentSheetOpen = true)}
     onToggle={onSummaryClick}
@@ -395,26 +394,8 @@
           {onOpenSubagent}
         />
       {/each}
-      {#if busy}
-        <WorkingTraceStatus
-          {rehydrated}
-          {foreignRun}
-          {note}
-          startTime={effectiveStartTime}
-          {elapsed}
-          {modelLabel}
-          {isFast}
-          {thinkingLevel}
-          {providerName}
-          {providerId}
-          {harnessId}
-          {harnessName}
-          {accountLabel}
-          {accountId}
-          {ovenLabel}
-          {ovenIsLocal}
-          {ovenAppearance}
-        />
+      {#if busy && (foreignRun || rehydrated || note)}
+        <WorkingTraceStatus {rehydrated} {foreignRun} {note} />
       {/if}
     </div>
   {/if}
