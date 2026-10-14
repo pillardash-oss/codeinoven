@@ -113,12 +113,13 @@
   {/snippet}
   {#if chain.steps.length > 0}
     {#if showHeader}
-      <!-- Sticky to the trace's own scroller: a reader deep in a long chain
-           keeps its fold control directly under the trace header instead of
-           having to scroll back to the head. -->
+      <!-- Sticky within the transcript scroller, directly under the pinned
+           trace header: a reader deep in a long chain keeps its fold control on
+           screen instead of having to scroll back to the head. -->
       <button
         type="button"
-        class="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-app py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+        class="sticky z-10 flex w-full items-center gap-1.5 bg-app py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+        style="top: var(--cio-trace-header-h, 0px)"
         aria-expanded={open}
         title={open ? 'Hide the steps behind this output' : 'Show the steps behind this output'}
         onclick={() => (userChoice = !open)}

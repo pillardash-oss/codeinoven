@@ -138,14 +138,17 @@
   let userFolded = $state(initiallyFolded)
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
-  /** How close to the trace scroller's bottom counts as "there". */
-  const TRACE_SCROLL_THRESHOLD = 32
-  /** The trace's own scroller. A tall trace caps its height and scrolls inside
-   *  the transcript. */
-  let traceScrollEl = $state<HTMLDivElement>()
-  /** True while the reader is parked at the trace's bottom, where live output
-   *  keeps following. A scroll-up pins their place and stops the follow. */
-  let traceAtBottom = $state(true)
+  /** The trace's root. It exists only to find the transcript scroller the trace
+   *  lives in, because the trace no longer owns a scroller of its own. */
+  let traceRootEl = $state<HTMLDivElement>()
+  /** The trace body. Its oldest mounted child is the sentinel that older pages
+   *  load above once the reader reaches the top of the mounted work. */
+  let traceBodyEl = $state<HTMLDivElement>()
+  /** The transcript scroller that now drives the trace's own scrolling. */
+  const scrollRoot = $derived(traceRootEl?.closest('.conversation-scroll') ?? null)
+  /** The sticky header's measured height, published as a custom property so a
+   *  chain's fold header pins directly beneath it instead of under it. */
+  let traceHeaderHeight = $state(0)
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -159,25 +162,25 @@
   const stepCount = $derived(Math.max(mountedStepCount, totalSteps))
   /** The trace's whole wall-clock span, from its earliest entry to its latest. */
   const traceSpan = $derived(tracePartsSpan(visibleParts))
-  /** True while an older page is in flight, so one gesture pulls exactly one
-   *  page. Plain, not reactive: only the DOM handlers read it and nothing
+  /** True while an older page is in flight, so one arrival loads exactly one
+   *  page. Plain, not reactive: only the scroll handler reads it and nothing
    *  renders from it. */
   let loadingOlderParts = false
-  /** True while the reader is parked at the trace's top, so reaching the top
-   *  pulls one page and staying there does not pull a page per scroll event. */
+  /** Latched while the oldest mounted step sits in the top zone, so standing
+   *  there does not load a page per scroll event. */
   let atTraceTop = false
-  /** How close to the trace's top counts as reaching for older steps. */
-  const TRACE_TOP_REACH = 24
+  /** How close to the header the oldest mounted step counts as the top. */
+  const TRACE_TOP_REACH = 48
 
-  /** Pull the next older page and hold the reader's place across the prepend:
-   *  the added rows land above what is on screen, so the scroller is moved down
-   *  by exactly the height they added. Scroll anchoring is off for this scroller
-   *  (see the style block), so this is the only correction applied. */
+  /** Pull the next older page and hold the reader's place across the prepend.
+   *  The added rows land above what is on screen, so the transcript scroller is
+   *  moved down by exactly the height they added. The transcript turns native
+   *  scroll anchoring off, so this is the only correction applied. */
   async function pullOlderPage(): Promise<void> {
-    const element = traceScrollEl
-    if (!element || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
+    const root = scrollRoot
+    if (!root || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
     loadingOlderParts = true
-    const previousHeight = element.scrollHeight
+    const previousHeight = root.scrollHeight
     try {
       await onLoadOlderParts()
     } catch {
@@ -187,55 +190,67 @@
       loadingOlderParts = false
     }
     await tick()
-    if (!traceScrollEl) return
-    traceScrollEl.scrollTop += traceScrollEl.scrollHeight - previousHeight
+    const scroller = scrollRoot
+    if (!scroller) return
+    scroller.scrollTop += scroller.scrollHeight - previousHeight
   }
 
-  /** Track the trace's own scroll: remember whether the reader is at the bottom,
-   *  where live output keeps following, and pull an older page when they reach
-   *  the top. */
-  function onTraceScroll(): void {
-    const element = traceScrollEl
-    if (!element) return
-    traceAtBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
-    if (element.scrollTop <= TRACE_TOP_REACH) {
-      if (!atTraceTop) {
-        atTraceTop = true
-        void pullOlderPage()
+  /** True while the oldest mounted step sits just under the trace header, where
+   *  the reader has reached the top of the loaded work. The body's current first
+   *  child is the sentinel: once a page lands above it the sentinel is pushed
+   *  out of the zone, which is what stops one arrival loading page after page. */
+  function traceTopReached(): boolean {
+    const root = scrollRoot
+    const body = traceBodyEl
+    if (!root || !body) return false
+    const oldest = body.firstElementChild
+    if (!oldest) return false
+    const offset = oldest.getBoundingClientRect().top - root.getBoundingClientRect().top
+    return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
+  }
+
+  // The transcript scroller drives this trace now. Reaching the top of the
+  // mounted work on a scroll-up loads one older page; following the live tail
+  // and keeping the reader's place across content growth stay the transcript's
+  // job, so nothing scrolls this trace by hand any more.
+  $effect(() => {
+    const root = scrollRoot
+    if (!root || !isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
+    let previousTop = root.scrollTop
+    const onScroll = (): void => {
+      const top = root.scrollTop
+      const scrolledUp = top < previousTop
+      previousTop = top
+      if (!scrolledUp) return
+      if (!traceTopReached()) {
+        atTraceTop = false
+        return
       }
-      return
+      if (atTraceTop) return
+      atTraceTop = true
+      void pullOlderPage()
     }
-    atTraceTop = false
-  }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  })
 
-  // A trace that fits its box hides the older steps behind no scrollbar, so fill
-  // the visible height: pull one page at a time until the box scrolls or the
-  // turn's older entries run out. Bounded by the box height, never the turn, so
-  // a long turn still opens on a fraction of its steps.
+  // A trace whose work fits the transcript leaves older steps behind no scroll
+  // at all, so fill the visible height one page at a time until the transcript
+  // scrolls or the turn's older entries run out. Bounded by the viewport, never
+  // the turn, so a long turn still opens on a fraction of its steps.
   $effect(() => {
     void visibleParts.length
     void isOpen
     void olderPartsAvailable
     if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
-    const element = traceScrollEl
-    if (!element) return
-    if (element.scrollHeight - element.clientHeight > 1) return
+    const root = scrollRoot
+    const body = traceBodyEl
+    if (!root || !body) return
+    if (root.scrollHeight - root.clientHeight > 1) return
+    // A trace scrolled out of view above the reader is not filled: nobody is
+    // reading it, and it would pull pages for a turn that is not on screen.
+    if (body.getBoundingClientRect().top >= root.getBoundingClientRect().bottom) return
     void pullOlderPage()
-  })
-
-  // New live parts follow the trace only while the reader remains at its
-  // bottom. A scroll-up is preserved, and a collapsed or hidden trace mounts
-  // nothing to follow.
-  $effect(() => {
-    void visibleParts.length
-    void isOpen
-    void busy
-    if (!isOpen || !traceScrollEl || !traceAtBottom) return
-    void tick().then(() => {
-      if (!traceScrollEl || !traceAtBottom) return
-      traceScrollEl.scrollTop = traceScrollEl.scrollHeight
-    })
   })
 
   // When no explicit start is available, fall back to the earliest working
@@ -381,41 +396,45 @@
   }
 </script>
 
-<div class="min-w-0">
-  <WorkingTraceSummary
-    open={isOpen}
-    live={liveActivity}
-    count={stepCount}
-    durationSeconds={totalDurationSeconds}
-    {hasCompaction}
-    {subagentCount}
-    {activeSubagentCount}
-    {subagentParts}
-    {coarsePointer}
-    title={subagentBadgeTitleText}
-    label={subagentBadgeLabelText}
-    elapsedFor={subagentElapsed}
-    {modelLabel}
-    {isFast}
-    {thinkingLevel}
-    {providerName}
-    {providerId}
-    {harnessId}
-    {harnessName}
-    {accountLabel}
-    {ovenLabel}
-    {ovenIsLocal}
-    {ovenAppearance}
-    onOpen={(part) => onOpenSubagent?.(part)}
-    onOpenSheet={() => (subagentSheetOpen = true)}
-    onToggle={onSummaryClick}
-  />
+<div class="min-w-0" bind:this={traceRootEl} style="--cio-trace-header-h: {traceHeaderHeight}px">
+  <!-- The header pins to the transcript's top while the reader scrolls through
+       this trace's work, so folding it is always one click away without a
+       scroll back. The body is the transcript's now: one scroller, not two. -->
+  <div class="sticky top-0 z-20 bg-app" bind:clientHeight={traceHeaderHeight}>
+    <WorkingTraceSummary
+      open={isOpen}
+      live={liveActivity}
+      count={stepCount}
+      durationSeconds={totalDurationSeconds}
+      {hasCompaction}
+      {subagentCount}
+      {activeSubagentCount}
+      {subagentParts}
+      {coarsePointer}
+      title={subagentBadgeTitleText}
+      label={subagentBadgeLabelText}
+      elapsedFor={subagentElapsed}
+      {modelLabel}
+      {isFast}
+      {thinkingLevel}
+      {providerName}
+      {providerId}
+      {harnessId}
+      {harnessName}
+      {accountLabel}
+      {ovenLabel}
+      {ovenIsLocal}
+      {ovenAppearance}
+      onOpen={(part) => onOpenSubagent?.(part)}
+      onOpenSheet={() => (subagentSheetOpen = true)}
+      onToggle={onSummaryClick}
+    />
+  </div>
   {#if isOpen}
     <div
-      bind:this={traceScrollEl}
+      bind:this={traceBodyEl}
       transition:slide={foldSlide()}
-      class="trace-scroll flex max-h-[min(75vh,48rem)] min-w-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-2"
-      onscroll={onTraceScroll}
+      class="flex min-w-0 flex-col gap-2 pb-2"
     >
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
@@ -449,13 +468,3 @@
     onClose={() => (subagentSheetOpen = false)}
   />
 {/if}
-
-<style>
-  /* The trace owns its scroll position: it pages older steps in at the top as
-     the reader scrolls and compensates by hand. Chromium's scroll anchoring is
-     off so it never applies a second, competing correction when a page lands or
-     a fold opens. */
-  .trace-scroll {
-    overflow-anchor: none;
-  }
-</style>
