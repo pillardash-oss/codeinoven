@@ -673,6 +673,27 @@ export class BrowserService {
    * switch focused instead of losing the race to the page's own mount.
    */
   private pendingPageFocusTabId: string | null = null
+  /**
+   * The tab whose page last gained the keyboard, or null while the window's own
+   * renderer did.
+   *
+   * Updated by focus events alone, which makes it the last surface the user was
+   * actually working in. It is read once, on the window's `blur`, because
+   * nothing inside the app gains focus while the whole window is losing it, so
+   * at that moment it still names the page the user was typing in.
+   */
+  private keyboardOwnerTabId: string | null = null
+  /**
+   * The tab whose page should get the keyboard back when the app window is
+   * reactivated, captured from {@link keyboardOwnerTabId} at the window's
+   * `blur`.
+   *
+   * Reactivating a window hands the keyboard to the window's own web contents,
+   * not to the `WebContentsView` that had it (the same handoff
+   * `browser-history-swipe.ts` corrects for history traversal), so a page the
+   * user was typing in comes back unfocused unless it is deliberately refocused.
+   */
+  private restorePageFocusTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup centres itself over this area, so the
    *  prompt opens over the page it belongs to rather than over the app's chrome. */
@@ -817,8 +838,20 @@ export class BrowserService {
       this.nativeToasts.setHost(host ?? window)
     )
     // Chromium drops its own status bubble when the window loses the pointer's
-    // context; so does this.
-    window.on('blur', () => this.dismissStatusOverlay())
+    // context; so does this. The same moment captures which surface held the
+    // keyboard, so reactivating the window can hand the page its keyboard back;
+    // see `restorePageFocusTabId`.
+    window.on('blur', () => {
+      this.restorePageFocusTabId = this.keyboardOwnerTabId
+      this.dismissStatusOverlay()
+    })
+    window.on('focus', () => this.restorePageFocus())
+    // The renderer owns the keyboard whenever the user works in the app chrome
+    // rather than the page, so this is what keeps a page from being refocused on
+    // return when the user had actually been in the toolbar.
+    window.webContents.on('focus', () => {
+      this.keyboardOwnerTabId = null
+    })
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -3344,6 +3377,12 @@ export class BrowserService {
     ])
 
     const publish = (): void => this.publishState(tabId)
+    // The page takes the keyboard whenever the user clicks into it, which is
+    // recorded here so a reactivated window can hand it back (see
+    // `restorePageFocusTabId`).
+    view.webContents.on('focus', () => {
+      this.keyboardOwnerTabId = tabId
+    })
     // A key pressed in the page reaches this view's web contents and nothing
     // else in the app, so this is where the browser claims its own shortcuts.
     // Preventing the event also prevents the application menu from acting on
@@ -6583,6 +6622,33 @@ export class BrowserService {
     this.primePagePointer(tab, this.activeTabId === tabId ? this.activeTabBounds : null)
   }
 
+  /**
+   * Hand the keyboard back to the page the user was in before the app window
+   * lost focus.
+   *
+   * Called on the window's `focus`. The capture happens at `blur` (see
+   * {@link restorePageFocusTabId}), so a page that was not the last surface the
+   * user worked in is left alone. A page that is no longer the one on screen is
+   * skipped as well: the surface may have changed to another tab or away from
+   * the browser while the app was in the background, and focus must not follow a
+   * page the user can no longer see.
+   */
+  private restorePageFocus(): void {
+    const tabId = this.restorePageFocusTabId
+    this.restorePageFocusTabId = null
+    if (!tabId) return
+    // The reactivated window settles its own focus a beat after the event, so
+    // the handover waits a turn; otherwise the window's focus lands last and the
+    // page loses the race it was just won.
+    setImmediate(() => {
+      if (this.window.isDestroyed()) return
+      const tab = this.tabs.get(tabId)
+      if (!tab || tab.view.webContents.isDestroyed()) return
+      if (!this.isPageOnScreen(tabId)) return
+      this.focusPageView(tabId, tab)
+    })
+  }
+
   /** Whether a tab's page is the native view the window is currently showing. */
   private isPageOnScreen(tabId: string): boolean {
     if (this.toastVisible || this.activeTabId !== tabId) return false
@@ -6879,6 +6945,9 @@ export class BrowserService {
     // A destroyed tab can no longer hold the keyboard, so its toolbar must not
     // stay the tab the window-level interception routes to.
     if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
+    // Likewise a destroyed page cannot be given the keyboard back on return.
+    if (this.keyboardOwnerTabId === tabId) this.keyboardOwnerTabId = null
+    if (this.restorePageFocusTabId === tabId) this.restorePageFocusTabId = null
     this.injectedDialogLabels.delete(tabId)
     this.extensionNavigationUrls.delete(tabId)
     this.forgetParked(tabId)

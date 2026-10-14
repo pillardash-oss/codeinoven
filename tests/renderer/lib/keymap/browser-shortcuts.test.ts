@@ -62,4 +62,19 @@ describe('appShortcutChords', () => {
       publishedChords('darwin').every((chord) => chord.meta || chord.control || chord.alt)
     ).toBe(true)
   })
+
+  it('never hands the app editor shortcuts back, so a focused page keeps undo and format', () => {
+    // The app's rich text editor can never hold the keyboard while a native page
+    // does, and the page's own inputs and contenteditable regions answer these
+    // chords natively. Claiming one would preventDefault the page's own edit and
+    // pull focus out of the document (Cmd/Ctrl+Z undo is the one users notice).
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const chords = publishedChords(platform)
+      for (const key of ['z', 'b', 'i']) {
+        expect(
+          chords.some((chord) => chord.key === key && (chord.meta || chord.control))
+        ).toBe(false)
+      }
+    }
+  })
 })

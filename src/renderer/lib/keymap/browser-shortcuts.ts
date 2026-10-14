@@ -116,6 +116,24 @@ const BROWSER_OWNED_IDS = new Set<string>([
 ])
 
 /**
+ * Keymap entries whose action belongs to the app's own rich text editor.
+ *
+ * A native page holds the OS keyboard through its own view, so the app's editor
+ * can never be the focused surface at the same time, and the page's own inputs
+ * and contenteditable regions answer these chords natively (undo, redo, bold,
+ * italic). Handing one back would only `preventDefault` the page's own edit and
+ * pull focus out of the document for a command nothing on the page could run,
+ * exactly as claiming a modifier+arrow chord would (see
+ * {@link PAGE_OWNED_ARROW_KEYS}). Derived from the `editor` category so a future
+ * editor binding is covered without a second list to remember.
+ */
+const PAGE_OWNED_EDITOR_IDS: ReadonlySet<string> = new Set(
+  (KEYMAP.categories.find((category) => category.id === 'editor')?.shortcuts ?? []).map(
+    (shortcut) => shortcut.id
+  )
+)
+
+/**
  * Keys that always belong to the page's own caret and scroll movement, so the
  * app must never claim them from a page.
  *
@@ -159,7 +177,7 @@ export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShor
   const chords = new Map<string, BrowserShortcutChord>()
   for (const category of KEYMAP.categories) {
     for (const shortcut of category.shortcuts) {
-      if (BROWSER_OWNED_IDS.has(shortcut.id)) continue
+      if (BROWSER_OWNED_IDS.has(shortcut.id) || PAGE_OWNED_EDITOR_IDS.has(shortcut.id)) continue
       for (const chord of resolveChords(source.keysFor(shortcut.id), isMac)) {
         if (!chord.meta && !chord.control && !chord.alt) continue
         if (PAGE_OWNED_ARROW_KEYS.has(chord.key)) continue
