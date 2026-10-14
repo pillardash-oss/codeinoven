@@ -380,7 +380,8 @@ import {
   COMPOSITION_TRANSPORT_GLOBAL,
   compositionTransportCommandScript,
   compositionTransportScript,
-  compositionTransportStateScript
+  compositionTransportStateScript,
+  frameSettleScript
 } from './browser-service/browser-transport-script'
 
 /**
@@ -2820,10 +2821,15 @@ export class BrowserService {
    *
    * A composition owns how a frame is drawn   the render contract is a global
    * function the project defines   so the app calls it and waits rather than
-   * reimplementing it. The page is asked to draw the frame itself, then two
-   * animation frames are waited out, because a project that redraws from its own
-   * loop during a settle would otherwise be captured mid-paint. A project that
-   * defines no render function is reported rather than captured as a guess.
+   * reimplementing it. The page is asked to draw the frame itself, then the paint
+   * is waited out, because a project that redraws from its own loop during a
+   * settle would otherwise be captured mid-paint. A project that defines no render
+   * function is reported rather than captured as a guess.
+   *
+   * The wait goes through the transport when one is armed, and that is not a
+   * detail: arming parks the page's own `requestAnimationFrame`, so a wait built
+   * on it is never called back and every capture of a composition the app had
+   * shown timed out instead of answering.
    */
   async renderTabFrame(
     tabId: string,
@@ -2837,7 +2843,7 @@ export class BrowserService {
       const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
       if (transport && typeof transport.freezeAt === 'function') {
         const state = await transport.freezeAt(${JSON.stringify(seconds)});
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (typeof transport.settle === 'function') await transport.settle();
         const failure = state && state.error;
         return failure ? { rendered: false, reason: String(failure) } : { rendered: true };
       }
@@ -2850,7 +2856,9 @@ export class BrowserService {
       } catch (error) {
         return { rendered: false, reason: String(error) };
       }
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Bounded like the transport's own settle: a page whose frames are throttled
+      // answers with the frame as drawn rather than timing the whole capture out.
+      await ${frameSettleScript()};
       return { rendered: true };
     })()`)
     // Bounded, because a page that never settles, or one whose animation frames

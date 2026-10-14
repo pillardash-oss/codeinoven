@@ -24,6 +24,12 @@
  *    over the app's frame for as long as the tab lived, which is the difference
  *    between a pause and a page that keeps playing.
  *
+ * Parking the page's loop takes the page's animation clock away with it, so a
+ * caller that has to know whether the frame it asked for was painted cannot wait
+ * on frames any more. That is what `settle` is for: it answers on the native
+ * clock captured before parking, so a capture waits for a paint without ever
+ * waiting on a callback the parking is holding.
+ *
  * The soundtrack is reached the same way, and for the same reason. A bed is
  * normally a detached `new Audio(...)` that no document query can find, so every
  * media element that asks to play is recorded as it asks and a play is refused
@@ -42,6 +48,17 @@ export const TRANSPORT_MAX_TICK_SECONDS = 1
 
 /** How far page audio may drift from the playhead before it is re-timed. */
 export const TRANSPORT_MEDIA_RESYNC_SECONDS = 0.25
+
+/**
+ * Ceiling on one settle wait, in milliseconds.
+ *
+ * `settle` yields to the real animation clock so a frame that was just drawn has
+ * also been painted. A tab whose frames are throttled, which is what a parked or
+ * backgrounded tab does, never calls back, and a capture that cannot settle is
+ * worse than one that settled a frame early, so the wait gives up and lets the
+ * capture proceed.
+ */
+export const TRANSPORT_SETTLE_TIMEOUT_MS = 250
 
 export interface CompositionTransportOptions {
   /** Seconds the composition runs, from `composition.json`. */
@@ -87,6 +104,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   const AUTOPLAY = ${autoplay};
   const MAX_TICK = ${JSON.stringify(TRANSPORT_MAX_TICK_SECONDS)};
   const RESYNC = ${JSON.stringify(TRANSPORT_MEDIA_RESYNC_SECONDS)};
+  const SETTLE_TIMEOUT = ${JSON.stringify(TRANSPORT_SETTLE_TIMEOUT_MS)};
   const previous = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
   if (previous && typeof previous.dispose === 'function') previous.dispose();
   const render = globalThis.cioRenderFrame;
@@ -423,6 +441,32 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     return state();
   }
 
+  /**
+   * Wait for the picture to reach the compositor, on this transport's own clock.
+   *
+   * Two rules meet here. A caller inside the page cannot wait on animation frames
+   * once the transport is armed, because arming parks the page's own
+   * \`requestAnimationFrame\` so the page cannot repaint over the app's frame, and a
+   * wait built on it is never called back. The app still has to know that the
+   * frame it asked for has been painted rather than merely drawn, or a capture can
+   * read the frame before last. So the wait runs on the native clock captured
+   * before parking, and gives up rather than hang when this tab's frames are
+   * throttled, because a capture that answers late beats one that never answers.
+   */
+  function settle() {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, SETTLE_TIMEOUT);
+      raf(() => raf(finish));
+    });
+  }
+
   function dispose() {
     transport.playing = false;
     stopDriver();
@@ -455,6 +499,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.stop = stop;
   transport.setLoop = setLoop;
   transport.freezeAt = freezeAt;
+  transport.settle = settle;
   transport.state = state;
   transport.dispose = dispose;
   // The runtime owns the page from here: its loop is parked so it cannot repaint
@@ -524,4 +569,26 @@ export function compositionTransportStateScript(): string {
   if (!transport || typeof transport.state !== 'function') return null;
   return transport.state();
 })()`
+}
+
+/**
+ * The wait a capture uses when no transport is armed.
+ *
+ * A page with no transport drawing its own loop paints on its own animation
+ * frames, so a capture waits on them. It is bounded for the same reason
+ * {@link TRANSPORT_SETTLE_TIMEOUT_MS} is: a page whose frames are throttled would
+ * never call back, and a capture that answers with the frame as drawn beats one
+ * that times out. Exported rather than inlined so the one wait a capture can
+ * reach without a transport can be exercised on its own.
+ */
+export function frameSettleScript(): string {
+  return `new Promise((resolve) => {
+        const timer = setTimeout(resolve, ${TRANSPORT_SETTLE_TIMEOUT_MS});
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            clearTimeout(timer);
+            resolve();
+          })
+        );
+      })`
 }
