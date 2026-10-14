@@ -1429,6 +1429,21 @@ export class ChatEngine {
   // 30 minutes
 
   /**
+   * How long the answer path waits for a session to finish its idle
+   * finalization before resuming it with the user's decision.
+   *
+   * When a driver can no longer accept the reply (its pending-UI map was
+   * cleared by a process restart, eviction, or teardown) the engine falls back
+   * to resuming the session itself, and this wait joins the process exit's
+   * history mirror. That wait must be bounded: a session parked on the very
+   * question the app no longer holds emits no idle of its own, so an unbounded
+   * join parks forever and leaves the answer card stuck on "Sending…".
+   */
+  private static readonly INACTIVE_QUESTION_RESUME_WAIT_MS = 10 * 1000
+
+  // 10 seconds
+
+  /**
    * How long one harness-native MCP call may stay open before the watchdog
    * ends the turn.
    *
@@ -3073,7 +3088,7 @@ export class ChatEngine {
     pending: PendingQuestionInfo,
     resolution: AgentSecretResolution
   ): Promise<void> {
-    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.awaitInactiveResumeIdleFinalization(pending)
     await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
       Logger.error('Secret request turn settlement failed:', error)
     )
@@ -3177,7 +3192,7 @@ export class ChatEngine {
     entry: AgentUtilitySuggestionEntry,
     decision: UtilitySuggestionDecision
   ): Promise<void> {
-    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.awaitInactiveResumeIdleFinalization(pending)
     await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
       Logger.error('Utility suggestion turn settlement failed:', error)
     )
@@ -3385,7 +3400,7 @@ export class ChatEngine {
     resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed' | 'timed_out'>,
     answers?: string[][]
   ): Promise<void> {
-    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.awaitInactiveResumeIdleFinalization(pending)
     await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
     // The answer starts a new turn, so the turn that asked the question can
     // never resume and its checkpoint would stay active forever. Settle it
@@ -24082,6 +24097,62 @@ export class ChatEngine {
         waiters.filter((waiter) => waiter.resolve !== resolve)
       )
     })
+  }
+
+  /**
+   * Join a parked card's session exit without ever blocking on an idle that
+   * can no longer arrive, then report the timeout instead of swallowing it.
+   */
+  private async awaitInactiveResumeIdleFinalization(pending: PendingQuestionInfo): Promise<void> {
+    const finalized = await this.awaitSessionIdleFinalizationWithin(
+      pending.request.sessionId,
+      ChatEngine.INACTIVE_QUESTION_RESUME_WAIT_MS
+    )
+    if (!finalized) {
+      Logger.error('Session did not finalize while resuming a parked request   resuming anyway', {
+        sessionId: pending.request.sessionId,
+        requestId: pending.request.requestId
+      })
+    }
+  }
+
+  /**
+   * `awaitSessionIdleFinalization`, but never longer than `timeoutMs`.
+   *
+   * Native process exits settle in milliseconds, so the bound only ever fires
+   * for a session that is alive but cannot idle (parked on a dialog the driver
+   * no longer holds). Returns whether the finalization actually landed, and
+   * rethrows a real finalization failure exactly as the unbounded wait would.
+   */
+  private async awaitSessionIdleFinalizationWithin(
+    sessionId: string,
+    timeoutMs: number
+  ): Promise<boolean> {
+    let failure: unknown
+    let settled = false
+    // The rejection is captured instead of left on the racing promise: when the
+    // timeout wins, an unobserved rejection would surface as an unhandled
+    // rejection on the main process.
+    const finalization = this.awaitSessionIdleFinalization(sessionId).then(
+      () => {
+        settled = true
+      },
+      (error: unknown) => {
+        settled = true
+        failure = error
+      }
+    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs)
+    })
+    try {
+      await Promise.race([finalization, timeout])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    if (settled && failure !== undefined) throw failure
+    return settled
   }
 
   private settleSessionIdleFinalizationWaiters(sessionId: string, error?: unknown): void {
