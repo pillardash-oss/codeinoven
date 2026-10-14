@@ -28,6 +28,7 @@
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID, isOrchestrationChildThread } from '$shared/types'
   import {
+    openChatUtilitySetupThread,
     openProjectUtilitySetupThread,
     resolveUtilitySetupProject
   } from '$lib/utility-setup-thread'
@@ -726,9 +727,11 @@
    *
    * The caller that owns the context opens it: a routine's connection setup
    * belongs to that routine's own new thread, while every other entry lands in
-   * the project the user was last on. Both end in a real conversation with the
-   * request already written, which is what makes the work watchable, steerable,
-   * and able to ask for a credential through the app's secret card.
+   * the project the user was last on, or in a chat when they have no project,
+   * since a capability installs into the app's own library and needs no
+   * repository. Every route ends in a real conversation with the request
+   * already written, which is what makes the work watchable, steerable, and
+   * able to ask for a credential through the app's secret card.
    */
   async function startSetupThread(): Promise<void> {
     if (onOpenSetupThread) {
@@ -737,14 +740,11 @@
       return
     }
     const project = resolveUtilitySetupProject(projects, threads)
-    if (!project) {
-      editorError = 'Open a project first: a setup thread needs a project to work in.'
-      return
-    }
     saving = true
     editorError = ''
     try {
-      await openProjectUtilitySetupThread(project, setupRequestSeed)
+      if (project) await openProjectUtilitySetupThread(project, setupRequestSeed)
+      else await openChatUtilitySetupThread(setupRequestSeed)
       onClose()
     } catch (setupError) {
       editorError =
@@ -776,6 +776,7 @@
     {:else if !isNative && draft.id === null && setupPreset === null}
       <UtilityEditorModalCreateStep
         error={editorError}
+        busy={saving}
         onChooseCreate={chooseCreate}
         onStartSetupThread={() => void startSetupThread()}
       />

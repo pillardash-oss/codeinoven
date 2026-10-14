@@ -6,9 +6,11 @@
     onStartSetupThread: () => void
     /** Why the assisted path did not open a thread, when it could not. */
     error?: string
+    /** True while a setup thread is being opened, so a second click waits. */
+    busy?: boolean
   }
 
-  let { onChooseCreate, onStartSetupThread, error = '' }: Props = $props()
+  let { onChooseCreate, onStartSetupThread, error = '', busy = false }: Props = $props()
 
   const createChoices: Array<{
     id: 'skill' | 'mcp' | 'plugin'
@@ -79,8 +81,9 @@
     </div>
     <button
       type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
+      class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
       title="Open a thread that sets this utility up with an agent"
+      disabled={busy}
       onclick={onStartSetupThread}
     >
       <Sparkles size={14} />

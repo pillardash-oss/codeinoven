@@ -1,9 +1,10 @@
 import { ASSISTANT_SPACE_ID, type Project, type Routine, type Thread } from '$shared/types'
+import { DEFAULT_HARNESS } from '$shared/harness-default'
 import { routinePrimaryModel, settingsWithRoutineModel } from '$shared/routine-agents'
 import { invoke } from '$lib/ipc.svelte'
 import { composerBuiltInTag } from '$lib/components/chats/composer-mentions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { threadSettings } from '$lib/stores/thread-settings.svelte'
+import { chatEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   settingsForNewAssistantTask,
@@ -24,6 +25,11 @@ import {
  * already in its composer and the caret at the end, so the user finishes the
  * sentence, presses send, and watches the agent work in a conversation they can
  * steer like any other.
+ *
+ * Three places a setup thread can live, resolved by what the user was doing:
+ * the project they were last on, one of a routine's own threads when the
+ * connection is the routine's, and a standalone chat when the user has no
+ * project at all, since installing a capability needs no repository.
  */
 
 /** The tag that grants the setup contract for the turn that carries it. */
@@ -69,6 +75,9 @@ export function utilitySetupDraft(request?: string | null): string {
  * thread covers a first run after cleanup. Only projects the caller passed in
  * are eligible, which is what keeps a setup thread out of the hidden containers
  * (chats, the assistant space, the global browser).
+ *
+ * A null answer is not a dead end: setup needs no repository, so the caller
+ * opens a chat instead (`openChatUtilitySetupThread`).
  */
 export function resolveUtilitySetupProject(
   projects: readonly Project[],
@@ -151,7 +160,29 @@ export async function openRoutineUtilitySetupThread(input: {
   return thread
 }
 
-/** One `thread:create` for both contexts: the only differences are the fields. */
+/**
+ * Create a setup thread as a standalone chat, for a user who has no project.
+ *
+ * A capability is installed into the app's own library, so setup needs no
+ * repository and a chat is a complete home for it. The chat carries the chat
+ * family's own settings (its model and permission tier, never the project
+ * view's), exactly as the app's own New chat does, and `project:ensureInbox`
+ * covers the first chat of a launch that has never held one.
+ */
+export async function openChatUtilitySetupThread(request?: string | null): Promise<Thread> {
+  const inbox = await invoke('project:ensureInbox')
+  const thread = await invoke('thread:create', {
+    projectId: inbox.id,
+    providerId: DEFAULT_HARNESS,
+    title: UTILITY_SETUP_THREAD_TITLE,
+    workingDirectory: '',
+    settings: chatEffectiveSettings(threadSettings.lastUsed)
+  })
+  openSeededSetupThread(thread, inbox, request)
+  return thread
+}
+
+/** One `thread:create` for all three contexts: the differences are the fields. */
 async function createSetupThread(input: {
   project: Project
   title: string
