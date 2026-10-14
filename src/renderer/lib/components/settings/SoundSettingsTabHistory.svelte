@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { RefreshCw, Trash2 } from '@lucide/svelte'
+  import { Check, Copy, RefreshCw, Trash2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import { formatDateTime } from '$shared/date-time-format'
-  import type { SpeechSettings } from '../../../../lib/speech/types'
+  import type { SpeechRecordingAttempt, SpeechSettings } from '../../../../lib/speech/types'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'
 
@@ -33,6 +34,41 @@
       return haystack.includes(normalizedQuery)
     })
   })
+
+  /**
+   * The transcript worth copying for an attempt. `finalTranscript` is the
+   * post-cleanup text, so fall back through the cleaned and raw stages, then
+   * the retry records, so a run that stopped halfway still has something to
+   * copy.
+   */
+  function attemptTranscript(attempt: SpeechRecordingAttempt): string {
+    const direct = attempt.finalTranscript ?? attempt.cleanedTranscript ?? attempt.rawTranscript
+    if (direct) return direct
+    for (let index = attempt.retries.length - 1; index >= 0; index -= 1) {
+      const retry = attempt.retries[index]
+      const text = retry.cleanedTranscript ?? retry.rawTranscript
+      if (text) return text
+    }
+    return ''
+  }
+
+  let copiedId = $state<string | null>(null)
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function copyTranscript(attempt: SpeechRecordingAttempt): Promise<void> {
+    const text = attemptTranscript(attempt)
+    if (!text) return
+    try {
+      await copyText(text, null)
+      copiedId = attempt.id
+      clearTimeout(copyResetTimer)
+      copyResetTimer = setTimeout(() => (copiedId = null), 1500)
+    } catch {
+      // Clipboard unavailable   the button simply stays idle.
+    }
+  }
+
+  $effect(() => () => clearTimeout(copyResetTimer))
 
   async function saveHistoryLimit(
     event: Event & { currentTarget: HTMLInputElement }
@@ -106,6 +142,19 @@
               ><RefreshCw size={13} aria-hidden="true" /></button
             >
           {/if}
+          <button
+            type="button"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated disabled:opacity-40"
+            title="Copy transcription"
+            aria-label="Copy transcription"
+            disabled={!attemptTranscript(attempt)}
+            onclick={() => void copyTranscript(attempt)}
+            >{#if copiedId === attempt.id}<Check
+                size={13}
+                class="text-success"
+                aria-hidden="true"
+              />{:else}<Copy size={13} aria-hidden="true" />{/if}</button
+          >
           <button
             type="button"
             class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
