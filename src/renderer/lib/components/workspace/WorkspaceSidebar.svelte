@@ -58,7 +58,8 @@
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
     filterThreadsByQuery,
-    groupThreadsByStatus
+    groupThreadsByStatus,
+    threadHasVisibleWork
   } from './workspace-thread-helpers'
   import { countThreadStates } from '$lib/thread-state-counts'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
@@ -546,7 +547,21 @@
                   {#each otherBuckets as bucket (bucket.id)}
                     {@const pinnedCount = scopeState.threadsFor(bucket.id, 'pinned').length}
                     {@const todoCount = scopeState.threadsFor(bucket.id, 'todo').length}
-                    {@const workingCount = scopeState.threadsFor(bucket.id, 'working').length}
+                    {@const workingThreads = scopeState.threadsFor(bucket.id, 'working')}
+                    <!-- A paused or parked thread shares the board's `working`
+                         slice, so split the slice apart: only genuinely live
+                         work earns the blue mark, and a retry or an attention
+                         park keeps its own amber mark instead of hiding inside
+                         the working count. -->
+                    {@const workingCount = workingThreads.filter((thread) =>
+                      threadHasVisibleWork(thread)
+                    ).length}
+                    {@const attentionCount = workingThreads.filter(
+                      (thread) => thread.status === 'awaiting_approval'
+                    ).length}
+                    {@const retryCount = workingThreads.filter(
+                      (thread) => thread.status === 'working-paused'
+                    ).length}
                     {@const issueCount = scopeState.threadsFor(bucket.id, 'issue').length}
                     {@const unreadCount = scopeState.threadsFor(bucket.id, 'unread').length}
                     <div
@@ -567,6 +582,18 @@
                           {/if}
                           {#if workingCount > 0}
                             <StatusBadge stage="working" title="Working threads" />
+                          {/if}
+                          {#if attentionCount > 0}
+                            <StatusBadge
+                              tone="attention"
+                              title="Threads that need attention"
+                            />
+                          {/if}
+                          {#if retryCount > 0}
+                            <StatusBadge
+                              tone="working-paused"
+                              title="Threads waiting to retry"
+                            />
                           {/if}
                           {#if issueCount > 0}
                             <StatusBadge stage="issue" title="Issue threads" />

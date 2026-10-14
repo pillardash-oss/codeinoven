@@ -1,5 +1,10 @@
 import { Clock } from '@lucide/svelte'
-import { isThreadAwaitingUser, isThreadWorking, type Thread } from '$shared/types'
+import {
+  isThreadAwaitingUser,
+  isThreadRetryPaused,
+  isThreadWorking,
+  type Thread
+} from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import type { ActionStatusBadge } from '$lib/actions/types'
@@ -15,6 +20,12 @@ import type { ActionStatusBadge } from '$lib/actions/types'
  * the change that leaves the state   reading or opening the thread never
  * clears it.
  *
+ * A thread paused on a scheduled retry (`working-paused`, a rate limit or
+ * provider wait) is never working either, for the same reason: its session
+ * stays bound and reports `waiting` while it parks, so the live run flag would
+ * otherwise paint an amber retry as an active blue run on every surface. The
+ * paused status is the authority until the retry fires or the user resumes it.
+ *
  * Otherwise, once the run state has been settled by a live session (a mounted
  * ThreadView or streamed activity) that flag is authoritative   a stale
  * persisted `planning`/`executing` status must not keep the spinner alive after
@@ -24,7 +35,7 @@ import type { ActionStatusBadge } from '$lib/actions/types'
  * working on one surface and idle on another.
  */
 export function isThreadLiveWorking(thread: Thread): boolean {
-  if (isThreadAwaitingUser(thread)) return false
+  if (isThreadAwaitingUser(thread) || isThreadRetryPaused(thread)) return false
   return agentRuns.hasSettled(thread.projectId, thread.id)
     ? agentRuns.isBusy(thread.projectId, thread.id)
     : Boolean(thread.sessionId) && isThreadWorking(thread)
