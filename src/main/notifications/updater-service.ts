@@ -17,6 +17,7 @@ import {
   INSTALL_ATTEMPT_LIMIT,
   INSTALL_DISPATCH_FILE,
   INSTALL_FAILURE_FILE,
+  isRunningNewestBuild,
   nextFailureState,
   nextInstallPermitted,
   purgeAbandonedInstallStaging,
@@ -176,6 +177,20 @@ export class UpdaterService {
     })
 
     autoUpdater.on('update-available', (info) => {
+      // A stale channel can make the feed offer a build the app already has, or
+      // even an older one (a nightly of the release that is already installed).
+      // Handing that to the installer re-downloads and re-runs it on every
+      // launch, so it is dropped before any download is started. See
+      // `isRunningNewestBuild`.
+      if (isRunningNewestBuild(app.getVersion(), info.version)) {
+        Logger.dev('Updater: offered update is not newer than the running build; ignoring', {
+          running: app.getVersion(),
+          offered: info.version
+        })
+        this.pendingUpdateInfo = null
+        this.updateState({ state: 'idle', blockedReason: undefined })
+        return
+      }
       Logger.dev('Updater: update available', info)
       this.pendingUpdateInfo = {
         version: info.version,
@@ -497,18 +512,23 @@ export class UpdaterService {
         if (timeout) clearTimeout(timeout)
       })
       const nightly = config.updateChannel === 'nightly'
-      const channel = nightly ? 'nightly' : null
+      // electron-updater's channel setter accepts only a string; its stable feed
+      // is `latest`. Assigning `null` here threw "Channel must be a string, but
+      // got: null", which the catch below swallowed and left the updater on
+      // whatever channel the previous run had set.
+      const channel = nightly ? 'nightly' : 'latest'
       this.activeChannel = nightly ? 'nightly' : 'stable'
-      if (autoUpdater.channel !== channel) {
-        autoUpdater.channel = channel
-        Logger.dev('Updater: channel set to', channel ?? 'latest')
-      }
       // Nightlies are published as semver-lower prereleases on a non-latest tag
       // (`vX.Y.Z-nightly.N`), so the GitHub provider only finds their feed file
       // when prereleases are allowed. Without this it resolves the latest stable
       // release, whose artifacts are `latest-*.yml`, and 404s on `nightly-*.yml`.
-      // Re-assert every check so opting back out to stable clears it too.
+      // Re-asserted on every check so opting back out to stable clears it even
+      // when the channel value itself did not change.
       autoUpdater.allowPrerelease = nightly
+      if (autoUpdater.channel !== channel) {
+        autoUpdater.channel = channel
+        Logger.dev('Updater: channel set to', channel)
+      }
     } catch (error: unknown) {
       Logger.error('Updater: failed to read update channel', error)
     }

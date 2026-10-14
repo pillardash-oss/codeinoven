@@ -113,6 +113,27 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
+ * Whether the build the app is running is already the newest the feed resolved
+ * for its channel, so an offered update must not be downloaded or installed
+ * again.
+ *
+ * electron-updater is left as the authority on "is there something newer", but
+ * when the channel it was left on is stale (the setting read failed and the
+ * previous channel stayed in place) it can offer a prerelease that is older
+ * than the release already installed: `0.5.61-nightly.2` is lower than
+ * `0.5.61`, and handing it to the installer is exactly what made a launch
+ * re-download and replay the same install on every start. Nothing equal to or
+ * older than the running build is ever an update, so this is the last word that
+ * stops the loop before a download begins.
+ */
+export function isRunningNewestBuild(
+  runningVersion: string,
+  offeredVersion: string
+): boolean {
+  return compareVersions(runningVersion, offeredVersion) >= 0
+}
+
+/**
  * Decide what a dispatch record means now that we know which version is
  * running. A version at or past the dispatched one means the install landed
  * (a user installing something even newer counts as applied); anything older
