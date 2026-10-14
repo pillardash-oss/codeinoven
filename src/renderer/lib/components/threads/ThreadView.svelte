@@ -243,6 +243,7 @@
     AgentEvent,
     AgentContextUsage,
     AgentHarnessUsage,
+    ProviderModel,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -1791,6 +1792,36 @@
 
     return actions
   })
+  /** The model currently selected for the thread, resolved from the catalog. */
+  const selectedModel = $derived.by((): ProviderModel | undefined => {
+    const provider =
+      providers.find(
+        (candidate) =>
+          candidate.id === settings.providerId && candidate.harnessId === settings.harnessId
+      ) ?? providers.find((candidate) => candidate.id === settings.providerId)
+    return provider?.models.find((candidate) => candidate.id === settings.modelId)
+  })
+  /**
+   * The context window the app has configured for a model: the thread's runtime
+   * override when the model advertises it, otherwise the catalog's window
+   * (which, for a custom base-URL provider, is the window the user authored).
+   *
+   * This is the window the meter must show. It deliberately outranks the window
+   * a harness reported on its latest turn, because a live harness session keeps
+   * reporting the window it started with: after a custom model's window (or a
+   * thread's runtime window) is edited, the old reading would otherwise keep
+   * driving the battery until the session restarts. The harness-reported window
+   * stays the fallback for models whose window the catalog does not state.
+   */
+  function configuredContextWindowFor(model: ProviderModel | undefined): number | undefined {
+    const runtimeWindow =
+      settings.contextWindow !== undefined &&
+      model?.contextWindows?.includes(settings.contextWindow)
+        ? settings.contextWindow
+        : undefined
+    return runtimeWindow ?? model?.contextWindow
+  }
+  const configuredContextWindow = $derived(configuredContextWindowFor(selectedModel))
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
@@ -1902,7 +1933,7 @@
         (provider) => provider.id === providerId && provider.harnessId === harnessId
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
-    const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
+    const contextWindow = configuredContextWindowFor(model) ?? latestMessage?.contextWindow
     // Only the explicit composed-request estimate is an estimate. Falling back
     // to the harness's own reported token total is a provider reading   the
     // last request's prompt plus completion is the occupancy the provider
@@ -2191,7 +2222,10 @@
           rateLimits: []
         }),
         rateLimits: currentUsage.rateLimits,
-        ...(currentUsage.contextWindow !== undefined
+        // A harness reading only supplies the window when the app has none for
+        // this model   a live session's stale window must never replace the
+        // window the user just configured.
+        ...(configuredContextWindow === undefined && currentUsage.contextWindow !== undefined
           ? { contextWindow: currentUsage.contextWindow }
           : {}),
         ...(currentUsage.contextUsed !== undefined
