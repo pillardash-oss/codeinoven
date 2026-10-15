@@ -41,10 +41,14 @@
   })
 
   let display = $derived(count > max ? `${max}+` : String(count))
-  /** A colour indicator is its own mark, so it carries no box: the swatches are
-   *  the state, and a border, a fill, a padding and a shadow around them only
-   *  added noise to the rail. A counted badge keeps its box, because there the
-   *  count is the mark and the box is what makes it legible over the glyph. */
+  /**
+   * A colour mark shows its swatches in place of a glyph.
+   *
+   * It wears the same box as a counted badge, for the same reason that badge
+   * wears one: the mark lands on the item's own glyph, and bare swatches and a
+   * bare digit over a foreground-coloured icon are unreadable at this size. The
+   * box is what makes the mark legible wherever the host anchors it.
+   */
   let colorOnly = $derived(Boolean(colors?.length))
   /**
    * The colour the count is written in: the mark's own.
@@ -59,17 +63,12 @@
 
 {#if count > 0}
   {@const Icon = icon}
-  <!-- A counted badge is a filled, bordered box, so it can afford the host's
-       overhang: over the rail's current-item surface it blends and reads as a
-       chip laid on top. A bare swatch mark cannot. The active item draws a 2px
-       accent bar down the item's right edge, and a mark that overhung the same
-       way would sit across that line and cut it, which reads as a glitch rather
-       than as a chip. The mark therefore cancels the overhang to sit inside its
-       own item's corner, with a little air before the accent. -->
+  <!-- Every indicator is a filled, bordered chip: the fill lifts the mark off
+       whatever it lands on, which on the rail is the item's own icon. -->
   <span
-    class="flex items-center gap-px text-[0.5625rem] font-semibold tabular-nums {colorOnly
-      ? 'mr-2'
-      : `h-3.5 min-w-3.5 justify-center border border-border bg-elevated px-1 shadow-sm ${toneClass}`} {className}"
+    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colorOnly
+      ? ''
+      : toneClass} {className}"
     role="status"
     aria-label={label}
     title={label}
