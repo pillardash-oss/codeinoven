@@ -15,15 +15,28 @@ class VideoPackagesStore {
   loading = $state(false)
   error = $state('')
   private unsubscribe: (() => void) | null = null
+  /**
+   * How many surfaces are currently reading this store.
+   *
+   * The state is app-wide but its listener is not: an install started from
+   * Settings has to reach a board that is already mounted, so the subscription
+   * outlives either surface alone. Mounting adds a reader and unmounting removes
+   * one, and the listener is dropped only when the last one goes.
+   */
+  private users = 0
 
   async load(): Promise<void> {
+    this.users += 1
+    this.unsubscribe ??= subscribe('video:packages:progress', (state) => this.applyProgress(state))
+    await this.read()
+  }
+
+  /** Read the state once, without claiming a reader. */
+  private async read(): Promise<void> {
     this.loading = true
     this.error = ''
     try {
       this.state = await invoke('video:packages:state')
-      this.unsubscribe ??= subscribe('video:packages:progress', (state) =>
-        this.applyProgress(state)
-      )
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
     } finally {
@@ -41,7 +54,7 @@ class VideoPackagesStore {
         reportError(cause, 'The optional video pack could not be installed.')
       }
     }
-    await this.load()
+    await this.read()
   }
 
   async remove(): Promise<void> {
@@ -50,7 +63,7 @@ class VideoPackagesStore {
     } catch (cause) {
       reportError(cause, 'The optional video pack could not be removed.')
     }
-    await this.load()
+    await this.read()
   }
 
   async cancel(): Promise<void> {
@@ -62,6 +75,8 @@ class VideoPackagesStore {
   }
 
   dispose(): void {
+    this.users = Math.max(0, this.users - 1)
+    if (this.users > 0) return
     this.unsubscribe?.()
     this.unsubscribe = null
   }

@@ -29,9 +29,19 @@
     projectId: string
     threadId: string
     directory: string
+    /**
+     * The board's own composition view, when it has one.
+     *
+     * A board plays its composition in a view of its own, and the thread may also
+     * have a browser tab on the same folder. Naming the view is what makes the
+     * timeline read the playhead of the page the user is actually watching rather
+     * than whichever composition tab reported last. Absent when the board is not
+     * playing anything, and the timeline then falls back to the thread's tab.
+     */
+    tabId?: string
   }
 
-  let { projectId, threadId, directory }: Props = $props()
+  let { projectId, threadId, directory, tabId = '' }: Props = $props()
 
   /** How often the playhead catches up with the page that owns the clock. */
   const POLL_MS = 200
@@ -55,7 +65,11 @@
   let editing = $state<{ id: string; seconds: number } | null>(null)
   let anchor = $state<{ x: number; y: number } | null>(null)
 
-  const tab = $derived(videoTimelineState.compositionIn(projectId, threadId, directory))
+  const tab = $derived(
+    tabId !== ''
+      ? videoTimelineState.compositionByTab(tabId)
+      : videoTimelineState.compositionIn(projectId, threadId, directory)
+  )
   const duration = $derived(
     Math.max(manifest?.duration ?? tab?.duration ?? playback?.duration ?? 0, 0.001)
   )

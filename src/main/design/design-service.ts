@@ -678,10 +678,12 @@ export class DesignService {
    *
    * A design's screen is opened in a tab of its own, so clicking one canvas never
    * replaces another canvas's tab (see `BrowserService.openDesignScreen`); a
-   * composition keeps the thread's tab, because its board holds one canvas. The
-   * folder is validated and the browser opens it in the background, then the tab
-   * is revealed: revealing is one mechanism, not two, so an existing tab and a
-   * brand-new one behave the same way for the user.
+   * composition is played by the video board's own view, which never enters the
+   * tab strip, so a user watching and editing in the board never has to open or
+   * find the browser. The folder is validated and the page is loaded in the
+   * background, then the tab is revealed where revealing applies: revealing is one
+   * mechanism, not two, so an existing tab and a brand-new one behave the same way
+   * for the user.
    */
   async open(
     projectId: string,
@@ -707,7 +709,11 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal,
-      tab: kind === 'design' ? 'screen' : 'thread'
+      // A composition is played by the board's own view, never the thread's
+      // browser tab: that is what lets a user watch and edit without opening the
+      // browser. A design screen keeps its own tab, and a design's other routes
+      // keep the thread's.
+      tab: kind === 'design' ? 'screen' : 'board'
     })
     if (forcedKind === undefined) {
       this.designs.upsert({
@@ -756,13 +762,15 @@ export class DesignService {
   /**
    * A small picture of the work, for the coordinator's preview.
    *
-   * It is shown in the thread's own tab, off screen, then captured. That is
-   * deliberate: the capture has to come from a page the app is actually rendering,
-   * and a hidden tab is the same page the user would see, at the same size, without
-   * a second browser and without stealing focus. A composition is captured as a
-   * still at its opening, because a picture for a board must not start playback: a
-   * frame is what the composition exists to draw, and the user asks for the moving
-   * one by clicking Preview.
+   * It is shown off screen, then captured. That is deliberate: the capture has to
+   * come from a page the app is actually rendering, and a hidden page is the same
+   * page the user would see, at the same size, without a second browser and
+   * without stealing focus. A design is captured in the thread's tab; a
+   * composition is captured in the video board's own view, which never enters the
+   * tab strip, so a picture of a composition costs the user no browser tab. A
+   * composition is captured as a still at its opening, because a picture for a
+   * board must not start playback: a frame is what the composition exists to
+   * draw, and the user asks for the moving one by watching it in the board.
    */
   async thumbnail(
     projectId: string,
@@ -787,7 +795,10 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal: false,
-      tab: 'thread',
+      // A composition is pictured through the board's own view, so a still of it
+      // never opens a browser tab the user did not ask for. A design keeps the
+      // thread's tab, which is where its canvas and screens live.
+      tab: kind === 'video' ? 'board' : 'thread',
       // A board's picture of a composition is a still, so selecting a video thread
       // must not start playback and sound in a tab the user never asked for. The
       // design kind has no timeline to freeze, so it is unaffected.
@@ -1042,14 +1053,14 @@ export class DesignService {
     attention: 'focus' | 'background'
     reveal: boolean
     /**
-     * Which tab the preview may use, design only.
+     * Which view the work may use.
      *
-     * The board's open is the user choosing a screen, so every screen keeps its
-     * own tab; the capability's own preview and both capture paths share the
-     * thread's. A composition board holds one canvas, so it keeps the thread's
-     * tab and the video path ignores this.
+     * The board's open is the user choosing a page, so every design screen keeps
+     * its own tab. A composition is played by the board's own view, which is a
+     * registered tab that never enters the tab strip. The capability's own
+     * preview and every capture share the thread's browser tab.
      */
-    tab: 'thread' | 'screen'
+    tab: 'thread' | 'screen' | 'board'
     /**
      * Load a still at this second instead of the moving composition. Video only:
      * a design is shown as it is, and the design path ignores this.
@@ -1066,13 +1077,18 @@ export class DesignService {
       defaultRoot: currentWorkRoot(input.kind),
       attention: input.attention,
       reveal: input.reveal,
-      posterSeconds: input.posterSeconds,
-      tab: input.tab
+      posterSeconds: input.posterSeconds
     }
     const result =
       input.kind === 'video'
-        ? await openVideoPreview(deps, target)
-        : await openDesignPreview(deps, target)
+        ? await openVideoPreview(deps, {
+            ...target,
+            mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
+          })
+        : await openDesignPreview(deps, {
+            ...target,
+            tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
+          })
     return {
       directory: result.directory,
       entry: result.entry,

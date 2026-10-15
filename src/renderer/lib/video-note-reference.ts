@@ -34,20 +34,31 @@ export interface VideoNoteContext {
  *
  * Deliberately plain `key: value` lines rather than JSON: the same text is
  * rendered in the composer popover, and a block of readable lines is what a
- * human wants there too. A caption the moment falls inside is quoted because it
- * is the most direct answer to "what is on screen here".
+ * human wants there too. A caption the moment falls inside is quoted with its
+ * exact bounds, and the composition's controls are listed by the key the
+ * document and the render function address, because a note is only as precise as
+ * the vocabulary it hands the reader: naming "the accent control" needs
+ * `accent` to be a name the model already has.
  */
 export function videoNoteDescriptor(seconds: number, context: VideoNoteContext): string {
   const fps = context.composition?.fps ?? null
   const duration = context.composition?.duration ?? null
   const caption = videoCaptionAt(context.document, seconds)
+  // The composition's own vocabulary, capped exactly as the document caps it.
+  const controlNames = (context.document?.controls ?? [])
+    .slice(0, 32)
+    .map((control) => `${control.key}=${JSON.stringify(control.label)}`)
+    .join(', ')
   const lines = [
     `Composition: ${context.directory}`,
     `timecode: ${videoTimecode(seconds)}`,
     `seconds: ${Number.isFinite(seconds) ? Math.max(0, seconds).toFixed(3) : '0.000'}`,
     fps ? `frame: ${videoFrameAt(seconds, fps)} (at ${fps} fps)` : null,
     duration !== null ? `duration: ${duration}` : null,
-    caption ? `caption: ${JSON.stringify(caption.text)}` : null
+    caption
+      ? `caption: ${JSON.stringify(caption.text)} (${caption.start.toFixed(3)}s to ${caption.end.toFixed(3)}s)`
+      : null,
+    controlNames ? `controls: ${controlNames}` : null
   ].filter((line): line is string => line !== null)
   return lines.join('\n').slice(0, MAX_DESCRIPTOR_LENGTH)
 }

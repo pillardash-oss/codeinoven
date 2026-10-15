@@ -283,6 +283,7 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import { designScreenEntryFromUrl } from '../../lib/design/screens'
+import { compositionBoardTabId } from './browser-service/composition-board-tab'
 import { designScreenTabId } from './browser-service/design-screen-tab'
 
 /**
@@ -2717,6 +2718,55 @@ export class BrowserService {
   }
 
   /**
+   * Show one composition in the video board's own view.
+   *
+   * The board is a player rather than a page the user opened, so this is the one
+   * open path that deliberately sends no `browser:openRequested`: that event is
+   * what puts a tab in the strip, and a composition the user is watching in the
+   * board must not appear as a second browser tab they never asked for. The view
+   * is still an ordinary registered tab, so the tab-mark pipeline marks it as a
+   * composition and the transport drives it exactly as it drives any other.
+   *
+   * The view is named from the composition ({@link compositionBoardTabId}), so
+   * coming back to the board finds the view it already had, and a page already
+   * showing the composition is left on it rather than reloaded: a reload resets
+   * the playhead of a composition the user is watching.
+   */
+  async showCompositionBoardTab(input: {
+    projectId: string
+    threadId: string
+    /** Project-relative folder of the composition, with forward slashes. */
+    directory: string
+    url: string
+  }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    const projectId = validateProjectId(input.projectId)
+    const threadId = validateThreadId(input.threadId)
+    const url = validateBrowserUrl(input.url)
+    const tabId = compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    const existing = this.tabs.get(tabId)
+    if (existing) {
+      // A view already on this page is the one being asked for again, so it is
+      // not reloaded. Anything else is a folder switch, and the new page loads
+      // over a view that is either on screen or staged offscreen.
+      if (this.tabUrl(tabId) === url) return { tabId, tab: 'reused' }
+      if (this.activeTabId !== tabId && !this.stage.isParked(existing.view)) {
+        // A view the parked cap evicted has no stage window left, so it is mounted
+        // again before it navigates, exactly as an agent's operation revives one.
+        this.parkTab(tabId)
+      }
+      this.load(tabId, url)
+      return { tabId, tab: 'reused' }
+    }
+    const tab = this.ensureTab(tabId, projectId, threadId)
+    tab.initialNavigationStarted = true
+    // Mount the view offscreen before anything else: the page must run whether or
+    // not the board is on screen to place it yet.
+    this.parkTab(tabId)
+    this.load(tabId, url)
+    return { tabId, tab: 'opened' }
+  }
+
+  /**
    * The URL a tab is showing right now, or null when it is gone.
    *
    * A preview asks this before loading something, because a page the tab already
@@ -3216,8 +3266,7 @@ export class BrowserService {
       if (
         owner &&
         action &&
-        ((action !== 'designUndo' && action !== 'designRedo') ||
-          this.canUseScreenHistory(owner.id))
+        ((action !== 'designUndo' && action !== 'designRedo') || this.canUseScreenHistory(owner.id))
       ) {
         this.runBrowserShortcut(owner.id, action)
         return

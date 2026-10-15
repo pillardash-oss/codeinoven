@@ -36,6 +36,15 @@ function compositionKey(projectId: string, threadId: string): string {
  */
 class VideoTimelineState {
   private readonly tabs = new SvelteMap<string, VideoCompositionTab>()
+  /**
+   * The same compositions, keyed by the view showing them.
+   *
+   * A board plays its composition in a view of its own, and the view is the only
+   * thing that identifies it when the thread also has a browser tab on the same
+   * folder. Keying by tab is what lets the board address its own page rather than
+   * whichever composition tab reported last.
+   */
+  private readonly byTabId = new SvelteMap<string, VideoCompositionTab>()
   private started = false
 
   /**
@@ -51,19 +60,22 @@ class VideoTimelineState {
     subscribe('browser:state', (state) => {
       const key = compositionKey(state.projectId, state.threadId)
       if (state.composition) {
-        this.tabs.set(key, {
+        const tab: VideoCompositionTab = {
           ...state.composition,
           tabId: state.tabId,
           projectId: state.projectId,
           threadId: state.threadId,
           url: state.url,
           boxId: state.boxId
-        })
+        }
+        this.tabs.set(key, tab)
+        this.byTabId.set(state.tabId, tab)
         return
       }
       // A tab that is no longer showing a composition must not keep answering
       // for one: the folder may have been replaced by a normal page.
       if (this.tabs.get(key)?.tabId === state.tabId) this.tabs.delete(key)
+      this.byTabId.delete(state.tabId)
     })
   }
 
@@ -80,6 +92,17 @@ class VideoTimelineState {
   ): VideoCompositionTab | null {
     const tab = this.compositionFor(projectId, threadId)
     return tab && tab.directory === directory ? tab : null
+  }
+
+  /**
+   * The composition one view is showing, or null when it is not a composition.
+   *
+   * The video board owns a view of its own and asks for it by identity, so the
+   * board plays the page it opened even while another composition tab exists for
+   * the same thread.
+   */
+  compositionByTab(tabId: string): VideoCompositionTab | null {
+    return this.byTabId.get(tabId) ?? null
   }
 
   /**
