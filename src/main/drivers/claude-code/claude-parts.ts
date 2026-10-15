@@ -161,7 +161,18 @@ export function messageFromAssistant(message: Record<string, unknown>): AgentMes
     if (part) parts.push(part)
   }
   const tokens = tokenUsage(message['usage'])
-  return { id: messageId, role: 'assistant', parts, createdAt: now, ...(tokens ? { tokens } : {}) }
+  // Claude Code reports the model that actually answered on every assistant
+  // record. Keep it beside the selected id: the conversation may run `default`
+  // or an alias, and only this id can be priced.
+  const reportedModel = string(message['model'])
+  return {
+    id: messageId,
+    role: 'assistant',
+    parts,
+    createdAt: now,
+    ...(tokens ? { tokens } : {}),
+    ...(reportedModel ? { pricingModelId: reportedModel } : {})
+  }
 }
 
 export function latestAssistant(context: CliLineParseContext): AgentMessage | undefined {

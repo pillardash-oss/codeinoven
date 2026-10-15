@@ -2246,6 +2246,8 @@
           providerId: row.providerId,
           ...(row.modelId ? { modelId: row.modelId } : {}),
           costUsd: row.costUsd,
+          pricedCostEvents: row.pricedCostEvents,
+          unavailableCostEvents: row.unavailableCostEvents,
           rateLimits: [],
           tokens: row.tokens,
           messageCount: row.messageCount,
@@ -2286,13 +2288,23 @@
       if (message.role !== 'assistant') continue
       const harnessId = message.harnessId ?? settings.harnessId
       const providerId = message.providerId ?? settings.providerId
-      const stepCost = message.parts.reduce(
-        (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
-        0
-      )
+      let stepCost = 0
+      let hasStepCost = false
+      for (const part of message.parts) {
+        if (part.type === 'step-finish' && typeof part.cost === 'number') {
+          stepCost += part.cost
+          hasStepCost = true
+        }
+      }
+      // An in-memory message carries no `cost_status`; a numeric cost (or a
+      // step-finish cost) is the only signal that it was priced. The stored
+      // thread rollup replaces these counts whenever a `harness_usage` row
+      // exists, so this fallback applies only to messages with no stored row.
+      const priced = typeof message.cost === 'number' || hasStepCost
       const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd += message.cost ?? stepCost
+        if (priced) entry.pricedCostEvents += 1
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
         if (message.credits) entry.credits = message.credits
         if (message.bankedResets) entry.bankedResets = message.bankedResets
@@ -2304,6 +2316,8 @@
         providerId,
         ...(message.modelId ? { modelId: message.modelId } : {}),
         costUsd: message.cost ?? stepCost,
+        pricedCostEvents: priced ? 1 : 0,
+        unavailableCostEvents: 0,
         rateLimits: message.rateLimits ?? [],
         ...(message.credits ? { credits: message.credits } : {}),
         ...(message.bankedResets ? { bankedResets: message.bankedResets } : {})
@@ -2317,6 +2331,8 @@
       const entry = tableByHarness[stored.harnessId]
       if (entry) {
         entry.costUsd += stored.costUsd
+        entry.pricedCostEvents += stored.pricedCostEvents
+        entry.unavailableCostEvents += stored.unavailableCostEvents
         if (stored.tokens) {
           entry.tokens = {
             input: (entry.tokens?.input ?? 0) + stored.tokens.input,
@@ -2341,6 +2357,8 @@
       const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd = stored.costUsd
+        entry.pricedCostEvents = stored.pricedCostEvents
+        entry.unavailableCostEvents = stored.unavailableCostEvents
         if (stored.modelId) entry.modelId = stored.modelId
         if (stored.tokens) entry.tokens = stored.tokens
         if (stored.messageCount !== undefined) entry.messageCount = stored.messageCount
@@ -2363,6 +2381,8 @@
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
+          pricedCostEvents: 0,
+          unavailableCostEvents: 0,
           rateLimits: usage.rateLimits,
           ...(usage.credits ? { credits: usage.credits } : {}),
           ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})

@@ -414,7 +414,7 @@ import {
   gateCuaDriverBehaviorPrompt
 } from '../../lib/agent-behavior'
 import type { CioPromptId } from '../../lib/cio-prompts'
-import { estimateTokenCostUsd } from '../providers/pricing'
+import { estimateModelCost } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
 import { OpenUsageClient, openUsageProviderCandidates } from '../usage/openusage-client'
 import { CustomProviderUsageClient } from '../providers/custom-provider-usage-client'
@@ -28901,7 +28901,7 @@ export class ChatEngine {
     }
     const estimated =
       cost === null
-        ? estimateTokenCostUsd(
+        ? estimateModelCost(
             input.settings.modelId,
             input.settings.providerId,
             reported
@@ -28926,7 +28926,10 @@ export class ChatEngine {
                     cacheWrite: 0,
                     total: inputTokens + outputTokens
                   }
-                : undefined
+                : undefined,
+            // The window that governed the run is the run's own timestamp, not
+            // the moment the record is written.
+            new Date(details.createdAt)
           )
         : null
     if (cost !== null) {
@@ -28946,12 +28949,17 @@ export class ChatEngine {
       this.usageRepo.recordEvent({
         ...details,
         costStatus: 'estimated',
-        costUsd: estimated,
+        costUsd: estimated.costUsd,
+        // The record keeps its own inputs: which entry priced it, the rates it
+        // used, the snapshot version, and the window the run fell in.
         pricingProvenance: {
           source: 'model_catalog',
-          sourceId: input.settings.modelId,
+          sourceId: estimated.entryId,
           currency: 'USD',
-          capturedAt: details.createdAt
+          capturedAt: details.createdAt,
+          rates: estimated.rates,
+          ...(estimated.priceVersion === null ? {} : { priceVersion: estimated.priceVersion }),
+          ...(estimated.window ? { priceWindow: estimated.window } : {})
         }
       })
       return

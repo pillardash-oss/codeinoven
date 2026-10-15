@@ -61,12 +61,41 @@ export type UsageTotalSemantics =
   | 'provider_defined'
   | 'unavailable'
 
+/** Per-1M USD rates a stored dollar was derived from. */
+export interface UsagePriceRates {
+  inputUsdPer1M: number
+  outputUsdPer1M: number
+  cacheReadUsdPer1M: number
+  cacheWriteUsdPer1M: number
+  reasoningUsdPer1M: number
+}
+
+/** Time-of-day window that governed one run's rates. */
+export interface UsagePriceWindow {
+  /** Label of the pricing scheme, e.g. `DeepSeek V4`. */
+  label: string
+  /** Multiplier the window declares; 1 when the source publishes no rate for it. */
+  multiplier: number
+  /** False when the run fell in the window but nothing publishes its rate. */
+  rated: boolean
+}
+
 /** Source used to calculate or verify an event's monetary cost. */
 export interface UsagePricingProvenance {
   source: 'provider' | 'model_catalog' | 'utility_catalog' | 'manual'
   sourceId?: string
   currency: 'USD'
   capturedAt: number
+  /**
+   * Rates the dollar was derived from, present for catalog prices. Without them
+   * a recorded cost can only be read, never reproduced, so the snapshot ships
+   * its own inputs.
+   */
+  rates?: UsagePriceRates
+  /** Fetch time of the price snapshot the rates came from, when the loader knows it. */
+  priceVersion?: number
+  /** Time-of-day window applied to the run, when the model bills by hour. */
+  priceWindow?: UsagePriceWindow
 }
 
 /** Provider-neutral token categories. Null means the provider did not report the category. */
@@ -254,6 +283,14 @@ export interface AgentHarnessUsage {
   modelId?: string
   /** Total USD this harness consumed on the thread, when the harness reports cost. */
   costUsd: number
+  /**
+   * Ledger events for this harness whose cost was priced (`known` or
+   * `estimated`). A priced cost of 0 is a real provider-reported zero, so it
+   * renders as `$0.00` rather than "cost not reported".
+   */
+  pricedCostEvents: number
+  /** Ledger events for this harness whose cost was never reported. */
+  unavailableCostEvents: number
   /** Latest quota windows reported by this harness on the thread. */
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported by this harness on the thread. */
@@ -339,6 +376,13 @@ export interface HarnessUsage {
   messageCount: number
   /** Cumulative USD cost, when the harness reports cost. */
   costUsd: number
+  /**
+   * Ledger events for this harness whose cost was priced (`known` or
+   * `estimated`); a priced 0 is a real reported zero.
+   */
+  pricedCostEvents: number
+  /** Ledger events for this harness whose cost was never reported. */
+  unavailableCostEvents: number
   /** Cumulative token accounting across this harness's messages on the thread. */
   tokens: AgentTokenUsage
   /** Approximate cumulative wall-clock time spent in turns attributed to this harness, ms. */

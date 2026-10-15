@@ -314,6 +314,14 @@ export interface AgentMessage {
    *  running total on every refresh (it doubled each request until it overflowed
    *  the ledger). Display-only; never summed with `cost`. */
   sessionCostUsd?: number
+  /**
+   * Model id the harness itself reported for this response, when it differs
+   * from the id the turn was started with. Claude Code answers `default` or an
+   * alias (`haiku`, `sonnet`) while its assistant records name the real model,
+   * so pricing reads this field and reporting keeps `modelId` as selected.
+   * Kept transient; not persisted.
+   */
+  pricingModelId?: string
   tokens?: AgentTokenUsage
   /** Canonical accounting payload; raw provider evidence and semantics are preserved. */
   normalizedUsage?: NormalizedUsage

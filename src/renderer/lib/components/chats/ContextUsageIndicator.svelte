@@ -70,6 +70,17 @@
       ? undefined
       : Math.max(0, Math.min(100, usage.contextPercent))
   )
+  /**
+   * A zero total only goes unreported when something on the thread was never
+   * priced. A thread whose every cost event is priced at zero is a known zero,
+   * and saying "Cost not reported" over it states the opposite of the record.
+   */
+  const costTotalKnown = $derived(
+    (usage?.costUsd ?? 0) > 0 ||
+      (efficiencyKpis !== undefined &&
+        efficiencyKpis.pricedCostEvents > 0 &&
+        efficiencyKpis.unavailableCostEvents === 0)
+  )
   const fillClass = $derived(
     boundedPercent === undefined
       ? 'bg-overlay'
@@ -226,7 +237,9 @@
       <AgentIcon agentId={entry.harnessId} size={16} />
       <span class="min-w-0 truncate text-[0.625rem] font-medium text-foreground">{name}</span>
       <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed">
-        {entry.costUsd > 0 ? `${formatMoney(entry.costUsd)} consumed` : 'Cost not reported'}
+        {entry.costUsd > 0 || entry.pricedCostEvents > 0
+          ? `${formatMoney(entry.costUsd)} consumed`
+          : 'Cost not reported'}
       </span>
     </button>
     {#if !collapsed}
@@ -273,7 +286,7 @@
     <div>
       <p class="text-xs font-semibold text-foreground">Usage</p>
       <p class="mt-0.5 text-[0.625rem] text-dimmed">
-        {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
+        {usage && costTotalKnown ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
       </p>
     </div>
     <div class="flex items-center gap-2">
