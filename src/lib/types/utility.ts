@@ -60,8 +60,6 @@ export interface McpOAuthConfig {
   resource?: string
   /** Epoch ms the stored access token expires; absent when the server issued no lifetime. */
   expiresAt?: number
-  /** Who authorized, when the authorization server identifies the account. */
-  accountLabel?: string
   /** Epoch ms of the last completed authorization. */
   authorizedAt?: number
 }

@@ -102,7 +102,8 @@ export class McpOAuthService {
     const clientId = oauth?.clientId ?? state?.clientInformation?.client_id
     const scope = tokens?.scope ?? oauth?.scope
     const resource = state?.discovery?.resourceMetadata?.resource ?? oauth?.resource
-    const expiresAt = state?.tokensExpireAt ?? oauth?.expiresAt
+    const expiresAt = state?.tokensExpireAt ?? (tokens ? oauth?.expiresAt : undefined)
+    const accountLabel = accountLabelFrom(tokens)
     const error = this.lastErrors.get(utilityId)
     return {
       utilityId,
@@ -123,6 +124,7 @@ export class McpOAuthService {
       ...(scope ? { scope } : {}),
       ...(resource ? { resource } : {}),
       ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(accountLabel ? { accountLabel } : {}),
       ...(oauth?.authorizedAt === undefined ? {} : { authorizedAt: oauth.authorizedAt }),
       ...(error ? { error } : {}),
       secureStorageAvailable: this.dependencies.vault.isAvailable()
@@ -561,6 +563,34 @@ export class McpOAuthService {
     if (!utility) throw new Error(`Utility not found: ${utilityId}`)
     if (utility.kind !== 'mcp') throw new Error('Only an MCP server can be authorized with OAuth')
     return utility
+  }
+}
+
+/**
+ * Who the authorization server says authorized this app, for display.
+ *
+ * The identity is read from the id token's own claims and is deliberately never
+ * verified and never used for a decision: it exists so the Utilities page can
+ * say which account a grant belongs to (two workspaces of the same product are
+ * otherwise indistinguishable). A token whose payload is not readable simply has
+ * no label.
+ */
+function accountLabelFrom(tokens: OAuthTokens | undefined): string | undefined {
+  const payload = tokens?.id_token?.split('.')[1]
+  if (!payload) return undefined
+  try {
+    const claims: unknown = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'))
+    if (claims === null || typeof claims !== 'object' || Array.isArray(claims)) return undefined
+    const record = claims as Record<string, unknown>
+    for (const key of ['email', 'preferred_username', 'name', 'sub']) {
+      const value = record[key]
+      if (typeof value !== 'string') continue
+      const trimmed = value.trim()
+      if (trimmed && !/\p{Cc}/u.test(trimmed)) return trimmed
+    }
+    return undefined
+  } catch {
+    return undefined
   }
 }
 

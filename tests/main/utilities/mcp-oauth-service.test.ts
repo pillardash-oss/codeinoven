@@ -129,7 +129,8 @@ async function startFakeOAuthServer(): Promise<FakeOAuthServer> {
         token_type: 'Bearer',
         expires_in: 3600,
         refresh_token: 'refresh-token',
-        scope: 'tools:read'
+        scope: 'tools:read',
+        id_token: `header.${base64UrlJson({ email: 'operator@example.com' })}.signature`
       })
     }
     if (url.pathname === '/mcp') {
@@ -211,6 +212,10 @@ function firstString(value: unknown): string {
 
 function pkceChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url')
+}
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf-8').toString('base64url')
 }
 
 function asMcpUtility(utility: UtilityDefinition | null): UtilityDefinitionFor<'mcp'> {
@@ -295,6 +300,8 @@ describe('McpOAuthService', () => {
     expect(status.clientId).toBe('codeinoven-test-client')
     expect(status.scope).toBe('tools:read')
     expect(status.resource).toBe(fake.mcpUrl)
+    // The account is read from the id token for display only.
+    expect(status.accountLabel).toBe('operator@example.com')
     expect(status.authorizedAt).toBeTypeOf('number')
     expect(fake.registrations).toBe(1)
     expect(fake.tokenGrants).toEqual(['authorization_code'])

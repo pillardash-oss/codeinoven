@@ -16,7 +16,6 @@ const MCP_OAUTH_KEYS = new Set([
   'scope',
   'resource',
   'expiresAt',
-  'accountLabel',
   'authorizedAt'
 ])
 
@@ -51,7 +50,6 @@ export function parseMcpOAuthConfig(value: unknown): McpOAuthConfig {
     ...(confidentialClient === undefined ? {} : { confidentialClient }),
     ...optional('scope', record['scope'], 4_000),
     ...optional('resource', record['resource'], 2_000),
-    ...optional('accountLabel', record['accountLabel'], 200),
     ...timestamp('expiresAt', record['expiresAt']),
     ...timestamp('authorizedAt', record['authorizedAt'])
   }
