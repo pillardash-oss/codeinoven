@@ -93,6 +93,7 @@ export class RoutineSchedulerService {
   private readonly skipped: RoutineSkipStore
   private readonly now: () => number
   private timer: ReturnType<typeof setInterval> | null = null
+  private started = false
   private startedAt = 0
   private changeListener: (() => void) | null = null
   private tickChain: Promise<void> = Promise.resolve()
@@ -122,6 +123,7 @@ export class RoutineSchedulerService {
 
   /** Load persisted missed runs, detect app-closed misses, and arm the ticker. */
   async start(): Promise<void> {
+    this.started = true
     await Promise.all([this.missed.load(), this.skipped.load()])
     this.missed.pruneSettled()
     // Drop records that predate their schedule (or whose task is gone) before
@@ -132,8 +134,44 @@ export class RoutineSchedulerService {
     // Detect misses that happened while the app was closed before ticking, so a
     // slot that comes due only after startup is fired, not mis-recorded.
     this.evaluate(false)
-    this.timer = setInterval(() => this.tick(), TICK_MS)
+    this.refreshSchedule()
     this.notifyChange()
+  }
+
+  /**
+   * Arm or clear the tick for the schedule as it is now.
+   *
+   * The tick's whole job is firing a due run or recording one that was missed,
+   * and both need a task that can still come due. With none in the tree there is
+   * nothing to look at, so the interval is cleared instead of querying an empty
+   * schedule every thirty seconds. Routine and task writes recompute it:
+   * `assistant-handlers` calls this after every mutation that can change the
+   * answer, and the schedule is re-read here rather than taken from the caller.
+   */
+  refreshSchedule(): void {
+    if (!this.started) return
+    const shouldRun = this.hasTaskOnTheClock()
+    if (shouldRun && this.timer === null) {
+      this.timer = setInterval(() => this.tick(), TICK_MS)
+    } else if (!shouldRun && this.timer !== null) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+  }
+
+  /**
+   * Whether any task is on the clock, which is the only reason the tick exists.
+   *
+   * A read that fails keeps the tick: a missed slot costs the user far more than
+   * a tick that had nothing to do.
+   */
+  private hasTaskOnTheClock(): boolean {
+    try {
+      return this.deps.routines.listAssistantTasks().some((task) => this.canComeDue(task))
+    } catch (error) {
+      Logger.error('Routine schedule could not be read', error)
+      return true
+    }
   }
 
   /** Register a callback fired whenever scheduler ledger state changes. */
@@ -433,6 +471,7 @@ export class RoutineSchedulerService {
   }
 
   stop(): void {
+    this.started = false
     if (this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
@@ -455,15 +494,26 @@ export class RoutineSchedulerService {
       })
   }
 
-  private evaluateTask(task: Thread, allowDispatch: boolean): void {
+  /**
+   * Whether a task can still come due: not paused, with a how-to to run, and
+   * with an active schedule. The tick arms on this and clears on its absence,
+   * and {@link evaluateTask} opens with the same three checks, so the clock can
+   * never stop while there is work for it to look at.
+   */
+  private canComeDue(task: Thread): boolean {
     // A paused routine keeps its tasks and how-to but never fires.
-    if (this.deps.routines.isTaskPaused(task)) return
+    if (this.deps.routines.isTaskPaused(task)) return false
     // A routine with no how-to cannot run: there is nothing to fire and nothing
     // to miss until it is set up. Gating here also keeps a half-configured
     // routine from badging a "missed run" for a slot it could never have run.
-    if (this.deps.routines.resolveTaskHowTo(task).trim() === '') return
+    if (this.deps.routines.resolveTaskHowTo(task).trim() === '') return false
+    return scheduleIsActive(this.deps.routines.resolveTaskSchedule(task))
+  }
+
+  private evaluateTask(task: Thread, allowDispatch: boolean): void {
+    if (!this.canComeDue(task)) return
     const schedule = this.deps.routines.resolveTaskSchedule(task)
-    if (!scheduleIsActive(schedule)) return
+    if (!schedule) return
     const now = this.now()
     const due = previousDueAt(schedule, now)
     if (due === null) return

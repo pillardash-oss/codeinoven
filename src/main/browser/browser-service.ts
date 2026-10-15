@@ -861,15 +861,6 @@ export class BrowserService {
     this.overlay = new BrowserOverlayWindow(window, undefined, (host) =>
       this.nativeToasts.setHost(host ?? window)
     )
-    // Start the shared host loading now, alongside the rest of the service's
-    // hydration, instead of at the end of the post-paint boot. The first modal
-    // of a session can open as soon as the renderer is interactive, and a host
-    // whose document only begins loading on that gesture cannot confirm the
-    // projection inside its window: the renderer falls back to the app window
-    // and a live page is hidden behind it. `warmOverlay` stays as the
-    // idempotent call from the boot. See `native-dock-controller.svelte.ts`
-    // `ackDeadline` for the renderer's half of this guarantee.
-    this.overlay.warmForSession()
     // Chromium drops its own status bubble when the window loses the pointer's
     // context; so does this. The same moment captures which surface held the
     // keyboard, so reactivating the window can hand the page its keyboard back;
@@ -1178,19 +1169,6 @@ export class BrowserService {
   async flushTabHistory(): Promise<void> {
     for (const [tabId, tab] of this.tabs) this.captureTabHistory(tabId, tab)
     await this.tabHistory.flush()
-  }
-
-  /**
-   * Load the overlay document once and keep it for the session.
-   *
-   * Called after the primary window is up: the first modal, switcher or toast of
-   * a session then draws into a document that is already loaded, instead of
-   * paying its load on the gesture that asks for it   and, past the
-   * acknowledgement deadline, falling back to the app window's DOM, which hides
-   * the browser behind it.
-   */
-  warmOverlay(): void {
-    this.overlay.warmForSession()
   }
 
   register(): void {

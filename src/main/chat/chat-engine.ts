@@ -2830,11 +2830,7 @@ export class ChatEngine {
       (_, projectId: string, threadId: string, commandId: string, args: string) =>
         this.runCommand(projectId, threadId, commandId, args)
     )
-    this.idleReaperTimer = setInterval(
-      () => void this.reapIdleResources(),
-      ChatEngine.IDLE_REAP_INTERVAL_MS
-    )
-    this.idleReaperTimer.unref?.()
+    this.syncIdleReaper()
     void this.restoreCoordinatorHandoffQueues().catch((error) =>
       Logger.error('Coordinator handoff queue recovery failed', {
         error: rawErrorMessage(error)
@@ -3754,10 +3750,7 @@ export class ChatEngine {
       this.streamBroadcastTimer = null
     }
     this.pendingStreamBroadcasts.clear()
-    if (this.idleReaperTimer) {
-      clearInterval(this.idleReaperTimer)
-      this.idleReaperTimer = null
-    }
+    this.clearIdleReaper()
     if (this.assignmentApiServer) {
       await new Promise<void>((resolveClose) => {
         this.assignmentApiServer?.close(() => resolveClose())
@@ -8335,6 +8328,56 @@ export class ChatEngine {
 
     this.applyDeferredHarnessRestarts()
     await this.sweepOrphanedProcesses()
+    // The pass may have released the last project, or emptied the last queue it
+    // was running for: the reaper only stays armed while there is something left
+    // to look at. A session that arrives while this pass was awaiting re-arms it.
+    this.syncIdleReaper()
+  }
+
+  /**
+   * Arm or clear the idle reaper for what this engine is actually holding.
+   *
+   * The reaper releases the harness resources of idle projects, applies harness
+   * restarts that were deferred while a session was busy, and reclaims harness
+   * processes from a sibling that died. Every one of those needs something to act
+   * on: a registered session, a project whose resources are still tracked, a queued
+   * restart, or a peer instance that could leave an orphan behind. With none of
+   * them the pass would only prove there is still nothing to do, once a minute,
+   * for as long as the app is open.
+   */
+  private syncIdleReaper(): void {
+    if (this.shouldReap()) this.armIdleReaper()
+    else this.clearIdleReaper()
+  }
+
+  private shouldReap(): boolean {
+    if (this.sessionRegistry.size > 0) return true
+    if (this.projectResourcePaths.size > 0) return true
+    if (this.deferredHarnessRestarts.size > 0) return true
+    // A sibling's harness roots are journaled in the journal this app shares, so
+    // only a live peer can leave a process for the periodic sweep to reclaim; a
+    // launch reaps whatever a crash left before any of this runs.
+    try {
+      return instanceRegistry.hasOtherLiveInstance()
+    } catch {
+      // An unreadable registry is not evidence that a peer is gone.
+      return true
+    }
+  }
+
+  private armIdleReaper(): void {
+    if (this.idleReaperTimer) return
+    this.idleReaperTimer = setInterval(
+      () => void this.reapIdleResources(),
+      ChatEngine.IDLE_REAP_INTERVAL_MS
+    )
+    this.idleReaperTimer.unref?.()
+  }
+
+  private clearIdleReaper(): void {
+    if (!this.idleReaperTimer) return
+    clearInterval(this.idleReaperTimer)
+    this.idleReaperTimer = null
   }
 
   /**
@@ -29817,8 +29860,11 @@ export class ChatEngine {
     })
     this.agentProcesses.claimSession(sessionId, projectId, threadId)
     // A session re-registering means the project is in use again   make it
-    // eligible for a future idle release.
+    // eligible for a future idle release. It is also the moment the idle reaper
+    // becomes worth running: there is now a project to release, and possibly a
+    // harness restart waiting for this session to free the harness up.
     this.releasedProjects.delete(projectId)
+    this.syncIdleReaper()
   }
 
   // ─── Session watchdog   catches silent agent failures ───────────────────

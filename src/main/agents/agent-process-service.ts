@@ -541,6 +541,9 @@ export class AgentProcessService implements AgentProcessObserver {
   async reapOrphans(options: ReapOrphansOptions = {}): Promise<ReapOrphansResult> {
     if (!this.journal) return { killed: [], skipped: [] }
     const roots = await this.journal.load()
+    // Nothing journaled means nothing to reap, and the snapshot below reads the
+    // whole process table: skip it rather than paying for it to iterate nothing.
+    if (roots.length === 0) return { killed: [], skipped: [] }
     const snapshot = await this.snapshotter().catch(() => [])
     const alive = new Set(snapshot.map((entry) => entry.pid))
     const parentOf = new Map(snapshot.map((entry) => [entry.pid, entry.parentPid]))

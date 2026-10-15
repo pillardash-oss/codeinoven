@@ -236,7 +236,6 @@ export class PtyService {
   }
 
   register(): void {
-    this.ensureIdleWatchdog()
     ipcMain.handle(
       'pty:create',
       (
@@ -589,6 +588,8 @@ export class PtyService {
       idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
       lastActivityAt: createdAt
     })
+    // The one kind of session the watchdog exists for is now on the books.
+    this.syncIdleWatchdog()
     await this.recordEvent({
       type: 'create',
       terminalId: id,
@@ -605,43 +606,77 @@ export class PtyService {
    * Kill single-command sessions (harness self-updates, logins) that have been
    * completely silent   no output and no input   past their idle timeout, so a
    * hung update never pins the terminal until the app is restarted.
+   *
+   * Armed by {@link syncIdleWatchdog}, which is what keeps the interval off the
+   * books while no session carries a timeout. A pass that finds nothing left to
+   * watch puts it back off.
    */
   private ensureIdleWatchdog(): void {
     if (this.idleWatchdog) return
     this.idleWatchdog = setInterval(() => {
-      const now = Date.now()
-      for (const session of this.sessions.values()) {
-        if (!session.idleTimeoutMs) continue
-        if (now - session.lastActivityAt < session.idleTimeoutMs) continue
-        Logger.info(
-          `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
-            (now - session.lastActivityAt) / 1000
-          )}s   killing hung process`
-        )
-        sendToRenderer(
-          this.sender,
-          `pty:data:${session.id}`,
-          `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
-            session.idleTimeoutMs / 1000
-          )}s   the process appears hung and was stopped automatically.\x1b[0m\r\n`
-        )
-        // Give the notice a moment to flush before the PTY goes away.
-        setTimeout(() => {
-          if (this.sessions.get(session.id) === session) {
-            session.exitCodeOverride = 1
-            session.idleTimeoutMs = undefined
-            try {
-              session.process.kill()
-            } catch {
-              this.sessions.delete(session.id)
-              sendToRenderer(this.sender, `pty:exit:${session.id}`, 1)
-            }
-          }
-        }, 300)
-      }
+      this.sweepIdleSessions()
+      // A single-command session that has exited or has already been killed
+      // leaves nothing for the next pass to look at.
+      this.syncIdleWatchdog()
     }, IDLE_WATCHDOG_INTERVAL_MS)
     // Never keep the Electron main process alive just for the watchdog.
     this.idleWatchdog.unref()
+  }
+
+  /**
+   * Whether a hung session could still be caught: only a single-command session
+   * carries an idle timeout, and every other kind is skipped by the pass above.
+   */
+  private hasTimedSession(): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.idleTimeoutMs) return true
+    }
+    return false
+  }
+
+  /** Arm the watchdog for a timed session, or clear it when the last one is gone. */
+  private syncIdleWatchdog(): void {
+    if (this.hasTimedSession()) this.ensureIdleWatchdog()
+    else this.stopIdleWatchdog()
+  }
+
+  private stopIdleWatchdog(): void {
+    if (!this.idleWatchdog) return
+    clearInterval(this.idleWatchdog)
+    this.idleWatchdog = null
+  }
+
+  private sweepIdleSessions(): void {
+    const now = Date.now()
+    for (const session of this.sessions.values()) {
+      if (!session.idleTimeoutMs) continue
+      if (now - session.lastActivityAt < session.idleTimeoutMs) continue
+      Logger.info(
+        `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
+          (now - session.lastActivityAt) / 1000
+        )}s   killing hung process`
+      )
+      sendToRenderer(
+        this.sender,
+        `pty:data:${session.id}`,
+        `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
+          session.idleTimeoutMs / 1000
+        )}s   the process appears hung and was stopped automatically.\x1b[0m\r\n`
+      )
+      // Give the notice a moment to flush before the PTY goes away.
+      setTimeout(() => {
+        if (this.sessions.get(session.id) === session) {
+          session.exitCodeOverride = 1
+          session.idleTimeoutMs = undefined
+          try {
+            session.process.kill()
+          } catch {
+            this.sessions.delete(session.id)
+            sendToRenderer(this.sender, `pty:exit:${session.id}`, 1)
+          }
+        }
+      }, 300)
+    }
   }
 
   private async createAction(
@@ -777,10 +812,7 @@ export class PtyService {
 
   destroyAll(): void {
     this.sender = null
-    if (this.idleWatchdog) {
-      clearInterval(this.idleWatchdog)
-      this.idleWatchdog = null
-    }
+    this.stopIdleWatchdog()
     for (const id of this.sessions.keys()) {
       this.destroy(id)
     }

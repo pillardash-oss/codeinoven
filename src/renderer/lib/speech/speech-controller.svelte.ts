@@ -35,7 +35,7 @@ import {
   transcribeCapture,
   type SpeechArtifactSelection
 } from './speech-controller-artifacts'
-import { playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
+import { endSpeechCues, playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
 import { SpeechPlaybackEngine } from './speech-controller-playback.svelte'
 import {
   nextVoiceSendLevel,
@@ -196,9 +196,10 @@ class SpeechController {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalKeydown, true)
       window.addEventListener('cio:soundChanged', this.handleSoundChanged)
-      // Open the cue output once, at startup, so no audio device is opened at
-      // the moment a recording captures the microphone (see the cue module).
-      prepareSpeechCues()
+      // The cue output used to be opened here, which held an audio output
+      // stream for the whole process lifetime even when speech was never used.
+      // It is opened per session in `start()` now, before the microphone comes
+      // up, and released once that session ends (see the cue module).
       void this.loadSettings()
     }
   }
@@ -519,6 +520,21 @@ class SpeechController {
     }
   }
 
+  /**
+   * Release the cue output once a dictation is fully over.
+   *
+   * Guarded on `active` because a detached transcription outlives its own
+   * capture: the user may already be recording the next dictation while the
+   * previous transcript settles, and arming a close then would take the live
+   * capture's output stream down underneath it. `prepareSpeechCues` on the new
+   * session cancels any release armed before it, so this guard is what keeps a
+   * close from landing on a live microphone.
+   */
+  private endSpeechCuesIfIdle(): void {
+    if (this.active) return
+    endSpeechCues()
+  }
+
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
@@ -536,6 +552,11 @@ class SpeechController {
       this.surfaceFailure(target.id, 'prepare', new Error('Focus the editor before recording.'))
       return
     }
+    // The user's intent to record is known and no capture IPC has run yet: open
+    // the cue output now, so the first blip never opens an audio device while
+    // the microphone is coming up. `endSpeechCuesIfIdle` below settles every
+    // path that does not end in a live recording.
+    prepareSpeechCues()
     // Flip the surface to recording immediately: the double-press shortcut and
     // the mic button must respond in the same frame they are pressed. Every
     // async pipeline step below has a failure path that settles into `failed`.
@@ -707,6 +728,10 @@ class SpeechController {
       }
     } finally {
       if (this.startToken === startToken) this.startToken = null
+      // A start that did not reach a live recording (aborted, refused, or
+      // failed) must not leave the output stream armed forever. On success
+      // `active` is set, so the guard leaves the live session's context alone.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -869,6 +894,10 @@ class SpeechController {
       if (active.stream) for (const track of active.stream.getTracks()) track.stop()
       this.active = null
       if (this.state.state === 'stopping') this.state = { state: 'idle' }
+      // The capture is over: the 'stopped' cue has played (or the finalize
+      // failed), so the output stream may be released once the idle window
+      // passes. `active` is null here, so the guard cannot block it.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -969,6 +998,11 @@ class SpeechController {
     } finally {
       this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
+      // The transcript settled (landed, held for its field, or failed), which
+      // is the last thing this session's output stream is needed for. A new
+      // recording already running makes the guard skip, so no close lands on
+      // its live microphone.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -1011,6 +1045,9 @@ class SpeechController {
     this.pendingDeliveries.delete(target.id)
     this.recordDictationSpan(pending.attemptId, target.id, pending.transcript, pending.scope)
     playSpeechCue(this.sound, 'completed')
+    // This is the last cue of the held dictation, so its output stream can go
+    // once the idle window passes (unless another recording is live).
+    this.endSpeechCuesIfIdle()
     try {
       toast.success('Voice recording inserted into its field', {
         id: 'voice-recording-delivered',

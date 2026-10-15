@@ -60,6 +60,12 @@
   let mounted = false
   let reading = false
   let bandArea = $state<HTMLElement | null>(null)
+  /** The root element, watched so the poll stops while the timeline is off screen. */
+  let root = $state<HTMLElement | null>(null)
+  /** Whether the timeline intersects its scroll container, from the observer. */
+  let onScreen = $state(true)
+  /** Whether the window is visible, from `document.visibilityState`. */
+  let pageVisible = $state(true)
 
   /** The note whose comment bubble is open, and where the bubble is anchored. */
   let editing = $state<{ id: string; seconds: number } | null>(null)
@@ -313,16 +319,40 @@
   onMount(() => {
     mounted = true
     void load()
+
+    // A hidden panel neither polls the page nor has anyone to show the playhead
+    // to, so the timeline stops while it is off screen or the window is hidden.
+    // Its twin in BrowserCompositionTransport.svelte already gates on `active`.
+    const element = root
+    let observer: IntersectionObserver | null = null
+    if (typeof IntersectionObserver !== 'undefined' && element) {
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          onScreen = entry.isIntersecting
+        },
+        { threshold: 0 }
+      )
+      observer.observe(element)
+    }
+    const onVisibility = (): void => {
+      pageVisible = document.visibilityState !== 'hidden'
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    onVisibility()
+
     return () => {
       mounted = false
+      observer?.disconnect()
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   })
 
   // The page owns the clock, so the panel reads it rather than running one of its
-  // own. Only the tab is read here, so a state report cannot restart the timer.
+  // own. Only the tab and whether the timeline is on screen are read here, so a
+  // state report cannot restart the timer it just fed.
   $effect(() => {
     const current = tab
-    if (!current) return
+    if (!current || !onScreen || !pageVisible) return
     void refresh()
     const timer = setInterval(() => void refresh(), POLL_MS)
     return () => clearInterval(timer)
@@ -341,6 +371,7 @@
 </script>
 
 <div
+  bind:this={root}
   class="rounded-xl border border-border bg-surface p-3"
   role="group"
   aria-label="Composition timeline"

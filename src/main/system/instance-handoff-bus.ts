@@ -57,6 +57,10 @@ const HANDOFF_TTL_MS = 5 * 60_000
  * is the floor, and it is far below `HANDOFF_TIMEOUT_MS` so a missed event
  * delays a transfer instead of failing it. The directory holds a handful of
  * small files, so a pass costs one `readdir`.
+ *
+ * The floor is only worth paying while there is traffic it could recover, so
+ * this interval is armed on a condition rather than at start-up. See
+ * {@link InstanceHandoffBus.setPeerInstancesPresent}.
  */
 const HANDOFF_POLL_MS = 2_000
 
@@ -109,6 +113,17 @@ export class InstanceHandoffBus {
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private sequence = 0
   private started = false
+  /**
+   * Whether a sibling instance is alive to exchange hand-offs with.
+   *
+   * Starts true, which is what the bus did before this input existed: a bus
+   * nobody informs keeps its backstop poll. The app reports the real membership
+   * through {@link setPeerInstancesPresent}, so a process running alone clears
+   * the interval instead of re-reading an empty directory twice a second.
+   */
+  private peerInstancesPresent = true
+  /** Whether the directory still holds a request to consume or a leftover to sweep. */
+  private trafficOnDisk = false
   private readonly requestListeners = new Set<(request: HandoffRequest) => void>()
   private readonly pending = new Map<string, PendingRequest>()
   /** Request ids already delivered to listeners, so a repeat watch event is inert. */
@@ -133,16 +148,12 @@ export class InstanceHandoffBus {
       Logger.dev('Cross-instance handoff directory unavailable:', error)
     }
     this.startWatcher()
-    this.pollTimer = setInterval(() => this.poll(), HANDOFF_POLL_MS)
-    this.pollTimer.unref?.()
+    this.syncPoll()
   }
 
   stop(): void {
     this.started = false
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer)
-      this.pollTimer = null
-    }
+    this.disarmPoll()
     this.watcher?.close()
     this.watcher = null
     for (const [requestId, pending] of this.pending) {
@@ -208,6 +219,8 @@ export class InstanceHandoffBus {
         if (!pending) return
         this.pending.delete(requestId)
         clearTimeout(pending.timer)
+        // The last reason to keep looking may have just gone away.
+        this.refreshPoll()
         resolve(ack)
       }
       const timer = setTimeout(() => {
@@ -223,6 +236,8 @@ export class InstanceHandoffBus {
       }, HANDOFF_TIMEOUT_MS)
       timer.unref?.()
       this.pending.set(requestId, { resolve: finish, timer })
+      // A verdict is outstanding, and the poll is what bounds the wait.
+      this.refreshPoll()
       // The ack may have landed between the write and this registration.
       this.drainAck(requestId)
     })
@@ -255,8 +270,12 @@ export class InstanceHandoffBus {
     try {
       // The event is only a wake-up call: the directory is re-read whole, so an
       // event naming a file that has already been replaced still delivers the
-      // request or ack that is really there.
-      this.watcher = watch(this.dir, { persistent: false }, () => this.drain())
+      // request or ack that is really there. A pass also re-decides whether the
+      // backstop poll has anything left to watch.
+      this.watcher = watch(this.dir, { persistent: false }, () => {
+        this.drain()
+        this.syncPoll()
+      })
       this.watcher.on('error', () => {
         this.watcher?.close()
         this.watcher = null
@@ -284,6 +303,69 @@ export class InstanceHandoffBus {
   private poll(): void {
     this.drain()
     this.sweepStale()
+    this.syncPoll()
+  }
+
+  /**
+   * Tell the bus whether another instance is alive to exchange hand-offs with.
+   *
+   * The interval above is a backstop for a watch event that never arrived, and
+   * the only traffic this directory carries comes from a peer process: with this
+   * process alone there is no request to miss and no ack to wait for, so the
+   * interval is cleared and the bus goes back to being purely event driven. The
+   * caller owns the answer because the bus deliberately knows nothing about the
+   * instance registry.
+   */
+  setPeerInstancesPresent(present: boolean): void {
+    if (this.peerInstancesPresent === present) return
+    this.peerInstancesPresent = present
+    this.refreshPoll()
+  }
+
+  /**
+   * Whether the backstop poll has work to do: an ack this process is waiting
+   * for, a peer that can write a request at any moment, or files still on disk
+   * to consume or retire. With none of the three, a pass would only learn that
+   * the directory is still empty.
+   */
+  private shouldPoll(): boolean {
+    if (!this.started) return false
+    if (this.pending.size > 0) return true
+    if (this.peerInstancesPresent) return true
+    return this.trafficOnDisk
+  }
+
+  /** Re-read what the directory holds, then arm or clear the poll to match. */
+  private syncPoll(): void {
+    try {
+      this.trafficOnDisk = readdirSync(this.dir).length > 0
+    } catch {
+      // The directory is gone (config root moved, temp dir removed): nothing is
+      // waiting, and whatever created it will write to it again.
+      this.trafficOnDisk = false
+    }
+    this.refreshPoll()
+  }
+
+  private refreshPoll(): void {
+    if (this.shouldPoll()) this.armPoll()
+    else this.disarmPoll()
+  }
+
+  private armPoll(): void {
+    if (this.pollTimer || !this.started) return
+    this.pollTimer = setInterval(() => this.poll(), HANDOFF_POLL_MS)
+    this.pollTimer.unref?.()
+    // A pass right now rather than after the first interval, so whatever is
+    // already waiting is delivered the moment the poll is armed. The timer is
+    // assigned first, so the pass below cannot arm a second one.
+    this.poll()
+  }
+
+  private disarmPoll(): void {
+    if (!this.pollTimer) return
+    clearInterval(this.pollTimer)
+    this.pollTimer = null
   }
 
   private consume(file: string): void {

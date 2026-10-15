@@ -321,6 +321,21 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   const broadcastRoutines = () => broadcastRoutinesChanged(routineManager.listRoutines())
 
+  /**
+   * A routine or task write landed: push the list and let the scheduler
+   * re-decide its tick.
+   *
+   * The scheduler only runs its tick while a task can come due, so the write
+   * that takes the last task off the clock (or puts the first one on) is the
+   * moment to recompute that. It re-reads the schedule itself instead of being
+   * told what changed. Optional, because the scheduler is not up during early
+   * hydration and a failed write must not fail with it.
+   */
+  const routinesChanged = () => {
+    broadcastRoutines()
+    routineScheduler?.refreshSchedule()
+  }
+
   // Registered on the hydration surface when the bootstrap already owns it, so
   // Assistant View's first hydration pass never awaits the post-paint graph just
   // to guarantee the hidden assistant container exists.
@@ -331,7 +346,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('routine:create', (_, input: unknown) => {
     const routine = routineManager.createRoutine(validateCreateInput(input))
-    broadcastRoutines()
+    routinesChanged()
     return routine
   })
 
@@ -339,7 +354,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     const safeId = validateEntityId(routineId, 'Routine ID')
     const existing = routineManager.getRoutine(safeId)
     const routine = routineManager.updateRoutine(safeId, validateUpdateInput(input))
-    broadcastRoutines()
+    routinesChanged()
     // The first how-to a routine ever gets is the moment its owner has work they
     // expect to run, so it is the one moment the app offers to start at login.
     // It is raised once in an install's life: the offer carries its own flag.
@@ -358,7 +373,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     const safeId = validateEntityId(routineId, 'Routine ID')
     const result = await routineManager.deleteRoutine(safeId)
     routineScheduler?.forgetRoutine(safeId, result.removedThreadIds)
-    broadcastRoutines()
+    routinesChanged()
     return result
   })
 
@@ -366,14 +381,14 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     if (!Array.isArray(orderedIds)) throw new TypeError('Routine order must be an array')
     const ids = orderedIds.map((id) => validateEntityId(id, 'Routine ID'))
     const routines = routineManager.reorderRoutines(ids)
-    broadcastRoutines()
+    routinesChanged()
     return routines
   })
 
   ipcMain.handle('routine:setPinned', (_, routineId: unknown, pinned: unknown) => {
     if (typeof pinned !== 'boolean') throw new TypeError('Routine pin state must be a boolean')
     const routine = routineManager.setPinned(validateEntityId(routineId, 'Routine ID'), pinned)
-    broadcastRoutines()
+    routinesChanged()
     return routine
   })
 
@@ -382,13 +397,13 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       validateEntityId(routineId, 'Routine ID'),
       validateCustomIconImage(rawImage)
     )
-    broadcastRoutines()
+    routinesChanged()
     return routine
   })
 
   ipcMain.handle('routine:clearIcon', async (_, routineId: unknown) => {
     const routine = await routineManager.clearIcon(validateEntityId(routineId, 'Routine ID'))
-    broadcastRoutines()
+    routinesChanged()
     return routine
   })
 
@@ -399,7 +414,10 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:setTaskRoutine', (_, threadId: unknown, routineId: unknown) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     const safeRoutineId = routineId === null ? null : validateEntityId(routineId, 'Routine ID')
-    return routineManager.setTaskRoutine(safeThreadId, safeRoutineId)
+    const thread = routineManager.setTaskRoutine(safeThreadId, safeRoutineId)
+    // The task now belongs to another routine's clock, so the tick is recomputed.
+    routineScheduler?.refreshSchedule()
+    return thread
   })
 
   ipcMain.handle('assistant:howToThread', (_, routineId: unknown) =>
@@ -427,7 +445,10 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('assistant:setTaskSchedule', (_, threadId: unknown, schedule: unknown) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    return routineManager.setTaskScheduleOverride(safeThreadId, sanitizeSchedule(schedule))
+    const thread = routineManager.setTaskScheduleOverride(safeThreadId, sanitizeSchedule(schedule))
+    // This is a task's own clock going on, off, or onto another schedule.
+    routineScheduler?.refreshSchedule()
+    return thread
   })
 
   /**
@@ -444,6 +465,8 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     }
     const thread = routineManager.setTaskScheduled(safeThreadId, scheduled)
     broadcastThreadUpdate(thread)
+    // The task's own clock was turned on or off.
+    routineScheduler?.refreshSchedule()
     return thread
   })
 

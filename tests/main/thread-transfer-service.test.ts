@@ -131,10 +131,14 @@ async function harness(
   const adopter = new ThreadTransferService(adopterEngine.engine, {
     bus: new InstanceHandoffBus(directory),
     isRunOwnerAlive: () => options.ownerAlive ?? true,
+    // Two peers by construction here, so the bus keeps the poll that lets a
+    // hand-off complete with no watch event at all.
+    hasPeerInstance: () => true,
     locks: lockFor(process.pid)
   })
   const owner = new ThreadTransferService(ownerEngine.engine, {
     bus: new InstanceHandoffBus(directory, OWNER_PID),
+    hasPeerInstance: () => true,
     locks: lockFor(OWNER_PID)
   })
   services.push(adopter, owner)
@@ -373,18 +377,21 @@ describe('ThreadTransferService', () => {
     const ownerEngine = engineStub({})
     const owner = new ThreadTransferService(ownerEngine.engine, {
       bus: new InstanceHandoffBus(directory, OWNER_PID),
+      hasPeerInstance: () => true,
       locks: lockFor(OWNER_PID)
     })
     const firstEngine = engineStub({ ownerPid: OWNER_PID })
     const first = new ThreadTransferService(firstEngine.engine, {
       bus: new InstanceHandoffBus(directory),
       isRunOwnerAlive: live,
+      hasPeerInstance: () => true,
       locks: lockFor(process.pid)
     })
     const secondEngine = engineStub({ ownerPid: OWNER_PID })
     const second = new ThreadTransferService(secondEngine.engine, {
       bus: new InstanceHandoffBus(directory, OTHER_PID),
       isRunOwnerAlive: live,
+      hasPeerInstance: () => true,
       locks: lockFor(OTHER_PID)
     })
     services.push(owner, first, second)

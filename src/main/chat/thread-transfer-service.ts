@@ -56,6 +56,12 @@ export interface ThreadTransferServiceOptions {
   isRunOwnerAlive?: (pid: number) => boolean
   /** Live app processes to ask when no active-turn row names an idle writer. */
   liveInstancePids?: () => number[] | null
+  /**
+   * Whether a sibling app instance exists at all. The hand-off bus only keeps
+   * its backstop poll armed while one does, because a peer is the only thing
+   * that can write a request this process has to answer.
+   */
+  hasPeerInstance?: () => boolean
   /** The peer-to-peer bus this service asks for a release over. */
   bus?: InstanceHandoffBus
   /**
@@ -71,9 +77,11 @@ export class ThreadTransferService {
   private started = false
   private readonly isRunOwnerAlive: (pid: number) => boolean
   private readonly liveInstancePids: () => number[] | null
+  private readonly hasPeerInstance: () => boolean
   private readonly bus: InstanceHandoffBus
   private readonly locks: ThreadTransferLock | null
   private detachPromptPreflight: (() => void) | null = null
+  private stopPeerWatch: (() => void) | null = null
 
   constructor(
     private readonly chatEngine: ThreadTransferEngine,
@@ -82,6 +90,7 @@ export class ThreadTransferService {
     this.isRunOwnerAlive =
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
     this.liveInstancePids = options.liveInstancePids ?? (() => instanceRegistry.liveInstancePids())
+    this.hasPeerInstance = options.hasPeerInstance ?? (() => instanceRegistry.hasOtherLiveInstance())
     this.bus = options.bus ?? instanceHandoffBus
     this.locks = options.locks ?? null
     this.detachPromptPreflight =
@@ -105,6 +114,11 @@ export class ThreadTransferService {
     if (this.started) return
     this.started = true
     this.bus.start()
+    // Hand-offs are peer to peer, so with no sibling there is nothing for the
+    // bus's backstop poll to recover and it stays event driven. Membership is the
+    // registry's to report, and it reports it on change.
+    this.syncPeerInstance()
+    this.stopPeerWatch = instanceRegistry.onLiveInstanceSetChanged(() => this.syncPeerInstance())
     this.stopRequestListener = this.bus.onRequest((request) => {
       void this.handleRequest(request)
     })
@@ -114,11 +128,22 @@ export class ThreadTransferService {
   dispose(): void {
     this.detachPromptPreflight?.()
     this.detachPromptPreflight = null
+    this.stopPeerWatch?.()
+    this.stopPeerWatch = null
     this.stopRequestListener?.()
     this.stopRequestListener = null
     this.started = false
     this.bus.stop()
     trustedIpcMain.removeHandler('thread:transferRun')
+  }
+
+  /** Tell the bus whether there is a sibling instance to exchange hand-offs with. */
+  private syncPeerInstance(): void {
+    try {
+      this.bus.setPeerInstancesPresent(this.hasPeerInstance())
+    } catch (error) {
+      Logger.dev('Could not read instance membership for the hand-off bus:', error)
+    }
   }
 
   /**

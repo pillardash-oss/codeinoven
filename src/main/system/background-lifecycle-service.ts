@@ -157,6 +157,7 @@ export class BackgroundLifecycleService {
     this.unsubscribers.push(instanceRegistry.onLiveInstanceSetChanged(() => this.evaluateRole()))
     this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
     this.startActivationWatcher()
+    this.refreshActivationWatch()
     this.broadcastRole()
     // A launch can inherit problems from the last one: a run that failed
     // overnight, a thread still parked on an approval gate. The icon states
@@ -176,10 +177,7 @@ export class BackgroundLifecycleService {
     this.updaterUnsubscribe = null
     this.activationWatcher?.close()
     this.activationWatcher = null
-    if (this.activationTimer) {
-      clearInterval(this.activationTimer)
-      this.activationTimer = null
-    }
+    this.clearActivationPoll()
     this.destroyTray()
   }
 
@@ -241,6 +239,7 @@ export class BackgroundLifecycleService {
     this.mode = config.backgroundMode
     this.applyLoginItem(config)
     this.syncTray()
+    this.refreshActivationWatch()
     this.broadcastRole()
   }
 
@@ -253,6 +252,8 @@ export class BackgroundLifecycleService {
     this.syncTray()
     this.pushRoleTo(window)
     this.refreshAttention()
+    // With a visible window there is nothing to activate, so the drain stops.
+    this.refreshActivationWatch()
   }
 
   /** The window is gone: menu-bar-only while background mode is on. */
@@ -260,6 +261,8 @@ export class BackgroundLifecycleService {
     if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
     this.refreshAttention()
+    // Windowless is the one state the drain exists for.
+    this.refreshActivationWatch()
   }
 
   /**
@@ -373,6 +376,8 @@ export class BackgroundLifecycleService {
     this.deps.destroyWindow()
     this.syncTray()
     this.hideDock()
+    // Parked: the drain takes over as the only way back to a window.
+    this.refreshActivationWatch()
   }
 
   // ---------------------------------------------------------------- tray ----
@@ -560,6 +565,9 @@ export class BackgroundLifecycleService {
     const wasOwner = this.tray !== null
     this.syncTray()
     this.broadcastRole()
+    // The icon's presence is half of what the drain watches, and a role change
+    // is one of the two ways it can appear or vanish.
+    this.refreshActivationWatch()
     // A launch that opted out never owned the icon, so "promotion" is not a
     // hand-off and must not run the catch-up.
     if (!wasOwner && this.backgroundEnabled && this.currentRole().role === 'owner') {
@@ -630,9 +638,41 @@ export class BackgroundLifecycleService {
     } catch (error) {
       Logger.dev('Activation directory unavailable (non-fatal):', error)
     }
+    this.drainActivationRequests()
+  }
+
+  /**
+   * Arm or clear the backstop poll over the activation directory.
+   *
+   * The poll covers two things a watch event cannot: a request file written by
+   * another instance that the event never reported, and a menu bar icon that
+   * failed to appear. Both only matter while this process has no window, because
+   * a visible window is the user already being here: there is nothing to bring
+   * forward, and whatever opened that window has just reconciled the icon. The
+   * watcher itself stays armed either way, so an arriving request is still
+   * delivered by its own event.
+   */
+  private refreshActivationWatch(): void {
+    if (this.stopped) return
+    const window = this.deps.state.mainWindow
+    const hasWindow = window !== null && !window.isDestroyed() && window.isVisible()
+    if (this.backgroundEnabled && (!hasWindow || this.tray === null)) this.armActivationPoll()
+    else this.clearActivationPoll()
+  }
+
+  private armActivationPoll(): void {
+    if (this.activationTimer) return
     this.activationTimer = setInterval(() => this.drainActivationRequests(), ACTIVATION_POLL_MS)
     this.activationTimer.unref()
+    // Read once now rather than up to two seconds from now: a request that landed
+    // while the poll was off, or an icon that is still missing, is handled here.
     this.drainActivationRequests()
+  }
+
+  private clearActivationPoll(): void {
+    if (!this.activationTimer) return
+    clearInterval(this.activationTimer)
+    this.activationTimer = null
   }
 
   private drainActivationRequests(): void {
@@ -640,9 +680,13 @@ export class BackgroundLifecycleService {
     // Self-heal the menu bar icon. It is created on startup, on a config
     // change, on an ownership/membership change, and on a window open, but any
     // of those can be missed or coalesced, and a process that owns the schedule
-    // must never sit with an empty menu bar. This tick already runs every two
-    // seconds, and the check is a single field read whenever the icon exists.
-    if (!this.tray) this.syncTray()
+    // must never sit with an empty menu bar. A healed icon is also the end of
+    // one of the two reasons this drain runs at all, so the poll is re-decided
+    // before anything else (see `refreshActivationWatch`).
+    if (!this.tray) {
+      this.syncTray()
+      this.refreshActivationWatch()
+    }
     let files: string[]
     try {
       files = readdirSync(this.activationDir).filter((name) => name.endsWith('.json'))

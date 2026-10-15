@@ -24,9 +24,48 @@ export type SpeechCueKind = 'started' | 'stopped' | 'completed'
  * teardown. A context the platform suspends (autoplay policy, an output device
  * switch, or the microphone taking voice processing) is resumed instead of
  * being replaced; a context that is genuinely closed is rebuilt on the next
- * cue.
+ * cue. The context is opened when a session starts and released once the
+ * session has been idle past `CUE_RELEASE_IDLE_MS`, so no output stream is held
+ * from app boot.
  */
 let cueContext: AudioContext | null = null
+let cueReleaseTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * How long the shared cue context is kept after a session ends before its
+ * output stream is released.
+ *
+ * The window has to outlast the cue that fires at the end of a dictation plus
+ * the transcription latency after it: `stopped` plays when the mic closes, but
+ * `completed` can land many seconds later once the model answers, and closing
+ * on the earlier cue would cut that final blip off. A minute covers a slow
+ * transcription while still releasing the device soon after a session is
+ * genuinely over.
+ */
+const CUE_RELEASE_IDLE_MS = 60_000
+
+/** Cancel a scheduled release, because a cue or a new session still needs the
+ *  context. */
+function cancelCueRelease(): void {
+  if (cueReleaseTimer) clearTimeout(cueReleaseTimer)
+  cueReleaseTimer = null
+}
+
+/** Close the shared context and forget it, so the next session rebuilds it.
+ *  Never throws: a close failure only means the platform already took the
+ *  output stream away. */
+function releaseCueContext(): void {
+  cueReleaseTimer = null
+  const context = cueContext
+  cueContext = null
+  if (!context) return
+  void context.close().catch((cause: unknown) => {
+    logRendererError(
+      `The speech cue audio output could not be closed: ${errorMessage(cause)}`,
+      cause
+    )
+  })
+}
 
 /** The context currently backing cue playback, or null when Web Audio is
  *  unavailable in this environment. Rebuilds a context that has been closed. */
@@ -49,19 +88,35 @@ function cueAudioContext(): AudioContext | null {
 }
 
 /**
- * Open the shared cue context ahead of the first blip.
+ * Open the shared cue context at the start of a speech session.
  *
- * Calling this at startup means the output stream is already established when a
- * recording begins, so opening the microphone is never accompanied by the audio
- * device being opened underneath it - the exact ordering that broke capture.
- * Safe to call more than once.
+ * The context is opened here, before any capture IPC runs, so the output stream
+ * is already established when the microphone comes up and opening the mic is
+ * never accompanied by the audio device being opened underneath it - the exact
+ * ordering that broke capture. Safe to call more than once.
  */
 export function prepareSpeechCues(): void {
+  // A session is starting: a release armed by the previous one must not close
+  // the context underneath this one.
+  cancelCueRelease()
   const context = cueAudioContext()
   if (!context || context.state === 'running') return
   // A context that cannot be resumed yet (no user gesture has happened) stays
   // suspended and every cue resumes it on demand, so this is best effort.
   void context.resume().catch(() => undefined)
+}
+
+/**
+ * Mark the speech session as over, so its output stream can be released.
+ *
+ * The close is delayed by `CUE_RELEASE_IDLE_MS` instead of happening now: the
+ * final cue of the session, and the transcription that produces it, may still
+ * be in flight, and a later cue or a new session cancels the release. Only a
+ * session that stays quiet for that whole window really closes its device.
+ */
+export function endSpeechCues(): void {
+  cancelCueRelease()
+  cueReleaseTimer = setTimeout(releaseCueContext, CUE_RELEASE_IDLE_MS)
 }
 
 /** Play the short blip that marks a capture or delivery milestone. */
@@ -73,6 +128,10 @@ export function playSpeechCue(sound: SpeechSettings, kind: SpeechCueKind): void 
         ? sound.cues.recordingStopped
         : sound.cues.transcriptReady
   if (!enabled || sound.cues.volume === 0) return
+  // A cue arriving inside the idle window means the session is not over after
+  // all: cancel the pending release so this blip, and the one after it, are
+  // never cut off by a close that was already scheduled.
+  cancelCueRelease()
   const context = cueAudioContext()
   if (!context) return
   if (context.state !== 'running') {
