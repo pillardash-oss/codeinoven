@@ -46,6 +46,15 @@
    *  added noise to the rail. A counted badge keeps its box, because there the
    *  count is the mark and the box is what makes it legible over the glyph. */
   let colorOnly = $derived(Boolean(colors?.length))
+  /**
+   * The colour the count is written in: the mark's own.
+   *
+   * A counted badge writes its number in its tone, so a colour mark has to write
+   * its number in the colour it stands for. Without this the number has no colour
+   * at all and inherits whatever hosts the badge, which on the rail is the muted
+   * icon tone: legible nowhere and reading as disabled rather than as a count.
+   */
+  let markColor = $derived(colors?.[0])
 </script>
 
 {#if count > 0}
@@ -68,7 +77,7 @@
           <span class="h-1.5 w-1.5" style:background={accent}></span>
         {/each}
       </span>
-      {display}
+      <span style:color={markColor}>{display}</span>
     {:else}
       <Icon size={8} strokeWidth={2.6} aria-hidden="true" />
       {display}
