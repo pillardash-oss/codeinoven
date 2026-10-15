@@ -60,6 +60,7 @@
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
+    knowledgeSectionSummary,
     parseKnowledgeSections,
     previewRuns,
     resolveConnections,
@@ -193,6 +194,9 @@
   // ─── Assistant content ──────────────────────────────────────────────────────
 
   const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+
+  /** The one-line summary a folded section shows in place of its body. */
+  const sectionSummary = knowledgeSectionSummary
   const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
   const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
   /** Whether this assistant runs on a clock at all; drives the schedule copy. */
@@ -1189,6 +1193,12 @@
                 <div class="border-t border-border px-2.5 py-2">
                   <MarkdownView text={section.body} class="text-[0.75rem]" />
                 </div>
+              {:else if sectionSummary(section)}
+                <!-- A folded section keeps one line of its own prose, so folding
+                     hides detail without hiding what the section is about. -->
+                <p class="border-t border-border px-2.5 py-1.5 text-[0.6875rem] text-dimmed">
+                  {sectionSummary(section)}
+                </p>
               {/if}
             </div>
           {/each}
