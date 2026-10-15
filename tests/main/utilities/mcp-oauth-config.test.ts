@@ -9,6 +9,12 @@ import {
   parseMcpOAuthConfig
 } from '../../../src/main/utilities/mcp-oauth/mcp-oauth-config'
 import { resolveMcpHeaders } from '../../../src/main/utilities/mcp-connection'
+import type { UtilityDefinition, UtilityDefinitionFor } from '../../../src/lib/types'
+
+function asMcpUtility(utility: UtilityDefinition | null): UtilityDefinitionFor<'mcp'> {
+  if (!utility || utility.kind !== 'mcp') throw new Error('Expected an MCP utility')
+  return utility
+}
 
 const { safeStorage } = vi.hoisted(() => ({
   safeStorage: {
@@ -85,22 +91,24 @@ describe('MCP OAuth configuration', () => {
       description: 'A remote server authorized with OAuth',
       config: { transport: 'http', url: 'https://mcp.example/mcp' }
     })
-    const stored = await registry.update(created.id, {
-      config: {
-        transport: 'http',
-        url: 'https://mcp.example/mcp',
-        oauth: {
-          enabled: true,
-          issuer: 'https://auth.example',
-          clientId: 'client-1',
-          confidentialClient: false,
-          scope: 'tools:read',
-          authorizedAt: 1_700_000_000_000
+    const stored = asMcpUtility(
+      await registry.update(created.id, {
+        config: {
+          transport: 'http',
+          url: 'https://mcp.example/mcp',
+          oauth: {
+            enabled: true,
+            issuer: 'https://auth.example',
+            clientId: 'client-1',
+            confidentialClient: false,
+            scope: 'tools:read',
+            authorizedAt: 1_700_000_000_000
+          }
         }
-      }
-    })
+      })
+    )
 
-    expect(await registry.get(created.id)).toMatchObject({
+    expect(asMcpUtility(await registry.get(created.id))).toMatchObject({
       config: { oauth: { enabled: true, clientId: 'client-1' } }
     })
     expect(stored.config.oauth?.issuer).toBe('https://auth.example')
@@ -110,7 +118,7 @@ describe('MCP OAuth configuration', () => {
         config: {
           transport: 'http',
           url: 'https://mcp.example/mcp',
-          oauth: { clientSecret: 'shh' }
+          oauth: { clientSecret: 'shh' } as unknown as UtilityDefinitionFor<'mcp'>['config']['oauth']
         }
       })
       // The registry refuses a secret-shaped config field before any parser sees
