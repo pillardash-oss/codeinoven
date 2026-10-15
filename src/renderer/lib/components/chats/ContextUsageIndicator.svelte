@@ -440,12 +440,19 @@
     <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
   </button>
 
+  <!-- The panel opens above the control with a gap, and that gap belongs to the
+       hover target: it is this box's own bottom padding, never a margin. A margin
+       there is a dead band the pointer crosses on its way up, and the panel closed
+       under the user's hand the moment they reached for it. Padding keeps the
+       visible offset and leaves nothing to cross outside the target. -->
   <div
-    class="invisible absolute bottom-full right-0 z-40 mb-1.5 w-72 border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+    class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
     role="dialog"
     aria-label="Context and provider usage"
   >
-    {@render usageDetail()}
+    <div class="border border-border bg-surface p-3 shadow-lg">
+      {@render usageDetail()}
+    </div>
   </div>
 </div>
 
