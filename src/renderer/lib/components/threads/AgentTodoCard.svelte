@@ -9,11 +9,17 @@
     busy: boolean
     /** The run is over, so the list on screen is a record and not live progress. */
     stopped: boolean
+    /**
+     * Another CodeInOven instance is streaming this thread's turn right now.
+     * `busy` is false here because none of that stream reaches this window, so
+     * without this the list would report a live run as stopped.
+     */
+    foreign?: boolean
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
 
-  let { items, signature, busy, stopped, onClose }: Props = $props()
+  let { items, signature, busy, stopped, foreign = false, onClose }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
@@ -21,6 +27,19 @@
 
   let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
   let activeIndex = $derived(activeAgentTodoIndex(items, busy))
+  /**
+   * What the list is, in one reading. A run another window is streaming is live
+   * work, not a stopped one: the item that is marked active is marked by that
+   * window's activity, and calling it "Stopped" here contradicts the transfer
+   * card sitting under it.
+   */
+  let chip = $derived(
+    foreign
+      ? { text: 'Live elsewhere' }
+      : busy
+        ? { text: 'Running' }
+        : { text: 'Stopped', tone: 'urgent' as const }
+  )
   /**
    * The turn stopped with tasks it never completed, so the list on screen is a
    * record of where the run left off and not live progress. Naming that state
@@ -63,7 +82,7 @@
   label="Agent task progress"
   icon={ListChecks}
   title="Tasks"
-  chip={busy ? { text: 'Running' } : { text: 'Stopped', tone: 'urgent' }}
+  {chip}
   warn={stoppedUnfinished}
   bind:folded={foldState.folded}
   foldLabel="task list"

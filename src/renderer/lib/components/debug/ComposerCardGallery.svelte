@@ -236,6 +236,12 @@
       note: 'Amber edge and the unfinished notice.'
     },
     {
+      id: 'todo-elsewhere',
+      group: 'above',
+      label: 'Tasks, live elsewhere',
+      note: 'Another instance is streaming the run.'
+    },
+    {
       id: 'queued-one',
       group: 'above',
       label: 'Queued message',
@@ -695,6 +701,16 @@
               signature="gallery-stopped"
               busy={false}
               stopped
+              onClose={noop}
+            />
+            {@render mockComposer(true)}
+          {:else if selected.id === 'todo-elsewhere'}
+            <AgentTodoCard
+              items={galleryTodoItems}
+              signature="gallery-elsewhere"
+              busy={false}
+              stopped={false}
+              foreign
               onClose={noop}
             />
             {@render mockComposer(true)}

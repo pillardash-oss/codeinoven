@@ -14251,6 +14251,7 @@
                     signature={visibleTodo.signature}
                     {busy}
                     stopped={todoRunStopped}
+                    foreign={foreignRunActive}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}
