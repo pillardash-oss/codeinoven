@@ -1,5 +1,14 @@
 import DOMPurify from 'dompurify'
 
+/** How a preview document is laid out inside the frame it is given. */
+export interface HtmlPreviewFrameOptions {
+  /**
+   * Draw the document as a canvas: the body fills the frame's box exactly, with
+   * no minimum height and no padding injected around it.
+   */
+  canvas?: boolean
+}
+
 /**
  * Wrap a project HTML file in a sandboxed `<iframe srcdoc>` preview page.
  *
@@ -18,17 +27,31 @@ import DOMPurify from 'dompurify'
  * percent-encoded) resolves relative image and media URLs against the project
  * through the `appfile://` origin. That scheme deliberately serves media only,
  * so project stylesheets and scripts still never load.
+ *
+ * `canvas` says the document fills the frame as a canvas instead of reading as a
+ * page of prose: the body takes exactly the frame's box with nothing injected
+ * around it, so a composition authored at `100vh` is neither pushed past the
+ * frame's bottom edge nor wrapped in a scrollbar by the host.
  */
-export function htmlPreviewFrame(html: string, baseHref?: string, themeStyles?: string): string {
+export function htmlPreviewFrame(
+  html: string,
+  baseHref?: string,
+  themeStyles?: string,
+  options: HtmlPreviewFrameOptions = {}
+): string {
   const sanitized = DOMPurify.sanitize(html, {
     FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
     FORBID_TAGS: ['base', 'link', 'meta', 'script'],
     WHOLE_DOCUMENT: true
   })
+  const body = options.canvas
+    ? 'body { box-sizing: border-box; height: 100%; margin: 0; }'
+    : `body { box-sizing: border-box; min-height: 100vh; margin: 0; padding: 1.25rem; ${themeStyles === undefined ? 'color: #202124; background: #fff; line-height: 1.55;' : ''} }`
   const head = `${baseHref ? `<base href="${baseHref}">` : ''}
     <style>
       ${themeStyles ?? ':root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }'}
-      body { box-sizing: border-box; min-height: 100vh; margin: 0; padding: 1.25rem; ${themeStyles === undefined ? 'color: #202124; background: #fff; line-height: 1.55;' : ''} }
+      ${options.canvas ? 'html { height: 100%; }' : ''}
+      ${body}
       img, video { max-width: 100%; height: auto; }
     </style>`
   // DOMPurify serializes a parsed document, so the output always carries the

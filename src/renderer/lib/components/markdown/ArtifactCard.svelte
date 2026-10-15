@@ -20,7 +20,12 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import Modal from '../ui/Modal.svelte'
   import CodeBlock from './CodeBlock.svelte'
-  import { buildArtifactSrcdoc, type ArtifactKind } from './artifact'
+  import {
+    buildArtifactSrcdoc,
+    artifactPictureFrameStyle,
+    svgArtifactIntrinsicRatio,
+    type ArtifactKind
+  } from './artifact'
 
   interface Props {
     code: string
@@ -47,6 +52,18 @@
 
   const label = $derived(kind === 'html' ? 'HTML artifact' : 'SVG artifact')
   const srcdoc = $derived(buildArtifactSrcdoc(kind, code, artifactThemeStyles()))
+  /**
+   * The shape the inline preview is drawn in, or `undefined` for a plain viewport.
+   *
+   * An SVG artifact states its own shape, and the card takes it: a picture poured
+   * into a fixed viewport is a picture cropped or shrunk by its host. An HTML
+   * artifact is a document with a flowing height rather than a picture, and an
+   * SVG that states no shape keeps the plain viewport too.
+   */
+  const pictureFrameRatio = $derived(kind === 'svg' ? svgArtifactIntrinsicRatio(code) : null)
+  const pictureFrame = $derived(
+    pictureFrameRatio === null ? undefined : artifactPictureFrameStyle(pictureFrameRatio)
+  )
   const wrapped = $derived(wrapTextState.wrapped)
   const artifactKey = $derived(artifactKeyFor(kind, code))
   /** Inspection is an SVG-only affair: an HTML artifact has no element contract
@@ -183,12 +200,19 @@
       />
     </div>
   {:else}
+    {@const picture = fullscreen ? undefined : pictureFrame}
+    <!-- The inline frame is the artifact's own shape whenever the artifact states
+         one, and the plain viewport otherwise. The viewer fills its stage and lets
+         the zoom carry the picture past the frame's edges. -->
     <iframe
       title="{label} preview"
       sandbox=""
       {srcdoc}
-      class={['block w-full border-0 bg-app', fullscreen ? 'h-full min-h-0' : 'h-80']}
-      style={fullscreen ? panZoom.transform : undefined}
+      class={[
+        'block w-full border-0 bg-app',
+        fullscreen ? 'h-full min-h-0' : picture === undefined ? 'h-80' : 'mx-auto'
+      ]}
+      style={fullscreen ? panZoom.transform : picture}
       {@attach fullscreen ? panZoom.bindTarget : () => {}}
     ></iframe>
   {/if}
