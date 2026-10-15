@@ -4,16 +4,11 @@ import { existsSync, createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { join } from 'path'
 import type {
-  AgentEvent,
   AgentMessage,
   AgentPart,
   AgentRateLimitWindow,
   AgentUsageCredits,
   AgentToolStatus,
-  NativeMcpPublicationResult,
-  NativeMcpServerFailure,
-  NativeMcpUtilityBinding,
-  NativeUtilityInvocation,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent
@@ -49,15 +44,6 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import {
-  PI_MCP_SERVERS_FILE_NAME,
-  buildPiMcpRegistrations,
-  parsePiMcpFailureReport,
-  piMcpToolAttribution,
-  piMcpServersDocument
-} from './pi/pi-mcp-registration'
-import type { PiNativeToolAttribution } from './pi/pi-mcp-registration'
-import { PI_MCP_FAILURE_STATUS_KEY } from './pi-mcp-servers-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import { apiKeyEnvVarFor } from '../providers/base-url-provider-service'
 import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
@@ -446,31 +432,6 @@ export class PiDriver extends PersistentCliDriver {
   /** Storage-relative allowed-tools handoff file per session, rewritten per turn
    *  so the extension's tool gate reflects the current File-System setting. */
   private cioAllowedToolsPaths = new Map<string, string>()
-  /** Storage-relative MCP server documents per session. Each one names the MCP
-   *  utilities this thread has activated, so the extension can register them
-   *  with pi's own MCP host; the document is rewritten whenever that set or a
-   *  credential changes. */
-  private cioMcpServersPaths = new Map<string, string>()
-  /**
-   * Server name to the utility it belongs to, for the MCP servers this app
-   * registered on pi's own host.
-   *
-   * A script's call arrives as `mcp__<server>__<tool>`, which names no
-   * utility, and it never passes the app gateway, which is where a utility
-   * call is normally recorded. This map is what lets the trace and the audit
-   * name the utility the user actually enabled. Keyed by server name rather
-   * than by session because a sub-agent's call arrives on its own session id.
-   */
-  private nativeServerOwners = new Map<string, { utilityId: string; utilityName: string }>()
-  /** Terminal native calls already reported, per session, keyed by call id. */
-  private reportedNativeCalls = new Map<string, Set<string>>()
-  /** Refusals already told to the app, so a reconcile retry is one notice. */
-  private reportedMcpFailures = new Set<string>()
-  private nativeUtilityCallHandler: ((invocation: NativeUtilityInvocation) => void) | null = null
-  private nativeMcpFailureHandler: ((failure: NativeMcpServerFailure) => void) | null = null
-  /** The fold's resolver, so a part names the utility behind an `mcp__` call. */
-  private readonly nativeToolOwner = (toolName: string): PiNativeToolAttribution | null =>
-    piMcpToolAttribution(this.nativeServerOwners, toolName)
   /** Storage-relative arm/disarm flag files for oversized-request recovery. */
   private cioOversizedFlagPaths = new Map<string, string>()
   /** Storage-relative stop-flag files the user's Stop writes for the core-tools
@@ -872,9 +833,6 @@ export class PiDriver extends PersistentCliDriver {
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    // Each turn reports its own native calls; a call id never repeats across
-    // turns, so the per-session record is reset at the turn that starts fresh.
-    this.reportedNativeCalls.delete(session.id)
     const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
@@ -1254,12 +1212,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
-    this.reportedNativeCalls.delete(sessionId)
-    for (const key of Array.from(this.reportedMcpFailures)) {
-      if (key.startsWith(`${sessionId}:`)) this.reportedMcpFailures.delete(key)
-    }
     await this.removeGatewayHandoff(sessionId)
-    await this.removeMcpServersDocument(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1394,70 +1347,6 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
-   * Publish the MCP servers this thread has activated, so the app-owned
-   * extension can register them with pi's own MCP host.
-   *
-   * A pi session process outlives the turn that spawned it, so this document  
-   * not the launch arguments   is how a utility activated in a later turn
-   * reaches the running process, and how a rotated credential is re-read
-   * without a restart. An empty list is a real instruction, because pi then
-   * drops the servers the app no longer publishes; a failed write is not, and
-   * leaves the previous document in force until the next publication.
-   *
-   * Answers with the server name each utility took, which the gateway hands the
-   * model on activation so it knows which namespace to reach for.
-   */
-  /**
-   * Register the callback for one call a script made to a server this app
-   * registered. Fires once per call, at its terminal status.
-   */
-  onNativeUtilityCall(callback: (invocation: NativeUtilityInvocation) => void): void {
-    this.nativeUtilityCallHandler = callback
-  }
-
-  /**
-   * Register the callback for a server pi's own MCP host would not run, so the
-   * user hears about it while the session that tried is still alive.
-   */
-  onNativeMcpFailure(callback: (failure: NativeMcpServerFailure) => void): void {
-    this.nativeMcpFailureHandler = callback
-  }
-
-  async publishUtilityMcpServers(
-    _projectPath: string,
-    sessionId: string,
-    utilities: readonly NativeMcpUtilityBinding[]
-  ): Promise<NativeMcpPublicationResult> {
-    void _projectPath
-    const relative =
-      this.cioMcpServersPaths.get(sessionId) ??
-      join(cioCoreToolsDirectory(sessionId), PI_MCP_SERVERS_FILE_NAME)
-    this.cioMcpServersPaths.set(sessionId, relative)
-    // One broken utility never costs the thread the others: the adapter reports
-    // it, and the app gateway is still a path to that one.
-    const { registrations, failures } = buildPiMcpRegistrations(utilities)
-    for (const failure of failures) {
-      Logger.dev('Pi MCP server skipped:', failure.utilityName, failure.reason)
-    }
-    for (const registration of registrations) {
-      this.nativeServerOwners.set(registration.name, {
-        utilityId: registration.utilityId,
-        utilityName: registration.utilityName
-      })
-    }
-    try {
-      await this.storage.writeRaw(relative, JSON.stringify(piMcpServersDocument(registrations)))
-    } catch (error) {
-      Logger.dev('Pi MCP server document update failed:', error)
-      return { servers: [], failures }
-    }
-    return {
-      servers: registrations.map(({ utilityId, name }) => ({ utilityId, server: name })),
-      failures
-    }
-  }
-
-  /**
    * Publish the plan and progress the owning thread is executing, so the
    * compaction extension can rebuild a checkpoint from them when a transcript
    * cannot be summarized. Session-keyed and best-effort: a thread with no plan
@@ -1493,7 +1382,7 @@ export class PiDriver extends PersistentCliDriver {
       turnIndex: 0
     }
     this.turnStates.set(context.sessionId, state)
-    return mapPiRecord(value, { ...context, nativeToolOwner: this.nativeToolOwner }, state)
+    return mapPiRecord(value, context, state)
   }
 
   dispose(): void {
@@ -1510,9 +1399,6 @@ export class PiDriver extends PersistentCliDriver {
     }
     this.gatewayHandoffPaths.clear()
     this.pendingGatewayEndpoints.clear()
-    for (const sessionId of this.cioMcpServersPaths.keys()) {
-      void this.removeMcpServersDocument(sessionId)
-    }
     this.cioCoreToolsExtensionPaths.clear()
     this.cioSystemPromptPaths.clear()
     this.cioHistoryRecapPaths.clear()
@@ -2350,19 +2236,6 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /** Remove a session's MCP server document, which names the utilities and
-   *  carries the credential values a deleted session must not leave behind. */
-  private async removeMcpServersDocument(sessionId: string): Promise<void> {
-    const relative = this.cioMcpServersPaths.get(sessionId)
-    if (!relative) return
-    this.cioMcpServersPaths.delete(sessionId)
-    try {
-      await this.storage.removeRaw(relative)
-    } catch (error) {
-      Logger.dev('Pi MCP server document removal failed:', error)
-    }
-  }
-
   /** Remove a session's gateway handoff file and forget its path. */
   private async removeGatewayHandoff(sessionId: string): Promise<void> {
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
@@ -2505,95 +2378,8 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /**
-   * Report one call a script made to an app-registered server, once, at its
-   * terminal status.
-   *
-   * The fold already named the utility on the part (it holds the resolver and
-   * the tool name together); this funnel is where that identity becomes a
-   * record, because a native call never passes the app gateway, which is the
-   * only other place a utility call is written down.
-   */
-  protected override emit(event: AgentEvent): void {
-    if (event.type === 'message.part.updated') {
-      const part = event.part
-      if (part.type === 'tool') {
-        const metadata = part.state.metadata
-        const status = part.state.status
-        const utilityId = stringValue(metadata?.['utilityId'])
-        const utilityName = stringValue(metadata?.['utilityName'])
-        const server = stringValue(metadata?.['server'])
-        const tool = stringValue(metadata?.['tool'])
-        if (
-          utilityId &&
-          utilityName &&
-          server &&
-          tool &&
-          (status === 'completed' || status === 'error' || status === 'aborted')
-        ) {
-          this.reportNativeCall(event.sessionId, part.callID, {
-            sessionId: event.sessionId,
-            utilityId,
-            utilityName,
-            server,
-            tool,
-            status: status === 'completed' ? 'completed' : 'error'
-          })
-        }
-      }
-    }
-    super.emit(event)
-  }
-
-  private reportNativeCall(
-    sessionId: string,
-    callId: string,
-    invocation: NativeUtilityInvocation
-  ): void {
-    const handler = this.nativeUtilityCallHandler
-    if (!handler) return
-    const reported = this.reportedNativeCalls.get(sessionId) ?? new Set<string>()
-    this.reportedNativeCalls.set(sessionId, reported)
-    if (reported.has(callId)) return
-    reported.add(callId)
-    handler(invocation)
-  }
-
-  /**
-   * A server the app published was refused by pi's own MCP host. Pi reports it
-   * as a status record carrying the server name and pi's reason; the driver
-   * resolves the utility and hands it to the app, once per distinct refusal.
-   */
-  private handleNativeMcpFailureReport(
-    statusRecord: Record<string, unknown>,
-    sessionId: string
-  ): void {
-    for (const failure of parsePiMcpFailureReport(statusRecord['statusText'])) {
-      const owner = this.nativeServerOwners.get(failure.name)
-      this.reportNativeMcpFailure({
-        sessionId,
-        server: failure.name,
-        ...(owner ? { utilityId: owner.utilityId, utilityName: owner.utilityName } : {}),
-        reason: failure.reason
-      })
-    }
-  }
-
-  private reportNativeMcpFailure(failure: NativeMcpServerFailure): void {
-    const handler = this.nativeMcpFailureHandler
-    if (!handler) return
-    const key = `${failure.sessionId}:${failure.server ?? failure.utilityId ?? ''}:${failure.reason}`
-    if (this.reportedMcpFailures.has(key)) return
-    this.reportedMcpFailures.add(key)
-    handler(failure)
-  }
-
   /** Route app-owned extension status records and compaction requests. */
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
-    if (stringValue(record['statusKey']) === PI_MCP_FAILURE_STATUS_KEY) {
-      this.handleNativeMcpFailureReport(record, sessionId)
-      return
-    }
     if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
       const request = parseRecord(record['statusText'])
       if (request?.['type'] === 'ready') this.compactionReadySessions.add(sessionId)
@@ -3232,7 +3018,6 @@ export class PiDriver extends PersistentCliDriver {
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const historyRecapRelative = join(directory, 'history-recap.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
-      const mcpServersRelative = join(directory, PI_MCP_SERVERS_FILE_NAME)
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const watchFlagRelative = join(directory, 'watched-subagents.json')
@@ -3260,7 +3045,6 @@ export class PiDriver extends PersistentCliDriver {
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           historyRecapPath: this.storage.resolve(historyRecapRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
-          mcpServersPath: this.storage.resolve(mcpServersRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
           subagentWatchPath: this.storage.resolve(watchFlagRelative),
@@ -3279,7 +3063,6 @@ export class PiDriver extends PersistentCliDriver {
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioHistoryRecapPaths.set(sessionId, historyRecapRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
-      this.cioMcpServersPaths.set(sessionId, mcpServersRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
       this.cioWatchFlagPaths.set(sessionId, watchFlagRelative)
