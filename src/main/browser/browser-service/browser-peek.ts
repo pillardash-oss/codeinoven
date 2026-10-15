@@ -73,24 +73,84 @@ const FALLBACK_ORIGIN_SIZE = 20
  */
 export const PEEK_SNAPSHOT_MAX_WIDTH = 1_280
 
+/** The kind of media element a peek was asked from. */
+export type BrowserPeekMediaKind = 'image' | 'video' | 'audio'
+
 /**
- * The script that finds the link under a point.
+ * The media element a peek was asked from.
  *
- * Deliberately anchor-only: the same probe serves a Peek opened from the page's
- * own menu, where the element under the cursor is usually the paragraph, the card
- * or the whole body, and a flight out of one of those says nothing about where
- * the user clicked. A link inside a frame leaves this document's own tree, so a
- * page that keeps its links in an iframe falls back to the click point.
+ * A right-click on a picture or a player says exactly which element the user is
+ * on through its own source address, which is what lets the flight start on the
+ * element itself rather than on the pixel the click landed on.
  */
-export function peekProbeScript(point: BrowserPeekPoint): string {
+export interface BrowserPeekMediaTarget {
+  /** The element's source address, as the page reported it. */
+  url: string
+  /** The element the page reported under the cursor. */
+  kind: BrowserPeekMediaKind
+}
+
+/** The tag each reported media kind is shown by. */
+const MEDIA_TAGS: Record<BrowserPeekMediaKind, string> = {
+  image: 'img',
+  video: 'video',
+  audio: 'audio'
+}
+
+/**
+ * The script that finds the element a peek's flight starts from.
+ *
+ * The link half is deliberately anchor-only: the same probe serves a Peek opened
+ * from the page's own menu, where the element under the cursor is usually the
+ * paragraph, the card or the whole body, and a flight out of one of those says
+ * nothing about where the user clicked.
+ *
+ * A picture or a player is the other way round: the menu that asked for the peek
+ * already knows which source was clicked, so the page is searched for the element
+ * showing exactly that source and the flight starts on it. The search is scoped to
+ * the reported tag and reads nothing but sources, so it stays a bounded pass over
+ * the media of a document.
+ *
+ * Either way a link inside a frame leaves this document's own tree, so a page that
+ * keeps its links or its pictures in an iframe falls back to the click point.
+ */
+export function peekProbeScript(
+  point: BrowserPeekPoint,
+  media: BrowserPeekMediaTarget | null = null
+): string {
   return `(() => {
-    const element = document.elementFromPoint(${JSON.stringify(point.x)}, ${JSON.stringify(point.y)});
+    const rectOf = (element) => {
+      if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+      const rect = element.getBoundingClientRect();
+      if (!(rect.width > 0) || !(rect.height > 0)) return null;
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    };
+    ${media ? mediaProbeScript(media) : ''}const element = document.elementFromPoint(${JSON.stringify(point.x)}, ${JSON.stringify(point.y)});
     const anchor = element && typeof element.closest === 'function' ? element.closest('a[href]') : null;
-    if (!anchor) return null;
-    const rect = anchor.getBoundingClientRect();
-    if (!(rect.width > 0) || !(rect.height > 0)) return null;
-    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    return rectOf(anchor);
   })()`
+}
+
+/**
+ * The media half of the probe, written inline because it runs in the page.
+ *
+ * An element is matched on the sources it actually carries: `currentSrc` is the
+ * one a `srcset` chose, `src` is the attribute the markup wrote, and a player
+ * keeps its address on the `source` children instead. The first match with a
+ * rectangle on screen wins, which is a picture that is present but collapsed out
+ * of the way skipped rather than reported as no answer at all.
+ */
+function mediaProbeScript(media: BrowserPeekMediaTarget): string {
+  const tag = JSON.stringify(MEDIA_TAGS[media.kind])
+  const url = JSON.stringify(media.url)
+  return `for (const element of document.querySelectorAll(${tag})) {
+      const sources = [element.currentSrc, element.src];
+      for (const source of element.querySelectorAll('source')) sources.push(source.src);
+      if (!sources.includes(${url})) continue;
+      const rect = rectOf(element);
+      if (rect) return rect;
+    }
+    `
 }
 
 /**

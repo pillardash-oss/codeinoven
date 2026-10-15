@@ -205,6 +205,7 @@ import {
   PEEK_ORIGIN_PROBE_TIMEOUT_MS,
   PEEK_SNAPSHOT_MAX_WIDTH,
   resolvePeekOrigin,
+  type BrowserPeekMediaTarget,
   type BrowserPeekPoint,
   type BrowserPeekRect
 } from './browser-service/browser-peek'
@@ -6124,7 +6125,7 @@ export class BrowserService {
       },
       ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? {
-            openPeekWindow: (url: string): void => {
+            openPeekWindow: (url: string, media?: BrowserPeekMediaTarget | null): void => {
               const current = live()
               if (!current) return
               let target: string
@@ -6134,7 +6135,7 @@ export class BrowserService {
                 Logger.error('Browser Peek refused a link:', error)
                 return
               }
-              this.openPeekFrom(owner, current, target, frame, point)
+              this.openPeekFrom(owner, current, target, frame, point, media ?? null)
             }
           }
         : {}),
@@ -6197,24 +6198,29 @@ export class BrowserService {
   }
 
   /**
-   * Open an ephemeral peek page, growing out of the link it was asked for.
+   * Open an ephemeral peek page, growing out of the thing it was asked for.
    *
-   * The probe is what makes the opening flight start on the link rather than at a
-   * corner of the window, and it is bounded: the page is asked once, within
-   * `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created afterwards with whatever
-   * answer came back. In practice that is a few milliseconds, because the question
-   * is a containment test in a frame that is already running; the budget is what a
-   * page that is busy, mid-navigation or without a document can cost, and it is
-   * spent before the surface exists rather than while it is on screen.
+   * The probe is what makes the opening flight start on the link, the picture or
+   * the player rather than at a corner of the window, and it is bounded: the page
+   * is asked once, within `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created
+   * afterwards with whatever answer came back. In practice that is a few
+   * milliseconds, because the question is a containment test in a frame that is
+   * already running; the budget is what a page that is busy, mid-navigation or
+   * without a document can cost, and it is spent before the surface exists rather
+   * than while it is on screen.
+   *
+   * `media` names the element a menu already knows the page was clicked on, and is
+   * null for a link or for a gesture that names nothing.
    */
   private openPeekFrom(
     owner: BrowserPageOwner,
     contents: WebContents,
     url: string,
     frame: BrowserViewBounds | null,
-    point: BrowserPeekPoint | null
+    point: BrowserPeekPoint | null,
+    media: BrowserPeekMediaTarget | null = null
   ): void {
-    void this.peekOriginFor(contents, frame, point).then((origin) => {
+    void this.peekOriginFor(contents, frame, point, media).then((origin) => {
       try {
         this.openNewTabFor(owner, url, true, origin)
       } catch (error: unknown) {
@@ -6252,9 +6258,9 @@ export class BrowserService {
   }
 
   /**
-   * The rectangle a peek's flight starts from: the link under `point`, or null
-   * when there is no point to speak of, because the page is not on screen, the
-   * click never landed on it, or the page answered nothing in time.
+   * The rectangle a peek's flight starts from: the link, picture or player under
+   * `point`, or null when there is no point to speak of, because the page is not
+   * on screen, the click never landed on it, or the page answered nothing in time.
    *
    * `point` arrives in the page view's own pixels, which is what Electron reports
    * for a right-click and what the pointer is read as, and the answer has to be in
@@ -6264,10 +6270,11 @@ export class BrowserService {
   private async peekOriginFor(
     contents: WebContents,
     frame: BrowserViewBounds | null,
-    point: BrowserPeekPoint | null
+    point: BrowserPeekPoint | null,
+    media: BrowserPeekMediaTarget | null = null
   ): Promise<BrowserViewBounds | null> {
     if (frame === null || point === null) return null
-    const link = await this.probeLinkRect(contents, point)
+    const link = await this.probePeekRect(contents, point, media)
     return resolvePeekOrigin({
       link,
       point: { x: frame.x + point.x, y: frame.y + point.y },
@@ -6276,13 +6283,14 @@ export class BrowserService {
     })
   }
 
-  /** Ask the page which link is under a point, bounded. */
-  private async probeLinkRect(
+  /** Ask the page which link or media element is under a point, bounded. */
+  private async probePeekRect(
     contents: WebContents,
-    point: BrowserPeekPoint
+    point: BrowserPeekPoint,
+    media: BrowserPeekMediaTarget | null = null
   ): Promise<BrowserPeekRect | null> {
     if (contents.isDestroyed()) return null
-    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()))
+    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()), media)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const answer = await Promise.race([
