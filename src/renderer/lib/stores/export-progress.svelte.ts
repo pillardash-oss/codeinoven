@@ -1,4 +1,5 @@
 import { mount } from 'svelte'
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import type { DesignExportFormat } from '$shared/design/design-export'
@@ -20,6 +21,24 @@ export interface ExportOutcome {
 
 /** Which export the one panel is reporting on. */
 export type ExportKind = 'design' | 'video'
+
+/**
+ * The project-relative path the panel's reveal action lands on.
+ *
+ * The two exports report their files differently. A video export names files
+ * already relative to the project root and leaves `directory` empty, so its MP4
+ * is revealed directly. A design export names files relative to the folder it
+ * created, so the folder has to be joined on before the path means anything in
+ * the tree. An export that reported no files at all reveals that folder.
+ */
+export function exportRevealPath(kind: ExportKind, outcome: ExportOutcome): string | null {
+  const first = outcome.files[0]
+  if (kind === 'design') {
+    if (!outcome.directory) return first ?? null
+    return first ? `${outcome.directory}/${first}` : outcome.directory
+  }
+  return first ?? (outcome.directory || null)
+}
 
 /** The label a video export carries, phrased for the user rather than the code. */
 const VIDEO_EXPORT_LABEL = 'Composition as MP4'
@@ -71,6 +90,12 @@ class ExportProgressState {
   error = $state('')
   /** What a finished export wrote. */
   result = $state<ExportOutcome | null>(null)
+  /** The project the reported export belongs to, so its Reveal action can find
+   *  that project's own file tree. Kept across the export because the panel
+   *  outlives the board that started it. */
+  projectId = $state('')
+  /** Whether the panel is landing the finished export in the file tree. */
+  revealing = $state(false)
   private mounted = false
   /** Bumped on every new export so a superseded run stops writing to the panel. */
   private generation = 0
@@ -106,7 +131,7 @@ class ExportProgressState {
       return
     }
     const generation = ++this.generation
-    this.begin('design', `${entry ?? 'Whole design'} as ${format.toUpperCase()}`)
+    this.begin('design', `${entry ?? 'Whole design'} as ${format.toUpperCase()}`, projectId)
     try {
       const exported = await invoke('design:export', projectId, directory, entry, format)
       if (this.generation !== generation) return
@@ -131,7 +156,7 @@ class ExportProgressState {
       return
     }
     const generation = ++this.generation
-    this.begin('video', VIDEO_EXPORT_LABEL)
+    this.begin('video', VIDEO_EXPORT_LABEL, projectId)
     this.stage = 'Starting'
     try {
       // The export runs in main as a job, so its progress is read back until it
@@ -179,10 +204,78 @@ class ExportProgressState {
     return null
   }
 
+  /**
+   * Reveal what a finished export wrote in the exporting project's own file
+   * tree, and dock the panel onto the tree it just brought on screen.
+   *
+   * The reveal is the app's existing one (`revealProjectFileFromAbsolutePath`):
+   * it opens the files surface, expands the ancestors and selects the entry, so
+   * an export lands in the same tree every other path citation uses instead of
+   * a folder the user has to find again.
+   */
+  async revealInFileTree(): Promise<void> {
+    const outcome = this.result
+    const kind = this.kind
+    const path = outcome && kind ? exportRevealPath(kind, outcome) : null
+    if (!outcome || !kind || !this.projectId || !path || this.revealing) return
+    this.revealing = true
+    try {
+      const { revealProjectFileFromAbsolutePath } = await import('$lib/reveal-file')
+      const revealed = await revealProjectFileFromAbsolutePath(this.projectId, path)
+      if (revealed) {
+        // The tree is on screen now, and the panel floats over the right edge
+        // where the sidebar just opened: dock it so it covers nothing the user
+        // was sent to look at.
+        this.minimized = true
+        return
+      }
+      // The path exists (the export just wrote it) but the project's tree could
+      // not show it, which is what a thread mounted on a worktree looks like:
+      // the export writes under the project root, the tree reads the checkout.
+      // The file manager can still show the file, so the action is not a
+      // dead end.
+      await this.revealInFileManager(path)
+    } catch (failure: unknown) {
+      // The export itself succeeded, so a failed reveal must not replace the
+      // panel's report of it with an error card; it is reported beside it.
+      logRendererError('The exported file could not be revealed.', failure)
+      toast.error(
+        failure instanceof Error
+          ? failure.message
+          : 'The exported file could not be revealed in the file tree.'
+      )
+    } finally {
+      this.revealing = false
+    }
+  }
+
+  /**
+   * Last resort for a file the project's tree cannot show: hand it to the OS
+   * file manager, which displays any existing path. A conversation mounted on a
+   * worktree checkout reads a different root than the one the export wrote to,
+   * so the tree is not always the right surface. Never throws over the panel's
+   * report of a successful export.
+   */
+  private async revealInFileManager(path: string): Promise<void> {
+    const project = await invoke('project:get', this.projectId).catch(() => null)
+    const root = project?.path.replace(/\/+$/u, '')
+    if (!root) {
+      toast.error('The exported file could not be revealed in the file tree.')
+      return
+    }
+    const { revealInOsFileManager } = await import('$lib/os-file-manager')
+    const revealed = await revealInOsFileManager(`${root}/${path.replace(/^\/+/, '')}`)
+    if (!revealed) {
+      toast.error('The exported file could not be revealed in the file tree.')
+    }
+  }
+
   /** Reset the panel for a new export and bring it to the front. */
-  private begin(kind: ExportKind, label: string): void {
+  private begin(kind: ExportKind, label: string, projectId: string): void {
     this.kind = kind
     this.label = label
+    this.projectId = projectId
+    this.revealing = false
     this.stage = ''
     this.progress = 0
     this.error = ''

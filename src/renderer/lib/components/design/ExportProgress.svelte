@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download, LoaderCircle } from '@lucide/svelte'
+  import { Download, FolderTree, LoaderCircle } from '@lucide/svelte'
   import DockableModal from '$lib/components/ui/DockableModal.svelte'
   import DockRow from '$lib/components/ui/DockRow.svelte'
   import { exportProgressState as state } from '$lib/stores/export-progress.svelte'
@@ -11,8 +11,11 @@
    *
    * Exporting anything for design or video opens this dockable panel rather than
    * a regular modal: it floats over the app, drags to any edge, and docks to a
-   * chip while its work runs, so a long MP4 export never blocks the user. The
-   * controller it reads owns the export; this component is only its face.
+   * chip while its work runs, so a long MP4 export never blocks the user. On
+   * completion it offers the two things a finished export needs: the path on the
+   * clipboard for handing to something else, and the file itself revealed in the
+   * project's own tree. The controller it reads owns the export; this component
+   * is only its face.
    */
   const STORAGE_KEY = `${APP_SLUG}.exportProgressPanel.v1`
 
@@ -23,6 +26,9 @@
   const chipLabel = $derived(
     state.running ? `Exporting ${noun}` : state.error ? 'Export failed' : `${noun} exported`
   )
+
+  /** Whether the finished export can be landed in the exporting project's tree. */
+  const canReveal = $derived(Boolean(state.result) && Boolean(state.projectId))
 
   /** The path the copy action offers: the design folder, or the video's own file. */
   function copyPath(): void {
@@ -119,6 +125,22 @@
       </button>
       <button
         type="button"
+        class="flex items-center gap-2 px-3 py-2 text-sm text-muted hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        title="Reveal the exported file in the file tree"
+        aria-label="Reveal the exported file in the file tree"
+        disabled={!canReveal || state.revealing}
+        onclick={() => void state.revealInFileTree()}
+      >
+        {#if state.revealing}
+          <LoaderCircle size={14} class="animate-spin" />
+        {:else}
+          <FolderTree size={14} />
+        {/if}
+        Reveal file
+      </button>
+      <button
+        type="button"
+        data-modal-primary
         class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={copyPath}
       >
