@@ -5,8 +5,8 @@
   /**
    * The assistant's knowledge mark, as a component a list can render directly.
    *
-   * How-to authoring is one concept across the assistant, so every surface that
-   * offers it draws this: the rail's How to toggle, the assistant row's menu item,
+   * Knowledge authoring is one concept across the assistant, so every surface that
+   * offers it draws this: the rail's knowledge toggle, the assistant row's menu item,
    * the panel's own action. It is the same inside mark as the knowledge task rows
    * wear, so opening the knowledge from any of them lands on the same mark.
    */
