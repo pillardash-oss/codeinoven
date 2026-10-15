@@ -87,4 +87,4 @@ export function shortcutHint(node: HTMLElement, options: ShortcutHintOptions) {
 
 /** Shared badge styling   muted kbd chip that lifts above the control. */
 export const shortcutHintBadgeClass =
-  'absolute z-20 inline-flex h-4 min-w-4 items-center justify-center rounded border border-border bg-surface px-1 font-mono text-[0.5625rem] leading-none text-dimmed shadow-sm transition-opacity duration-150'
+  'absolute z-20 inline-flex h-4 min-w-4 items-center justify-center border border-border bg-surface px-1 font-mono text-[0.5625rem] leading-none text-dimmed shadow-sm transition-opacity duration-150'

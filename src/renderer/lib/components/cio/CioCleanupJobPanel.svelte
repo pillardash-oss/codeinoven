@@ -92,7 +92,7 @@
   dragLabel="Drag to move the cleanup run"
 >
   {#snippet details()}
-    <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-xs text-muted">
+    <div class="space-y-1 border bg-overlay px-3 py-2 text-xs text-muted">
       {#if running && job.progress.currentTarget}
         <p class="flex min-w-0 items-center gap-1.5">
           <span class="shrink-0 text-dimmed">Sweeping</span>
@@ -130,7 +130,7 @@
         folder, which is what the user navigates by.
       -->
       <ul
-        class="max-h-40 space-y-0.5 overflow-y-auto rounded-lg border bg-overlay px-3 py-2 text-xs"
+        class="max-h-40 space-y-0.5 overflow-y-auto border bg-overlay px-3 py-2 text-xs"
         aria-label="Entries removed by this cleanup run"
       >
         {#each recentRemovals as record (record.target + '\u0000' + record.path)}
@@ -147,7 +147,7 @@
         {/each}
       </ul>
     {:else}
-      <p class="rounded-lg border bg-overlay px-3 py-2 text-xs text-dimmed">
+      <p class="border bg-overlay px-3 py-2 text-xs text-dimmed">
         Nothing was stale enough to remove.
       </p>
     {/if}

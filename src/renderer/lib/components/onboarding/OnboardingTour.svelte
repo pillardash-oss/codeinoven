@@ -201,21 +201,21 @@
       </div>
 
       <div class="grid gap-2 sm:grid-cols-3">
-        <div class="rounded-xl border bg-elevated p-3">
+        <div class="border bg-elevated p-3">
           <FolderKanban size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Import your work</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Start with a folder already on your computer.
           </p>
         </div>
-        <div class="rounded-xl border bg-elevated p-3">
+        <div class="border bg-elevated p-3">
           <MessageSquare size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Prompt the agent</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Describe a task and review what the agent does.
           </p>
         </div>
-        <div class="rounded-xl border bg-elevated p-3">
+        <div class="border bg-elevated p-3">
           <PanelRight size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Follow the details</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
@@ -227,14 +227,14 @@
       <div class="flex items-center justify-between border-t pt-4">
         <button
           type="button"
-          class="h-9 rounded-lg px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="h-9 px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
           onclick={onFinish}
         >
           Skip setup
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="flex h-9 items-center gap-2 bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
           data-modal-primary
           onclick={() => onStepChange(1)}
         >
@@ -268,7 +268,7 @@
           style:top={`${targetRect.top + targetRect.height}px`}
         ></div>
         <div
-          class="pointer-events-none fixed rounded-xl ring-2 ring-primary ring-offset-2 ring-offset-app"
+          class="pointer-events-none fixed ring-2 ring-primary ring-offset-2 ring-offset-app"
           style:top={`${targetRect.top}px`}
           style:left={`${targetRect.left}px`}
           style:width={`${targetRect.width}px`}
@@ -280,7 +280,7 @@
 
       <div
         bind:this={calloutEl}
-        class="fixed max-h-[calc(100vh-2rem)] w-[340px] overflow-y-auto rounded-2xl border bg-surface p-5 shadow-xl"
+        class="fixed max-h-[calc(100vh-2rem)] w-[340px] overflow-y-auto border bg-surface p-5 shadow-xl"
         style:top={`${calloutTop}px`}
         style:left={`${calloutLeft}px`}
         role="dialog"
@@ -298,7 +298,7 @@
           </div>
           <button
             type="button"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title={tour === 'setup' ? 'Skip setup' : 'Close tour'}
             aria-label={tour === 'setup' ? 'Skip setup' : 'Close tour'}
             onclick={onFinish}
@@ -312,10 +312,10 @@
           <div class="mt-4 grid gap-2">
             {#each activeSpotlight.shortcuts as shortcut (shortcut.label)}
               <div
-                class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2"
+                class="flex items-center justify-between border bg-elevated px-3 py-2"
               >
                 <span class="text-xs text-muted">{shortcut.label}</span>
-                <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
+                <kbd class="border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
                   >{shortcut.keys}</kbd
                 >
               </div>
@@ -330,7 +330,7 @@
           >
             {#each steps as tourStep (tourStep.selector)}
               <span
-                class={`h-1.5 rounded-full ${tourStep.selector === activeSpotlight.selector ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
+                class={`h-1.5 ${tourStep.selector === activeSpotlight.selector ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
               ></span>
             {/each}
           </div>
@@ -338,7 +338,7 @@
             {#if tour === 'setup' || step > 0}
               <button
                 type="button"
-                class="flex h-8 items-center gap-1 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-8 items-center gap-1 border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 onclick={previousStep}
               >
                 <ArrowLeft size={13} /> Back
@@ -347,7 +347,7 @@
             <button
               bind:this={nextButton}
               type="button"
-              class="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              class="flex h-8 items-center gap-1 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
               onclick={nextStep}
             >
               {tour === 'setup'
@@ -369,7 +369,7 @@
     <div class="space-y-5">
       <div class="flex items-start gap-4">
         <div
-          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-elevated text-primary"
+          class="flex h-11 w-11 shrink-0 items-center justify-center bg-elevated text-primary"
         >
           <FolderInput size={20} />
         </div>
@@ -380,7 +380,7 @@
           </p>
         </div>
       </div>
-      <div class="rounded-xl border bg-elevated p-4">
+      <div class="border bg-elevated p-4">
         <p class="text-xs font-medium text-foreground">Good first choices</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           Pick an existing app or website folder. If you are learning, you can also make an empty
@@ -390,14 +390,14 @@
       <div class="flex items-center justify-between border-t pt-4">
         <button
           type="button"
-          class="h-9 rounded-lg px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="h-9 px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
           onclick={() => onStepChange(7)}
         >
           Do this later
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="flex h-9 items-center gap-2 bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
           data-modal-primary
           onclick={onChooseProject}
         >
@@ -416,7 +416,7 @@
   >
     <div class="space-y-5">
       <div class="flex items-start gap-4">
-        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-elevated">
+        <div class="flex h-11 w-11 shrink-0 items-center justify-center bg-elevated">
           <AgentIcon agentId="pi" size={24} />
         </div>
         <div class="min-w-0 flex-1">
@@ -429,7 +429,7 @@
       </div>
 
       {#if piReady}
-        <div class="rounded-xl border border-success/30 bg-success/10 p-4">
+        <div class="border border-success/30 bg-success/10 p-4">
           <p class="text-sm font-medium text-success">
             {piBundled ? 'Pi is bundled and ready to use.' : 'Pi is installed and ready to use.'}
           </p>
@@ -439,7 +439,7 @@
           </p>
         </div>
       {:else}
-        <div class="rounded-xl border bg-elevated p-4">
+        <div class="border bg-elevated p-4">
           <p class="text-sm font-medium">Install Pi, then come back here</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             The install button opens Pi's instructions for your operating system. After
@@ -451,7 +451,7 @@
           <div class="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-9 items-center gap-2 bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
               data-modal-primary
               disabled={installBusy}
               onclick={() => void openPiInstall()}
@@ -465,7 +465,7 @@
             </button>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border px-4 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border px-4 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-50"
               disabled={piChecking}
               onclick={() => void checkPi()}
             >
@@ -479,7 +479,7 @@
       <div class="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
         <button
           type="button"
-          class="h-9 rounded-lg px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="h-9 px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
           onclick={onBrowseHarnesses}
         >
           See all coding agents
@@ -488,7 +488,7 @@
           {#if !piReady}
             <button
               type="button"
-              class="h-9 rounded-lg px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="h-9 px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
               onclick={onFinish}
             >
               Skip for now
@@ -496,7 +496,7 @@
           {/if}
           <button
             type="button"
-            class="h-9 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="h-9 bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
             onclick={onFinish}
           >
             Finish setup
