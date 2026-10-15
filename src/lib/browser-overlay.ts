@@ -109,11 +109,23 @@ export function browserStatusOverlayPlacement(
   }
 }
 
-/** The status a projected toast carries: sonner's own set, plus `memory` for
- *  the memory proposal, which the app raises as a component but the overlay
- *  draws as a plain card with the memory icon. */
-export type ToastOverlayKind =
-  'default' | 'success' | 'error' | 'warning' | 'info' | 'loading' | 'memory'
+/** The status a projected toast carries: sonner's own set. */
+export type ToastOverlayKind = 'default' | 'success' | 'error' | 'warning' | 'info' | 'loading'
+
+/**
+ * The icons a projected card can lead with.
+ *
+ * A card's icon cannot cross this boundary as the component the app renderer
+ * holds, so it crosses as one of these tokens and each side resolves it: the
+ * app renderer names the token the live toast's icon stands for, and the overlay
+ * looks the component back up in its own registry (`toast-icons.ts`). Adding an
+ * icon is therefore one entry in that registry plus the icon at the call site,
+ * and the main-process validator has to name the token too: this projection is a
+ * whitelist, so a field it does not know is a field the card silently loses.
+ * That is exactly how the memory proposal lost its icon, as a `memory` *kind* the
+ * validator's kind set did not carry.
+ */
+export type ToastOverlayIcon = 'memory' | 'clipboard'
 
 /**
  * One toast, reduced to what the overlay can draw.
@@ -125,6 +137,8 @@ export type ToastOverlayKind =
 export interface ToastOverlayToast {
   id: number | string
   kind: ToastOverlayKind
+  /** The icon this card leads with, when it carries one. */
+  icon?: ToastOverlayIcon
   title: string
   description?: string
   duration?: number

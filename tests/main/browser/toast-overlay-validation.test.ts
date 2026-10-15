@@ -42,4 +42,34 @@ describe('toast overlay request validation', () => {
     expect(() => validateToastOverlayRequest({ revision: 1, theme: 'dark' })).toThrow(TypeError)
     expect(validateToastOverlayRequest(null)).toBeNull()
   })
+
+  /**
+   * The regression this guards: this validator is a whitelist, so a field it does
+   * not name is dropped in silence, and a dropped icon is a card built around a
+   * chip that never paints. The memory proposal spent its life that way: it
+   * crossed as a `memory` kind this file's kind set did not carry, was rewritten
+   * to `default`, and every fix downstream went on fixing a card that had already
+   * lost the thing the user was looking for.
+   */
+  it('keeps the icon token a card leads with', () => {
+    const request = validateToastOverlayRequest({
+      revision: 3,
+      theme: 'dark',
+      toasts: [
+        { id: 0, kind: 'default', icon: 'memory', title: 'A preference worth remembering' },
+        { id: 1, kind: 'default', icon: 'clipboard', title: 'Copied to clipboard' }
+      ]
+    })
+    expect(request?.toasts.map((entry) => entry.icon)).toEqual(['memory', 'clipboard'])
+  })
+
+  it('drops an icon token the overlay cannot draw', () => {
+    const request = validateToastOverlayRequest({
+      revision: 4,
+      theme: 'dark',
+      toasts: [{ id: 0, kind: 'default', icon: 'not-an-icon', title: 'Copied to clipboard' }]
+    })
+    expect(request?.toasts[0]?.kind).toBe('default')
+    expect(request?.toasts[0]?.icon).toBeUndefined()
+  })
 })

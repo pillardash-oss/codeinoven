@@ -12,6 +12,7 @@ import {
   type ToastOverlayToast
 } from '$shared/browser-overlay'
 import MemoryToastComponent from './components/ui/MemoryToast.svelte'
+import { toastIconToken } from './components/ui/toast-icons'
 import { logRendererDev } from './system/renderer-logger'
 import { openMemoryProposal } from './stores/memory-proposal-open'
 
@@ -102,17 +103,24 @@ function memoryProposalProps(
  * A toast whose text is a component cannot be projected: the overlay would have
  * to render a Svelte component from another renderer's props. The memory
  * proposal is the only toast the app raises that way, and it is projected from
- * its own props instead, with the one button it shows. Any future component
- * toast has nothing the overlay can draw, so it is dropped here rather than
- * drawn empty: it is the one case where a toast would be invisible over a page,
- * and must receive a serializable projection before a caller can use it.
+ * its own props instead, as a plain card with the one button it shows and the
+ * memory icon it leads with. Any future component toast has nothing the overlay
+ * can draw, so it is dropped here rather than drawn empty: it is the one case
+ * where a toast would be invisible over a page, and must receive a serializable
+ * projection before a caller can use it.
+ *
+ * Every other card carries its icon as a token, never as the component the
+ * renderer holds (`toast-icons.ts`): the component cannot cross this boundary,
+ * and it is what keeps a call site's icon option from being dropped on the way
+ * out.
  */
 export function projectToast(entry: ToastT): ToastOverlayToast | null {
   const memory = memoryProposalProps(entry)
   if (memory) {
     return {
       id: entry.id,
-      kind: 'memory',
+      kind: 'default',
+      icon: 'memory',
       title: memory.message,
       duration: entry.duration,
       // The icon chip (`toaster.css`) derives its tint from `--status`, so
@@ -130,6 +138,7 @@ export function projectToast(entry: ToastT): ToastOverlayToast | null {
   return {
     id: entry.id,
     kind: OVERLAY_KINDS[entry.type] ?? 'default',
+    icon: toastIconToken(entry.icon),
     title: entry.title,
     description: typeof entry.description === 'string' ? entry.description : undefined,
     duration: entry.duration,

@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
+import ClipboardToastIcon from '$lib/components/ui/ClipboardToastIcon.svelte'
 
 async function copyWithElectron(text: string): Promise<void> {
   await invoke('clipboard:writeText', text)
@@ -17,6 +18,9 @@ async function copyWithElectron(text: string): Promise<void> {
  *
  * A copy is a routine acknowledgement, not a status the app reports about its
  * own health, so it uses the default toast rather than the green success card.
+ * It leads with the clipboard mark all the same: a confirmation of an action the
+ * user cannot see happen should be readable without being read, and the chip is
+ * what tells a copy apart from every other plain card in the stack.
  *
  * Start both supported paths during the originating user gesture. Electron is
  * verified by reading the value back; the browser fallback keeps copy controls
@@ -35,7 +39,7 @@ export async function copyText(
   } catch {
     throw new Error('Clipboard copy failed')
   }
-  if (successMessage !== null) toast(successMessage)
+  if (successMessage !== null) toast(successMessage, { icon: ClipboardToastIcon })
 }
 
 /**
@@ -46,5 +50,5 @@ export async function copyText(
  * where the confirmation is raised on its own.
  */
 export function notifyClipboard(message: string): void {
-  toast(message)
+  toast(message, { icon: ClipboardToastIcon })
 }

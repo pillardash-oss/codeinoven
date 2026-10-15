@@ -9,7 +9,7 @@
     ToastOverlayRequestStack,
     ToastOverlayToast
   } from '$shared/browser-overlay'
-  import MemoryToastIcon from './MemoryToastIcon.svelte'
+  import { TOAST_ICONS } from './toast-icons'
   import ToastStack from './ToastStack.svelte'
   let theme = $state<'light' | 'dark'>('light')
   let stack: ToastOverlayRequestStack | null = null
@@ -21,6 +21,7 @@
   function signatureOf(entry: ToastOverlayToast): string {
     return [
       entry.kind,
+      entry.icon ?? '',
       entry.title,
       entry.description ?? '',
       entry.duration ?? '',
@@ -50,6 +51,10 @@
       description: entry.description,
       duration: entry.duration,
       style: entry.style,
+      // The card's own mark, resolved from the token the app renderer projected:
+      // a card that leads with an icon is a card the user can place at a glance
+      // without reading it.
+      icon: entry.icon ? TOAST_ICONS[entry.icon] : undefined,
       closeButton: entry.closeButton,
       dismissible: entry.dismissible,
       action: entry.action
@@ -94,13 +99,10 @@
       case 'loading':
         toast.loading(entry.title, options)
         break
-      case 'memory':
-        // The app raises the memory proposal as a component toast, which the
-        // overlay cannot render, so it arrives projected: a plain card with
-        // the memory icon, which is what tells it apart from other cards.
-        toast.message(entry.title, { ...options, icon: MemoryToastIcon })
-        break
       default:
+        // Every plain card lands here, the memory proposal and the copy
+        // confirmation included: what tells them apart is the icon the options
+        // carry, not the branch that draws them.
         toast.message(entry.title, options)
     }
     drawn.set(keyOf(entry.id), { id: entry.id, signature: signatureOf(entry) })

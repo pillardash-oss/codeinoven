@@ -55,6 +55,7 @@ import type {
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   BrowserStripOverlayTab,
+  ToastOverlayIcon,
   ToastOverlayInteraction,
   ToastOverlayInteractionReport,
   ToastOverlayKind,
@@ -1220,6 +1221,19 @@ const OVERLAY_KINDS: ReadonlySet<string> = new Set([
   'loading'
 ])
 
+/**
+ * The icons a card may lead with, as the app renderer's registry names them.
+ *
+ * Listed here rather than passed through, because a card's icon is drawn by
+ * resolving this token to a component, and a token the overlay does not know is
+ * a card built around a chip that never paints. A missing entry is not harmless:
+ * the memory proposal's icon spent its life as a kind this file's own kind set
+ * did not carry, was quietly rewritten to `default`, and every downstream fix
+ * went on fixing a card the boundary had already stripped. Keep this list and
+ * `ToastOverlayIcon` (`src/lib/browser-overlay.ts`) in step.
+ */
+const OVERLAY_ICONS: ReadonlySet<string> = new Set(['memory', 'clipboard'])
+
 function overlayText(value: unknown, limit = MAX_OVERLAY_TEXT_LENGTH): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
   return value.slice(0, limit)
@@ -1269,7 +1283,11 @@ export function validateToastOverlayInteraction(value: unknown): ToastOverlayInt
  * `null` is a real request: nothing covers the toaster's corner any more, so the
  * overlay takes itself down. Every field is optional in the projection, so a
  * malformed card is dropped rather than rejected whole: one odd toast must never
- * cost the renderer its stack. A list longer than the ceiling is trimmed for the
+ * cost the renderer its stack. This validator is a whitelist, though, so a field
+ * it does not name is a field the card loses in silence: the icon the memory
+ * proposal led with crossed as a `memory` kind this file's kind set did not
+ * carry, and the card was drawn without it while every reader upstream believed
+ * it had been sent. A list longer than the ceiling is trimmed for the
  * same reason, and for one more: while a page covers the toaster's corner this
  * overlay is the only surface a card reaches, so refusing an over-long update
  * does not bound the payload, it hides every notification in it. Sonner keeps its
@@ -1297,12 +1315,17 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
     if (title === undefined) continue
     const kind = entry['kind']
     const duration = entry['duration']
+    const icon = entry['icon']
     toasts.push({
       id,
       kind:
         typeof kind === 'string' && OVERLAY_KINDS.has(kind)
           ? (kind as ToastOverlayKind)
           : 'default',
+      icon:
+        typeof icon === 'string' && OVERLAY_ICONS.has(icon)
+          ? (icon as ToastOverlayIcon)
+          : undefined,
       title,
       description: overlayText(entry['description']),
       duration:
