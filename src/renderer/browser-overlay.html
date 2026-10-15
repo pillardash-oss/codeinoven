@@ -19,6 +19,15 @@
       body {
         overflow: hidden;
       }
+
+      /* Vite sends compile errors to every renderer, including this transparent
+         native host. Its copy floats above the main window but cannot reliably
+         receive clicks or Escape because this host passes input through. Keep
+         the dismissible error card in the main window only. This rule must live
+         in the document so it also applies when a module or app.css fails to load. */
+      vite-error-overlay {
+        display: none !important;
+      }
     </style>
   </head>
   <body>
