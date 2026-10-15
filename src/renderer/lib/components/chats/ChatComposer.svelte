@@ -23,7 +23,6 @@
   import AttachmentPreview from './AttachmentPreview.svelte'
   import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
-  import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
@@ -75,7 +74,7 @@
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
-  import ComposerShoe, { type ComposerShoeData } from './ComposerShoe.svelte'
+  import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sessionTagKind } from '$shared/session-tags'
@@ -659,6 +658,27 @@
   let accountPickerVisible = $state(false)
   /** The shoe instance, so the `/scope` slash action can open its picker. */
   let shoeComponent: ComposerShoe | undefined = $state(undefined)
+  /**
+   * The context reading the shoe carries. It is the composer's own data, so it
+   * stays out of the shoe contract the host builds, and a turn that has reported
+   * no usage simply shows no meter: an empty gauge read as a broken one.
+   */
+  let usageReading = $derived<ComposerUsage | undefined>(
+    contextUsage === undefined
+      ? undefined
+      : {
+          usage: contextUsage,
+          efficiencyKpis,
+          harnessUsage,
+          canCompact,
+          compacting,
+          onCompact,
+          onActivateBankedReset,
+          onReveal: onRevealUsage,
+          onHide: onHideUsage,
+          refreshing: usageRefreshing
+        }
+  )
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
@@ -2133,19 +2153,6 @@
 
     <span class="flex-1"></span>
 
-    <ContextUsageIndicator
-      usage={contextUsage}
-      {efficiencyKpis}
-      {harnessUsage}
-      {canCompact}
-      {compacting}
-      {onCompact}
-      {onActivateBankedReset}
-      onReveal={onRevealUsage}
-      onHide={onHideUsage}
-      refreshing={usageRefreshing}
-    />
-
     <!-- Keep the mic mounted in one stable slot so recording state never resets
          when the composer gains text and the send control appears. -->
     <VoiceInputButton
@@ -2226,6 +2233,7 @@
       <ComposerShoe
         bind:this={shoeComponent}
         {shoe}
+        usage={usageReading}
         onScopeMenuClosed={focusComposerAtSavedCaret}
       />
     </div>

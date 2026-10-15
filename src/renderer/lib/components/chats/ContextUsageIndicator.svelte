@@ -2,7 +2,6 @@
   import {
     Archive,
     BatteryCharging,
-    BatteryMedium,
     Brain,
     ChevronDown,
     ChevronRight,
@@ -55,6 +54,17 @@
     refreshing = false
   }: Props = $props()
 
+  /** The meter's cells, bottom first: five of them, so each one is 20% of the
+   *  context. They are drawn as a column that fills upward, which reads as a
+  /** The meter's cells, bottom first: four of them, so each one is a quarter of
+   *  the context. They are drawn as a column that fills upward, which reads as a
+   *  gauge at a glance where a one-pixel bar had to be measured. */
+  const METER_CELLS = [0, 1, 2, 3] as const
+
+  /** The ring's radius and the arc it takes to fill it, for the popover header. */
+  const RING_RADIUS = 10
+  const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
   const boundedPercent = $derived(
     usage?.contextPercent === undefined
       ? undefined
@@ -69,7 +79,18 @@
           ? 'bg-warning'
           : 'bg-success'
   )
-  const iconClass = $derived(
+  /** The ring's arc and the number beside it carry the same severity colour, so
+   *  a nearly full context reads amber then red in both. */
+  const ringClass = $derived(
+    boundedPercent === undefined
+      ? 'stroke-dimmed'
+      : boundedPercent >= 90
+        ? 'stroke-danger'
+        : boundedPercent >= 70
+          ? 'stroke-warning'
+          : 'stroke-success'
+  )
+  const ringLabelClass = $derived(
     boundedPercent === undefined
       ? 'text-dimmed'
       : boundedPercent >= 90
@@ -78,8 +99,21 @@
           ? 'text-warning'
           : 'text-success'
   )
+  /** The ring's empty track, under the arc. */
+  const trackClass = 'stroke-overlay'
+  /** The ring's arc, drawn from the top: the shape states the reading, and the
+   *  number beside it states it exactly. */
+  const ringDash = $derived(
+    boundedPercent === undefined ? 0 : (boundedPercent / 100) * RING_CIRCUMFERENCE
+  )
   const percentLabel = $derived(
     boundedPercent === undefined ? '' : `${Math.round(boundedPercent)}%`
+  )
+  /** Cells of the four that are full. Four cells at a quarter each, so the meter
+   *  reads as a gauge rather than a bar: rounding keeps the closest reading, and
+   *  the number beside it carries the exact one. */
+  const filledCells = $derived(
+    boundedPercent === undefined ? 0 : Math.min(METER_CELLS.length, Math.round(boundedPercent / 25))
   )
   const multiHarness = $derived(harnessUsage.length > 1)
   const cacheHitLabel = $derived(
@@ -248,7 +282,37 @@
           {creditsLabel(usage)}
         </span>
       {/if}
-      <BatteryMedium size={15} class={iconClass} />
+      <!-- The ring and the number: the shape states the reading and the number
+           states it exactly. A battery icon in one of three colours said only
+           that something was coloured. -->
+      <span
+        class="flex shrink-0 items-center gap-1.5"
+        title="Context used"
+        aria-label={boundedPercent === undefined
+          ? 'Context usage unavailable'
+          : `Context ${Math.round(boundedPercent)}% used`}
+      >
+        <svg viewBox="0 0 24 24" class="h-4.5 w-4.5 -rotate-90" aria-hidden="true">
+          <circle cx="12" cy="12" r={RING_RADIUS} fill="none" stroke-width="3" class={trackClass}
+          ></circle>
+          {#if boundedPercent !== undefined}
+            <circle
+              cx="12"
+              cy="12"
+              r={RING_RADIUS}
+              fill="none"
+              stroke-width="3"
+              class={ringClass}
+              stroke-dasharray={`${ringDash} ${RING_CIRCUMFERENCE}`}
+            ></circle>
+          {/if}
+        </svg>
+        {#if percentLabel}
+          <span class="text-[0.625rem] font-medium tabular-nums {ringLabelClass}"
+            >{percentLabel}</span
+          >
+        {/if}
+      </span>
     </div>
   </div>
 
@@ -354,29 +418,28 @@
   aria-label="Context and provider usage"
   onmouseleave={onHide}
 >
-  <!-- Console usage control: a flat meter and its number, the shape the chosen
-       composer draws. The bar keeps the app's severity colours, so a nearly
-       full context still reads amber then red at a glance. -->
+  <!-- Console usage control: a four-cell column and its number, the reading the
+       shoe carries. The cells keep the app's severity colours, so a nearly full
+       context still reads amber then red at a glance. -->
   <button
     type="button"
-    class="flex h-8 items-center gap-2 rounded-xs px-2 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
     onmouseenter={onReveal}
     aria-label={boundedPercent === undefined
       ? 'Context usage unavailable'
       : `Context ${Math.round(boundedPercent)}% used`}
     title="Context and usage"
   >
-    <span class="h-1 w-8 shrink-0 overflow-hidden bg-overlay" aria-hidden="true">
-      <span
-        class={`block h-full ${fillClass} transition-[width] duration-700 ease-out`}
-        style={`width: ${boundedPercent ?? 0}%`}
-      ></span>
+    <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
+      {#each METER_CELLS as cell (cell)}
+        <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
+      {/each}
     </span>
     <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
   </button>
 
   <div
-    class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+    class="invisible absolute bottom-full right-0 z-40 mb-1.5 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
     role="dialog"
     aria-label="Context and provider usage"
   >

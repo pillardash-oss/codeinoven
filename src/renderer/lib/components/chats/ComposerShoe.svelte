@@ -29,6 +29,25 @@
   }
 
   /**
+   * What the context holds, as the shoe states it: the five-cell meter and its
+   * number, drawn by `ContextUsageIndicator` before the tips. The composer owns
+   * this reading, so it does not travel through `ComposerShoeData`, which the
+   * host builds.
+   */
+  export interface ComposerUsage {
+    usage?: AgentContextUsage
+    efficiencyKpis?: UsageEfficiencyKpis
+    harnessUsage?: AgentHarnessUsage[]
+    canCompact?: boolean
+    compacting?: boolean
+    onCompact?: () => void
+    onActivateBankedReset?: () => void
+    onReveal?: () => void
+    onHide?: () => void
+    refreshing?: boolean
+  }
+
+  /**
    * Everything the shoe states about one composer, in the order it renders:
    * what the composer writes into, the scope it belongs to (projects), the Oven
    * the work runs on, and   inside `identity`   the branch. This is the whole
@@ -64,6 +83,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
   import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
+  import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ScopePickerMenu from '$lib/components/shared/ScopePickerMenu.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
@@ -71,16 +91,20 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import ComposerIdentity from './ComposerIdentity.svelte'
+  import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import { uniqueScopeName } from '$shared/scope-naming'
 
   interface Props {
     shoe: ComposerShoeData
+    /** The composer's own reading: context and quota, or nothing when the turn
+     *  has reported none. */
+    usage?: ComposerUsage
     /** Runs whenever the scope picker menu closes, so the composer that renders
      *  the shoe can win its focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
   }
 
-  let { shoe, onScopeMenuClosed }: Props = $props()
+  let { shoe, usage, onScopeMenuClosed }: Props = $props()
 
   /** The project this thread belongs to, whichever way the shoe learned it. */
   let projectId = $derived(
@@ -457,6 +481,24 @@
         </div>
       {/if}
     </div>
+  {/if}
+
+  <!-- What the context holds, before the keys: the composer's own reading, in the
+       row the composer already owns, so the toolbar above keeps its room. Its
+       popover opens over the composer it belongs to. -->
+  {#if usage}
+    <ContextUsageIndicator
+      usage={usage.usage}
+      efficiencyKpis={usage.efficiencyKpis}
+      harnessUsage={usage.harnessUsage ?? []}
+      canCompact={usage.canCompact ?? false}
+      compacting={usage.compacting ?? false}
+      onCompact={usage.onCompact}
+      onActivateBankedReset={usage.onActivateBankedReset}
+      onReveal={usage.onReveal}
+      onHide={usage.onHide}
+      refreshing={usage.refreshing ?? false}
+    />
   {/if}
 
   <!-- The tips: the keys that end a message, there only to be read. Nothing here
