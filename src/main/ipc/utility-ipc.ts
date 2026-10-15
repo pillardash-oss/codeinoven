@@ -81,6 +81,10 @@ export function registerUtilityIpc(
     }
   }
 
+  // No claim of this process can exist yet, so an unrestricted daemon running now
+  // was left behind by a run that a quit or a crash ended.
+  void cuaBridge.reapAbandonedDaemon().catch(() => undefined)
+
   ipcMain.handle('computerUse:getCuaStatus', () => cuaBridge.getStatus())
   ipcMain.handle('computerUse:setCuaEnabled', (_, enabled: unknown) => {
     if (typeof enabled !== 'boolean') throw new TypeError('Cua bridge enabled state is invalid')
