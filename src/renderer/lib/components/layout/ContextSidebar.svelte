@@ -458,8 +458,14 @@
       <Bug size={12} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}
       <Info size={12} class="shrink-0" />
+    {:else if tab.kind === 'subagent'}
+      <!-- The Bot glyph is the mark a sub-agent wears on every surface; a hue
+           would make it a second class of tab rather than one more tab. -->
+      <Bot size={12} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
-      <MessageCircleDashed size={12} class="shrink-0 text-temporary-chat" />
+      <!-- The dashed circle is the whole signal: a side chat carries the same
+           neutral glyph as every other tab, never an indicator colour. -->
+      <MessageCircleDashed size={12} class="shrink-0" />
     {:else if tab.kind === 'browser-agent'}
       <!-- The assistant conversation of a browser tab wears the Chats view's own
            mark, and no tone: it is a conversation, not a status. -->
@@ -497,7 +503,7 @@
     {:else if tab.kind === 'assistant-how-to'}
       <Hammer size={12} class="shrink-0 text-primary" />
     {:else}
-      <Bot size={12} class="shrink-0 text-info" />
+      <Bot size={12} class="shrink-0" />
     {/if}
   {/snippet}
 

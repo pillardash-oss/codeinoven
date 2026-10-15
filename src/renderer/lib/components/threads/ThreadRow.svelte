@@ -524,11 +524,11 @@
     // of the badge) but shows the unread dot instead of swallowing it.
     // Last action wins between the side chat and the parent thread's own turn:
     // a primary turn that settled after the side chat landed keeps the green
-    // unread dot; otherwise the side-chat unread shows in the working colour
-    // (the temporary-chat icon colour) so it never masquerades as an unread
-    // primary thread. Opening the thread reads the primary turn but leaves the
-    // side chat unread, so the working-coloured dot returns and stays until the
-    // side-chat panel is focused (or the chat expires or is closed).
+    // unread dot, and otherwise the side-chat unread keeps that same dot under
+    // its own state. The marker that says "side chat" is the row's dashed glyph,
+    // so no colour has to carry that meaning. Opening the thread reads the
+    // primary turn but leaves the side chat unread, so the dot returns and stays
+    // until the side-chat panel is focused (or the chat expires or is closed).
     if (hasTemporaryChatUnread) {
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
@@ -712,10 +712,10 @@
         case 'approval':
           return { kind: 'attention', animated: true }
         case 'temporary-unread':
-          // Same circular dot as the primary unread badge but in the
-          // temporary-chat colour so the user reads it as "side chat waiting",
-          // not as an unread primary thread.
-          return { stage: 'unread', color: 'var(--color-temporary-chat)' }
+          // The same circular unread dot as a primary thread: what is waiting, not
+          // which kind of thing is waiting. The row's own dashed side-chat marker
+          // names the side chat, so no second colour does the talking.
+          return { stage: 'unread' }
         case 'error':
           return { kind: 'error' }
         default:
@@ -832,9 +832,10 @@
 {#snippet temporaryChatMarker()}
   {#if hasTemporaryChat}
     <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
-         side chat is visible from the list that spawned it. -->
+         side chat is visible from the list that spawned it. It keeps the row's
+         neutral icon colour: the dashed circle is the mark, never a hue. -->
     <span
-      class="flex shrink-0 items-center text-temporary-chat"
+      class="flex shrink-0 items-center text-muted"
       role="img"
       aria-label={temporaryChatLabel}
       title={temporaryChatLabel}

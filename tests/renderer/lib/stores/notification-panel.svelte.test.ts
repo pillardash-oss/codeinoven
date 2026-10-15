@@ -351,10 +351,10 @@ describe('routing a temporary chat notification', () => {
     expect(panel.projectNotifications).toEqual([])
   })
 
-  it('paints a side chat with the temporary-chat colour, not the chat teal', () => {
+  it('paints a side chat with the chat-completion tone its response earned', () => {
     panel.add(temporaryChat('side'))
     const entry = panel.projectNotifications[0]
-    expect(entry && panel.accentColor(entry)).toBe('var(--color-temporary-chat)')
+    expect(entry && panel.accentColor(entry)).toBe('var(--color-chat-success)')
     expect(panel.hasTemporaryChat).toBe(true)
   })
 
@@ -364,7 +364,7 @@ describe('routing a temporary chat notification', () => {
     expect(panel.unreadRailSummary('projects')).toEqual({
       count: 1,
       label: '1 unread project',
-      colors: ['var(--color-temporary-chat)']
+      colors: ['var(--color-chat-success)']
     })
   })
 
@@ -372,7 +372,7 @@ describe('routing a temporary chat notification', () => {
     panel.add(payload('turn'))
     panel.add(temporaryChat('side'))
     expect(panel.unreadRailSummary('projects')?.colors).toEqual([
-      'var(--color-temporary-chat)',
+      'var(--color-chat-success)',
       'var(--color-success)'
     ])
   })

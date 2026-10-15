@@ -1228,7 +1228,8 @@
 
     // Temporary chats get their own hairline-separated slot: they are ephemeral
     // side conversations, not standing tools, and one button toggles the whole
-    // set because the panel tabs them.
+    // set because the panel tabs them. The dashed mark is the whole signal   a
+    // side chat carries no indicator colour, so it reads as one more entry.
     const temporaryChats: ContextDockItem[] = []
     if (temporaryChatTabs.length > 0) {
       const name =
@@ -1240,7 +1241,6 @@
         label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
         icon: MessageCircleDashed,
         active: dockKindActive('temporary-chat'),
-        tone: 'info',
         onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
       })
     }
@@ -1326,7 +1326,8 @@
     }
 
     // Sub-agents appear only after the first one is opened. The group shares
-    // one toggle, while the sidebar keeps each sub-agent in its own tab.
+    // one toggle, while the sidebar keeps each sub-agent in its own tab. The Bot
+    // glyph is what marks a sub-agent; no rail colour does.
     const subagents: ContextDockItem[] = []
     if (subagentTabs.length > 0) {
       const name =
@@ -1338,7 +1339,6 @@
         label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
         icon: Bot,
         active: dockKindActive('subagent'),
-        tone: 'info',
         onSelect: () => toggleDockPanel('subagent', focusSubagent)
       })
     }

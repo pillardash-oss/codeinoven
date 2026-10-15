@@ -36,8 +36,9 @@
     countBadge?: string
     countBadgeTone?: 'working'
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
-     *  info for ephemeral tools that match their in-panel icon colour. */
-    tone?: 'warning' | 'info'
+     *  and nothing else   blue on the rail means work in progress, never the
+     *  kind of tool an icon stands for. */
+    tone?: 'warning'
     /**
      * A floating flyout (e.g. a dropdown) docked to this specific item. Rendered
      * as a sibling of the trigger button inside a shared `position: relative`
@@ -73,14 +74,12 @@
       .join('|')
   )
 
-  /** Toned tools keep their colour in every state so the rail icon reads as the
-   *  same tool as its panel icon; the shared highlight behind the current item
-   *  paints the active background for every tool. */
+  /** A toned tool   an attention-worthy entry such as a written thread note   keeps
+   *  its colour in every state; the shared highlight behind the current item
+   *  paints the active background for every tool, so an untinted icon reads as
+   *  one more tool and never as a second class of thing. */
   function toneClass(item: ContextDockItem): string {
     if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
-    if (item.tone === 'info') {
-      return item.active ? 'text-info' : 'text-info/80 hover:bg-elevated hover:text-info'
-    }
     return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
   }
 </script>

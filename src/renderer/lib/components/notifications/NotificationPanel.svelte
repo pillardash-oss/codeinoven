@@ -584,9 +584,11 @@
             >
             {#if n.source === 'temporary-chat'}
               <span class="shrink-0">·</span>
+              <!-- The dashed circle marks the side chat; it wears the row's own
+                   neutral icon colour, never an identity hue. -->
               <MessageCircleDashed
                 size={10}
-                class="shrink-0 text-temporary-chat"
+                class="shrink-0"
                 title="Temporary chat"
                 aria-hidden="true"
               />

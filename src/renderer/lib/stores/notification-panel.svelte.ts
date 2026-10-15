@@ -97,25 +97,24 @@ export function backgroundRunNotificationKind(
  * Canonical accent colour for a notification kind, keyed to the very token the
  * app paints the same meaning with everywhere else: a spec is the spec purple,
  * a failure the danger red, a request for attention the warning amber, the chat
- * response a temporary (side) chat delivers the temporary-chat indicator blue,
+ * response a temporary (side) chat delivers the chat-completion teal,
  * and a completed thread the success green its entry already carries. The bell's
  * dots and an entry's leading dot both read from here, so the colour on the
  * notification badge is always the status colour the rest of the app uses for
  * the same thing   never a one-off hue.
  *
- * `chat-completed` is raised only by a temporary chat, so it wears that side
- * chat's own colour rather than the chat teal: a side chat is a temporary
- * conversation pinned to one thread, not a message in the Chats inbox.
+ * `chat-completed` is raised only by a temporary chat, and it wears the chat
+ * completion tone: that colour names the outcome (a chat response landed), never
+ * the fact that the conversation is a side one. A side chat carries no colour of
+ * its own anywhere   its dashed glyph is the only thing that marks it.
  *
  * An assistant notice raised by the assistant space's own activity wears the
  * assistant colour instead (see `accentColor`), which is how the assistant is
  * identified across the app. A status kind never does: see `STATUS_KINDS`.
  */
-export const TEMPORARY_CHAT_COLOR = 'var(--color-temporary-chat)'
-
 export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string> = {
   completed: 'var(--color-success)',
-  'chat-completed': TEMPORARY_CHAT_COLOR,
+  'chat-completed': 'var(--color-chat-success)',
   attention: 'var(--color-warning)',
   spec: 'var(--color-thread-spec)',
   error: 'var(--color-danger)'
@@ -176,15 +175,14 @@ class NotificationPanelState {
 
   /**
    * The colour a notification wears on its leading dot and its card border: a
-   * status kind always takes its canonical status colour, a temporary chat its
-   * own indicator colour, and every other assistant notice the assistant space
+   * status kind always takes its canonical status colour, an activity notice the
+   * outcome colour it reports, and every other assistant notice the assistant space
    * colour. One rule shared by the bell, the panel and the view rails, so the
    * surfaces can never disagree about what colour a notification is   and a
    * failed run reads as an error on all of them, never as brand colour.
    */
   accentColor(n: InAppNotification): string {
     if (STATUS_KINDS.has(n.kind)) return NOTIFICATION_KIND_COLORS[n.kind]
-    if (n.source === 'temporary-chat') return TEMPORARY_CHAT_COLOR
     if (this.isAssistant(n)) return this.assistantColor ?? 'var(--color-dimmed)'
     return NOTIFICATION_KIND_COLORS[n.kind]
   }
@@ -362,8 +360,8 @@ class NotificationPanelState {
 
     // The dots list the accents actually waiting on the family, deduped and in
     // a stable order (a side-chat response first, then a settled turn). Reading
-    // each entry's accent   rather than mapping its kind   is what keeps a
-    // temporary chat's own colour on the rail of the entity that spawned it.
+    // each entry's own outcome accent, rather than mapping its kind, is what
+    // keeps it on the rail of the entity that spawned it.
     const priority: InAppNotification['kind'][] = ['chat-completed', 'completed']
     const ordered = [...entries].sort((a, b) => priority.indexOf(a.kind) - priority.indexOf(b.kind))
     const colors: string[] = []
@@ -397,8 +395,8 @@ class NotificationPanelState {
   }
 
   /** A completed temporary (side) chat turn, which the bell shows as a dot in
-   *  the temporary-chat indicator colour. A failed side chat lights the error
-   *  dot instead, so a failure is never hidden behind the side-chat colour. */
+   *  the chat-completion tone its entry carries. A failed side chat lights the
+   *  error dot instead, so a failure is never hidden behind a completion. */
   get hasTemporaryChat(): boolean {
     return this._notifications.some(
       (n) => n.source === 'temporary-chat' && n.kind === 'chat-completed'

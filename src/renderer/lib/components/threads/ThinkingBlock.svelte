@@ -76,7 +76,7 @@
     >
       <Brain
         size={13}
-        class="shrink-0 text-info/60 transition-colors group-hover/think:text-info"
+        class="shrink-0 text-dimmed transition-colors group-hover/think:text-muted"
       />
       <!-- Bold label with the run's duration, then the muted summary: the
            weight is what separates the label from the content it introduces.
@@ -116,7 +116,7 @@
           {/if}
           {#if summary.trim()}
             <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
-              <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
+              <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
                 Reasoning summary
               </p>
               <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />

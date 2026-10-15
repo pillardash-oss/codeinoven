@@ -62,11 +62,9 @@
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
   --color-thread-working-paused: var(--color-warning);
-  /* Temporary (side) chat indicator — the context-rail tab icon, the parent
-     thread's side-chat badge and every temporary-chat notification share this
-     one colour, so a side chat reads as a side chat by one accent everywhere
-     it appears, whichever entity it belongs to. */
-  --color-temporary-chat: var(--color-info);
+  /* No hue identifies a temporary (side) chat or a sub-agent: their mark is
+     their glyph, so neither ever reads as a second class of thing, and blue on
+     these surfaces keeps meaning exactly one thing   work in progress. */
   /* Quiet but unmistakable purple for reviewable engineering artifacts. */
   --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);

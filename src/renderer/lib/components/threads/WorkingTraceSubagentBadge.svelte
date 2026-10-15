@@ -41,7 +41,7 @@
 {#if coarsePointer}
   <button
     type="button"
-    class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
+    class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-1 text-[0.5625rem] text-muted transition-colors active:bg-dimmed/20"
     aria-label={title}
     {title}
     onclick={(e: MouseEvent) => {
@@ -56,7 +56,7 @@
 {:else}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
+      class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] text-muted transition-colors hover:bg-dimmed/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-border"
       aria-label={title}
       {title}
       onclick={(e: MouseEvent) => {
@@ -76,7 +76,7 @@
         class="z-50 w-96 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
       >
         <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-          <Bot size={12} class="shrink-0 text-info" />
+          <Bot size={12} class="shrink-0 text-muted" />
           <span class="text-[0.6875rem] font-semibold text-foreground">
             {subagentCount}
             {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
