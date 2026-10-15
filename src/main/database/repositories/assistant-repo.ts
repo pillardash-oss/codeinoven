@@ -241,6 +241,33 @@ export class AssistantRepo {
   }
 
   /**
+   * Write the two fields the setup conversation settles before the knowledge
+   * exists: the name the user gives their assistant and the personality they
+   * described.
+   *
+   * Narrower than `upsert` on purpose. The capability that calls this may only
+   * rename the assistant and record how it should behave, so it can never clobber
+   * a schedule, a connection set or a knowledge that the panel is editing in the
+   * same window. Only the fields the caller passes are touched.
+   */
+  updateIdentity(
+    id: string,
+    identity: { name?: string; personality?: string },
+    updatedAt: number
+  ): Assistant | null {
+    const existing = this.get(id)
+    if (!existing) return null
+    const next: Assistant = {
+      ...existing,
+      ...(identity.name !== undefined ? { name: identity.name } : {}),
+      ...(identity.personality !== undefined ? { personality: identity.personality } : {}),
+      updatedAt
+    }
+    this.upsert(next)
+    return next
+  }
+
+  /**
    * One assistant, read on the worker's connection. Interaction paths (a settled
    * run's notification naming its assistant, say) use this instead of `get`, so a
    * synchronous read never holds the Electron main thread.

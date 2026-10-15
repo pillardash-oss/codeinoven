@@ -114,6 +114,7 @@ import {
   ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
   assistantAuthoringUtility
 } from '../../lib/assistant-authoring'
+import { ASSISTANT_NAME_LIMIT, ASSISTANT_PERSONALITY_LIMIT } from '../../lib/types'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -225,6 +226,13 @@ export interface UtilityTurnRequest {
    * the checkpoint path and replaces its content.
    */
   saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
+  /**
+   * Present only for an assistant's Getting started interview; the callback writes
+   * the name and the personality the conversation settles onto the assistant and
+   * broadcasts the change, so every surface renames itself the moment the user
+   * answers rather than at the end of the interview.
+   */
+  saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -2333,17 +2341,44 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation !== 'save_checkpoint' || !state.request.saveAssistantCheckpoint) {
-        throw new Error(
-          'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
+      if (operation === 'save_checkpoint') {
+        if (!state.request.saveAssistantCheckpoint) {
+          throw new Error(
+            'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
+          )
+        }
+        const markdown = requiredString(
+          operationInput['markdown'],
+          'markdown',
+          ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
         )
+        result = await state.request.saveAssistantCheckpoint(markdown)
+      } else if (operation === 'save_identity') {
+        if (!state.request.saveAssistantIdentity) {
+          throw new Error(
+            'Renaming the assistant is only available while its knowledge is being written'
+          )
+        }
+        // Only the fields the user has actually settled are sent on, so naming the
+        // assistant never clears a personality the conversation agreed earlier.
+        const identity: { name?: string; personality?: string } = {}
+        if (operationInput['name'] !== undefined) {
+          identity.name = requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
+        }
+        if (operationInput['personality'] !== undefined) {
+          identity.personality = requiredString(
+            operationInput['personality'],
+            'personality',
+            ASSISTANT_PERSONALITY_LIMIT
+          )
+        }
+        if (identity.name === undefined && identity.personality === undefined) {
+          throw new Error('save_identity needs a name or a personality')
+        }
+        result = await state.request.saveAssistantIdentity(identity)
+      } else {
+        throw new Error('The getting-started capability exposes save_checkpoint and save_identity')
       }
-      const markdown = requiredString(
-        operationInput['markdown'],
-        'markdown',
-        ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
-      )
-      result = await state.request.saveAssistantCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')

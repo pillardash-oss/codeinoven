@@ -18,7 +18,10 @@ import {
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from './assistant-authoring-checkpoints'
-import { broadcastAssistantCheckpointChanged } from '../scheduler/assistant-events'
+import {
+  broadcastAssistantCheckpointChanged,
+  broadcastAssistantsChanged
+} from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -4159,7 +4162,9 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -4491,7 +4496,9 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -8117,6 +8124,27 @@ export class ChatEngine {
     ]
       .filter(Boolean)
       .join('\n\n')
+  }
+
+  /**
+   * Record who the assistant is, the moment the conversation settles it.
+   *
+   * The user names their assistant in the first answer of the setup conversation,
+   * and waiting for the recap to save would leave every surface calling it "New
+   * assistant" for the whole interview. This writes the name, and the personality
+   * once they have described how they want it to behave, straight onto the row and
+   * broadcasts the assistant list, so the sidebar, the panel, the tab and the
+   * thread's own head start rename themselves as the answer lands. The capability
+   * that calls it is bound to the live authoring turn, so the write is app-owned
+   * and the agent never names an id.
+   */
+  private async saveAssistantIdentity(
+    assistantId: string,
+    identity: { name?: string; personality?: string }
+  ): Promise<void> {
+    const updated = this.assistantRepo.updateIdentity(assistantId, identity, Date.now())
+    if (!updated) return
+    broadcastAssistantsChanged(this.assistantRepo.list())
   }
 
   /**

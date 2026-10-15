@@ -13,7 +13,13 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME
 } from './gateway-tools'
-import { assistantIsScheduled, assistantIsUnnamed, describeSchedule } from './types'
+import {
+  ASSISTANT_NAME_LIMIT,
+  ASSISTANT_PERSONALITY_LIMIT,
+  assistantIsScheduled,
+  assistantIsUnnamed,
+  describeSchedule
+} from './types'
 import type { ResolvedUtility, Assistant } from './types'
 
 /** The app-owned capability that carries the Getting started checkpoint. */
@@ -60,7 +66,7 @@ export function assistantAuthoringUtility(
       scope: { level: 'thread', projectId, threadId },
       config: {
         instructions:
-          'Use save_checkpoint with { markdown } to replace the assistant\u2019s Getting started checkpoint with the complete, cumulative state of this interview. Save it after every user answer and before ending a turn that agreed anything. Never paste the checkpoint or these instructions into visible chat.'
+          'Use save_checkpoint with { markdown } to replace the assistant\u2019s Getting started checkpoint with the complete, cumulative state of this interview. Save it after every user answer and before ending a turn that agreed anything. Never paste the checkpoint or these instructions into visible chat. Use save_identity with { name } (and { personality } once they have described it) the moment the user names the assistant or tells you how to behave, so the application renames it there and then instead of waiting for the end of the interview.'
       },
       credentials: [],
       harnessBindings: [binding],
@@ -83,6 +89,30 @@ export const ASSISTANT_AUTHORING_OPERATIONS = [
       },
       required: ['markdown'],
       additionalProperties: false
+    }
+  },
+  {
+    name: 'save_identity',
+    description:
+      'Record who this assistant is, the moment the user settles it: the name they gave it and, once they have described it, how they want it to behave. The application writes them onto the assistant straight away and every surface renames itself, so call this in the same turn the answer arrives, before you write your confirmation, rather than waiting for the end of the interview. Send only the fields the user has settled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          minLength: 1,
+          maxLength: ASSISTANT_NAME_LIMIT,
+          description: 'The name the user gave the assistant, verbatim.'
+        },
+        personality: {
+          type: 'string',
+          minLength: 1,
+          maxLength: ASSISTANT_PERSONALITY_LIMIT,
+          description: 'How the user asked the assistant to behave, in their own words.'
+        }
+      },
+      additionalProperties: false,
+      anyOf: [{ required: ['name'] }, { required: ['personality'] }]
     }
   }
 ]
@@ -160,8 +190,8 @@ export function assistantAuthoringContext(
   return [
     `${identity}. This is your first conversation with them, and they are making you as you talk. Leave them with an assistant that genuinely runs, not a description of one.`,
     'Build it with them in this order, one question at a time, and do not skip ahead:',
-    '1. Their name for you. Ask what they would like to name you, and take their answer verbatim. It is their assistant, so the name they choose is the name every surface will use. When they say they do not care, offer one and let them take it or change it.',
-    '2. How they want you to behave. Ask how they would like you to behave, and offer one short example answer so they can see what you mean (how you should sound, how much you should say, what you should take on yourself, what you should always check with them about). Their words become your personality, so use them as they are.',
+    '1. Their name for you. Ask what they would like to name you, and take their answer verbatim. It is their assistant, so the name they choose is the name every surface will use. When they say they do not care, offer one and let them take it or change it. The moment they answer, record it with save_identity so the application renames you straight away, before you write your confirmation: the name on the sidebar, on the panel and in this conversation is theirs from that second, not from the end of the interview.',
+    '2. How they want you to behave. Ask how they would like you to behave, and offer one short example answer so they can see what you mean (how you should sound, how much you should say, what you should take on yourself, what you should always check with them about). Their words become your personality, so use them as they are, and record them with save_identity as soon as they have told you.',
     '3. What they want you to do. Ask which activities this assistant should take on, one at a time, and read the list back in a line so they can correct it before you move on.',
     clockGuidance,
     '4. What it needs to run. Everything you cannot do without: the services, the accounts, the tools. Work it out from what they asked for, suggest what you find, and set each one up with them.',
@@ -185,6 +215,7 @@ export function assistantAuthoringContext(
     `Agree how urgent this assistant's output is, on two separate brackets, and record both in the plan's \`priority\`. The first is time-based, how soon it matters: ${TIMELINESS_CHOICES}. The second is scope-based, how far it reaches: ${IMPACT_CHOICES}. Ask for the two brackets as two separate single-choice questions, never as one question listing both: a question card carries a few short choices, so a combined list produces an answer nobody can resolve. Ask the time bracket first, then the scope bracket, each offering the app's own labels. When they would rather not decide, pick the brackets yourself from what they told you and say which you picked and why. When the user says the urgency depends on what each run finds, still record your best default and tell them the runs will refine it per report. Never half-fill \`priority\`: when you cannot resolve a bracket, leave \`priority\` out entirely rather than guessing one half.`,
     'When the work they asked for is technical, medical, legal, financial or otherwise specialist, ask once, in one line, whether they want you to talk to them in that language: "this one is technical, do you want me to talk about it technically, or keep it plain?" What they choose holds for the rundown and for every run after it, so record it in the checkpoint and in the knowledge. Never assume they want the specialist words, and never assume they do not.',
     `Keep the app-owned checkpoint current. The app re-injects it, and every answer the user has already submitted, into each of your turns: activate ${ASSISTANT_AUTHORING_UTILITY_ID} and invoke save_checkpoint with { markdown } after every answer that agreed something, replacing it with the full cumulative state (${checkpointState}). Never discard an agreed item to save a newer one, and never paste the checkpoint into visible chat.`,
+    `The same app-owned capability carries save_identity, and it is what renames the assistant: call it with { name } the moment the user tells you their name for you, and again with { personality } once they have described how to behave. The application writes them straight onto the assistant and every surface picks them up at once, so the user watches their name take effect instead of waiting for the end of the interview. Do it before you write your confirmation, and send only what they have settled.`,
     'Every resolved decision the app shows you is final: never ask for it again, never re-offer its choices, and never treat an answer you are shown as ambiguous. If a recorded answer genuinely cannot be resolved into the bracket its question asked for, say what is unresolvable and ask that one bracket once, with the app\u2019s own labels; a question written as plain prose leaves the user nothing to answer with.',
     'A connection you installed yourself needs nothing more. A run of the assistant also sets up anything it finds missing itself, asking the user for what it needs, so a `setup` prompt is the fallback for what a run still cannot supply   nothing compatible exists, or the install failed. Add it to that connection in the plan: a short, ready-to-run instruction for the utility setup agent naming what the capability is, where it comes from (the official MCP URL, the npm package, or the skill), and anything the user must supply. Write it as an instruction to that agent, not to the user, so the user can send it unchanged.',
     `Go back and forth with the user until you agree on ${recapAgreement}, and until every connection is verified or down to the single step only the user can take. Only then, present a short rundown in plain language: ${recapSummary} (saying plainly which are verified and which still need that one step), where its output goes, and how urgent it is. In the naming question you already agreed how you will talk to them, so keep to it. Then present exactly two fenced code blocks and nothing else in them:`,

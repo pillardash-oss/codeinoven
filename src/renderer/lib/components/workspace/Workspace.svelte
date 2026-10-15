@@ -1064,6 +1064,26 @@
   })
 
   /**
+   * What the rail calls a tab, when its stored title is not the whole story.
+   *
+   * An Oven tab wears the Oven's own mark and name. An assistant's knowledge tab
+   * wears the assistant's, read from the live list rather than from the title the
+   * tab was opened with: the setup conversation names the assistant while that
+   * panel is open, so the row, the panel header and this conversation all rename
+   * themselves the moment the user answers.
+   */
+  function tabPresentation(
+    tab: ContextSidebarTab
+  ): { title: string; iconUrl?: string | null; color?: string | null } | null {
+    if (tab.kind === 'assistant-knowledge') {
+      if (!tab.assistantId) return null
+      const name = assistantList.find((entry) => entry.id === tab.assistantId)?.name.trim()
+      return name ? { title: name } : null
+    }
+    return ovenTabPresentation(tab)
+  }
+
+  /**
    * The Oven panel names itself.
    *
    * The sidebar header shows the Oven's own mark and name instead of the generic
@@ -4322,9 +4342,10 @@
    * It exists straight away with nothing known about it, its Getting started
    * conversation is seeded exactly like the form's, and the app posts the opening
    * turn: the user reads one line saying a new assistant is being created, and the
-   * model is told to run the setup conversation, starting with the name. The
-   * answers land back on the assistant when the recap is saved, so the name the
-   * user gives it in the conversation is the name every surface then uses.
+   * model is told to run the setup conversation, starting with the name. It wears
+   * a placeholder name and a colour of its own from that moment, and the name the
+   * user gives it in the conversation is written onto it as the answer lands, so
+   * every surface renames itself there and then rather than at the recap.
    */
   async function createAssistantViaChat(): Promise<void> {
     if (!assistantProject) return
@@ -5076,7 +5097,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            tabPresentation={ovenTabPresentation}
+            {tabPresentation}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}

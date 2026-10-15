@@ -1,4 +1,11 @@
-import { parseTimeOfDay, type AssistantSchedule, type ScheduleCadence } from './types'
+import {
+  ASSISTANT_NAME_LIMIT,
+  ASSISTANT_PERSONALITY_LIMIT,
+  ASSISTANT_SCHEDULE_NAME_LIMIT,
+  parseTimeOfDay,
+  type AssistantSchedule,
+  type ScheduleCadence
+} from './types'
 import {
   normalizePlanDelivery,
   normalizePlanPriority,
@@ -207,11 +214,11 @@ export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
 export const ASSISTANT_PLAN_SCHEMA_TEXT = JSON.stringify(ASSISTANT_PLAN_JSON_SCHEMA)
 
 /** Ceiling for the name a plan may carry, matching the store's own limit. */
-const MAX_PLAN_TEXT = 200
+const MAX_PLAN_TEXT = ASSISTANT_NAME_LIMIT
 /** Ceiling for the personality a plan may carry, matching the IPC validator. */
-const MAX_PLAN_PERSONALITY = 4_000
+const MAX_PLAN_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
 /** Ceiling for the schedule name a plan may carry, matching the IPC validator. */
-const MAX_PLAN_SCHEDULE_NAME = 120
+const MAX_PLAN_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 
 /**
  * One free-text field of a plan, trimmed and capped, or null when it carries

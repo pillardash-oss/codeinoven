@@ -37,6 +37,11 @@ import type {
   AssistantTimeliness,
   UpdateAssistantInput
 } from '../../../lib/types'
+import {
+  ASSISTANT_NAME_LIMIT,
+  ASSISTANT_PERSONALITY_LIMIT,
+  ASSISTANT_SCHEDULE_NAME_LIMIT
+} from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
 
@@ -44,10 +49,10 @@ const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ASSISTANT_DELIVERY_CHANNEL_IDS)
 const TIMELINESS_BRACKETS = new Set<string>(ASSISTANT_TIMELINESS_IDS)
 const IMPACT_BRACKETS = new Set<string>(ASSISTANT_IMPACT_IDS)
-const MAX_ASSISTANT_NAME = 200
+const MAX_ASSISTANT_NAME = ASSISTANT_NAME_LIMIT
 const MAX_ASSISTANT_DESCRIPTION = 2000
-const MAX_ASSISTANT_PERSONALITY = 4_000
-const MAX_ASSISTANT_SCHEDULE_NAME = 120
+const MAX_ASSISTANT_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
+const MAX_ASSISTANT_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 const MAX_KNOWLEDGE = 100_000
 const MAX_CONNECTIONS = 64
 const MAX_CONNECTION_SETUP = 4_000
