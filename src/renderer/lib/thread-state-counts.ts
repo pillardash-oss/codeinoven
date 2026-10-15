@@ -19,15 +19,6 @@ export interface ThreadStateCounts {
   error: number
 }
 
-export interface CountThreadStatesOptions {
-  /**
-   * Also count unread threads. Off by default: a project row reports working,
-   * attention, and error only, while a routine row also wears the green unread
-   * count its inline dot used to show.
-   */
-  includeUnread?: boolean
-}
-
 export function emptyThreadStateCounts(): ThreadStateCounts {
   return { working: 0, unread: 0, attention: 0, retry: 0, error: 0 }
 }
@@ -36,18 +27,15 @@ export function emptyThreadStateCounts(): ThreadStateCounts {
  * Count threads by the state a sidebar row reports. Working, attention, retry,
  * and error are mutually exclusive: a thread lands in exactly one of them, so a
  * thread is never double-counted. Unread is a separate axis (a thread can be
- * unread and parked at once), so it is counted on its own and only when the
- * caller asks for it.
+ * unread and parked at once), so it is counted on its own, and every row that
+ * renders the strip shows it on the same terms as working.
  *
  * Working reads the one live-working rule, so a row's badge can never disagree
  * with the thread rows it summarizes. Retry is the `working-paused` status, the
  * same threads the rail counts as "waiting to retry"; without it a routine
  * parked on a provider retry wore no indicator at all.
  */
-export function countThreadStates(
-  threads: Iterable<Thread>,
-  options: CountThreadStatesOptions = {}
-): ThreadStateCounts {
+export function countThreadStates(threads: Iterable<Thread>): ThreadStateCounts {
   const counts = emptyThreadStateCounts()
   for (const thread of threads) {
     if (threadHasVisibleWork(thread)) counts.working += 1
@@ -56,7 +44,7 @@ export function countThreadStates(
     else if (thread.status === 'failed' && thread.read) counts.error += 1
     else if (thread.status === 'awaiting_approval') counts.attention += 1
     else if (thread.status === 'working-paused') counts.retry += 1
-    if (options.includeUnread && !thread.read) counts.unread += 1
+    if (!thread.read) counts.unread += 1
   }
   return counts
 }

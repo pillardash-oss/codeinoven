@@ -210,16 +210,14 @@
     for (const [routineId, list] of tasksByRoutine) {
       map.set(
         routineId,
-        countThreadStates([...list, ...(runsByRoutine.get(routineId) ?? EMPTY_RUNS)], {
-          includeUnread: true
-        })
+        countThreadStates([...list, ...(runsByRoutine.get(routineId) ?? EMPTY_RUNS)])
       )
     }
     // A run can outlive the routine's task list (its task was removed), so any
     // routine left with only runs still gets a breakdown.
     for (const [routineId, runs] of runsByRoutine) {
       if (!map.has(routineId)) {
-        map.set(routineId, countThreadStates(runs, { includeUnread: true }))
+        map.set(routineId, countThreadStates(runs))
       }
     }
     return map
