@@ -10,7 +10,6 @@
     Pencil,
     Play,
     RotateCcw,
-    ScrollText,
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
@@ -784,7 +783,7 @@
 {#snippet routineEmptyState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
-      <ScrollText size={17} strokeWidth={1.6} class="text-dimmed" />
+      <AssistantIcon mark="how-to" size={24} class="text-dimmed" />
     </span>
     <p class="text-[0.8125rem] font-medium text-foreground">No how-to yet</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
