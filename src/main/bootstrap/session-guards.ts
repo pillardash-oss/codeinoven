@@ -3,6 +3,7 @@ import type { BrowserWindow } from 'electron'
 import { installFilePreviewProtocol } from '../editor/file-preview-protocol'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import type { PrivilegedIpcValidator } from '../ipc/ipc-validation'
+import { localDownloadName } from '../system/local-download-names'
 
 export interface RendererSessionGuardDeps {
   validator: PrivilegedIpcValidator
@@ -15,8 +16,10 @@ export interface RendererSessionGuardDeps {
  * The trusted top-level renderer may capture microphone audio for local
  * dictation. Camera, subframes, foreign documents, and every unrelated
  * permission remain denied. Electron requires both handlers for complete
- * media permission coverage. Downloads initiated from the renderer are denied
- * outright; exports always use the native save dialog in the main process.
+ * media permission coverage. Downloads initiated from the renderer are denied,
+ * because exports always use the native save dialog in the main process; a
+ * `blob:` URL the trusted window itself created is the one allowed exception
+ * (see the download guard below).
  */
 export function installRendererSessionGuards(deps: RendererSessionGuardDeps): void {
   session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => {
@@ -46,10 +49,28 @@ export function installRendererSessionGuards(deps: RendererSessionGuardDeps): vo
     }
   )
 
-  // Deny all downloads initiated from the renderer; exports always use the
-  // native save dialog in the main process.
-  session.defaultSession.on('will-download', (event) => {
-    event.preventDefault()
+  // Downloads this app's own renderer starts are denied, because every export
+  // it draws itself goes through the native save dialog in the main process.
+  //
+  // A `blob:` URL is the exception, and it has to be. Those bytes exist only in
+  // the renderer's memory, so saving one is the only way they can ever reach the
+  // disk, and the surface that asks for it is not always ours to draw: the media
+  // controls behind an `<audio controls>` element carry their own Download item,
+  // and denying its request made that item do nothing at all, with no dialog and
+  // no file. A blob handed over by the trusted window is therefore allowed
+  // through to Electron's default routine, which prompts for a save path; the
+  // name it suggests is the one the renderer registered for that URL.
+  session.defaultSession.on('will-download', (event, item, webContents) => {
+    const ownBlob =
+      item.getURL().startsWith('blob:') && webContents === deps.getMainWindow()?.webContents
+    if (!ownBlob) {
+      event.preventDefault()
+      return
+    }
+    item.setSaveDialogOptions({
+      title: 'Save file',
+      defaultPath: localDownloadName(item.getURL()) ?? item.getFilename()
+    })
   })
 }
 
