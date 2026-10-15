@@ -2,6 +2,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import type { Thread } from '$shared/types'
+import { THREAD_GROUP_MARK, THREAD_STATE_MARKS } from '$lib/components/threads/thread-state-marks'
+
+// The row asks the live agent-run store whether a thread is working. These tests
+// drive that one question directly, so a fixture can be "working" without a real
+// session behind it.
+const runs = vi.hoisted(() => ({ busy: new Set<string>(), settled: false }))
+vi.mock('$lib/stores/agent-runs.svelte', () => ({
+  agentRuns: {
+    hasSettled: () => runs.settled,
+    isBusy: (projectId: string, threadId: string) => runs.busy.has(`${projectId}:${threadId}`),
+    settledAt: () => null
+  }
+}))
 
 /**
  * The detailed row after the spine redesign.
@@ -129,14 +142,48 @@ describe('ThreadRow, the detailed spine row', () => {
     unmount(app)
   })
 
-  it('reserves no pin slot, so the primary line starts at the title', async () => {
+  it('draws a real pin mark on a pinned row, and no pin button at all', async () => {
     const { target, app } = render(thread({ pinned: true }))
     await tick()
 
-    const pinButtons = target.querySelectorAll('[aria-label="Pin thread"], [aria-label="Unpin thread"]')
+    // A pin button would reserve width the title cannot use; pinning is the
+    // context menu's job. The row still shows the pin, so the state is visible.
+    const pinButtons = target.querySelectorAll(
+      '[aria-label="Pin thread"], [aria-label="Unpin thread"]'
+    )
     expect(pinButtons.length).toBe(0)
+    expect(target.querySelector('[aria-label="Pinned"]')).not.toBeNull()
 
     unmount(app)
+  })
+
+  it('names the state with a glyph, so colour is never the only carrier', async () => {
+    const { target, app } = render(thread({ status: 'spec' }))
+    await tick()
+
+    const marks = [...target.querySelectorAll('[role="img"]')].map((n) =>
+      n.getAttribute('aria-label')
+    )
+    expect(marks).toContain('Spec ready')
+
+    unmount(app)
+  })
+
+  it('rides a draft on top of the working state instead of replacing it', async () => {
+    runs.busy.add('p1:t1')
+    // A live run needs a bound session, which is what the row reads.
+    const { target, app } = render(
+      thread({ status: 'executing', read: true, sessionId: 's1' } as Partial<Thread>)
+    )
+    await tick()
+
+    const marks = [...target.querySelectorAll('[role="img"]')].map((n) =>
+      n.getAttribute('aria-label')
+    )
+    expect(marks).toContain('Working')
+
+    unmount(app)
+    runs.busy.delete('p1:t1')
   })
 
   it('draws every live action in the compact layout as well', async () => {
@@ -154,6 +201,36 @@ describe('ThreadRow, the detailed spine row', () => {
     unmount(app)
     speech.recording.delete('t1')
     pip.threads.delete('t1')
+  })
+
+  it('names the specification with one mark everywhere it appears', async () => {
+    // The user asked for one canonical icon per status. The specification is the
+    // case that drifted: a document in some surfaces and a toolbox in others.
+    const spec = THREAD_STATE_MARKS.spec.icon
+    expect(spec).toBe(THREAD_STATE_MARKS.spec.icon)
+    expect(THREAD_GROUP_MARK.Spec.icon).toBe(spec)
+    expect(THREAD_STATE_MARKS.spec.colour).toBe(THREAD_GROUP_MARK.Spec.colour)
+  })
+
+  it('paints the state glyph in that state colour, and gives every state one', async () => {
+    const { target, app } = render(thread({ status: 'spec' }))
+    await tick()
+
+    const glyph = target.querySelector('[aria-label="Spec ready"]')
+    expect(glyph).not.toBeNull()
+    // The glyph and the rail share one column, and the column carries the state
+    // colour, so the icon and the line under it are the colour of the status.
+    const column = glyph?.parentElement as HTMLElement
+    expect(column.getAttribute('style')).toContain(THREAD_STATE_MARKS.spec.colour)
+    expect(column.className).toContain('flex-col')
+
+    unmount(app)
+    for (const key of Object.keys(THREAD_STATE_MARKS)) {
+      const mark = THREAD_STATE_MARKS[key as keyof typeof THREAD_STATE_MARKS]
+      expect(mark.icon).toBeTruthy()
+      expect(mark.colour).toMatch(/^var\(--/)
+      expect(['solid', 'dashed', 'dotted']).toContain(mark.dash)
+    }
   })
 
   it('puts one status rail on the row and no legacy ring slot', async () => {

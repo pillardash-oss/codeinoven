@@ -20,6 +20,11 @@
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    threadActionMark,
+    threadStateMark,
+    type ThreadStateMark
+  } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -578,37 +583,29 @@
    *  Read and completed draw the same quiet hairline. They are one settled state
    *  to the eye, and the distinction that matters is carried by the title, the
    *  tooltip and the accessible name instead of by two nearly identical rings. */
-  let spineStyle = $derived.by((): string => {
-    const solid = (width: string, color: string): string => `width:${width};background:${color};`
-    const dashed = (color: string): string =>
-      `width:0.1875rem;background:repeating-linear-gradient(to bottom, ${color} 0 0.25rem, transparent 0.25rem 0.4375rem);`
-    const dotted = (color: string): string =>
-      `width:0.1875rem;background:repeating-linear-gradient(to bottom, ${color} 0 0.125rem, transparent 0.125rem 0.25rem);`
-    switch (threadState) {
-      case 'read':
-      case 'completed':
-        return solid('0.0625rem', 'var(--color-border-strong)')
-      case 'unread':
-        return solid('0.1875rem', 'var(--color-thread-unread)')
-      case 'temporary-unread':
-        return dashed('var(--color-thread-unread)')
-      case 'todo':
-        return dashed('var(--color-muted)')
-      case 'working':
-        return solid('0.1875rem', 'var(--color-thread-working)')
-      case 'working-paused':
-        return dashed('var(--color-warning)')
-      case 'queued':
-        return dotted('var(--color-info)')
-      case 'scheduled':
-        return dotted('color-mix(in srgb, var(--color-info) 55%, transparent)')
-      case 'approval':
-        return solid('0.25rem', 'var(--color-warning)')
-      case 'spec':
-        return solid('0.1875rem', 'var(--color-thread-spec)')
-      case 'error':
-        return solid('0.25rem', 'var(--color-danger)')
-    }
+  /** The action mark riding this row's rail, if any.
+   *
+   *  A draft, a queued message and a start-after are not states: they are things
+   *  waiting on the thread. They ride the rail as a mark rather than replacing
+   *  what the thread is doing, so a thread that is working with a draft waiting
+   *  shows the pen and its rail still says working. */
+  let pendingAction = $derived.by((): ThreadStateMark | null => {
+    if (hasQueuedMessage) return threadActionMark('queued')
+    if (hasStartAfterPending) return threadActionMark('scheduled')
+    if (holdingDraft) return threadActionMark('todo')
+    return null
+  })
+
+  /** The glyph the rail carries, and the name it answers to. The action rides on
+   *  top of the state; with no action, the state speaks for itself. */
+  let spineMark = $derived.by((): ThreadStateMark => pendingAction ?? threadStateMark(threadState))
+
+  /** The rail's paint: the state's own colour, and its dash pattern. The rail is
+   *  the same width as the glyph above it, so the mark reads as one column. */
+  let spineRailPaint = $derived.by((): string => {
+    if (spineMark.dash === 'solid') return spineMark.colour
+    const stripe = spineMark.dash === 'dashed' ? ['0.25rem', '0.4375rem'] : ['0.125rem', '0.25rem']
+    return `repeating-linear-gradient(to bottom, ${spineMark.colour} 0 ${stripe[0]}, transparent ${stripe[0]} ${stripe[1]})`
   })
 
   /** The row's own ground, when the state wants the user. A tint is the second
@@ -640,7 +637,7 @@
    *  state rail, which runs the full height of the row. */
   let rowLayoutClass = $derived(
     detailed
-      ? 'gap-1 py-1.5 pl-2.5 pr-2.5 mb-3 relative'
+      ? 'gap-1 py-1.5 pl-[1.625rem] pr-2.5 mb-3 relative'
       : compact
         ? 'gap-1 px-2 py-1 mb-1'
         : 'gap-1 px-2 py-1.5 mb-1'
@@ -1189,24 +1186,43 @@
     oncontextmenu={openContextMenu}
   >
     {#if detailed}
-      <!-- State rail: the thread's state, drawn down the full height of the row.
-           Shape carries it as well as hue, so every state stays separable for a
-           reader who cannot tell the colours apart. Pinned caps the rail, so a
-           pinned thread shows without the pointer finding it first. -->
+      <!-- State mark: one column holding the glyph above a rail of the same
+           width. The glyph names the state and wears its colour; the rail repeats
+           that colour in a line beneath it, so both are centred on one axis and
+           the title's gutter stays flush and even.
+           A pinned thread wears a real pin above the glyph, and something waiting
+           on the thread (a draft, a queue, a start-after) takes the glyph's place. -->
       <span
-        class="pointer-events-none absolute inset-y-0 left-0"
-        style={spineStyle}
-        aria-hidden="true"
-      ></span>
-      {#if effectivePinned}
+        class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center"
+        style="color: {spineMark.colour};"
+      >
+        {#if effectivePinned}
+          <span
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center text-thread-pinned"
+            role="img"
+            title="Pinned"
+            aria-label="Pinned"
+          >
+            <Pin size={14} fill="currentColor" aria-hidden="true" />
+          </span>
+        {/if}
         <span
-          class="pointer-events-none absolute left-0 top-0 h-1.5"
-          style="width: {threadState === 'approval' || threadState === 'error'
-            ? '0.25rem'
-            : '0.1875rem'}; background: var(--color-thread-pinned);"
+          class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+          role="img"
+          title={spineMark.label}
+          aria-label={spineMark.label}
+        >
+          {#if spineMark}
+            {@const SpineIcon = spineMark.icon}
+            <SpineIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+          {/if}
+        </span>
+        <span
+          class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+          style="background: {spineRailPaint};"
           aria-hidden="true"
         ></span>
-      {/if}
+      </span>
     {/if}
     <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
     <span

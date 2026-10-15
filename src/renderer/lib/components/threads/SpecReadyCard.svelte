@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FileText, ListChecks, Play, X } from '@lucide/svelte'
+  import { ListChecks, Play, Toolbox, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -102,7 +102,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label={specless ? 'Assignment' : 'Specification ready'}>
     <CardHead
-      icon={specless ? ListChecks : FileText}
+      icon={specless ? ListChecks : Toolbox}
       title={specless ? 'Assignment' : 'Specification ready'}
       {chip}
       bind:folded

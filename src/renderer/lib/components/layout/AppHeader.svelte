@@ -22,11 +22,11 @@
     Bell,
     ChevronLeft,
     ChevronRight,
-    FileText,
     Globe,
     Loader2,
     Search,
-    StickyNotes
+    StickyNotes,
+    Toolbox
   } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
@@ -356,7 +356,9 @@
         {#if workspaceState.specStudioBusy}
           <Loader2 size={15} class="animate-spin" />
         {:else}
-          <FileText size={15} />
+          <!-- The specification's own mark, so the toolbox a user learns here is
+               the same one a spec-ready row wears. -->
+          <Toolbox size={15} />
         {/if}
         <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
