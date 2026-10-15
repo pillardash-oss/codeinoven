@@ -8,6 +8,7 @@
     Upload
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { listRowMove } from '$lib/motion'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import {
     describeSupportedFormatsForCapability,
@@ -248,7 +249,9 @@
     {:else}
       <ul class="divide-y">
         {#each installedRows as row (row.installed.artifactId)}
-          {@render installedRow(row)}
+          <li class="flex items-center gap-3 py-2.5" animate:listRowMove>
+            {@render installedRow(row)}
+          </li>
         {/each}
       </ul>
     {/if}
@@ -277,61 +280,58 @@
   {@const isActive = isActiveCapability(settings, row.installed.artifactId, row.capability)}
   {@const label = artifact?.label ?? parsedImport?.displayName ?? row.installed.artifactId}
   {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
-  <li class="flex items-center gap-3 py-2.5">
-    <span
-      class="size-1.5 shrink-0 {isActive
-        ? 'bg-primary'
-        : row.installed.available
-          ? 'bg-border-strong'
-          : 'bg-danger'}"
-      aria-hidden="true"
-    ></span>
-    <div class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium" title={label}>{label}</p>
-      <p class="truncate text-xs text-dimmed">
-        {runtimeBadge(row.installed.runtime)}{#if byteSize}
-          · {formatBytes(byteSize)}{/if}{#if artifact}
-          · {artifact.license}{/if}{#if artifact?.languages.length}
-          · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
-          · Not found{/if}
+  <span
+    class="size-1.5 shrink-0 {isActive
+      ? 'bg-primary'
+      : row.installed.available
+        ? 'bg-border-strong'
+        : 'bg-danger'}"
+    aria-hidden="true"
+  ></span>
+  <div class="min-w-0 flex-1">
+    <p class="truncate text-sm font-medium" title={label}>{label}</p>
+    <p class="truncate text-xs text-dimmed">
+      {runtimeBadge(row.installed.runtime)}{#if byteSize}
+        · {formatBytes(byteSize)}{/if}{#if artifact}
+        · {artifact.license}{/if}{#if artifact?.languages.length}
+        · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
+        · Not found{/if}
+    </p>
+    {#if !artifact && row.installed.importPath}
+      <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
+        {row.installed.importPath}
       </p>
-      {#if !artifact && row.installed.importPath}
-        <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
-          {row.installed.importPath}
-        </p>
-      {/if}
-    </div>
-    {#if isActive}
-      <span
-        class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
-        >Active</span
-      >
-    {:else if row.installed.available}
-      <button
-        type="button"
-        class="shrink-0 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
-        title="Use this model"
-        aria-label="Use {label} for {activeSubTab.label}"
-        onclick={() =>
-          setActive(modelSubTabForCapability(row.capability), row.installed.artifactId)}
-      >
-        Use
-      </button>
-    {:else}
-      <span class="shrink-0 text-xs text-muted" title={row.installed.unavailableReason}>
-        Unavailable
-      </span>
     {/if}
+  </div>
+  {#if isActive}
+    <span
+      class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
+      >Active</span
+    >
+  {:else if row.installed.available}
     <button
       type="button"
-      class="flex size-7 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
-      title="Remove {label}"
-      aria-label="Remove {label}"
-      onclick={() => removeInstalled(row)}
+      class="shrink-0 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+      title="Use this model"
+      aria-label="Use {label} for {activeSubTab.label}"
+      onclick={() => setActive(modelSubTabForCapability(row.capability), row.installed.artifactId)}
     >
-      <Trash2 size={13} aria-hidden="true" />
+      Use
     </button>
-  </li>
+  {:else}
+    <span class="shrink-0 text-xs text-muted" title={row.installed.unavailableReason}>
+      Unavailable
+    </span>
+  {/if}
+  <button
+    type="button"
+    class="flex size-7 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
+    title="Remove {label}"
+    aria-label="Remove {label}"
+    onclick={() => removeInstalled(row)}
+  >
+    <Trash2 size={13} aria-hidden="true" />
+  </button>
 {/snippet}
 
 {#snippet artifactRow(artifact: SpeechModelArtifact)}

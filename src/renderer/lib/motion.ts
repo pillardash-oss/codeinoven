@@ -1,4 +1,5 @@
 import { cubicOut } from 'svelte/easing'
+import { flip, type AnimationConfig } from 'svelte/animate'
 import type { TransitionConfig } from 'svelte/transition'
 
 /** True when the user has asked the OS for reduced motion. Shared by the
@@ -38,4 +39,27 @@ export function slideWidth(
     easing,
     css: (t: number) => `overflow: hidden; width: ${t * width}px;`
   }
+}
+
+/**
+ * The travel a row makes when a keyed list reorders it, for use as
+ * `animate:listRowMove` on the element that is the only child of its keyed
+ * `{#each}` block.
+ *
+ * It exists so every reordering list moves at the same rate and skips the same
+ * work: a row that is offscreen in either its old or its new position moves
+ * instantly instead of animating for nobody, and the OS reduced-motion setting
+ * turns the travel into a jump. Both guards read here rather than at each call
+ * site, so a list cannot accidentally animate offscreen rows or ignore the
+ * user's motion preference.
+ */
+export function listRowMove(
+  node: HTMLElement,
+  positions: { from: DOMRect; to: DOMRect },
+  { duration = 160 }: { duration?: number } = {}
+): AnimationConfig {
+  const visible = [positions.from, positions.to].some(
+    (rect) => rect.bottom > 0 && rect.top < window.innerHeight
+  )
+  return flip(node, positions, { duration: visible ? motionDuration(duration) : 0 })
 }

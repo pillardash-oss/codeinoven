@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { flip } from 'svelte/animate'
   import { prefersReducedMotion } from 'svelte/motion'
   import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
+  import { listRowMove } from '$lib/motion'
   import {
     ChevronDown,
     Copy,
@@ -281,14 +281,11 @@
   })
 
   // Animate only rows that were or will be on screen. Offscreen rows move
-  // immediately instead of creating hundreds of invisible animations.
+  // immediately instead of creating hundreds of invisible animations; that
+  // guard, its reduced-motion read and its 160ms rate live in `listRowMove`,
+  // shared with every other reordering list.
   function moveThreadEntry(node: HTMLElement, positions: { from: DOMRect; to: DOMRect }) {
-    const visible = [positions.from, positions.to].some(
-      (rect) => rect.bottom > 0 && rect.top < window.innerHeight
-    )
-    return flip(node, positions, {
-      duration: prefersReducedMotion.current || !visible ? 0 : 160
-    })
+    return listRowMove(node, positions)
   }
 
   function getThreadIcon(thread: Thread): string | null {
