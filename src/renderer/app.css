@@ -951,6 +951,15 @@ html body vite-error-overlay {
      the host back in restores Vite's own dismissal; `lib/layer-above-modal.ts`
      owns the selector `ui/Modal.svelte` shares to ignore presses aimed at it. */
   pointer-events: auto;
+  /* `pointer-events` alone was not enough: the app header and every panel
+     header are `-webkit-app-region: drag` strips, and a drag region is
+     computed from layout rather than paint order, so a `drag` rectangle under
+     this full-screen overlay still swallowed the press and dragged the window
+     instead of dismissing the card. A card scrolled into the top of the window
+     was then impossible to click away, which reads as "undismissable" again.
+     `no-drag` subtracts the rectangle, exactly as the header's own controls
+     rely on via `titlebar-no-drag`, so the whole card surface is clickable. */
+  -webkit-app-region: no-drag;
 }
 
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */

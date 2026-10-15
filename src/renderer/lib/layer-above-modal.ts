@@ -17,6 +17,14 @@
  * a toast on screen; for the dev error overlay it made the card undismissable,
  * because a press meant for it fell through to whatever sat underneath.
  *
+ * The dev error overlay needs a second escape the toaster does not: the app
+ * header and every panel header are `-webkit-app-region: drag` strips, and a
+ * drag region is computed from layout, not paint order, so a `drag` rectangle
+ * underneath the full-screen overlay put the window's own drag ahead of the
+ * card and swallowed the press that was meant to dismiss it. `app.css` gives
+ * the overlay `-webkit-app-region: no-drag`, the same subtraction the header's
+ * own controls use through `titlebar-no-drag`.
+ *
  * `ui/Modal.svelte` ignores outside interactions that start inside either
  * layer, so a press aimed at a toast or at the dev error card never dismisses
  * the modal they float over.
