@@ -5,6 +5,7 @@ import { installRendererErrorCapture } from './lib/system/renderer-logger'
 import { installNotificationSound } from './lib/notification-sound'
 import { scheduleDeferredWork } from './lib/deferred-work'
 import { preloadSpotlightChunk } from './lib/page-preload'
+import { warmOverlayHostOnFirstGesture } from './lib/overlay-host-warm'
 
 // Capture renderer JS errors (uncaught exceptions, unhandled rejections, and
 // console.error output) from the first renderer statement and forward them to
@@ -32,5 +33,14 @@ const app = mount(App, {
 // the first Cmd/Ctrl+K of a session would pay the chunk fetch and module eval on
 // the keypress itself. Warming it once the renderer is idle removes that wait.
 scheduleDeferredWork('spotlight:palette', preloadSpotlightChunk)
+
+// Every canonical modal is projected into the shared native overlay host, which
+// is created on demand. Loading it at boot held a second renderer for sessions
+// that never draw in it, and leaving it to the modal's own gesture means the
+// app window paints nothing while its document loads. The first gesture is the
+// honest middle: nothing is held for a session nobody has touched, and the host
+// is already loading before the click that opens the first dialog.
+const stopOverlayHostWarm = warmOverlayHostOnFirstGesture()
+window.addEventListener('beforeunload', stopOverlayHostWarm, { once: true })
 
 export default app

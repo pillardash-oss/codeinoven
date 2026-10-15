@@ -698,17 +698,18 @@ export class NativeDockController {
   /**
    * How long this frame's host gets to confirm it drew, in milliseconds.
    *
-   * A modal shares the always-warm full-window overlay, so two seconds is
-   * enough for it to prove it drew. A bounded panel host is loaded while the
-   * browser view is up, but a reveal can still land while that load is in
-   * flight, and nothing is drawn in the app window while it waits: five seconds
-   * bounds that wait without turning a slow start into a fallback. The first
-   * projection to a host that has never answered is different again: its
-   * document may still be loading   on a cold, busy boot that load is what the
-   * user watches   and the same generous window the passive surfaces already
-   * use bounds it without letting a host that never answers keep the panel
-   * forever. Every later frame is held to the short deadline because a host
-   * that has answered once has proven it can.
+   * A modal draws in the shared full-window overlay, which the session's first
+   * gesture loads and keeps (`renderer/lib/overlay-host-warm.ts`), so two
+   * seconds is enough for it to prove it drew. A bounded panel host is loaded
+   * while the browser view is up, but a reveal can still land while that load is
+   * in flight, and nothing is drawn in the app window while it waits: five
+   * seconds bounds that wait without turning a slow start into a fallback. The
+   * first projection to a host that has never answered is different again: its
+   * document may still be loading, on a cold, busy boot that load is what the
+   * user watches, and the same generous window the passive surfaces already use
+   * bounds it without letting a host that never answers keep the panel forever.
+   * Every later frame is held to the short deadline because a host that has
+   * answered once has proven it can.
    */
   private ackDeadline(): number {
     if (this.passive || !this.confirmed) return OVERLAY_ACK_TIMEOUT_MS

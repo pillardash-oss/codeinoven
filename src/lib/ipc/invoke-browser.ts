@@ -266,6 +266,19 @@ export const invokeBrowserContract = {
    */
   'browser:warmOverlayWindow': {} as Contract<[warm: boolean], boolean>,
   /**
+   * Keep the shared overlay window loaded for the rest of the session.
+   *
+   * The app renderer sends this once, on the session's first gesture
+   * (`renderer/lib/overlay-host-warm.ts`): from then on the session draws modals
+   * into this window, and a document that only begins loading on the gesture that
+   * opens the first dialog leaves the app window painting nothing for it in the
+   * meantime. Unlike `browser:warmOverlayWindow` there is no release, because
+   * what it records is that the user is here, and giving that up puts the load
+   * back on the next open. Answers false when the window could not be created,
+   * which leaves that first dialog to the app window's own panel.
+   */
+  'browser:warmOverlayHostForSession': {} as Contract<[], boolean>,
+  /**
    * Everything on display in the overlay, asked for by the overlay document
    * itself once its listener is bound. First delivery is a pull here because a
    * push straight after `loadURL` loses the same race the permission popup

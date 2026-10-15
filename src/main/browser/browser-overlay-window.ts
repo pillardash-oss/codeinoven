@@ -97,20 +97,32 @@ export class BrowserOverlayWindow {
    */
   private awaitingDocument = false
   /**
-   * Kept loaded while the browser view is on screen, which is the only thing
-   * that does. A modal is opened and closed repeatedly in one browsing session,
-   * and a fresh document costs a few hundred milliseconds to load. Paying that
-   * on every open is what the user watches as a blank frame before the panel
-   * arrives.
+   * Kept loaded by whatever asked for it, instead of being rebuilt per use.
    *
-   * Released as soon as that view goes away: the surfaces here are the browser's
-   * floating chrome, so a session that is not browsing has nothing for this
-   * window to draw and no reason to hold a renderer (`setWarm`). The first frame
-   * is never at risk when the load has not finished, because the renderer waits
-   * on an unconfirmed host for `OVERLAY_ACK_TIMEOUT_MS` and every surface of this
-   * window only appears over a page that is already on screen.
+   * A modal is opened and closed repeatedly, and a fresh document costs a few
+   * hundred milliseconds to load. Paying that on every open is what the user
+   * watches as a blank frame before the panel arrives, so two callers hold this
+   * window open: the browser view while it is on screen, because the surfaces
+   * drawn here are its floating chrome, and the app renderer from the session's
+   * first gesture onwards (`renderer/lib/overlay-host-warm.ts`), because that is
+   * the session drawing modals into it. A session nobody has touched holds no
+   * renderer for it (`setWarm`).
+   *
+   * A first frame that lands while the document is still loading is not at risk
+   * either way: the renderer waits on an unconfirmed host for
+   * `OVERLAY_ACK_TIMEOUT_MS`, and a dock drawn into this window only appears over
+   * a page that is already on screen.
    */
   private warm = false
+  /**
+   * Held open for the rest of the session by the app renderer's first gesture.
+   *
+   * Independent of `warm`, which the browser view releases the moment it leaves:
+   * a session that visited the browser and came back still draws its modals
+   * here, and must still meet a host that is already loaded. See
+   * `warmForSession` and `renderer/lib/overlay-host-warm.ts`.
+   */
+  private sessionWarm = false
   /** The pending idle teardown, armed while nothing is drawing in the window. */
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   /** Tracked rather than read back, because the toggle is only ever a change. */
@@ -151,8 +163,20 @@ export class BrowserOverlayWindow {
   private showWhileWarm(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    if (!this.warm && !this.hasContent()) return
+    if (!this.wantsWindow && !this.hasContent()) return
     this.reveal(popup)
+  }
+
+  /**
+   * Whether anything is holding this window loaded.
+   *
+   * The browser view holds it while it is on screen, and the app renderer holds
+   * it from the session's first gesture onwards. Empty is not the same as
+   * unwanted: a held window stays mapped and click-through so the next drawer
+   * does not pay the window server for the map.
+   */
+  private get wantsWindow(): boolean {
+    return this.warm || this.sessionWarm
   }
 
   /** Hide the overlay because another application is now in front. */
@@ -271,6 +295,31 @@ export class BrowserOverlayWindow {
   }
 
   /**
+   * Keep the window loaded for the rest of the session.
+   *
+   * The app renderer calls this on the session's first gesture
+   * (`renderer/lib/overlay-host-warm.ts`). From that moment the session draws
+   * modals, tooltips and the switcher here, and a document reload between two of
+   * them is a blank frame the user watches. The window is mapped now, empty and
+   * click-through, rather than on the gesture that opens the first dialog,
+   * because the window server's map is part of that gesture's cost.
+   *
+   * Answers false when the window could not be created, which leaves the first
+   * projection to fall back to the app window's own panel and lets the next
+   * gesture try again.
+   */
+  warmForSession(): boolean {
+    this.sessionWarm = true
+    const popup = this.ensure()
+    if (!popup) {
+      this.sessionWarm = false
+      return false
+    }
+    this.reveal(popup)
+    return true
+  }
+
+  /**
    * Tear the window down once nothing is drawing in it and nothing wants it.
    *
    * Everywhere except an open browser view it outlives its last content by a
@@ -281,13 +330,13 @@ export class BrowserOverlayWindow {
    * stops using it releases the renderer.
    */
   private retire(): void {
-    if (this.warm) return
+    if (this.wantsWindow) return
     clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined
-      // Warming again while this was pending spends it, and so does content that
-      // arrived after it was armed.
-      if (this.warm || this.hasContent()) return
+      // Holding it again while this was pending spends it, and so does content
+      // that arrived after it was armed.
+      if (this.wantsWindow || this.hasContent()) return
       this.dispose()
     }, IDLE_DISPOSE_MS)
     this.idleTimer.unref?.()
@@ -543,9 +592,9 @@ export class BrowserOverlayWindow {
     if (this.hasContent()) return
     this.pointerOverContent = false
     this.applyClickThrough()
-    // A warm window stays mapped, empty and click-through, so the next modal
+    // A held window stays mapped, empty and click-through, so the next modal
     // paints into a window that is already on screen.
-    if (!this.warm && popup.isVisible()) popup.hide()
+    if (!this.wantsWindow && popup.isVisible()) popup.hide()
   }
 
   /**
@@ -798,7 +847,7 @@ export class BrowserOverlayWindow {
         return
       }
       this.position(popup)
-      if ((this.warm || (this.ready && this.hasContent())) && !popup.isVisible())
+      if ((this.wantsWindow || (this.ready && this.hasContent())) && !popup.isVisible())
         popup.showInactive()
     }
     this.parent.on('move', reposition)

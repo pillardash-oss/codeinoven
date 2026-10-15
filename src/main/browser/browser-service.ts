@@ -1361,6 +1361,10 @@ export class BrowserService {
     replaceHandler('browser:warmOverlayWindow', (_event, warm) =>
       this.overlay.setWarm(warm === true)
     )
+    // The renderer's first gesture rather than the browser view: from that moment
+    // the session is drawing modals into the shared window, so it is loaded for
+    // the rest of the session. See `renderer/lib/overlay-host-warm.ts`.
+    replaceHandler('browser:warmOverlayHostForSession', () => this.overlay.warmForSession())
     replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
       const id = validateNativeDockId(rawId)
       const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
