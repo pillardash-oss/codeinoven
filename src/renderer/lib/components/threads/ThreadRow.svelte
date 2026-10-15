@@ -20,7 +20,6 @@
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
-  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -455,32 +454,31 @@
    * with the oldest candidate time, so any live action takes the slot and the
    * mark returns the moment the slot is free.
    */
-  let indicator = $derived.by((): ThreadIndicator | null => {
-    const candidates: Array<{ indicator: ThreadIndicator; at: number }> = []
-    const speechAt = speechController.threadIndicatorActionAt(thread.id) ?? 0
-    if (isRecording) candidates.push({ indicator: 'recording', at: speechAt })
-    if (isSpeaking) candidates.push({ indicator: 'speaking', at: speechAt })
+  /** Every live action on this thread right now, each kept rather than ranked
+   *  away.
+   *
+   *  The old row resolved these to one winner because it had one status slot and
+   *  a spinner, a clock and a vendor mark all had to share it. The state now
+   *  lives on the rail, so the row can afford to say all of it: a thread that is
+   *  recording while a browser tab of its own plays sound shows both, and a
+   *  thread that is engineering while recording keeps its engineering mark. */
+  let activeIndicators = $derived.by((): ThreadIndicator[] => {
+    const live: ThreadIndicator[] = []
+    if (isRecording) live.push('recording')
+    if (isSpeaking) live.push('speaking')
     if (isTranscribing) {
-      candidates.push({
-        indicator:
-          voiceSendStage === 'steer'
-            ? 'transcribing-steer'
-            : voiceSendStage === 'send'
-              ? 'transcribing-send'
-              : 'transcribing',
-        at: speechAt
-      })
+      live.push(
+        voiceSendStage === 'steer'
+          ? 'transcribing-steer'
+          : voiceSendStage === 'send'
+            ? 'transcribing-send'
+            : 'transcribing'
+      )
     }
-    if (isUsingComputerUse) {
-      candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
-    }
-    if (browserAudioAt !== null) {
-      candidates.push({ indicator: 'browser-audio', at: browserAudioAt })
-    }
-    if (thread.engineering === true) {
-      candidates.push({ indicator: 'engineering', at: 0 })
-    }
-    return resolveThreadIndicator(candidates)
+    if (isUsingComputerUse) live.push('computer-use')
+    if (browserAudioAt !== null) live.push('browser-audio')
+    if (thread.engineering === true) live.push('engineering')
+    return live
   })
 
   /**
@@ -550,6 +548,83 @@
     return 'read'
   })
 
+  /** The word a state that wants the user shows in the detailed row's end slot,
+   *  or null when the state is quiet. Four states want them: parked on the user
+   *  (approval), a failed run they have read, a spec ready for review, and a run
+   *  paused on a retry. Every other state keeps its age. */
+  let stateWord = $derived.by((): { label: string; color: string } | null => {
+    switch (threadState) {
+      case 'approval':
+        return { label: 'Your call', color: 'var(--color-warning)' }
+      case 'error':
+        return { label: 'Failed', color: 'var(--color-danger)' }
+      case 'spec':
+        return { label: 'Spec ready', color: 'var(--color-thread-spec)' }
+      case 'working-paused':
+        return { label: 'Retrying', color: 'var(--color-warning)' }
+      default:
+        return null
+    }
+  })
+
+  /** The row's state rail: a mark down the left edge of the whole row.
+   *
+   *  Every value `threadState` can take gets a shape, not only a hue, so the
+   *  state survives for a reader who cannot tell the greens and violets apart:
+   *  solid for a live or settled state, dashed for one that is waiting, dotted
+   *  for one queued behind another. Width carries the two states that want the
+   *  user, so approval and error are findable from across the sidebar.
+   *
+   *  Read and completed draw the same quiet hairline. They are one settled state
+   *  to the eye, and the distinction that matters is carried by the title, the
+   *  tooltip and the accessible name instead of by two nearly identical rings. */
+  let spineStyle = $derived.by((): string => {
+    const solid = (width: string, color: string): string => `width:${width};background:${color};`
+    const dashed = (color: string): string =>
+      `width:0.1875rem;background:repeating-linear-gradient(to bottom, ${color} 0 0.25rem, transparent 0.25rem 0.4375rem);`
+    const dotted = (color: string): string =>
+      `width:0.1875rem;background:repeating-linear-gradient(to bottom, ${color} 0 0.125rem, transparent 0.125rem 0.25rem);`
+    switch (threadState) {
+      case 'read':
+      case 'completed':
+        return solid('0.0625rem', 'var(--color-border-strong)')
+      case 'unread':
+        return solid('0.1875rem', 'var(--color-thread-unread)')
+      case 'temporary-unread':
+        return dashed('var(--color-thread-unread)')
+      case 'todo':
+        return dashed('var(--color-muted)')
+      case 'working':
+        return solid('0.1875rem', 'var(--color-thread-working)')
+      case 'working-paused':
+        return dashed('var(--color-warning)')
+      case 'queued':
+        return dotted('var(--color-info)')
+      case 'scheduled':
+        return dotted('color-mix(in srgb, var(--color-info) 55%, transparent)')
+      case 'approval':
+        return solid('0.25rem', 'var(--color-warning)')
+      case 'spec':
+        return solid('0.1875rem', 'var(--color-thread-spec)')
+      case 'error':
+        return solid('0.25rem', 'var(--color-danger)')
+    }
+  })
+
+  /** The row's own ground, when the state wants the user. A tint is the second
+   *  carrier beside the rail, so approval and error are findable from across the
+   *  sidebar. It is written as an inline style, the same way the scope chip draws
+   *  its mixed border, rather than as an arbitrary utility class: this keeps the
+   *  colour honest against the theme tokens and adds no class the build has to
+   *  discover. It never pulses. */
+  let rowTintStyle = $derived(
+    threadState === 'approval'
+      ? 'background: color-mix(in srgb, var(--color-warning) 8%, transparent);'
+      : threadState === 'error'
+        ? 'background: color-mix(in srgb, var(--color-danger) 8%, transparent);'
+        : ''
+  )
+
   /** Title colour, shared by every row layout. */
   let titleClass = $derived(
     threadState === 'approval'
@@ -561,10 +636,11 @@
 
   /** Row padding and line rhythm. The detailed row keeps its own lines tight
    *  and spends its space between rows instead, so consecutive entries read as
-   *  separate cards rather than one tall block. */
+   *  separate cards rather than one tall block. Its left padding also clears the
+   *  state rail, which runs the full height of the row. */
   let rowLayoutClass = $derived(
     detailed
-      ? 'gap-1 px-2.5 py-1.5 mb-3'
+      ? 'gap-1 py-1.5 pl-2.5 pr-2.5 mb-3 relative'
       : compact
         ? 'gap-1 px-2 py-1 mb-1'
         : 'gap-1 px-2 py-1.5 mb-1'
@@ -585,6 +661,12 @@
   })
 
   let scopeBucket = $derived(threadScopeBucket(thread))
+
+  /** Whether the scope chip shows at all. The detailed row draws it on its
+   *  context line, beside the project name; the one/two-line row keeps it on its
+   *  footer. `hideScope` is the caller saying the surrounding view is already
+   *  scoped. */
+  let scopeVisible = $derived(scopeBucket !== null && !hideScope)
 
   /** Whether the thread runs on an Oven rather than this computer. */
   let isRemote = $derived(
@@ -626,25 +708,27 @@
       branch !== null
   )
 
-  /** The detailed row's own project line, shown only when it has an icon or a
-   *  name to carry. A project's own thread list hides the name and passes no
-   *  icon, so that list skips the line and its rows stay two lines tall. */
+  /** The detailed row's own context line, shown only when it has something to
+   *  carry: a project icon, a project name, or the scope chip. A project's own
+   *  thread list hides the name and brings no icon, but it still shows the scope,
+   *  so the line must survive on the scope alone or the chip would be lost. */
   let showProjectLine = $derived(
-    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName))
+    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName) || scopeVisible)
   )
 
-  /** Whether the detailed row has anything for its footer line besides the
-   *  last-edited time. With nothing else to show, the time rides on the primary
-   *  line and the row stays a single line. When the project line is shown it
-   *  carries the Oven/branch marks instead, so they no longer count here. */
+  /** Whether the detailed row has anything for its meta line besides the
+   *  last-edited time: what the thread ran with, where it ran, the branch and
+   *  every marker it carries. With none of those, the time rides on the primary
+   *  line and the row stays two lines tall. The scope is not counted here: it
+   *  lives on the context line above, so a thread whose only extra is a scope
+   *  does not open a meta line just to fill it. */
   let hasRowExtras = $derived(
     harnessIds.length > 0 ||
-      (scopeBucket !== null && !hideScope) ||
-      (!showProjectLine && (branch !== null || isRemote)) ||
+      branch !== null ||
+      isRemote ||
       hasNote ||
       hasTemporaryChat ||
-      authoredWorkKind !== null ||
-      indicator !== null
+      authoredWorkKind !== null
   )
 
   let scopeColor = $derived(
@@ -961,8 +1045,10 @@
       </span>
       {@render peekIndicator()}
       {#if !showBottomRow}
-        {#if indicator}
-          <ThreadIndicatorSlot {indicator} />
+        {#if activeIndicators.length > 0}
+          {#each activeIndicators as live (live)}
+            <ThreadIndicatorSlot indicator={live} />
+          {/each}
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -1045,9 +1131,10 @@
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
-          {#if indicator}
-            <ThreadIndicatorSlot {indicator} />
-          {:else}
+          {#each activeIndicators as live (live)}
+            <ThreadIndicatorSlot indicator={live} />
+          {/each}
+          {#if activeIndicators.length === 0}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {formatCompactAge(thread.lastActivity)}
             </span>
@@ -1090,6 +1177,7 @@
     class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
       : 'hover:bg-elevated'}"
+    style={rowTintStyle}
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
@@ -1100,6 +1188,26 @@
     }}
     oncontextmenu={openContextMenu}
   >
+    {#if detailed}
+      <!-- State rail: the thread's state, drawn down the full height of the row.
+           Shape carries it as well as hue, so every state stays separable for a
+           reader who cannot tell the colours apart. Pinned caps the rail, so a
+           pinned thread shows without the pointer finding it first. -->
+      <span
+        class="pointer-events-none absolute inset-y-0 left-0"
+        style={spineStyle}
+        aria-hidden="true"
+      ></span>
+      {#if effectivePinned}
+        <span
+          class="pointer-events-none absolute left-0 top-0 h-1.5"
+          style="width: {threadState === 'approval' || threadState === 'error'
+            ? '0.25rem'
+            : '0.1875rem'}; background: var(--color-thread-pinned);"
+          aria-hidden="true"
+        ></span>
+      {/if}
+    {/if}
     <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
     <span
       class="pointer-events-none absolute inset-x-0 bottom-0 h-px"
@@ -1132,8 +1240,10 @@
         <!-- Single-line default: time rides on the top line, swapped for the
            working model's provider icon while the thread is working -->
         {#if !showBottomRow}
-          {#if indicator}
-            <ThreadIndicatorSlot {indicator} />
+          {#if activeIndicators.length > 0}
+            {#each activeIndicators as live (live)}
+              <ThreadIndicatorSlot indicator={live} />
+            {/each}
           {:else if isBusyIndicator && currentModelProviderName}
             <span
               class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -1239,9 +1349,10 @@
             {/if}
             {@render temporaryChatMarker()}
             {@render authoredWorkMarker(authoredWorkKind)}
-            {#if indicator}
-              <ThreadIndicatorSlot {indicator} />
-            {:else}
+            {#each activeIndicators as live (live)}
+              <ThreadIndicatorSlot indicator={live} />
+            {/each}
+            {#if activeIndicators.length === 0}
               <span
                 class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                   ? 'opacity-0'
@@ -1256,27 +1367,115 @@
       {/if}
     {:else}
       {#if showProjectLine}
-        <!-- Project line: which project the thread belongs to. A project's own
-             thread list skips it, since the folder above already names it. -->
+        <!-- Context line: which project the thread belongs to, and which slice of
+             it this thread works on. The project mark, the project name and the
+             scope all answer that one question, so they share this line, exactly
+             as the project mark and the project name already did. A project's own
+             thread list skips the name, since the folder above already names it. -->
         <span class="flex w-full min-w-0 items-center gap-2">
-          {#if projectIconUrl || projectIconGlyph}
-            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-              {#if projectIconUrl}
-                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
-              {:else if projectIconGlyph}
-                {@const ContainerIcon = projectIconGlyph}
-                <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
-              {/if}
-            </span>
-          {/if}
+          <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+            {#if projectIconUrl}
+              <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
+            {:else if projectIconGlyph}
+              {@const ContainerIcon = projectIconGlyph}
+              <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
+            {/if}
+          </span>
           {#if projectName && !hideProjectName}
-            <span class="min-w-0 truncate text-[0.6875rem] text-muted" title={projectName}
+            <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={projectName}
               >{projectName}</span
             >
           {/if}
-          <!-- Where it runs and its branch ride on this line: the project line
-               has the room the footer does not. -->
-          <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
+          {#if scopeVisible}
+            <!-- The scope gives way: the project name truncates first and the
+                 scope chip narrows rather than pushing a neighbour off the line. -->
+            {@render scopeChip('min-w-0 shrink max-w-[8rem]')}
+          {/if}
+        </span>
+      {/if}
+
+      <!-- Primary line: the title, and the end slot. The rail down the left edge
+           carries the state, so this line spends its width on one thing: every
+           live action the thread has, else the word for a state that wants the
+           user, else the age. Pinning is not here: the row's context menu and
+           the pin keymap already do it, so the line keeps no reserved space. -->
+      <span class="flex w-full min-w-0 items-center gap-2">
+        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        {@render peekIndicator()}
+        {#if activeIndicators.length > 0}
+          <!-- Every live action the thread has, not only the loudest one. A thread
+               can be recording while a browser tab of its own plays sound, and
+               the row must be able to say both at once. -->
+          {#each activeIndicators as live (live)}
+            <span class="flex shrink-0 items-center">
+              <ThreadIndicatorSlot indicator={live} />
+            </span>
+          {/each}
+        {:else if stateWord}
+          <!-- A state that wants the user says so in a word. The hue fills the
+               stamp; the letters stay in the foreground colour, so contrast
+               never depends on an amber or a violet passing AA. -->
+          <span
+            class="flex shrink-0 items-center border-l-2 bg-elevated py-0.5 pl-1 pr-1.5 text-[0.5625rem] font-bold uppercase tracking-[0.08em] text-foreground"
+            style="border-left-color: {stateWord.color};"
+          >
+            {stateWord.label}
+          </span>
+        {:else if currentModelProviderName}
+          <!-- The mark of the model that ran this thread. It sits here whenever
+               nothing louder owns the slot, and the age has the meta line below,
+               so both are on the row at once instead of one displacing the
+               other. -->
+          <span
+            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={thread.settings?.modelId ?? 'Model'}
+          >
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
+          </span>
+        {:else if !hasRowExtras}
+          <span
+            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}
+            >{formatCompactAge(thread.lastActivity)}</span
+          >
+        {/if}
+      </span>
+
+      {#if hasRowExtras}
+        <!-- Footer line: what the thread runs with on the left, then where it
+             runs, its branch, every marker it carries and its last-edited time
+             on the right. Both tracks reserve their own content width
+             (`max-content` minimum), so neither the harness icons nor the marks
+             can be squeezed or overlapped. The scope is no longer here: it moved
+             up to the context line, where it belongs with the project name. -->
+        <span
+          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
+        >
+          {#if harnessIds.length > 0}
+            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
+              {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
+                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+              {/each}
+              {#if harnessIds.length > MAX_HARNESS_ICONS}
+                <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+                  >+{harnessIds.length - MAX_HARNESS_ICONS}</span
+                >
+              {/if}
+            </span>
+          {/if}
+          <span class="col-start-2 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+            <!-- Where it runs, and the branch it runs on: both always, so a
+                 branch never disappears just because the row also has a scope. -->
             <span
               class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
               title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
@@ -1301,101 +1500,6 @@
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
-          </span>
-        </span>
-      {/if}
-
-      <!-- Primary line: status, title, current provider, and the time when there
-           is no footer line to carry it -->
-      <span class="flex w-full min-w-0 items-center gap-2">
-        {@render threadStatusSlot(true)}
-        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
-        {@render peekIndicator()}
-        {#if currentModelProviderName}
-          <span
-            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
-              ? 'opacity-0'
-              : 'opacity-100'}"
-            aria-hidden={hovered}
-            title={thread.settings?.modelId ?? 'Model'}
-          >
-            <VendorIcon
-              name={currentModelProviderName}
-              id={currentModelProviderId ?? undefined}
-              size={13}
-            />
-          </span>
-        {/if}
-        {#if !hasRowExtras}
-          <span
-            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed transition-opacity duration-150 {hovered
-              ? 'opacity-0'
-              : 'opacity-100'}"
-            aria-hidden={hovered}
-            title={`Edited ${formatDateTime(thread.lastActivity)}`}
-            >{formatCompactAge(thread.lastActivity)}</span
-          >
-        {/if}
-      </span>
-
-      {#if hasRowExtras}
-        <!-- Footer line: what the thread runs with on the left, the scope in
-             the middle, then where it runs, its branch, its markers and its
-             last-edited time on the right. Both side tracks reserve their own
-             content width (`max-content` minimum), so neither the harness icons
-             nor the marks can be squeezed or overlapped; the scope is the track
-             that gives way, and it stays centred whenever the two side tracks
-             have room to stay equal. -->
-        <span
-          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
-        >
-          {#if harnessIds.length > 0}
-            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
-              {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
-                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
-              {/each}
-              {#if harnessIds.length > MAX_HARNESS_ICONS}
-                <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
-                  >+{harnessIds.length - MAX_HARNESS_ICONS}</span
-                >
-              {/if}
-            </span>
-          {/if}
-          {#if !hideScope}
-            {@render scopeChip('col-start-2 max-w-[8rem]')}
-          {/if}
-          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
-            {#if !showProjectLine}
-              <span
-                class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-                title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-                aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-              >
-                {#if isRemote}
-                  {#if oven?.iconUrl}
-                    <img
-                      src={oven.iconUrl}
-                      alt=""
-                      class="h-3 w-3 object-contain"
-                      draggable="false"
-                    />
-                  {:else}
-                    <Server size={11} class="shrink-0" />
-                  {/if}
-                {:else}
-                  <Monitor size={10} class="shrink-0" aria-hidden="true" />
-                {/if}
-              </span>
-              {#if branch}
-                <span
-                  class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
-                  title={`Branch: ${branch}`}
-                >
-                  <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-                  <span class="truncate">{branchLabel}</span>
-                </span>
-              {/if}
-            {/if}
             {#if hasNote}
               {@const ThreadNoteIcon = feature('thread-note').icon}
               <span
@@ -1407,11 +1511,8 @@
             {/if}
             {@render temporaryChatMarker()}
             {@render authoredWorkMarker(authoredWorkKind)}
-            {#if indicator}
-              <ThreadIndicatorSlot {indicator} />
-            {/if}
             <span
-              class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed"
+              class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}
               >{formatCompactAge(thread.lastActivity)}</span
             >
