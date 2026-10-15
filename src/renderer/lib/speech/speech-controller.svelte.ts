@@ -207,7 +207,12 @@ class SpeechController {
   private readonly handleSoundChanged = (event: Event): void => {
     const detail = (event as CustomEvent<unknown>).detail
     if (!detail || typeof detail !== 'object') return
-    this.sound = structuredClone(detail as typeof this.sound)
+    // The event carries the app's live sound settings, which are `$state`, and a
+    // state proxy (or any object holding one) cannot be structured-cloned: doing
+    // that raised an uncaught DataCloneError here and left this mirror on the
+    // old settings for every change. Snapshot it into plain data first   that is
+    // exactly what `$state.snapshot` is for   then take the private copy.
+    this.sound = structuredClone($state.snapshot(detail as typeof this.sound))
     this.soundReady = true
   }
 

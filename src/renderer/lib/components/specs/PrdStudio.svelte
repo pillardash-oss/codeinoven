@@ -69,7 +69,11 @@
 
   // The parent keys this component by PRD identity and version.
   // svelte-ignore state_referenced_locally
-  let content = $state<PrdContent>(structuredClone(prd.content))
+  // The document arrives as live `$state` from the parent, and a state proxy
+  // cannot be structured-cloned, so the copy this studio edits starts from a
+  // snapshot (the same reason the spec, brainstorm, assignment, and audit
+  // studios snapshot their document before `history.attach`).
+  let content = $state<PrdContent>($state.snapshot(prd.content))
   let dirty = $state(false)
   let annotationDrafts = $state<Partial<Record<PrdSectionId, string>>>({})
   let nextStepBusy = $state(false)
