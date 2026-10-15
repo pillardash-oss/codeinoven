@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Info, TriangleAlert } from '@lucide/svelte'
   import type { Component, Snippet } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { rowArrive } from './card-motion'
 
   interface Props {
     /** Leading mark. Omit only for a notice that carries no icon. */
@@ -47,8 +49,13 @@
 </script>
 
 <!-- The design's notice row: one line of status that lives inside a card or on the
-composer itself, in the same shape wherever it appears. -->
-<div class="flex items-start gap-2 px-2.5 py-2 text-xs {toneClass} {placementClass} {className}">
+composer itself, in the same shape wherever it appears. It arrives and leaves on
+its own motion: a notice is something that happened, so it rises into place and
+fades back out when the state that carried it is gone. -->
+<div
+  class="flex items-start gap-2 px-2.5 py-2 text-xs {toneClass} {placementClass} {className}"
+  transition:fly={rowArrive()}
+>
   <Mark size={14} class="mt-0.5 shrink-0" />
   <p class="min-w-0 flex-1 leading-relaxed">
     {@render children()}

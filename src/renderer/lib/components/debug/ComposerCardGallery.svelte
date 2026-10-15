@@ -116,15 +116,20 @@
       id: 'question-walkthrough',
       group: 'replace',
       label: 'Question, walkthrough',
-      note: 'Three questions, the middle one open.'
+      note: 'Three questions, the middle one open. Step it to watch an entry move.'
     },
     {
       id: 'question-answered',
       group: 'replace',
       label: 'Question, walkthrough answered',
-      note: 'Every question answered, read from the middle.'
+      note: 'Every question answered. Step back and forward: the entry arrives from the side you moved.'
     },
-    { id: 'secret', group: 'replace', label: 'Secret request', note: 'Two secrets, value mode.' },
+    {
+      id: 'secret',
+      group: 'replace',
+      label: 'Secret request',
+      note: 'Two secrets, value mode. Step between them, and fold the card back open.'
+    },
     {
       id: 'audit-running',
       group: 'replace',
@@ -324,7 +329,7 @@
       id: 'run-changes',
       group: 'top',
       label: 'Edited files',
-      note: 'A turn checkpoint, five files.'
+      note: 'A turn checkpoint, five files. Expand the list at the foot: the rows arrive, the page does not move.'
     },
     {
       id: 'run-changes-undone',

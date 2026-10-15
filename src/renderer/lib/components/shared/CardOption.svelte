@@ -39,12 +39,18 @@
     class: className = ''
   }: Props = $props()
 
+  /*
+    The 2px mark is always on the box and only changes colour, so choosing an
+    option inks the edge in instead of snapping a bar into place. It is drawn as
+    an inset shadow rather than a border because a border would shift the label
+    two pixels sideways every time the choice changed.
+  */
   const frameClass = $derived(
     [
-      'flex min-h-11 w-full items-stretch border transition-colors',
+      'flex min-h-11 w-full items-stretch border transition-[box-shadow,border-color,background-color] duration-150',
       selected
         ? 'border-primary shadow-[inset_2px_0_0_var(--color-primary)]'
-        : 'border-border bg-surface hover:border-border-strong',
+        : 'border-border bg-surface shadow-[inset_2px_0_0_transparent] hover:border-border-strong',
       className
     ].join(' ')
   )
@@ -56,7 +62,7 @@
 {#snippet optionBody()}
   {#if multiple}
     <span
-      class="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border text-[0.5625rem] {selected
+      class="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border text-[0.5625rem] transition-colors {selected
         ? 'border-primary bg-primary text-on-primary'
         : 'border-border-strong'}"
       aria-hidden="true"

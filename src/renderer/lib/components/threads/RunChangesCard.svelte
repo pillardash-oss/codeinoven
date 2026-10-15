@@ -1,13 +1,13 @@
 <script lang="ts">
   import { Eye, FileDiff, RotateCcw, RotateCw } from '@lucide/svelte'
-  import { slide } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
   import CardButton from '../shared/CardButton.svelte'
   import CardFrame from '../shared/CardFrame.svelte'
   import CardHead from '../shared/CardHead.svelte'
   import CardNotice from '../shared/CardNotice.svelte'
-  import { foldSlide } from '../shared/card-motion'
+  import { foldSlide, rowArrive } from '../shared/card-motion'
   import type { TurnCheckpointChangeSummary, TurnCheckpointSummary } from '$shared/types'
 
   interface Props {
@@ -225,8 +225,12 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
               {@const added = additions(change)}
               {@const removed = deletions(change)}
               {@const changeRolledBack = checkpoint.rolledBackPaths?.includes(change.path)}
+              <!-- A row arrives where it belongs and moves nothing else: the row
+                 animates transform and opacity only, so expanding the list never
+                 steps on the fold's scroll compensation above. -->
               <div
                 class="group flex min-h-9 w-full items-center gap-1 border-b border-border px-3 transition-colors last:border-b-0 hover:bg-elevated"
+                in:fly={rowArrive()}
               >
                 <HoverDiffPopover
                   {projectId}

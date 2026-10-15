@@ -1,6 +1,8 @@
 <script lang="ts">
   import { ListChecks, TriangleAlert, X } from '@lucide/svelte'
+  import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
+  import { rowArrive } from '../shared/card-motion'
   import { activeAgentTodoIndex, type AgentTodoItem } from '$lib/agent-todos'
 
   interface Props {
@@ -118,10 +120,13 @@
   {#snippet body()}
     <div class="max-h-56 overflow-y-auto px-3 py-2" aria-live="polite">
       <ul class="space-y-1.5">
+        <!-- A task the agent adds arrives as a row; a task that changes state
+           inks to its new colour where it stands, so progress reads as movement
+           in the list the user is already watching rather than a redraw. -->
         {#each items as item, index (`${item.id}-${index}`)}
-          <li class="flex items-start gap-2 text-xs">
+          <li class="flex items-start gap-2 text-xs" in:fly={rowArrive()}>
             <span
-              class="mt-1 h-2 w-2 shrink-0 {item.status === 'completed'
+              class="mt-1 h-2 w-2 shrink-0 transition-colors {item.status === 'completed'
                 ? 'bg-success'
                 : index === activeIndex
                   ? 'bg-info'
@@ -131,7 +136,7 @@
               class:line-through={item.status === 'completed'}
               class:text-dimmed={item.status === 'completed'}
               class:text-foreground={item.status !== 'completed'}
-              class="min-w-0 flex-1 leading-relaxed"
+              class="min-w-0 flex-1 leading-relaxed transition-colors"
             >
               {item.label}
             </span>

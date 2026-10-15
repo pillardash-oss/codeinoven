@@ -1,7 +1,7 @@
 <script lang="ts">
   import { KeyRound, ShieldCheck } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
-  import { slide } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -11,7 +11,13 @@
   import CardHead from '../shared/CardHead.svelte'
   import CardStepper from '../shared/CardStepper.svelte'
   import { cardFrameClass } from '../shared/card-frame'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import {
+    dismissSlide,
+    foldSlide,
+    playEntryStep,
+    rowArrive,
+    type StepDirection
+  } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -61,6 +67,9 @@
   let actionError = $state('')
   let folded = $state(false)
   let alternativeEditor = $state<RichMarkdownEditor>()
+  /** The body every secret shares, so a step moves the card's own content
+   *  instead of swapping it out. */
+  let entryBody = $state<HTMLElement | undefined>(undefined)
 
   let total = $derived(request.questions.length)
   let question = $derived(request.questions[currentIndex])
@@ -174,6 +183,17 @@
   }
 
   /**
+   * Show another secret. Both arrows and the send key go through here, so the
+   * step motion plays once, in the direction the card actually moved.
+   */
+  function showEntry(index: number): void {
+    if (index === currentIndex) return
+    const direction: StepDirection = index > currentIndex ? 1 : -1
+    if (entryBody) playEntryStep(entryBody, direction)
+    currentIndex = index
+  }
+
+  /**
    * Move to the next entry, or submit when the current one is the last. Used by
    * the footer button, by Cmd/Ctrl+Enter in the alternative editor, and by the
    * same combination in the value field.
@@ -181,7 +201,7 @@
   function advance(): void {
     if (working || !currentAnswered) return
     if (currentIndex < total - 1) {
-      currentIndex += 1
+      showEntry(currentIndex + 1)
       return
     }
     void handleSubmit()
@@ -205,7 +225,7 @@
   }
 
   function goPrev(): void {
-    if (currentIndex > 0) currentIndex -= 1
+    if (currentIndex > 0) showEntry(currentIndex - 1)
   }
 
   async function handleSubmit(): Promise<void> {
@@ -285,7 +305,9 @@
 
   {#if !folded}
     <div transition:slide={foldSlide()}>
-      <div class="space-y-3 p-4">
+      <!-- Every secret renders into this one body, so stepping moves the body's
+         content (see `showEntry`) instead of the body animating in again. -->
+      <div bind:this={entryBody} class="space-y-3 p-4">
         <div class="space-y-1">
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
@@ -390,7 +412,11 @@
         {/key}
 
         {#if actionError}
-          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p
+            class="bg-danger/10 px-3 py-2 text-xs text-danger"
+            role="alert"
+            transition:fly={rowArrive()}
+          >
             {actionError}
           </p>
         {/if}

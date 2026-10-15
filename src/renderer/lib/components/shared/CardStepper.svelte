@@ -1,5 +1,7 @@
 <script lang="ts">
   import { ChevronLeft, ChevronRight } from '@lucide/svelte'
+  import { fly } from 'svelte/transition'
+  import { tickArrive } from './card-motion'
 
   /**
    * The step control for a card that asks for several things in a row: the pair
@@ -59,13 +61,18 @@
       <ChevronRight size={14} class="shrink-0" />
     </button>
     <!-- The reading stays after the pair, so it names where the arrows landed
-       rather than sitting between the two controls. -->
-    <span
-      class="ml-0.5 text-[0.6875rem] tabular-nums text-dimmed"
-      title={positionLabel}
-      aria-label={positionLabel}
-    >
-      {index + 1}/{total}
-    </span>
+       rather than sitting between the two controls. It is keyed by the entry
+       for the same reason: the count lands from the side the step came from
+       instead of blinking to its next value under the card's motion. -->
+    {#key index}
+      <span
+        class="ml-0.5 text-[0.6875rem] tabular-nums text-dimmed"
+        title={positionLabel}
+        aria-label={positionLabel}
+        in:fly={tickArrive()}
+      >
+        {index + 1}/{total}
+      </span>
+    {/key}
   </div>
 {/if}

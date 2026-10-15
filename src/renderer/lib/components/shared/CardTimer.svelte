@@ -38,8 +38,12 @@
   )
 </script>
 
+<!-- The reading's own colour carries the state (quiet, paused, urgent), and the
+state changes under the reader rather than by their hand, so the colour fades
+instead of switching: a countdown turning urgent is a change of degree, not an
+alarm to flash. -->
 <span
-  class="inline-flex shrink-0 items-center gap-1 border border-border px-1.5 py-0.5 text-[0.6875rem] tabular-nums whitespace-nowrap {toneClass}"
+  class="inline-flex shrink-0 items-center gap-1 border border-border px-1.5 py-0.5 text-[0.6875rem] tabular-nums whitespace-nowrap transition-colors {toneClass}"
   {title}
   aria-label={label ?? text}
 >

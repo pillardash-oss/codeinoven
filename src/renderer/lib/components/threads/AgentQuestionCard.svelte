@@ -1,6 +1,6 @@
 <script lang="ts">
   import { CircleHelp, ClipboardList, Paperclip, Send, X } from '@lucide/svelte'
-  import { slide } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
@@ -14,7 +14,13 @@
   import CardOption from '../shared/CardOption.svelte'
   import CardStepper from '../shared/CardStepper.svelte'
   import { cardFrameClass } from '../shared/card-frame'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import {
+    dismissSlide,
+    foldSlide,
+    playEntryStep,
+    rowArrive,
+    type StepDirection
+  } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
@@ -108,6 +114,9 @@
   let syncedServerState = $state('')
   let customSaveTimer: ReturnType<typeof setTimeout> | undefined
   let customAnswerEditor = $state<RichMarkdownEditor>()
+  /** The scrollable body every question shares, so a step moves the card's own
+   *  content instead of swapping it out, and the scroll can return to the top. */
+  let entryBody = $state<HTMLElement | undefined>(undefined)
   const customAnswerSpeechTargetId = $derived(`custom-answer-${request.requestId}-${currentIndex}`)
 
   function isOptionAnswer(question: AgentQuestion, value: string): boolean {
@@ -202,9 +211,23 @@
       const question = request.questions[index]
       return isOptionAnswer(question, persisted) ? customAnswer : persisted
     })
-    currentIndex = serverIndex
+    showEntry(serverIndex)
     for (const index of serverInteracted) interactedIndexes.add(index)
   })
+
+  /**
+   * Show another question. Every path that moves the index goes through here, so
+   * the step motion is played once, in the direction the card actually moved,
+   * and the next question is read from its first line rather than inheriting the
+   * scroll position of the one before it.
+   */
+  function showEntry(index: number): void {
+    if (index === currentIndex) return
+    const direction: StepDirection = index > currentIndex ? 1 : -1
+    if (entryBody) playEntryStep(entryBody, direction)
+    currentIndex = index
+    if (entryBody) entryBody.scrollTop = 0
+  }
 
   function goPrev(): void {
     if (currentIndex > 0) navigateTo(currentIndex - 1)
@@ -239,7 +262,7 @@
     if (working || index === currentIndex) return
     const previousIndex = currentIndex
     const previousAnswers = answers[previousIndex] ?? []
-    currentIndex = index
+    showEntry(index)
     persistProgress(previousIndex, previousAnswers, index)
   }
 
@@ -259,7 +282,9 @@
     const shouldAdvance = !question.multiple && answeredIndex < total - 1
     const nextIndex = shouldAdvance ? answeredIndex + 1 : undefined
     setAnswer(answeredIndex, updated)
-    if (nextIndex !== undefined) currentIndex = nextIndex
+    // Picking an option is the walkthrough advancing itself, so it is a step like
+    // any other and moves the body rather than swapping the content under it.
+    if (nextIndex !== undefined) showEntry(nextIndex)
     persistProgress(answeredIndex, updated, nextIndex)
   }
 
@@ -490,8 +515,13 @@
   {#if !folded}
     <div class="flex min-h-0 flex-1 flex-col" transition:slide={foldSlide()}>
       <!-- The scrollable half: the question, its options and the custom answer
-         give way first, while the header above and the footer below stay put. -->
-      <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
+         give way first, while the header above and the footer below stay put.
+         Every question renders into this one body, so a step moves the body's
+         content (see `showEntry`) instead of the body animating in again. -->
+      <div
+        bind:this={entryBody}
+        class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4"
+      >
         <div class="space-y-1">
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
@@ -629,7 +659,11 @@
         {/if}
 
         {#if actionError}
-          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p
+            class="bg-danger/10 px-3 py-2 text-xs text-danger"
+            role="alert"
+            transition:fly={rowArrive()}
+          >
             {actionError}
           </p>
         {/if}
@@ -651,7 +685,7 @@
             onNext={goNext}
           />
           {#if !allAnswered}
-            <p class="min-w-0 truncate text-[0.6875rem] text-muted">
+            <p class="min-w-0 truncate text-[0.6875rem] text-muted" transition:fly={rowArrive()}>
               {total > 1 ? 'Answer every question to send' : 'Answer this question to send'}
             </p>
           {/if}

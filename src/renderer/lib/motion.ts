@@ -1,12 +1,19 @@
 import { cubicOut } from 'svelte/easing'
 import type { TransitionConfig } from 'svelte/transition'
 
+/** True when the user has asked the OS for reduced motion. Shared by the
+ *  transitions (`motionDuration`) and by the few animations scripted by hand,
+ *  so both read the same signal from one place. */
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 /** Zeroes out a transition duration when the user has asked the OS for reduced
  *  motion, so panel/tree animations become instant show/hide instead of skipped
  *  entirely (which would otherwise require a second code path per component). */
 export function motionDuration(ms: number): number {
-  if (typeof window === 'undefined') return ms
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : ms
+  return prefersReducedMotion() ? 0 : ms
 }
 
 /**
