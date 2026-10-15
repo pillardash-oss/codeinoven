@@ -51,7 +51,7 @@
   profile's outstanding downloads.
 -->
 <nav
-  class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
+  class="relative z-10 flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Primary views"
   data-region="view-rail"
 >
@@ -81,13 +81,16 @@
         {#snippet badge()}
           {#if badges.activity || badges.unread}
             <!-- One container for every indicator this item carries, anchored at
-                 its top-right corner. Each indicator takes a row of its own: the
-                 rail is against the left edge of the window, so a wider row would
-                 grow left, past the edge, and out of the viewport. Stacking keeps
-                 the container no wider than its widest indicator, which fits
-                 inside the item, and the 4px overhang is the only part that
-                 reaches past the rail. -->
-            <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
+                 its top-right corner and lifted clear of the item's glyph. The
+                 lift is what keeps the icon readable, since an indicator is an
+                 opaque chip and the glyph band is exactly where a stack put the
+                 second one. Both indicators then sit side by side in a row, which
+                 only fits because the container runs past the item's right edge:
+                 two chips are wider than the 32px item, and the rail is against
+                 the left edge of the window, so the row cannot grow left. The
+                 rail carries `z-10` for those few pixels, which would otherwise
+                 be painted under the content area sitting to its right. -->
+            <span class="absolute -top-2 -right-2 flex items-center gap-0.5">
               {#if badges.activity}
                 <WorkingCountBadge
                   icon={badges.activity.icon}

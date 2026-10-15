@@ -64,9 +64,11 @@
 {#if count > 0}
   {@const Icon = icon}
   <!-- Every indicator is a filled, bordered chip: the fill lifts the mark off
-       whatever it lands on, which on the rail is the item's own icon. -->
+       whatever it lands on, which on the rail is the item's own icon. The
+       horizontal padding stays tight because a rail item 32px wide has to hold
+       two of these side by side inside the window. -->
   <span
-    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colorOnly
+    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px border border-border bg-elevated px-0.5 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colorOnly
       ? ''
       : toneClass} {className}"
     role="status"

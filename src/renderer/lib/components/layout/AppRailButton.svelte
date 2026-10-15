@@ -116,9 +116,10 @@
     <!-- The speaker rides the opposite corner from the badge stack, so a view can
          say "working" and "playing sound" at the same time without either mark
          hiding the other. It is a status, not a control: the mute toggle lives
-         on the tab row the sound actually belongs to. -->
+         on the tab row the sound actually belongs to. Like the badge row above,
+         it clears the glyph band on the way out, so the item's icon reads. -->
     <span
-      class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center border border-border bg-elevated text-info shadow-sm"
+      class="absolute -bottom-2 -right-2 flex h-3.5 w-3.5 items-center justify-center border border-border bg-elevated text-info shadow-sm"
       role="status"
       aria-label={`${label} is playing audio`}
       title={`${label} is playing audio`}
