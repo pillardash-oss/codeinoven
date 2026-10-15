@@ -163,9 +163,11 @@ export class RoutineSchedulerService {
    * Whether any task is on the clock, which is the only reason the tick exists.
    *
    * A read that fails keeps the tick: a missed slot costs the user far more than
-   * a tick that had nothing to do.
+   * a tick that had nothing to do. The residency check reads the same answer from
+   * outside the scheduler, to decide whether a windowless process still has a
+   * reason to exist at all (`residencyReason` in `background-work-state`).
    */
-  private hasTaskOnTheClock(): boolean {
+  hasTaskOnTheClock(): boolean {
     try {
       return this.deps.routines.listAssistantTasks().some((task) => this.canComeDue(task))
     } catch (error) {

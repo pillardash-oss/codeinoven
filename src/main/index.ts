@@ -48,7 +48,7 @@ import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
-import { computeAttention, hasUpcomingWork } from './system/background-work-state'
+import { computeAttention, hasUpcomingWork, residencyReason } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import { startStartupUpdater } from './bootstrap/startup-updater'
 import { getMainBundleDirectory } from './bootstrap/bundle-directory'
@@ -364,6 +364,10 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     }
   },
   hasUpcomingWork: () => hasUpcomingWork(state, database),
+  // The other half of the park decision: a windowless process only keeps its
+  // menu bar icon, its SQLite handle and its schedule alive for as long as this
+  // returns a reason (see `BackgroundLifecycleService.evaluateResidency`).
+  residencyReason: () => residencyReason(state, database),
   computeAttention: () => computeAttention(database),
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while

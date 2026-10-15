@@ -9,7 +9,8 @@
  * renderer memory.
  *
  * This service owns the decisions and the surfaces:
- *   - whether a close parks or quits (`shouldPark`),
+ *   - whether a close parks or quits (`shouldPark`, which is only true while the
+ *     process still has something to preserve; see `evaluateResidency`),
  *   - the menu bar icon and its two states (normal / error, the latter a bold
  *     exclamation beside the mark whenever a thread holds a live problem),
  *   - the Dock icon hiding while windowless and returning with a window,
@@ -22,8 +23,8 @@
  *
  * It is deliberately decoupled from the window and from the schedulers: the
  * composition root hands in the callbacks (`openWindow`, `destroyWindow`,
- * `quitApp`, `hasUpcomingWork`), so the service never imports the boot module
- * that creates them.
+ * `quitApp`, `hasUpcomingWork`, `residencyReason`), so the service never imports
+ * the boot module that creates them.
  */
 
 import {
@@ -57,6 +58,7 @@ import { instanceRegistry } from './instance-registry'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { BootstrapState } from '../bootstrap/bootstrap-state'
+import type { ResidencyReason } from './background-work-state'
 
 /** How long the renderer gets to persist its own state before the window dies. */
 const PARK_GRACE_MS = 350
@@ -66,6 +68,17 @@ const ACTIVATION_POLL_MS = 2_000
 
 /** Activation requests older than this are leftovers from a crashed instance. */
 const ACTIVATION_TTL_MS = 60_000
+
+/**
+ * How long a windowless process waits after its last reason to stay drains
+ * before it quits.
+ *
+ * A run that has just settled, a retry that has just fired and a slot that has
+ * just been recorded each pass through a moment where nothing is pending yet, and
+ * an exit taken inside that moment would cut the settlement short. The wait is
+ * also what keeps a flapping predicate (work, no work, work) from quitting.
+ */
+const RESIDENCY_DRAIN_GRACE_MS = 15_000
 
 /**
  * How long thread-update bursts are coalesced before the icon is recomputed.
@@ -95,6 +108,11 @@ export interface BackgroundLifecycleDeps {
    * to decide whether a real quit should warn.
    */
   hasUpcomingWork: () => boolean
+  /**
+   * Why the process still has to outlive its window, or null when nothing does.
+   * Read at every close decision and again while parked, so it must stay cheap.
+   */
+  residencyReason: () => ResidencyReason | null
   /** Something needs the user: a parked gate or an unread failure. */
   computeAttention: () => boolean
   /** Called when this instance becomes the owner of scheduled work. */
@@ -135,6 +153,10 @@ export class BackgroundLifecycleService {
   private stopped = false
   private activationWatcher: FSWatcher | null = null
   private activationTimer: ReturnType<typeof setInterval> | null = null
+  /** When the window last closed, or null while one is open (and at boot). */
+  private windowlessSince: number | null = null
+  /** The armed "nothing left to preserve" quit, or null when none is pending. */
+  private residencyTimer: ReturnType<typeof setTimeout> | null = null
   private readonly activationDir = join(getConfigRoot(), 'instances', 'activate')
   private readonly unsubscribers: Array<() => void> = []
   private updater: BackgroundUpdaterBridge | null = null
@@ -178,6 +200,7 @@ export class BackgroundLifecycleService {
     this.activationWatcher?.close()
     this.activationWatcher = null
     this.clearActivationPoll()
+    this.clearResidencyQuit()
     this.destroyTray()
   }
 
@@ -221,16 +244,23 @@ export class BackgroundLifecycleService {
 
   /**
    * Whether closing the window (or Cmd+Q) should park to the menu bar instead of
-   * quitting. Background mode on means the backend is expected to keep the
-   * schedule, so the full quits are the menu bar's Quit item, the direct-quit
-   * shortcut, and an OS logout. A secondary instance parks nothing: it owns no
-   * schedule, so closing it quits that process and leaves the owner alone. A
-   * probe launch opted out of registration outright, so closing its window
-   * closes the process.
+   * quitting.
+   *
+   * Parking is not free: it holds SQLite, the menu bar icon, the schedule and a
+   * live main process. The mode is therefore only half the answer, and the other
+   * half is {@link BackgroundLifecycleDeps.residencyReason}: a process with
+   * nothing left to run or to hold has no reason to outlive its window, so
+   * closing it quits like any other app. With work still pending it parks exactly
+   * as before, and {@link evaluateResidency} takes the exit once that work drains.
+   *
+   * A secondary instance parks nothing: it owns no schedule, so closing it quits
+   * that process and leaves the owner alone. A probe launch opted out of
+   * registration outright, so closing its window closes the process.
    */
   shouldPark(): boolean {
     if (this.stopped || this.optedOut || this.mode === 'off') return false
-    return this.currentRole().role === 'owner'
+    if (this.currentRole().role !== 'owner') return false
+    return this.deps.residencyReason() !== null
   }
 
   /** Apply a config change without a restart. */
@@ -245,6 +275,10 @@ export class BackgroundLifecycleService {
 
   /** A window now exists: restore the Dock icon and push the current role. */
   onWindowOpened(window: BrowserWindow): void {
+    // A window on screen is the user being here: the process is not parked, and
+    // an exit armed before this was never taken anyway.
+    this.windowlessSince = null
+    this.clearResidencyQuit()
     this.showDock()
     // Reconcile the menu bar icon here too, so a window that opens after the
     // process lost its icon (a role change, a missed event) brings it straight
@@ -258,6 +292,7 @@ export class BackgroundLifecycleService {
 
   /** The window is gone: menu-bar-only while background mode is on. */
   onWindowClosed(): void {
+    this.windowlessSince = Date.now()
     if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
     this.refreshAttention()
@@ -275,6 +310,11 @@ export class BackgroundLifecycleService {
    * {@link requestAttentionRefresh}.
    */
   refreshAttention(): void {
+    // Every state change the icon reacts to is also one that can drain the last
+    // reason to stay: a run settling, a retry firing, a routine being paused.
+    // Deciding here means the residency exit happens on the change rather than at
+    // the next launch. It costs nothing while a window is on screen.
+    this.evaluateResidency()
     if (this.attentionRefreshTimer !== null) {
       clearTimeout(this.attentionRefreshTimer)
       this.attentionRefreshTimer = null
@@ -675,6 +715,66 @@ export class BackgroundLifecycleService {
     this.activationTimer = null
   }
 
+  // ----------------------------------------------------------- residency ----
+
+  /**
+   * Decide whether a windowless process may exit, and arm the quit when it may.
+   *
+   * A parked process is a scheduler: it exists for the work it still has to do or
+   * to hold, and once that drains there is nothing left to preserve, so it goes
+   * instead of sitting in the menu bar. The decision is taken again on every state
+   * change (see `refreshAttention`) and on the drain tick below, so a drain is
+   * acted on when it happens rather than at the next launch.
+   *
+   * Free while a window is on screen: a visible window is the user being here, so
+   * the whole check is skipped instead of being run and discarded.
+   */
+  private evaluateResidency(): void {
+    if (this.stopped || !this.isWindowlessAndRegistered()) {
+      this.clearResidencyQuit()
+      return
+    }
+    if (this.deps.residencyReason() !== null) {
+      // A reason to stay is back, so a quit that was already armed is spent.
+      this.clearResidencyQuit()
+      return
+    }
+    if (this.residencyTimer !== null) return
+    this.residencyTimer = setTimeout(() => {
+      this.residencyTimer = null
+      this.quitWhenDrained()
+    }, RESIDENCY_DRAIN_GRACE_MS)
+    this.residencyTimer.unref?.()
+  }
+
+  /** Take the exit, unless a reason to stay arrived inside the grace window. */
+  private quitWhenDrained(): void {
+    if (this.stopped || !this.isWindowlessAndRegistered()) return
+    if (this.deps.residencyReason() !== null) return
+    Logger.info('Nothing left to preserve: quitting instead of parking', {
+      windowlessForMs: this.windowlessSince === null ? 0 : Date.now() - this.windowlessSince
+    })
+    this.deps.quitApp()
+  }
+
+  /**
+   * Whether this process is the background one: registered, and with no window of
+   * its own. `windowlessSince` is what keeps this false until a window has really
+   * closed, so the first window, which does not exist yet during startup, is never
+   * mistaken for a parked process.
+   */
+  private isWindowlessAndRegistered(): boolean {
+    if (!this.backgroundEnabled || this.windowlessSince === null) return false
+    const window = this.deps.state.mainWindow
+    return window === null || window.isDestroyed() || !window.isVisible()
+  }
+
+  private clearResidencyQuit(): void {
+    if (this.residencyTimer === null) return
+    clearTimeout(this.residencyTimer)
+    this.residencyTimer = null
+  }
+
   private drainActivationRequests(): void {
     if (this.stopped) return
     // Self-heal the menu bar icon. It is created on startup, on a config
@@ -687,6 +787,11 @@ export class BackgroundLifecycleService {
       this.syncTray()
       this.refreshActivationWatch()
     }
+    // The drain tick is the one thing that runs for as long as a windowless
+    // process is parked, so it is also where the residency decision is re-taken
+    // between state changes: the last reason to stay can drain without an event
+    // that says so (a retry expiring, a run settling its final write).
+    this.evaluateResidency()
     let files: string[]
     try {
       files = readdirSync(this.activationDir).filter((name) => name.endsWith('.json'))
