@@ -7,6 +7,13 @@ import { THREAD_GROUP_MARK, THREAD_STATE_MARKS } from '$lib/components/threads/t
 // The row asks the live agent-run store whether a thread is working. These tests
 // drive that one question directly, so a fixture can be "working" without a real
 // session behind it.
+// The context line only exists when there is something to put on it. A scope is
+// the case that must not float: it belongs flush against the row's left edge.
+const scope = vi.hoisted(() => ({ bucket: null as null | Record<string, unknown> }))
+vi.mock('$lib/threads/thread-scope', () => ({
+  threadScopeBucket: () => scope.bucket
+}))
+
 const runs = vi.hoisted(() => ({ busy: new Set<string>(), settled: false }))
 vi.mock('$lib/stores/agent-runs.svelte', () => ({
   agentRuns: {
@@ -142,17 +149,51 @@ describe('ThreadRow, the detailed spine row', () => {
     unmount(app)
   })
 
-  it('draws a real pin mark on a pinned row, and no pin button at all', async () => {
+  it('offers a pin control at the top of the mark column', async () => {
+    const { target, app } = render(thread({ pinned: false }))
+    await tick()
+
+    // The control is hidden until the row is hovered, but always in the DOM so
+    // the user can pin from the row without hunting the context menu.
+    const pin = target.querySelector('[role="button"][aria-label="Pin thread"]')
+    expect(pin).not.toBeNull()
+
+    unmount(app)
+  })
+
+  it('lights the pin on a pinned row', async () => {
     const { target, app } = render(thread({ pinned: true }))
     await tick()
 
-    // A pin button would reserve width the title cannot use; pinning is the
-    // context menu's job. The row still shows the pin, so the state is visible.
-    const pinButtons = target.querySelectorAll(
-      '[aria-label="Pin thread"], [aria-label="Unpin thread"]'
-    )
-    expect(pinButtons.length).toBe(0)
-    expect(target.querySelector('[aria-label="Pinned"]')).not.toBeNull()
+    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]')
+    expect(pin).not.toBeNull()
+    // A pinned thread shows its pin without the pointer finding it first.
+    expect(pin?.className).toContain('opacity-100')
+
+    unmount(app)
+  })
+
+  it('draws no rail on a settled thread, so its glyph stands alone', async () => {
+    const { target, app } = render(thread({ status: 'completed' }))
+    await tick()
+
+    const glyph = target.querySelector('[aria-label="Completed"]')
+    expect(glyph).not.toBeNull()
+    // The column is pin, glyph, and nothing else: a settled row asks for nothing.
+    const column = glyph?.parentElement as HTMLElement
+    expect(column.children.length).toBe(2)
+
+    unmount(app)
+  })
+
+  it('keeps the rail on a thread that is still asking for something', async () => {
+    const { target, app } = render(thread({ status: 'awaiting_approval' }))
+    await tick()
+
+    const glyph = target.querySelector('[aria-label="Needs attention"]')
+    const column = glyph?.parentElement as HTMLElement
+    // pin, glyph, rail
+    expect(column.children.length).toBe(3)
 
     unmount(app)
   })
@@ -218,10 +259,11 @@ describe('ThreadRow, the detailed spine row', () => {
 
     const glyph = target.querySelector('[aria-label="Spec ready"]')
     expect(glyph).not.toBeNull()
-    // The glyph and the rail share one column, and the column carries the state
-    // colour, so the icon and the line under it are the colour of the status.
+    // The glyph wears the state's own colour, so the icon is the colour rather
+    // than merely sitting beside it.
+    expect((glyph as HTMLElement).getAttribute('style')).toContain(THREAD_STATE_MARKS.spec.colour)
+    // It sits above the rail, in one column.
     const column = glyph?.parentElement as HTMLElement
-    expect(column.getAttribute('style')).toContain(THREAD_STATE_MARKS.spec.colour)
     expect(column.className).toContain('flex-col')
 
     unmount(app)
@@ -231,6 +273,28 @@ describe('ThreadRow, the detailed spine row', () => {
       expect(mark.colour).toMatch(/^var\(--/)
       expect(['solid', 'dashed', 'dotted']).toContain(mark.dash)
     }
+  })
+
+  it('flushes the context line left when there is no project icon', async () => {
+    // A project's own thread list passes no icon and hides the name, so the
+    // scope must start at the row's own left edge rather than floating right.
+    scope.bucket = { id: 'b1', name: 'Future version', color: '#888888', pinned: false }
+    const { target, app } = render(thread(), { hideProjectName: true })
+    await tick()
+
+    const line = target.querySelector('[data-thread-context-line]')
+    expect(line).not.toBeNull()
+    // No empty icon box: the first thing in the line is the scope itself.
+    const first = line?.firstElementChild as HTMLElement
+    expect(first.className).not.toContain('h-4 w-4')
+    // And nothing claims the remaining width to push it away.
+    const grower = [...(line?.children ?? [])].find((n) =>
+      (n as HTMLElement).className.includes('flex-1')
+    )
+    expect(grower).toBeUndefined()
+
+    unmount(app)
+    scope.bucket = null
   })
 
   it('puts one status rail on the row and no legacy ring slot', async () => {

@@ -21,6 +21,7 @@
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import {
+    markDrawsRail,
     threadActionMark,
     threadStateMark,
     type ThreadStateMark
@@ -600,6 +601,10 @@
    *  top of the state; with no action, the state speaks for itself. */
   let spineMark = $derived.by((): ThreadStateMark => pendingAction ?? threadStateMark(threadState))
 
+  /** Whether this row draws a rail under its glyph. A settled thread does not:
+   *  the glyph alone is the whole mark, vertically centred. */
+  let spineRailVisible = $derived(markDrawsRail(spineMark))
+
   /** The rail's paint: the state's own colour, and its dash pattern. The rail is
    *  the same width as the glyph above it, so the mark reads as one column. */
   let spineRailPaint = $derived.by((): string => {
@@ -740,7 +745,7 @@
   })
 
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
-  let pinVisible = $derived(hovered)
+  let pinVisible = $derived(hovered || effectivePinned)
 
   /** Tooltip for the state badge: the only place a collapsed row can explain
    *  itself, since the badge is a bare dot or spinner. */
@@ -1186,28 +1191,52 @@
     oncontextmenu={openContextMenu}
   >
     {#if detailed}
-      <!-- State mark: one column holding the glyph above a rail of the same
-           width. The glyph names the state and wears its colour; the rail repeats
-           that colour in a line beneath it, so both are centred on one axis and
-           the title's gutter stays flush and even.
-           A pinned thread wears a real pin above the glyph, and something waiting
-           on the thread (a draft, a queue, a start-after) takes the glyph's place. -->
+      <!-- State mark: one column holding the pin, then the glyph, then the rail.
+           The glyph names the state and wears its colour; the rail repeats that
+           colour as a line beneath it, so the column reads as one mark and the
+           title's gutter stays flush and even.
+           A settled thread draws no rail at all: with nothing left to do it
+           should attract no attention, so its row shows the glyph alone.
+           The pin is a real control at the top of the column, lit while the
+           pointer is on the row or while the thread is pinned, so pinning is
+           never hidden behind the context menu alone. -->
       <span
         class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center"
-        style="color: {spineMark.colour};"
       >
-        {#if effectivePinned}
-          <span
-            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center text-thread-pinned"
-            role="img"
-            title="Pinned"
-            aria-label="Pinned"
-          >
-            <Pin size={14} fill="currentColor" aria-hidden="true" />
-          </span>
-        {/if}
+        <!-- A role="button" span, not a real <button>: the whole row is one, and a
+             button cannot be nested inside another. `tabindex={-1}` keeps it out of
+             the tab order for the same reason, and the row's own `thread-pin`
+             keymap binding handles the key. -->
+        <span
+          role="button"
+          tabindex={-1}
+          class="flex h-[0.875rem] w-[0.875rem] flex-none cursor-pointer items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0'}"
+          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+          aria-hidden={!pinVisible}
+          title={effectivePinned ? 'Unpin' : 'Pin'}
+          onclick={(e: MouseEvent) => {
+            e.stopPropagation()
+            onTogglePin(thread)
+          }}
+          onkeydown={(e: KeyboardEvent) => {
+            if (keymapState.matches('thread-pin', e)) {
+              e.stopPropagation()
+              onTogglePin(thread)
+            }
+          }}
+        >
+          <Pin
+            size={14}
+            fill={effectivePinned ? 'currentColor' : 'none'}
+            class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
+            aria-hidden="true"
+          />
+        </span>
         <span
           class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+          style="color: {spineMark.colour};"
           role="img"
           title={spineMark.label}
           aria-label={spineMark.label}
@@ -1217,11 +1246,13 @@
             <SpineIcon size={14} strokeWidth={1.8} aria-hidden="true" />
           {/if}
         </span>
-        <span
-          class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
-          style="background: {spineRailPaint};"
-          aria-hidden="true"
-        ></span>
+        {#if spineRailVisible}
+          <span
+            class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+            style="background: {spineRailPaint};"
+            aria-hidden="true"
+          ></span>
+        {/if}
       </span>
     {/if}
     <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
@@ -1388,17 +1419,25 @@
              scope all answer that one question, so they share this line, exactly
              as the project mark and the project name already did. A project's own
              thread list skips the name, since the folder above already names it. -->
-        <span class="flex w-full min-w-0 items-center gap-2">
-          <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-            {#if projectIconUrl}
-              <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
-            {:else if projectIconGlyph}
-              {@const ContainerIcon = projectIconGlyph}
-              <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
-            {/if}
-          </span>
+        <span data-thread-context-line class="flex w-full min-w-0 items-center gap-2">
+          {#if projectIconUrl || projectIconGlyph}
+            <!-- The icon box exists only when there is an icon. A project's own
+                 thread list passes none, and an empty box would push the scope
+                 off the left edge it should be flush with. -->
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              {#if projectIconUrl}
+                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
+              {:else if projectIconGlyph}
+                {@const ContainerIcon = projectIconGlyph}
+                <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
+              {/if}
+            </span>
+          {/if}
           {#if projectName && !hideProjectName}
-            <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={projectName}
+            <!-- No `flex-1` here: the name sizes to its content so the scope sits
+                 immediately after it, flush left, instead of being pushed to the
+                 far edge. It still truncates when the line runs out of room. -->
+            <span class="min-w-0 truncate text-[0.6875rem] text-muted" title={projectName}
               >{projectName}</span
             >
           {/if}

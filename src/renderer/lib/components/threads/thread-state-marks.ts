@@ -55,6 +55,14 @@ export interface ThreadStateMark {
    * so they are findable from across the sidebar without reading a word.
    */
   wide?: boolean
+  /**
+   * Whether a rail is drawn under the glyph at all.
+   *
+   * A settled thread draws none: with nothing left to do, the row should attract
+   * no attention, so it shows its glyph alone, vertically centred. Every other
+   * state keeps its rail, because every other state is asking for something.
+   */
+  rail?: boolean
 }
 
 /**
@@ -82,15 +90,17 @@ export const THREAD_STATE_MARKS = {
     icon: CircleCheck,
     label: 'Read',
     tone: 'done',
-    colour: 'var(--color-border-strong)',
-    dash: 'solid'
+    colour: 'var(--color-thread-done)',
+    dash: 'solid',
+    rail: false
   },
   completed: {
     icon: CircleCheck,
     label: 'Completed',
     tone: 'done',
     colour: 'var(--color-thread-done)',
-    dash: 'solid'
+    dash: 'solid',
+    rail: false
   },
   todo: {
     icon: SquarePen,
@@ -198,6 +208,17 @@ export function threadStateMark(state: ThreadRowState): ThreadStateMark {
 /** The mark for something waiting on the thread. */
 export function threadActionMark(action: ThreadRowAction): ThreadStateMark {
   return THREAD_ACTION_MARKS[action]
+}
+
+/**
+ * Whether a mark draws a rail under its glyph.
+ *
+ * Read and completed are the settled pair: they answered the user already, so
+ * their row keeps quiet and shows only the glyph. Everything else is waiting,
+ * running, or failed, and keeps the rail to say so.
+ */
+export function markDrawsRail(mark: ThreadStateMark): boolean {
+  return mark.rail !== false
 }
 
 /**
