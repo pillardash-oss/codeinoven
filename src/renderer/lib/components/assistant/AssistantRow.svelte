@@ -23,11 +23,9 @@
   import { assistantGap, assistantNextRunLine, assistantRunCountLabel } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
-  import { tick } from 'svelte'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import AssistantHoverPopover from './AssistantHoverPopover.svelte'
 
   interface Props {
@@ -118,12 +116,8 @@
   let taskDropActive = $state(false)
 
   // ─── Hover popover ───────────────────────────────────────────────────────
-  let rowEl: HTMLElement | undefined = $state(undefined)
-  let popoverEl: HTMLElement | undefined = $state(undefined)
-  let hovered = $state(false)
-  let showPopover = $state(false)
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
-  let popoverPos = $state({ x: 0, y: 0 })
+  /** The assistant's info popover, shared with every surface that shows one. */
+  const popover = createThreadHoverPopover({ isBlocked: () => menuOpen })
   let todayRunsCheck = 0
 
   const skipDialogTitle = $derived(
@@ -165,46 +159,20 @@
       })
   }
 
-  async function revealPopover(): Promise<void> {
-    if (!rowEl || menuOpen || !hovered) return
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-    if (!rowEl || !popoverEl || menuOpen || !hovered) return
-    const rect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      rect.width,
-      rect.height
-    )
-  }
-
-  function onRowEnter(): void {
-    hovered = true
-    clearTimeout(popoverTimer)
-    popoverTimer = setTimeout(() => void revealPopover(), 550)
-  }
-
-  function onRowLeave(): void {
-    hovered = false
-    clearTimeout(popoverTimer)
-    showPopover = false
-  }
-
   function openContextMenu(event: MouseEvent): void {
     event.preventDefault()
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     onMenuOpenChange(true)
   }
 
-  function capturePopoverElement(element: HTMLElement): void {
-    popoverEl = element
+  function captureRowElement(element: HTMLElement): () => void {
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
+  }
+
+  function capturePopoverElement(element: HTMLElement): () => void {
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 
   // ─── Drag & drop ───────────────────────────────────────────────────────
@@ -223,8 +191,7 @@
     event.dataTransfer.setData('text/plain', assistant.id)
     event.dataTransfer.effectAllowed = 'move'
     setDragImage(event, assistant.name)
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
   }
 
   function handleDragOver(event: DragEvent): void {
@@ -277,10 +244,10 @@
   ondragover={handleDragOver}
   ondrop={handleDrop}
   ondragleave={handleDragLeave}
-  onpointerenter={onRowEnter}
-  onpointerleave={onRowLeave}
+  onpointerenter={() => popover.enter()}
+  onpointerleave={() => popover.leave()}
   oncontextmenu={openContextMenu}
-  bind:this={rowEl}
+  {@attach captureRowElement}
 >
   <!-- Stable drop indicator (assistant reorder) -->
   <div
@@ -510,12 +477,12 @@
   {/if}
 </ConfirmDialog>
 
-{#if showPopover}
+{#if popover.visible}
   <Portal>
     <div
       {@attach capturePopoverElement}
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-      style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+      style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
       <AssistantHoverPopover {assistant} {runCount} {working} {missed} {nextRunAt} {attention} />
     </div>

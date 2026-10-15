@@ -11,9 +11,8 @@
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import {
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
@@ -67,7 +66,6 @@
   import { Eye, Check, GitBranch, MessageCircleDashed, Monitor, Pin, Server } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
-  import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -201,11 +199,13 @@
   /** The ellipsis was revealed by a long press, so closing the menu hides it again. */
   let touchRevealed = $state(false)
   let showMenu = $state(false)
-  let showPopover = $state(false)
-  let rowEl = $state<HTMLDivElement>()
-  let popoverEl = $state<HTMLDivElement>()
-  let popoverPos = $state({ x: 0, y: 0 })
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
+  /** The row's info popover, shared with every other surface that shows one. */
+  const popover = createThreadHoverPopover({
+    isBlocked: () => showMenu,
+    onDismiss: () => {
+      hovered = false
+    }
+  })
   /** Debounces the message warmup so a fast mouse pass never fires an IPC call. */
   let preloadTimer: ReturnType<typeof setTimeout> | undefined
   const PRELOAD_DEBOUNCE_MS = 200
@@ -301,17 +301,13 @@
   })
 
   const captureRowElement: Attachment<HTMLDivElement> = (element) => {
-    rowEl = element
-    return () => {
-      if (rowEl === element) rowEl = undefined
-    }
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
   }
 
   const capturePopoverElement: Attachment<HTMLDivElement> = (element) => {
-    popoverEl = element
-    return () => {
-      if (popoverEl === element) popoverEl = undefined
-    }
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 
   const actionsMenu = createThreadActionsMenu({
@@ -856,44 +852,19 @@
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
-  async function revealPopover(): Promise<void> {
-    if (!rowEl || showMenu || !hovered) return
-
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-
-    if (!rowEl || !popoverEl || showMenu || !hovered) return
-    const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      popoverRect.width,
-      popoverRect.height
-    )
-  }
-
   function onRowEnter(): void {
     hovered = true
-    clearTimeout(popoverTimer)
+    popover.enter()
     // Warm the cache early   before the popover (550ms)   so the click path
     // into the thread is already fast by the time the user acts.
     clearTimeout(preloadTimer)
     preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
-    popoverTimer = setTimeout(() => {
-      void revealPopover()
-    }, 550)
   }
 
   function onRowLeave(): void {
     hovered = false
-    clearTimeout(popoverTimer)
+    popover.leave()
     clearTimeout(preloadTimer)
-    showPopover = false
   }
 
   /**
@@ -903,8 +874,7 @@
   function openActionsByTouch(): void {
     touchRevealed = true
     hovered = true
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
@@ -912,8 +882,7 @@
   function openContextMenu(e: MouseEvent): void {
     e.preventDefault()
     e.stopPropagation()
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 </script>
@@ -1224,8 +1193,7 @@
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
     onclick={() => {
-      showPopover = false
-      clearTimeout(popoverTimer)
+      popover.hide()
       onOpen(thread)
     }}
     oncontextmenu={openContextMenu}
@@ -1635,8 +1603,7 @@
         items={actionsMenu.items}
         vertical={compact ? showBottomRow : true}
         onOpen={() => {
-          showPopover = false
-          clearTimeout(popoverTimer)
+          popover.hide()
         }}
         onClose={() => {
           if (!touchRevealed) return
@@ -1648,12 +1615,12 @@
   </button>
 
   <!-- Hover popover with thread info -->
-  {#if showPopover}
+  {#if popover.visible}
     <Portal>
       <div
         {@attach capturePopoverElement}
         class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-        style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+        style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
       >
         <ThreadHoverPopover
           {thread}

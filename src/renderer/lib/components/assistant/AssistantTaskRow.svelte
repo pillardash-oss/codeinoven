@@ -9,7 +9,6 @@
     Pin
   } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
-  import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -25,10 +24,9 @@
   import { createAssistantHandoff } from './assistant-handoff.svelte'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import { longPress } from '$lib/long-press.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -274,50 +272,13 @@
   })
 
   // ─── Hover popover ───────────────────────────────────────────────────────
-  let rowEl: HTMLElement | undefined = $state(undefined)
-  let popoverEl: HTMLElement | undefined = $state(undefined)
-  let hovered = $state(false)
-  let showPopover = $state(false)
   let showMenu = $state(false)
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
-  let popoverPos = $state({ x: 0, y: 0 })
-
-  async function revealPopover(): Promise<void> {
-    if (!rowEl || showMenu || !hovered) return
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-    if (!rowEl || !popoverEl || showMenu || !hovered) return
-    const rect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      rect.width,
-      rect.height
-    )
-  }
-
-  function onRowEnter(): void {
-    hovered = true
-    clearTimeout(popoverTimer)
-    popoverTimer = setTimeout(() => void revealPopover(), 550)
-  }
-
-  function onRowLeave(): void {
-    hovered = false
-    clearTimeout(popoverTimer)
-    showPopover = false
-  }
+  /** The task's info popover, shared with every surface that shows one. */
+  const popover = createThreadHoverPopover({ isBlocked: () => showMenu })
 
   /** Touch has no hover or right click, so a long press opens the same menu. */
   function openActionsByTouch(): void {
-    hovered = true
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
@@ -325,13 +286,18 @@
   function openContextMenu(event: MouseEvent): void {
     event.preventDefault()
     event.stopPropagation()
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
-  function capturePopoverElement(element: HTMLElement): void {
-    popoverEl = element
+  function captureRowElement(element: HTMLElement): () => void {
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
+  }
+
+  function capturePopoverElement(element: HTMLElement): () => void {
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 
   function handleDragStart(event: DragEvent): void {
@@ -346,18 +312,17 @@
     document.body.appendChild(ghost)
     event.dataTransfer.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
   }
 </script>
 
 <div
   class="relative"
   role="listitem"
-  bind:this={rowEl}
+  {@attach captureRowElement}
   {@attach longPress({ onLongPress: openActionsByTouch })}
-  onpointerenter={onRowEnter}
-  onpointerleave={onRowLeave}
+  onpointerenter={() => popover.enter()}
+  onpointerleave={() => popover.leave()}
 >
   <button
     type="button"
@@ -370,8 +335,7 @@
     ondragstart={handleDragStart}
     aria-current={active ? 'true' : undefined}
     onclick={() => {
-      showPopover = false
-      clearTimeout(popoverTimer)
+      popover.hide()
       onSelect(task)
     }}
     oncontextmenu={openContextMenu}
@@ -496,19 +460,18 @@
       title="Task actions"
       ariaLabel="Actions for {task.title}"
       onOpen={() => {
-        showPopover = false
-        clearTimeout(popoverTimer)
+        popover.hide()
       }}
     />
   </span>
 </div>
 
-{#if showPopover}
+{#if popover.visible}
   <Portal>
     <div
       {@attach capturePopoverElement}
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-      style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+      style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
       <ThreadHoverPopover
         thread={task}

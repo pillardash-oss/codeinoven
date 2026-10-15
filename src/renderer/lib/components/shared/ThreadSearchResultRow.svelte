@@ -1,14 +1,12 @@
 <script lang="ts">
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { tick } from 'svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import {
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     threadHoverPopoverStyle,
     THREAD_HOVER_POPOVER_SURFACE_CLASS
   } from '$lib/components/shared/thread-hover-popover-layout'
@@ -122,57 +120,16 @@
 
   // ─── Hover popover (parity with ThreadRow) ────────────────────────────────
 
-  let showPopover = $state(false)
-  let rowEl = $state<HTMLButtonElement>()
-  let popoverEl = $state<HTMLDivElement>()
-  let popoverPos = $state({ x: 0, y: 0 })
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
-
-  async function revealPopover(): Promise<void> {
-    if (!rowEl) return
-
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-
-    if (!rowEl || !popoverEl) return
-    const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      popoverRect.width,
-      popoverRect.height
-    )
-  }
-
-  function onRowEnter(): void {
-    clearTimeout(popoverTimer)
-    popoverTimer = setTimeout(() => {
-      void revealPopover()
-    }, 550)
-  }
-
-  function onRowLeave(): void {
-    clearTimeout(popoverTimer)
-    showPopover = false
-  }
+  const popover = createThreadHoverPopover()
 
   const captureRowElement: Attachment<HTMLButtonElement> = (element) => {
-    rowEl = element
-    return () => {
-      if (rowEl === element) rowEl = undefined
-    }
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
   }
 
   const capturePopoverElement: Attachment<HTMLDivElement> = (element) => {
-    popoverEl = element
-    return () => {
-      if (popoverEl === element) popoverEl = undefined
-    }
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 </script>
 
@@ -183,12 +140,11 @@
     : 'hover:bg-elevated'}"
   title={thread.title}
   onclick={() => {
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     onOpen(thread)
   }}
-  onmouseenter={onRowEnter}
-  onmouseleave={onRowLeave}
+  onpointerenter={() => popover.enter()}
+  onpointerleave={() => popover.leave()}
 >
   <span class="flex min-w-0 items-center gap-2">
     <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
@@ -246,12 +202,12 @@
   {/if}
 </button>
 
-{#if showPopover}
+{#if popover.visible}
   <Portal>
     <div
       {@attach capturePopoverElement}
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-      style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+      style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
       <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
     </div>
