@@ -111,14 +111,9 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  /**
-   * The viewer body draws the inspector rather than the sandboxed preview frame.
-   *
-   * The frame is its own document, so the viewer's own gestures never reach it;
-   * the inspector is app DOM and takes them directly, which is why only the frame
-   * needs the drag surface.
-   */
-  const viewerShowsInspector = $derived(inspecting && annotationScope !== undefined)
+  // Keep the SVG in one document across mode changes. Its gestures reach the
+  // viewer directly; sandboxed iframe previews need a gesture overlay instead.
+  const viewerUsesSvgSurface = $derived(canInspect)
 
   /**
    * The expanded viewer's zoom.
@@ -182,10 +177,11 @@
     <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if inspecting && annotationScope && fullscreen}
+  {:else if canInspect && annotationScope && fullscreen}
     <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
+        enabled={inspecting}
         {artifactKey}
         projectId={annotationScope.projectId}
         threadId={annotationScope.threadId}
@@ -228,7 +224,7 @@
     aria-label="Zoomable {label.toLowerCase()}"
     class={[
       'relative h-full w-full touch-none overflow-hidden',
-      panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+      panZoom.zoom !== 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
     ]}
     onwheel={panZoom.onWheel}
     onpointerdown={panZoom.onPointerDown}
@@ -238,7 +234,7 @@
     ondblclick={() => panZoom.reset()}
   >
     {@render artifactBody(true)}
-    {#if panZoom.zoom > 1 && !viewerShowsInspector}
+    {#if !viewerUsesSvgSurface}
       <!-- The preview frame is a document of its own: a gesture inside it never
            reaches this surface, so a pan over it is taken here instead. -->
       <div class="absolute inset-0" role="presentation"></div>
