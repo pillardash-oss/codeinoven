@@ -64,6 +64,7 @@
   } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -273,12 +274,17 @@
     /** Called instead of sending when the thread has no AI account or no model
      *  selected, so the host can show its setup card and keep the draft. */
     onNeedsAiAccount?: () => void
+    /** True when a stack (the task list, a queued message) sits on the
+     *  composer's top edge: the composer's top rule then breaks into the dashed
+     *  line that carries the join, and the stack drops its own bottom rule. */
+    stackedAbove?: boolean
   }
 
   let {
     onSend,
     disabled = false,
     working = false,
+    stackedAbove = false,
     onStop,
     placeholder = 'Send a message...',
     autofocus = false,
@@ -1851,9 +1857,9 @@
 />
 
 <div
-  class="chat-composer relative z-10 border bg-surface {expansion.maximized
-    ? 'composer-maximized'
-    : ''}"
+  class="chat-composer relative z-10 border bg-surface {stackedAbove
+    ? 'border-t border-dashed border-border-strong'
+    : ''} {expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
@@ -1893,30 +1899,21 @@
   {/if}
 
   {#if ovenModelNotice}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="warn">
       {ovenModelNotice}
-    </div>
+    </CardNotice>
   {/if}
 
   {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="danger">
       This model cannot accept file attachments. Choose another model before sending this file.
-    </div>
+    </CardNotice>
   {/if}
 
   {#if textAttachmentError}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="danger">
       {textAttachmentError}
-    </div>
+    </CardNotice>
   {/if}
 
   <ChatComposerAttachmentStrip

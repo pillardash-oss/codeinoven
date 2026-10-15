@@ -1,19 +1,14 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    KeyRound,
-    Loader2,
-    ShieldCheck,
-    X
-  } from '@lucide/svelte'
+  import { ChevronLeft, ChevronRight, KeyRound, ShieldCheck, X } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
@@ -102,6 +97,18 @@
     if (remainingMs !== null) return formatRemaining(remainingMs)
     return timerPaused ? 'Paused' : 'No deadline'
   })
+  // The chip only claims urgency while the clock is running and the window is
+  // nearly gone; "No deadline" is a state, not a warning.
+  let timerTone = $derived<'default' | 'paused' | 'urgent'>(
+    remainingMs === null ? 'paused' : remainingMs <= 60_000 ? 'urgent' : 'default'
+  )
+  let timerTitle = $derived(
+    remainingMs === null
+      ? timerPaused
+        ? 'The countdown is paused while you fill this card in'
+        : 'This request has no deadline'
+      : 'The card closes when the time runs out; ask the agent again for a new one'
+  )
   /** Id of the current entry's alternative editor, unique per entry. */
   const alternativeTargetId = $derived(`secret-alternative-${request.requestId}-${currentIndex}`)
   /**
@@ -197,10 +204,6 @@
     if (currentIndex > 0) currentIndex -= 1
   }
 
-  function goNext(): void {
-    if (currentIndex < total - 1) currentIndex += 1
-  }
-
   async function handleSubmit(): Promise<void> {
     if (working || !allFilled) return
     const secrets: AgentSecretSubmission[] = []
@@ -242,64 +245,23 @@
 
 <section
   out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border bg-surface shadow-sm"
+  class={cardFrameClass('replace', 'overflow-hidden')}
   aria-label="Agent secret request"
 >
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-    <div class="min-w-0">
-      <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        {question.header ?? 'Secret'}
-      </p>
-      {#if total > 1}
-        <p class="mt-0.5 text-xs tabular-nums text-dimmed">
-          Secret {currentIndex + 1} of {total}
-        </p>
-      {/if}
-    </div>
-
-    <div class="flex shrink-0 items-center gap-1">
-      <span
-        class="mr-1 flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted"
-        aria-label={timerPaused ? 'The countdown is paused' : `Time remaining: ${remainingLabel}`}
-        title={timerPaused
-          ? 'The countdown is paused while you fill this card in'
-          : 'The card closes when the time runs out; ask the agent again for a new one'}
-      >
-        <Clock size={12} />
-        {remainingLabel}
-      </span>
-      {#if total > 1}
-        <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          disabled={currentIndex === 0 || working}
-          onclick={goPrev}
-          title="Previous secret"
-          aria-label="Previous secret"
-        >
-          <ChevronLeft size={15} />
-        </button>
-        <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          disabled={currentIndex === total - 1 || working}
-          onclick={goNext}
-          title="Next secret"
-          aria-label="Next secret"
-        >
-          <ChevronRight size={15} />
-        </button>
-      {/if}
-      <button
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-30"
-        disabled={working}
-        onclick={() => void handleDismiss()}
-        title="Discard this secret request"
-        aria-label="Discard this secret request"
-      >
-        <X size={15} />
-      </button>
-      <CardFoldToggle bind:folded label="secret request" />
-    </div>
-  </div>
+  <!-- The card that takes the composer's place while the agent waits for a
+     credential: what it needs, the field, and the two actions that end it. -->
+  <CardHead
+    icon={KeyRound}
+    title={question.header ?? 'Secret'}
+    chip={{
+      text: remainingLabel,
+      tone: timerTone,
+      title: timerTitle,
+      label: timerPaused ? 'The countdown is paused' : `Time remaining: ${remainingLabel}`
+    }}
+    foldLabel="secret request"
+    bind:folded
+  />
 
   {#if !folded}
     <div transition:slide={foldSlide()}>
@@ -332,7 +294,7 @@
                   disabled={working}
                   placeholder="Say what the agent should use instead, or name the variable you already provided…"
                   onValueChange={pauseCountdown}
-                  class="min-h-20 w-full resize-y overflow-y-auto rounded-lg border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                  class="min-h-20 w-full resize-y overflow-y-auto  border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   containerClass="min-w-0 flex-1"
                   ariaLabel="Alternative instruction"
                   onSubmit={advance}
@@ -374,7 +336,7 @@
                 </span>
                 <input
                   id={`secret-value-${request.requestId}-${currentIndex}`}
-                  class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                  class="h-10 w-full border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   type={currentRevealed ? 'text' : 'password'}
                   autocomplete="off"
                   autocapitalize="off"
@@ -408,18 +370,32 @@
         {/key}
 
         {#if actionError}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {actionError}
+          </p>
+        {/if}
+
+        {#if total > 1}
+          <p class="text-[0.6875rem] tabular-nums text-dimmed">
+            Secret {currentIndex + 1} of {total}
           </p>
         {/if}
       </div>
     </div>
   {/if}
 
-  <div
-    class="secret-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
-  >
-    <div class="flex min-w-0 items-center gap-2">
+  <CardFoot class="secret-card-footer">
+    {#snippet left()}
+      {#if total > 1}
+        <CardButton
+          label="Previous"
+          title="Previous secret"
+          icon={ChevronLeft}
+          variant="ghost"
+          disabled={currentIndex === 0 || working}
+          onclick={goPrev}
+        />
+      {/if}
       <AgentCardChatActions
         onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
         onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
@@ -434,48 +410,49 @@
         <ShieldCheck size={13} class="shrink-0 text-primary" />
         <span class="agent-card-footer-note-text min-w-0 truncate">Secrets are safe</span>
       </p>
-    </div>
-    <div class="flex min-w-0 shrink items-center justify-end gap-2">
-      {#if total > 1}
-        <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
-      {/if}
-      <button
-        class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+      <CardButton
+        label={showingAlternative ? 'Use a value instead' : 'Provide alternative'}
+        title={showingAlternative
+          ? 'Answer with a value instead of an instruction'
+          : 'Provide an alternative instead'}
+        variant="secondary"
         disabled={working}
         onclick={toggleAlternativeMode}
-      >
-        {showingAlternative ? 'Use a value instead' : 'Provide alternative'}
-      </button>
+      />
+      <CardButton
+        label="Discard"
+        title="Discard this secret request"
+        icon={X}
+        variant="ghost-danger"
+        disabled={working}
+        onclick={() => void handleDismiss()}
+      />
+    {/snippet}
+    {#snippet right()}
       {#if currentIndex < total - 1}
-        <button
-          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+        <CardButton
+          label="Next"
+          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
+          icon={ChevronRight}
+          variant="primary"
           disabled={working || !currentAnswered}
           onclick={advance}
-          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
-        >
-          Next
-          <ChevronRight size={13} />
-        </button>
+        />
       {:else}
-        <button
-          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working || !allFilled}
-          onclick={() => void handleSubmit()}
+        <CardButton
+          label={working ? 'Storing…' : 'Submit'}
           title={advanceShortcutLabel
             ? `Store the secret and answer the agent (${advanceShortcutLabel})`
             : 'Store the secret and answer the agent'}
-        >
-          {#if working}
-            <Loader2 size={13} class="animate-spin" />
-            Storing…
-          {:else}
-            <ShieldCheck size={13} />
-            Submit
-          {/if}
-        </button>
+          icon={ShieldCheck}
+          variant="primary"
+          loading={working}
+          disabled={working || !allFilled}
+          onclick={() => void handleSubmit()}
+        />
       {/if}
-    </div>
-  </div>
+    {/snippet}
+  </CardFoot>
 </section>
 
 <style>

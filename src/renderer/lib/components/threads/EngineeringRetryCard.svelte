@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { Loader2, RefreshCw, TriangleAlert } from '@lucide/svelte'
+  import { RefreshCw, TriangleAlert, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type {
     EngineeringLifecycleStage,
     ProviderCatalog,
@@ -66,6 +70,12 @@
     stage === undefined ? 'Engineering' : (STAGE_LABELS[stage] ?? 'Engineering')
   )
 
+  const chip: CardChipData = {
+    text: 'Stopped',
+    tone: 'urgent',
+    title: 'The stage stopped with an error'
+  }
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -93,94 +103,83 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border border-danger/30 bg-surface shadow-sm"
-  aria-label="Retry failed Engineering stage"
->
-  <div class="flex items-center gap-2 border-b border-danger/20 bg-danger/5 px-4 py-2.5">
-    <TriangleAlert size={15} class="shrink-0 text-danger" />
-    <p class="truncate text-xs font-semibold uppercase tracking-wide text-danger">
-      {stageLabel} failed
-    </p>
-    <CardFoldToggle bind:folded label="failed stage" class="ml-auto" />
-  </div>
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Retry failed Engineering stage">
+    <CardHead
+      icon={TriangleAlert}
+      title="{stageLabel} failed"
+      {chip}
+      tone="warn"
+      bind:folded
+      foldLabel="failed stage"
+    />
 
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="space-y-1.5 p-4">
-        <p class="text-sm font-semibold text-foreground">
-          The {stageLabel} stage could not complete
-        </p>
-        <p class="text-xs leading-relaxed text-muted">
-          {failure?.trim() ||
-            'The stage stopped with an error. Retry it from where it stopped   completed progress and context are preserved.'}
-        </p>
-      </div>
-
-      <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-        <button
-          type="button"
-          class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-          title="Stop the Engineering lifecycle and return to the stage card"
-          aria-label="Stop the Engineering lifecycle and return to the stage card"
-          disabled={busy}
-          onclick={() => void onCancel()}
-        >
-          Cancel
-        </button>
-        <div class="flex items-center gap-2">
-          {#if settings}
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={settings.harnessId}
-              providerId={settings.providerId}
-              modelId={settings.modelId}
-              accountId={settings.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="top"
-              label="Change model"
-              variant="action"
-              onSelect={chooseModel}
-              thinkingLevel={settings.thinkingLevel}
-              runtimeSettings={settings}
-              onSelectThinking={chooseThinking}
-              onSelectRuntime={chooseRuntime}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
-          {:else}
-            <button
-              type="button"
-              class="flex min-h-8 items-center gap-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-40"
-              title="Choose a model before retrying"
-              aria-label="Choose a model before retrying"
-              disabled
-            >
-              Change model
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-            title="Retry the failed {stageLabel} stage with the selected model"
-            aria-label="Retry the failed {stageLabel} stage with the selected model"
-            disabled={busy}
-            onclick={() => void onRetry()}
-          >
-            {#if busy}
-              <Loader2 size={13} class="animate-spin" />
-              Retrying…
-            {:else}
-              <RefreshCw size={13} />
-              Retry stage
-            {/if}
-          </button>
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-1.5 px-3 py-2.5">
+          <p class="text-xs font-semibold text-foreground">
+            The {stageLabel} stage could not complete
+          </p>
+          <p class="text-xs leading-relaxed text-muted">
+            {failure?.trim() ||
+              'The stage stopped with an error. Retry it from where it stopped   completed progress and context are preserved.'}
+          </p>
         </div>
+
+        <CardFoot>
+          {#snippet left()}
+            <CardButton
+              label="Cancel"
+              title="Stop the Engineering lifecycle and return to the stage card"
+              icon={X}
+              variant="ghost-danger"
+              disabled={busy}
+              onclick={() => void onCancel()}
+            />
+          {/snippet}
+          {#snippet right()}
+            {#if settings}
+              <ModelPicker
+                {providers}
+                {projectId}
+                harnessId={settings.harnessId}
+                providerId={settings.providerId}
+                modelId={settings.modelId}
+                accountId={settings.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="top"
+                label="Change model"
+                variant="action"
+                onSelect={chooseModel}
+                thinkingLevel={settings.thinkingLevel}
+                runtimeSettings={settings}
+                onSelectThinking={chooseThinking}
+                onSelectRuntime={chooseRuntime}
+                {onToggleFavorite}
+                {onReorderFavorite}
+              />
+            {:else}
+              <CardButton
+                label="Change model"
+                title="Choose a model before retrying"
+                variant="secondary"
+                disabled
+              />
+            {/if}
+            <CardButton
+              label={busy ? 'Retrying…' : 'Retry stage'}
+              title="Retry the failed {stageLabel} stage with the selected model"
+              icon={busy ? undefined : RefreshCw}
+              variant="primary"
+              disabled={busy}
+              loading={busy}
+              onclick={() => void onRetry()}
+            />
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

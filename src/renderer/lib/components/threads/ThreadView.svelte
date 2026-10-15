@@ -19,28 +19,23 @@
 
   import {
     AudioLines,
-    ArrowUpRight,
     Check,
     ChevronDown,
-    Clock,
     Copy,
-    Ellipsis,
     FileText,
     FileDown,
     FolderInput,
     GitFork,
-    Info,
     Loader2,
     MessageSquare,
     Network,
     Pencil,
-    Plus,
     ShieldCheck,
     Target,
     Trash2,
+    TriangleAlert,
     Undo2,
     Video,
-    X,
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
@@ -60,9 +55,13 @@
   import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
   import ClampedText from '../shared/ClampedText.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { dismissSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -81,6 +80,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
+  import ComposerQueuedCard from './ComposerQueuedCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
@@ -3511,6 +3511,7 @@
       thread.assignmentRole === undefined) ||
       thread.achievementRole === 'auditor'
   )
+
   /** Workers and auditors are orchestration internals driven by their
    *  coordinator: identical view, but they never enable engineering mode
    *  themselves, so the composer hides the toolbox and lifecycle actions. */
@@ -6511,12 +6512,29 @@
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
-  let showQueueMenu = $state(false)
   /** Folds the queued-message card down to its header so the conversation above
    *  the composer stays readable while a message waits in the queue. */
   let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
+  /** The rest of the queue behind the head entry, listed inside its card. */
+  const queuedNextMessages = $derived(
+    rendererRecovery
+      .queuedMessagesFor(thread.projectId, thread.id)
+      .slice(1)
+      .map((entry) => ({ id: entry.id, text: entry.text }))
+  )
+
+  /**
+   * True when a stack sits on the composer's top edge: the task list renders
+   * immediately above it, and the queued-message card renders above that. The
+   * composer's top rule then breaks into the dashed line that carries the join,
+   * which is the design's composer-edge rule.
+   */
+  let composerStackedAbove = $derived(
+    visibleTodo !== null ||
+      ((queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread)
+  )
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -7588,7 +7606,6 @@
 
     if (controller) {
       clearQueuedState()
-      showQueueMenu = false
       errorMessage = ''
       const payload: SendPayload = {
         text: msg,
@@ -7603,7 +7620,6 @@
       return
     }
     clearQueuedState()
-    showQueueMenu = false
     // The running trace stays exactly as it is: the harness has not taken the
     // message yet, so the work still streaming belongs to the turn it steers and
     // must keep rendering above the message. The durable fold moves to the new
@@ -7671,7 +7687,6 @@
 
   /** Return the queued message to the composer for editing. */
   function editQueuedMessage(): void {
-    showQueueMenu = false
     if (!queuedMessage && !queuedHasContent) return
     rendererRecovery.setDraft(
       thread.projectId,
@@ -7689,13 +7704,11 @@
 
   /** Delete the queued message. */
   function deleteQueuedMessage(): void {
-    showQueueMenu = false
     clearQueuedState()
   }
 
   /** Delete every queued message for the thread. */
   function deleteAllQueuedMessages(): void {
-    showQueueMenu = false
     queuedMessage = ''
     queuedAttachments = []
     queuedPromptContext = undefined
@@ -9460,7 +9473,6 @@
           )
         }
         specFormulating = true
-        showQueueMenu = false
         await sendMessage(ENGINEERING_SPEC_REQUEST_PROMPT, [], 'request', true, undefined, [], [], {
           action: 'Request spec'
         })
@@ -13656,221 +13668,71 @@
           </div>
         {/if}
 
-        <!-- Gentle notice   an interrupted auto-compaction silently ate the last turn -->
+        <!-- Compaction interrupted   the auto-compaction ate the last turn and was
+       stopped before it saved a summary. A top-of-thread card: it reports, it
+       never blocks the composer. -->
         {#if compactionInterruptedNotice}
           <div class="conversation-gutter shrink-0 px-6 pb-2">
             <div class="mx-auto max-w-3xl">
-              <div
-                class="flex items-start gap-3 rounded-xl border border-info/25 bg-info/5 px-4 py-3"
-                role="status"
-              >
-                <Info size={16} class="mt-0.5 shrink-0 text-info" />
-                <p class="min-w-0 flex-1 text-sm leading-relaxed text-foreground">
-                  {compactionInterruptedNotice}
-                </p>
-                <button
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label="Dismiss compaction notice"
-                  title="Dismiss"
-                  onclick={() => (compactionInterruptedNotice = '')}
-                >
-                  <X size={14} />
-                </button>
+              <div out:slide={dismissSlide()} role="status" aria-live="polite">
+                <CardFrame placement="top" label="Compaction interrupted">
+                  <CardHead
+                    icon={TriangleAlert}
+                    title="Compaction interrupted"
+                    chip={{
+                      text: 'Stopped',
+                      tone: 'urgent',
+                      title: 'The summary was never saved'
+                    }}
+                    foldLabel="compaction notice"
+                  />
+                  <div class="space-y-2 px-3 py-2.5">
+                    <CardNotice icon={TriangleAlert} tone="warn">
+                      {compactionInterruptedNotice}
+                    </CardNotice>
+                  </div>
+                  <CardFoot>
+                    {#snippet left()}
+                      <CardButton
+                        label="Dismiss"
+                        title="Dismiss the compaction notice"
+                        variant="ghost"
+                        onclick={() => (compactionInterruptedNotice = '')}
+                      />
+                    {/snippet}
+                  </CardFoot>
+                </CardFrame>
               </div>
             </div>
           </div>
         {/if}
 
-        <!-- Queued message card   attached to the top of the composer -->
+        <!-- Queued message card   attached to the top of the composer. It stacks on
+       the composer's edge, so its own bottom rule is dropped and the composer's
+       dashed top rule carries the join. The head names what waits; the footer
+       sends it now (the steer key) or removes it. -->
         {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
-              <div
-                out:slide={dismissSlide()}
-                class="rounded-t-xl border border-border bg-surface shadow-sm"
-              >
-                <div
-                  class={[
-                    'flex items-center justify-between gap-2 px-3 pt-2.5',
-                    queuedFolded ? 'pb-2.5' : 'pb-1'
-                  ]}
-                >
-                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-                    >{queuedCount > 1
-                      ? `Queued · ${queuedCount}`
-                      : queuedStartAfterThreads.length > 0
-                        ? 'Starts after'
-                        : 'Queued'}</span
-                  >
-                  <div class="flex items-center gap-1">
-                    <button
-                      type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Add thread to Starts after"
-                      aria-label="Add thread to Starts after"
-                      onclick={() => (queuedStartAfterPickerOpen = true)}
-                    >
-                      <Plus size={13} />
-                    </button>
-                    <button
-                      class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
-                      title={`Steer   ${steerModifierLabel}Enter   send this message to the agent now`}
-                      onclick={() => void steerQueuedMessage()}
-                    >
-                      Steer
-                    </button>
-                    <div class="relative">
-                      <button
-                        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                        aria-label="Queued message actions"
-                        onclick={() => (showQueueMenu = !showQueueMenu)}
-                        oncontextmenu={(e: MouseEvent) => {
-                          e.preventDefault()
-                          showQueueMenu = true
-                        }}
-                      >
-                        <Ellipsis size={13} />
-                      </button>
-                      {#if showQueueMenu}
-                        <button
-                          class="fixed inset-0 z-30 cursor-default"
-                          aria-label="Close menu"
-                          onclick={() => (showQueueMenu = false)}
-                        ></button>
-                        <div
-                          class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                          role="menu"
-                        >
-                          {#if !queuedPresentation}
-                            <button
-                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-                              role="menuitem"
-                              onclick={editQueuedMessage}
-                            >
-                              <Pencil size={13} class="text-muted" />
-                              Edit
-                            </button>
-                            <div class="mx-2 my-1 border-t"></div>
-                          {/if}
-                          <button
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                            role="menuitem"
-                            onclick={deleteQueuedMessage}
-                          >
-                            <Trash2 size={13} />
-                            Delete
-                          </button>
-                          {#if queuedCount > 1}
-                            <div class="mx-2 my-1 border-t"></div>
-                            <button
-                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                              role="menuitem"
-                              onclick={deleteAllQueuedMessages}
-                            >
-                              <Trash2 size={13} />
-                              Delete all ({queuedCount})
-                            </button>
-                          {/if}
-                        </div>
-                      {/if}
-                    </div>
-                    <CardFoldToggle bind:folded={queuedFolded} label="queued message" compact />
-                  </div>
-                </div>
-                {#if !queuedFolded}
-                  <div transition:slide={foldSlide()}>
-                    {#if queuedPromptReferences.length > 0}
-                      <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                        {#each queuedPromptReferences as reference (reference.id)}
-                          <span
-                            class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
-                            title={reference.comment
-                              ? `${reference.comment}\n\n${reference.text}`
-                              : reference.text}
-                          >
-                            <MessageSquare size={11} class="shrink-0 text-accent" />
-                            <span class="font-medium text-foreground">{reference.label}</span>
-                            <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                            {#if reference.comment}
-                              <span class="max-w-48 truncate italic text-foreground">
-                                “{reference.comment}”
-                              </span>
-                            {/if}
-                          </span>
-                        {/each}
-                      </div>
-                    {/if}
-                    {#if queuedStartAfterThreads.length > 0}
-                      <div class="flex flex-col gap-1 px-3 pb-2.5">
-                        {#each queuedStartAfterThreads as dependency (dependency.id)}
-                          <div
-                            class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
-                            role="group"
-                            onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                          >
-                            <Clock size={12} class="shrink-0 text-info" />
-                            <button
-                              type="button"
-                              class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
-                              title={`Open ${dependency.title}`}
-                              aria-label={`Open ${dependency.title}`}
-                              onclick={() => void openStartAfterThread(dependency.id)}
-                            >
-                              {dependency.title}
-                            </button>
-                            <button
-                              type="button"
-                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                              title={`Remove ${dependency.title} from Starts after`}
-                              aria-label={`Remove ${dependency.title} from Starts after`}
-                              onclick={() => (queuedStartAfterPendingRemoval = dependency)}
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                              title={`Open ${dependency.title}`}
-                              aria-label={`Open ${dependency.title}`}
-                              onclick={() => void openStartAfterThread(dependency.id)}
-                            >
-                              <ArrowUpRight size={12} />
-                            </button>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                    {#if queuedPresentation}
-                      <div class="px-3 pb-2.5">
-                        <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
-                        {#if queuedPresentation.body}
-                          <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
-                            {queuedPresentation.body}
-                          </p>
-                        {/if}
-                      </div>
-                    {:else}
-                      <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">
-                        {queuedMessage}
-                      </p>
-                    {/if}
-                    {#if queuedCount > 1}
-                      <div class="border-t px-3 pb-2.5 pt-2">
-                        <p
-                          class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-                        >
-                          Next up
-                        </p>
-                        {#each rendererRecovery
-                          .queuedMessagesFor(thread.projectId, thread.id)
-                          .slice(1) as next (next.id)}
-                          <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
+              <ComposerQueuedCard
+                text={queuedMessage}
+                hasContent={queuedHasContent}
+                count={queuedCount}
+                next={queuedNextMessages}
+                promptReferences={queuedPromptReferences}
+                presentation={queuedPresentation}
+                startAfterThreads={queuedStartAfterThreads}
+                {steerModifierLabel}
+                bind:folded={queuedFolded}
+                onSteer={() => void steerQueuedMessage()}
+                onEdit={editQueuedMessage}
+                onDelete={deleteQueuedMessage}
+                onDeleteAll={deleteAllQueuedMessages}
+                onAddStartAfter={() => (queuedStartAfterPickerOpen = true)}
+                onRemoveStartAfter={(dependency) => (queuedStartAfterPendingRemoval = dependency)}
+                onOpenStartAfter={(id) => void openStartAfterThread(id)}
+                onPreloadStartAfter={preloadStartAfterThread}
+              />
             </div>
           </div>
         {/if}
@@ -14455,6 +14317,7 @@
                       projectId={thread.projectId}
                       threadId={thread.id}
                       shoe={composerShoe}
+                      stackedAbove={composerStackedAbove}
                       attachmentStorage={{
                         kind: chatMode ? 'chat' : 'project',
                         projectId: thread.projectId,

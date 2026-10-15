@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { Check, Clock, ListChecks, Loader2, Plug } from '@lucide/svelte'
+  import { Check, Clock, ListChecks, Plug } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import { foldSlide } from '../shared/card-motion'
   import { describeSchedule } from '$shared/types'
   import { parseHowToSections, type RoutinePlanDraft } from './assistant-view'
 
@@ -51,6 +57,8 @@
     onKeepEditing
   }: Props = $props()
 
+  let folded = $state(false)
+
   // A routine that is already saved keeps everything the revision does not name,
   // so a plan that omits the schedule or the connections is not an empty one.
   // An on-demand routine has no schedule at all, so it never reads as one left
@@ -74,25 +82,30 @@
       ])
     )
   )
+
+  const cardTitle = $derived(`${update ? 'Ready to update' : 'Ready to save'} ${routineName}`)
+
+  const saveTitle = $derived(
+    (update ? "Save the routine's revised " : "Save the routine's ") +
+      (scheduled ? 'instructions, schedule, and connections' : 'instructions and connections')
+  )
 </script>
 
-<div
-  class="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3"
-  role="group"
-  aria-label="Review the routine the agent drafted"
->
-  <div class="flex items-start gap-3">
-    <span
-      class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary"
+<CardFrame placement="replace" label="Review the routine the agent drafted">
+  <CardHead
+    icon={ListChecks}
+    title={cardTitle}
+    chip={{ text: 'Draft', tone: 'paused' }}
+    bind:folded
+    foldLabel="routine recap"
+  />
+
+  {#if !folded}
+    <div
+      transition:slide={foldSlide()}
+      class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
     >
-      <ListChecks size={15} strokeWidth={1.8} />
-    </span>
-    <div class="min-w-0 flex-1">
-      <p class="text-[0.8125rem] font-semibold text-foreground">
-        {update ? 'Ready to update' : 'Ready to save'}
-        <span class="text-muted">{routineName}</span>
-      </p>
-      <p class="mt-0.5 text-[0.75rem] leading-relaxed text-muted">
+      <p>
         {#if update}
           The agent revised this routine. Check the recap, then save the change when you are happy.
           Everything it does not name stays as it is.
@@ -101,7 +114,7 @@
         {/if}
       </p>
 
-      <dl class="mt-2 flex flex-col gap-1 text-[0.75rem]">
+      <dl class="flex flex-col gap-1">
         <div class="flex items-start gap-2">
           <dt class="flex shrink-0 items-center gap-1.5 text-dimmed" title="When the routine runs">
             <Clock size={12} strokeWidth={1.8} />
@@ -135,38 +148,31 @@
           </dd>
         </div>
       </dl>
+    </div>
+  {/if}
 
-      <div class="mt-3 flex items-center gap-2">
-        <button
-          type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          title={(update ? "Save the routine's revised " : "Save the routine's ") +
-            (scheduled
-              ? 'instructions, schedule, and connections'
-              : 'instructions and connections')}
-          aria-label={update ? 'Update the routine' : 'Save the routine'}
-          disabled={saving}
-          onclick={onSave}
-        >
-          {#if saving}
-            <Loader2 size={12} strokeWidth={1.8} class="animate-spin" />
-            Saving
-          {:else}
-            <Check size={12} strokeWidth={2} />
-            {update ? 'Save changes' : 'Save routine'}
-          {/if}
-        </button>
-        <button
-          type="button"
-          class="shrink-0 rounded-md px-2 py-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+  {#if !folded}
+    <CardFoot>
+      {#snippet left()}
+        <CardButton
+          label="Keep editing"
           title="Keep working on the routine with the agent"
-          aria-label="Keep editing the routine"
+          variant="ghost"
           disabled={saving}
           onclick={onKeepEditing}
-        >
-          Keep editing
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
+        />
+      {/snippet}
+      {#snippet right()}
+        <CardButton
+          label={update ? 'Save changes' : 'Save routine'}
+          title={saveTitle}
+          icon={saving ? undefined : Check}
+          variant="primary"
+          loading={saving}
+          disabled={saving}
+          onclick={onSave}
+        />
+      {/snippet}
+    </CardFoot>
+  {/if}
+</CardFrame>

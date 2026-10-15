@@ -2,12 +2,16 @@
   import { Bot, ExternalLink } from '@lucide/svelte'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
   import {
     subagentModelLabel,
-    subagentTaskDetail,
+    subagentStatusLabel,
     subagentTaskLabel
   } from '$lib/subagent-presentation'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import type { CardChipData } from '../shared/CardTimer.svelte'
   import SubagentModeBadge from './SubagentModeBadge.svelte'
   import SubagentStatusIcon from './SubagentStatusIcon.svelte'
 
@@ -26,10 +30,9 @@
   const end = $derived(activity.time?.end)
   const status = $derived(activity.status)
   const taskLabel = $derived(subagentTaskLabel(activity))
-  const taskDetail = $derived(subagentTaskDetail(activity))
   const modelLabel = $derived(subagentModelLabel(activity, true))
 
-  // The row keeps counting only while this worker is genuinely live: a settled
+  // The card keeps counting only while this worker is genuinely live: a settled
   // or restored run freezes at its recorded end (or at the last observed tick),
   // never at whatever the wall clock says when the trace re-renders.
   $effect(() => {
@@ -42,43 +45,49 @@
   })
 
   const elapsed = $derived(clock.seconds(start, end))
+
+  /** The run duration as `m:ss`, the reading the head chip shows. */
+  function elapsedClock(seconds: number): string {
+    const minutes = Math.floor(seconds / 60)
+    const remainder = seconds % 60
+    return `${minutes}:${String(remainder).padStart(2, '0')}`
+  }
+
+  /** A live run reads `Running m:ss`; a settled one is frozen at its total. */
+  const chip = $derived.by<CardChipData>(() => {
+    if (!start) return { text: subagentStatusLabel(status), tone: 'paused' }
+    const total = elapsedClock(elapsed)
+    return clock.ticking ? { text: `Running ${total}` } : { text: total }
+  })
 </script>
 
-<div class="overflow-hidden rounded-lg border border-border bg-surface">
-  <button
-    type="button"
-    class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-elevated"
-    title="Open sub-agent session"
-    onclick={() => onOpen?.(part)}
-  >
-    <SubagentStatusIcon {status} size={14} />
+<CardFrame placement="top" label="Sub-agent">
+  <CardHead {chip} icon={Bot} title={taskLabel} divider={false}>
+    {#snippet meta()}
+      <SubagentStatusIcon {status} size={12} />
+      <SubagentModeBadge background={activity.background} />
+      {#if modelLabel}
+        <span
+          class="hidden max-w-32 shrink-0 truncate text-[0.625rem] text-dimmed sm:block"
+          title={activity.modelId ?? modelLabel}
+        >
+          {modelLabel}
+        </span>
+      {/if}
+    {/snippet}
+  </CardHead>
 
-    <Bot size={13} class="shrink-0 text-info" />
-    <span
-      class="max-w-40 shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
-      title={taskLabel}
-    >
-      {taskLabel}
-    </span>
-    {#if taskDetail}
-      <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">{taskDetail}</span>
-    {:else}
-      <span class="min-w-0 flex-1"></span>
-    {/if}
-    <SubagentModeBadge background={activity.background} />
-    {#if modelLabel}
-      <span
-        class="hidden max-w-32 shrink-0 truncate text-[0.625rem] text-dimmed sm:block"
-        title={activity.modelId ?? modelLabel}
-      >
-        {modelLabel}
-      </span>
-    {/if}
-    {#if start}
-      <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
-        {formatDurationSeconds(elapsed)}
-      </span>
-    {/if}
-    <ExternalLink size={12} class="shrink-0 text-dimmed" />
-  </button>
-</div>
+  <CardFoot>
+    {#snippet right()}
+      {#if onOpen}
+        <CardButton
+          label="Open session"
+          title="Open the sub-agent session"
+          icon={ExternalLink}
+          variant="primary"
+          onclick={() => onOpen?.(part)}
+        />
+      {/if}
+    {/snippet}
+  </CardFoot>
+</CardFrame>

@@ -118,6 +118,7 @@
     Hammer,
     History,
     Info,
+    LayoutGrid,
     MessageCircleDashed,
     MonitorCog,
     Plus,
@@ -676,6 +677,9 @@
     browserAddressFocus.request(tabId)
   }
 
+  /** Dev only: the review gallery for every composer card and its states. */
+  let composerCardGalleryOpen = $state(false)
+
   function openDebugger(): void {
     if (!selectedThread || !import.meta.env.DEV) return
     contextSidebarState.openDebugger(selectedThread.projectId, selectedThread.id)
@@ -1212,6 +1216,13 @@
         icon: Bug,
         active: dockKindActive('debugger'),
         onSelect: () => toggleDockPanel('debugger', openDebugger)
+      })
+      sessionTools.push({
+        id: 'composer-cards',
+        label: 'Composer cards',
+        icon: LayoutGrid,
+        active: composerCardGalleryOpen,
+        onSelect: () => (composerCardGalleryOpen = !composerCardGalleryOpen)
       })
     }
 
@@ -4974,6 +4985,14 @@
       <ContextDock groups={dockGroups} />
     {/if}
   </section>
+
+  <!-- Dev only: the composer card gallery. It is a review surface rather than a
+       workspace view, so it opens over everything and loads on demand. -->
+  {#if import.meta.env.DEV && composerCardGalleryOpen}
+    {#await import('../debug/ComposerCardGallery.svelte') then { default: ComposerCardGallery }}
+      <ComposerCardGallery open onClose={() => (composerCardGalleryOpen = false)} />
+    {/await}
+  {/if}
 </div>
 
 {#snippet historyMenu()}

@@ -3,13 +3,15 @@
     AlertTriangle,
     Check,
     Eye,
+    Image as ImageIcon,
     ImagePlus,
-    Loader2,
-    RefreshCw,
     RotateCw
   } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -90,6 +92,25 @@
   let working = $state(false)
   let actionError = $state('')
 
+  /** The card's real heading; the image mark only shows when an image is named. */
+  let cardTitle = $derived(
+    needsSelection
+      ? `${request.assignmentTaskTitle ?? 'Task'} needs an image model`
+      : networkRelated
+        ? 'Upload or network interrupted'
+        : 'Vision model failed'
+  )
+
+  let retryTitle = $derived(
+    needsSelection
+      ? 'Choose a vision-capable model and continue the blocked worker'
+      : changed
+        ? 'Retry describing the image with the selected vision model'
+        : networkRelated
+          ? 'Retry describing the image with a longer upload window'
+          : 'Retry describing the image'
+  )
+
   function chooseThinking(level: ThinkingLevel): void {
     const base = override ?? request.selection
     if (!base) return
@@ -156,159 +177,135 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border border-danger/30 bg-surface shadow-sm"
-  aria-label="Image descriptor error"
->
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-    <div class="flex min-w-0 items-center gap-2">
-      <AlertTriangle size={15} class="shrink-0 text-danger" />
-      <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        {needsSelection
-          ? `${request.assignmentTaskTitle ?? 'Task'} needs an image model`
-          : networkRelated
-            ? 'Upload or network interrupted'
-            : 'Vision model failed'}
-      </p>
-    </div>
-    <div class="flex shrink-0 items-center gap-1">
-      <button
-        class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-30"
-        disabled={working}
-        onclick={() => void ignore()}
-        aria-label="Ignore the vision model error and continue with whatever description was generated"
-        title="Ignore and continue"
-      >
-        <Check size={15} />
-      </button>
-      <CardFoldToggle bind:folded label="vision model error" />
-    </div>
-  </div>
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Image descriptor error">
+    <CardHead
+      icon={request.imageId ? ImageIcon : AlertTriangle}
+      title={cardTitle}
+      chip={{ text: 'Stopped', tone: 'urgent' }}
+      bind:folded
+      foldLabel="vision model error"
+    />
 
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="space-y-4 p-4">
-        <div>
-          <p class="text-sm font-semibold text-foreground">
-            {needsSelection
-              ? `${request.workerTitle ?? 'The agent'} needs vision assistance`
-              : networkRelated
-                ? 'The image upload or vision response was interrupted'
-                : 'The vision model could not describe this image'}
-          </p>
-          <p
-            class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-danger"
-          >
-            {request.error}
-          </p>
-          <p class="mt-2 text-xs leading-relaxed text-muted">
-            {needsSelection
-              ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
-              : networkRelated
-                ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model, pick a different image, or continue without the description.'
-                : changed
-                  ? 'Retry with the selected vision model, pick a different image, ignore, or type a new message below to steer the agent another way.'
-                  : 'Pick a different vision model and retry, pick a different image, ignore, or type a new message below to steer the agent another way.'}
-          </p>
-        </div>
-
-        <div>
-          <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
-            Change vision model
-          </p>
-          <ModelPicker
-            {providers}
-            {projectId}
-            harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
-            providerId={visionSelection?.providerId ?? ''}
-            modelId={visionSelection?.modelId ?? ''}
-            accountId={visionSelection?.accountId}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            visionOnly
-            side="top"
-            variant="field"
-            disabled={working}
-            onSelect={(providerId, modelId, harnessId, accountId) => {
-              override = { harnessId, providerId, modelId, accountId }
-            }}
-            thinkingLevel={visionSelection?.thinkingLevel}
-            runtimeSettings={visionSelection ?? undefined}
-            onSelectThinking={chooseThinking}
-            onSelectRuntime={chooseRuntime}
-            {onToggleFavorite}
-            {onReorderFavorite}
-          />
-          <div class="mt-3">
-            <Switch
-              bind:checked={remember}
-              label="Don't ask again"
-              aria-label="Don't ask again for worker image model selection"
-            />
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="space-y-4 p-4">
+          <div>
+            <p class="text-sm font-semibold text-foreground">
+              {needsSelection
+                ? `${request.workerTitle ?? 'The agent'} needs vision assistance`
+                : networkRelated
+                  ? 'The image upload or vision response was interrupted'
+                  : 'The vision model could not describe this image'}
+            </p>
+            <p
+              class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap border border-danger/30 bg-danger/5 px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-danger"
+            >
+              {request.error}
+            </p>
+            <p class="mt-2 text-xs leading-relaxed text-muted">
+              {needsSelection
+                ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
+                : networkRelated
+                  ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model, pick a different image, or continue without the description.'
+                  : changed
+                    ? 'Retry with the selected vision model, pick a different image, ignore, or type a new message below to steer the agent another way.'
+                    : 'Pick a different vision model and retry, pick a different image, ignore, or type a new message below to steer the agent another way.'}
+            </p>
           </div>
+
+          <div>
+            <p class="mb-1.5 text-[0.6875rem] font-semibold text-dimmed">Change vision model</p>
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
+              providerId={visionSelection?.providerId ?? ''}
+              modelId={visionSelection?.modelId ?? ''}
+              accountId={visionSelection?.accountId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              visionOnly
+              side="top"
+              variant="field"
+              disabled={working}
+              onSelect={(providerId, modelId, harnessId, accountId) => {
+                override = { harnessId, providerId, modelId, accountId }
+              }}
+              thinkingLevel={visionSelection?.thinkingLevel}
+              runtimeSettings={visionSelection ?? undefined}
+              onSelectThinking={chooseThinking}
+              onSelectRuntime={chooseRuntime}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+            <div class="mt-3">
+              <Switch
+                bind:checked={remember}
+                label="Don't ask again"
+                aria-label="Don't ask again for worker image model selection"
+              />
+            </div>
+          </div>
+
+          {#if actionError}
+            <p class="text-xs text-danger" role="alert">{actionError}</p>
+          {/if}
         </div>
-
-        {#if actionError}
-          <p class="text-xs text-danger" role="alert">{actionError}</p>
-        {/if}
       </div>
+    {/if}
 
-      <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-        <div class="flex items-center gap-2">
-          <button
-            class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+    {#if !folded}
+      <CardFoot>
+        {#snippet left()}
+          <CardButton
+            label="Ignore"
+            title="Ignore and continue without the description"
+            icon={Check}
+            variant="ghost"
             disabled={working}
             onclick={() => void ignore()}
-          >
-            <RefreshCw size={13} />
-            Ignore
-          </button>
+          />
           {#if request.imageId}
-            <button
-              class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            <CardButton
+              label="Pick new image"
+              title="Choose a different image and retry the description with it"
+              icon={ImagePlus}
+              variant="secondary"
               disabled={working}
               onclick={() => void pickNewImage()}
-              title="Choose a different image and retry the description with it"
-              aria-label="Choose a different image and retry the description with it"
-            >
-              <ImagePlus size={13} />
-              Pick new image
-            </button>
+            />
           {/if}
           {#if request.requestingModel}
-            <button
-              class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            <CardButton
+              label="False positive"
+              title="{falsePositiveTitle} so the image descriptor is skipped for it"
+              icon={Eye}
+              variant="secondary"
               disabled={working}
               onclick={() => void reportFalsePositive()}
-              aria-label="{falsePositiveTitle} so the image descriptor is skipped for it"
-              title="{falsePositiveTitle} so the image descriptor is skipped for it"
-            >
-              <Eye size={13} />
-              False positive
-            </button>
+            />
           {/if}
-        </div>
-        <button
-          class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-          disabled={working || !visionSelection}
-          onclick={() => void retry()}
-        >
-          {#if working}
-            <Loader2 size={13} class="animate-spin" />
-          {:else}
-            <RotateCw size={13} />
-          {/if}
-          {needsSelection
-            ? 'Continue worker'
-            : changed
-              ? 'Retry with this model'
-              : networkRelated
-                ? 'Retry with more time'
-                : 'Retry'}
-        </button>
-      </div>
-    </div>
-  {/if}
-</section>
+        {/snippet}
+        {#snippet right()}
+          <CardButton
+            label={needsSelection
+              ? 'Continue worker'
+              : changed
+                ? 'Retry with this model'
+                : networkRelated
+                  ? 'Retry with more time'
+                  : 'Retry'}
+            title={retryTitle}
+            icon={working || !visionSelection ? undefined : RotateCw}
+            variant="primary"
+            loading={working}
+            disabled={working || !visionSelection}
+            onclick={() => void retry()}
+          />
+        {/snippet}
+      </CardFoot>
+    {/if}
+  </CardFrame>
+</div>

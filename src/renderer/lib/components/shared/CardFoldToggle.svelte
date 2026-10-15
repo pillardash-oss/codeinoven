@@ -9,32 +9,23 @@
     folded?: boolean
     /** Card name used for the control's title and accessible label. */
     label: string
-    /** Compact variant for the smaller composer-attached stacks. */
-    compact?: boolean
     class?: string
   }
 
-  let { folded = $bindable(false), label, compact = false, class: className = '' }: Props = $props()
+  let { folded = $bindable(false), label, class: className = '' }: Props = $props()
 </script>
 
 <!-- Header control that folds a composer card down to its header row, mirroring
-the agent task card: the card stays identifiable, only its body is hidden. The
-chevron points down while expanded (fold away) and up while folded (expand
-back), never sideways, so it never reads as a "next" affordance. -->
+the design's fold: a 1.5rem square at the far right of the head. The chevron
+points down while expanded (fold away) and up while folded (expand back), never
+sideways, so it never reads as a "next" affordance. -->
 <button
   type="button"
-  class={[
-    'flex shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground',
-    compact ? 'h-6 w-6' : 'h-8 w-8',
-    className
-  ]}
+  class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground {className}"
   aria-expanded={!folded}
   aria-label="{folded ? 'Expand' : 'Fold'} {label}"
   title="{folded ? 'Expand' : 'Fold'} {label}"
   onclick={() => (folded = !folded)}
 >
-  <ChevronDown
-    size={compact ? 13 : 15}
-    class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}"
-  />
+  <ChevronDown size={14} class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}" />
 </button>
