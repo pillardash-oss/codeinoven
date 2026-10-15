@@ -253,10 +253,10 @@ import {
   type AgentSecretPlanEntry
 } from '../../lib/secret-request'
 import {
-  isUtilitySuggestionAccepted,
   isUtilitySuggestionQuestion,
   utilitySuggestionQuestion,
-  type UtilitySuggestionDecision
+  utilitySuggestionResolution,
+  type UtilitySuggestionResolution
 } from '../../lib/utility-suggestion'
 import {
   imageDescriptorInactivityTimeoutMs,
@@ -2869,9 +2869,11 @@ export class ChatEngine {
     if (pending.settleUtilitySuggestion) {
       pending.resumeUtilitySuggestionAfterSettlement = true
       await this.persistQuestionAnswer(pending, safeAnswers)
-      const accepted = isUtilitySuggestionAccepted(safeAnswers[0] ?? [])
+      // The user's own words are carried through, not flattened into a "no": a
+      // reply that names a different server is an instruction, not a decline.
+      const resolution = utilitySuggestionResolution(safeAnswers[0] ?? [])
       await this.resolvePendingQuestion(pending, 'answered', safeAnswers, async () => {
-        pending.settleUtilitySuggestion?.(accepted ? 'accepted' : 'declined')
+        pending.settleUtilitySuggestion?.(resolution)
       })
       return
     }
@@ -3128,7 +3130,7 @@ export class ChatEngine {
   private async requestUtilitySuggestion(
     entry: AgentUtilitySuggestionEntry,
     context: UtilitySuggestionContext
-  ): Promise<UtilitySuggestionDecision> {
+  ): Promise<UtilitySuggestionResolution> {
     const requestId = `cio-suggest-${randomUUID()}`
     const pending = this.registerPendingQuestion(
       context.harnessId,
@@ -3142,7 +3144,7 @@ export class ChatEngine {
       },
       await this.pendingQuestionTimeoutMs()
     )
-    const settled = new Promise<UtilitySuggestionDecision>((resolve) => {
+    const settled = new Promise<UtilitySuggestionResolution>((resolve) => {
       pending.settleUtilitySuggestion = resolve
     })
     await this.threadManager.setStatus(context.projectId, context.threadId, 'awaiting_approval', {
@@ -3154,7 +3156,7 @@ export class ChatEngine {
       requestId,
       questions: pending.request.questions
     })
-    const decision = await settled
+    const resolution = await settled
     const driver = this.driverForRuntime(
       context.harnessId,
       this.sessionRegistry.get(context.sessionId)?.accountId
@@ -3164,16 +3166,16 @@ export class ChatEngine {
       driver &&
       !this.questionAnswerCanReachLiveTurn(pending, driver)
     ) {
-      await this.resumeAfterInactiveUtilitySuggestion(pending, entry, decision)
+      await this.resumeAfterInactiveUtilitySuggestion(pending, entry, resolution)
     }
-    return decision
+    return resolution
   }
 
   /** Resume the thread when a suggestion card settles after its turn ended. */
   private async resumeAfterInactiveUtilitySuggestion(
     pending: PendingQuestionInfo,
     entry: AgentUtilitySuggestionEntry,
-    decision: UtilitySuggestionDecision
+    resolution: UtilitySuggestionResolution
   ): Promise<void> {
     await this.awaitInactiveResumeIdleFinalization(pending)
     await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
@@ -3190,9 +3192,11 @@ export class ChatEngine {
 
     const prompt = [
       'Your previous turn ended while waiting for the user to resolve a capability suggestion.',
-      decision === 'accepted'
+      resolution.decision === 'accepted'
         ? `The user accepted "${entry.name}". The app is installing it now; search for it before relying on it, then continue the original request.`
-        : `The user declined "${entry.name}". Do not install it and do not claim it is available. Continue without it, or say plainly what is missing.`
+        : resolution.decision === 'alternative'
+          ? `The user did not accept or decline "${entry.name}"; they answered in their own words, and nothing was installed. Their answer is below. Follow it, and only re-propose the capability if it is still the right answer.\n\nUser answer: ${resolution.answer ?? ''}`
+          : `The user declined "${entry.name}". Do not install it and do not claim it is available. Continue without it, or say plainly what is missing.`
     ].join('\n\n')
     await this.sendPrompt(
       pending.request.projectId,
@@ -3310,6 +3314,17 @@ export class ChatEngine {
       pending.resumeSecretAfterSettlement = true
       await this.resolvePendingQuestion(pending, 'dismissed', undefined, async () => {
         pending.settleSecret?.({ status: 'dismissed', secrets: [] })
+      })
+      return
+    }
+    if (pending.settleUtilitySuggestion) {
+      // A capability suggestion is app-owned too: the request id is the app's,
+      // never one the harness issued, so rejecting it through the driver only
+      // produces a "request is gone" error (and, on some harnesses, a failed
+      // discard in the UI). Settle the waiting tool call as a decline instead.
+      pending.resumeUtilitySuggestionAfterSettlement = true
+      await this.resolvePendingQuestion(pending, 'dismissed', undefined, async () => {
+        pending.settleUtilitySuggestion?.({ decision: 'declined' })
       })
       return
     }
@@ -22629,7 +22644,7 @@ export class ChatEngine {
     if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
     pending.timer = undefined
     pending.resumeUtilitySuggestionAfterSettlement = true
-    pending.settleUtilitySuggestion?.('declined')
+    pending.settleUtilitySuggestion?.({ decision: 'declined' })
     this.finalizePendingQuestion(pending.request.requestId, 'timed_out')
   }
 
@@ -22870,7 +22885,7 @@ export class ChatEngine {
     // A gateway `cio_util_suggest` call is waiting on this card too. An accepted
     // decision already settled it; anything else (dismissal, teardown) is a
     // decline, so a capability is never installed by a card that went away.
-    pending.settleUtilitySuggestion?.('declined')
+    pending.settleUtilitySuggestion?.({ decision: 'declined' })
   }
 
   private clearPendingQuestionsForSession(sessionId: string): void {

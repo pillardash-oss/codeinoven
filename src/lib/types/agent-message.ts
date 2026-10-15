@@ -32,6 +32,26 @@ export interface AgentQuestionOption {
 }
 
 /**
+ * One utility inside an agent proposal, described because the user has to judge
+ * it: an approval screen that names only "an MCP server" asks the user to trust a
+ * bundle they cannot see.
+ */
+export interface AgentUtilitySuggestionUtility {
+  /** Utility name as it will appear in Utilities. */
+  name: string
+  /** Utility kind, e.g. `mcp` or `skill`. */
+  kind: string
+  /**
+   * What the utility connects to or carries: for an MCP server its transport and
+   * URL or launch command, for a skill where its instructions come from. Always
+   * the installable target, never a credential.
+   */
+  source: string
+  /** The utility's own description, when it declares one. */
+  description?: string
+}
+
+/**
  * A capability an agent proposed for the user to install, carried on the
  * question that renders as the suggestion card. The app installs the proposed
  * bundle through Utilities only when the user accepts.
@@ -45,6 +65,12 @@ export interface AgentUtilitySuggestionEntry {
   kinds: string[]
   /** Plain-language reason from the agent, shown as the card body. */
   reason: string
+  /**
+   * Exactly what accepting installs, in order. The card lists these so the
+   * decision is made against the real tools rather than a bundle name; a
+   * suggestion the registry already rejected never reaches a card at all.
+   */
+  utilities: AgentUtilitySuggestionUtility[]
 }
 
 /** A structured question the agent is asking the user. */
@@ -410,7 +436,7 @@ export interface TurnStreamCompletedTurns {
 
 /** One bounded page of a thread's durable working-trace parts. */
 export interface TurnStreamPartsPage {
-  kind: 'window'  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
+  kind: 'window' /** The page, ordered oldest to newest. Task-list tool parts are excluded:
    *  they drive the task card (`todoParts`), never the trace window. */
   parts: AgentPart[]
   /** Total trace parts the durable log currently folds for the turn. */

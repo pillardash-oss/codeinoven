@@ -5,7 +5,7 @@ import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/drive
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
-import type { UtilitySuggestionDecision } from '../../../lib/utility-suggestion'
+import type { UtilitySuggestionResolution } from '../../../lib/utility-suggestion'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -376,7 +376,7 @@ export interface PendingQuestionInfo {
    * instead of being answered through a harness: only the gateway installs, and
    * only after this reports "accepted".
    */
-  settleUtilitySuggestion?: (decision: UtilitySuggestionDecision) => void
+  settleUtilitySuggestion?: (resolution: UtilitySuggestionResolution) => void
   /** The suggestion card was answered, dismissed, or timed out. */
   resumeUtilitySuggestionAfterSettlement?: boolean
 }

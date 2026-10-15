@@ -7,7 +7,8 @@ import type {
   McpUtilityConfig,
   UtilityKind,
   PermissionLevel,
-  AgentUtilitySuggestionEntry
+  AgentUtilitySuggestionEntry,
+  UtilityDefinitionInput
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -153,7 +154,10 @@ import {
   normalizeBundleDefinitions,
   normalizeBundleName
 } from './utility-orchestration/utility-bundle-input'
-import type { UtilitySuggestionDecision } from '../../lib/utility-suggestion'
+import {
+  utilityInstallSource,
+  type UtilitySuggestionResolution
+} from '../../lib/utility-suggestion'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 import {
   connectMcpServer,
@@ -381,7 +385,7 @@ export interface SecretRequestContext {
 export type UtilitySuggestionExecutor = (
   entry: AgentUtilitySuggestionEntry,
   context: UtilitySuggestionContext
-) => Promise<UtilitySuggestionDecision>
+) => Promise<UtilitySuggestionResolution>
 
 /** Which turn is proposing, so the card is bound to the right thread and session. */
 export interface UtilitySuggestionContext {
@@ -1579,6 +1583,12 @@ export class UtilityOrchestrationService {
    * user chose. Installing software is never automatic, so a declined, expired
    * or abandoned card leaves the registry untouched, and the bundle is always
    * secret-free   a credential is collected afterwards with `cio_ask_secret`.
+   *
+   * The bundle is validated against the registry's own rules before the card is
+   * ever shown, and the card lists the utilities it would install. The user is
+   * therefore never asked to approve a bundle that cannot install (which is what
+   * produced an "accepted" decision followed by `MCP transport is invalid`), and
+   * every card names the real tools rather than a bundle title.
    */
   private async suggestUtility(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const executor = this.utilitySuggestionExecutor
@@ -1586,28 +1596,78 @@ export class UtilityOrchestrationService {
     const reason = requiredString(input['reason'], 'reason', 1_000)
     const name = normalizeBundleName(input['bundle'])
     const definitions = normalizeBundleDefinitions(input['bundle'])
+    // Pre-flight with the registry's install rules: a proposal the registry would
+    // reject is answered as invalid here, and the user is never shown a card for
+    // it. The message is the registry's own, so the fix is unambiguous.
+    let installable: UtilityDefinitionInput[]
+    try {
+      installable = this.registry.validateMany(definitions)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        status: 'invalid',
+        error: detail,
+        message:
+          'This bundle cannot be installed, so the user was not asked. Fix the definition and call this tool again: ' +
+          detail
+      }
+    }
     const entry: AgentUtilitySuggestionEntry = {
       id: randomUUID().replace(/-/gu, '').slice(0, 8).toUpperCase(),
       name,
-      kinds: [...new Set(definitions.map((definition) => definition.kind))],
-      reason
+      kinds: [...new Set(installable.map((definition) => definition.kind))],
+      reason,
+      utilities: installable.map((definition) => ({
+        name: definition.name,
+        kind: definition.kind,
+        source: utilityInstallSource(definition),
+        ...(definition.description ? { description: definition.description } : {})
+      }))
     }
-    const decision = await executor(entry, {
+    const resolution = await executor(entry, {
       projectId: state.request.projectId,
       threadId: state.request.threadId,
       projectPath: state.request.projectPath,
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
-    await this.audit(state, 'utility.suggested', { name, kinds: entry.kinds, decision })
-    if (decision !== 'accepted') {
+    await this.audit(state, 'utility.suggested', {
+      name,
+      kinds: entry.kinds,
+      decision: resolution.decision
+    })
+    if (resolution.decision === 'alternative') {
+      return {
+        status: 'alternative',
+        userAnswer: resolution.answer ?? '',
+        message:
+          'The user answered with their own instruction instead of installing or declining. Nothing was installed. Follow what they wrote, and only call this tool again if the capability is still the right answer.'
+      }
+    }
+    if (resolution.decision !== 'accepted') {
       return {
         status: 'declined',
         message:
           'The user declined the proposed capability. Do not install it, and never claim it is available. Continue without it, or say plainly what is missing.'
       }
     }
-    const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    let outcomes: Awaited<ReturnType<UtilityRegistryService['installMany']>>
+    try {
+      outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    } catch (error) {
+      // The card is already answered, so the failure has to come back as data the
+      // agent can act on   never as an unlabelled tool error the agent paraphrases
+      // to the user as "the app rejected it".
+      const detail = error instanceof Error ? error.message : String(error)
+      Logger.error('Accepted capability suggestion failed to install:', error)
+      return {
+        status: 'failed',
+        error: detail,
+        message:
+          'The user accepted, but the install failed, so nothing was added. Tell them plainly that the install did not happen and why, then fix the definition and call this tool again: ' +
+          detail
+      }
+    }
     await this.footprint()
       ?.reconcile(await this.registry.list())
       .catch((error: unknown) =>

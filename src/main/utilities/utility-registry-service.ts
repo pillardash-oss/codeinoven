@@ -482,6 +482,26 @@ export class UtilityRegistryService {
   }
 
   /**
+   * Validate a bundle without installing it, returning the definitions exactly as
+   * an install would store them.
+   *
+   * The registry owns the install rules, so a surface that has to decide whether a
+   * proposal is installable asks here instead of guessing: an MCP entry with no
+   * usable transport, an unknown kind or a credential smuggled into the bundle is
+   * rejected with the same message `installMany` would raise. That is what keeps an
+   * approval card from ever asking the user to bless an install that cannot happen.
+   * Nothing is written and no app default is seeded.
+   */
+  validateMany(inputs: UtilityDefinitionInput[]): UtilityDefinitionInput[] {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('Utility bundle must contain at least one utility')
+    }
+    return inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
+  }
+
+  /**
    * Install a bundle the way a reinstall should behave: a definition that matches
    * an entry the registry already holds updates that entry in place instead of
    * adding a second one, and an install path that owns reconciliation (the agent

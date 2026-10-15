@@ -340,9 +340,9 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_SUGGEST_TOOL_NAME,
     description:
-      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
+      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. The card lists every utility in the bundle, so send the real definition (an MCP entry needs config.transport plus config.url or config.command), never a placeholder. The app validates the bundle the same way the install does: an invalid bundle is rejected without asking the user, so fix the definition and call again. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
       ASK_SECRET_TOOL_NAME +
-      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, or "declined" with the instruction to continue without the capability.',
+      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, "declined", "alternative" when the user answered in their own words, or "invalid"/"failed" with the reason to correct.',
     inputSchema: {
       type: 'object',
       properties: {
