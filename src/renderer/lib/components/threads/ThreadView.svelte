@@ -902,7 +902,10 @@
   ) {
     agentRuns.setIdle(thread.projectId, conversationId)
   }
-  /** When the current busy run started; authoritative source for the live timer. */
+  /** When this window learned the current run was busy, from the run store or a
+   *  controller. In-memory only   a refresh re-seeds it at reconnect time   so it
+   *  is the fallback for the live timer, not its authority: the persisted turn
+   *  anchor below outranks it wherever the transcript still holds the prompt. */
   const activeTurnStartTime = $derived(
     controller?.activeTurnStartTime ??
       (() => {
@@ -910,6 +913,16 @@
         return since && since > 0 ? since : undefined
       })()
   )
+  /** When the work of a trace that has no assistant row began.
+   *
+   * The transcript's turn anchor outranks the run store's start above, which is
+   * in-memory only: a refresh clears it and re-seeds it from whatever live
+   * activity arrives next, so a trace measuring from it restarted its duration
+   * at zero instead of resuming it. The anchor is persisted, and it is the same
+   * instant the mirrored trace measures from (`getTurnStartTime`) and the turn
+   * audit line reports as the turn's duration, so a live trace now agrees with
+   * the duration that turn shows once it settles. */
+  const unmirroredTraceStartTime = $derived(turnAnchorCreatedAt() ?? activeTurnStartTime)
   // Intentional initial-value capture   view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
@@ -5139,20 +5152,21 @@
   }
 
   /**
-   * Creation time of the newest prompt that opened a turn. Activity-only user
-   * messages (compaction notices, sub-agent envelopes) ride mid-turn, so they
-   * never move the boundary   the same rule the main process folds by.
+   * Creation time of the newest prompt that opened a turn.
+   *
+   * Activity-only user messages (compaction notices, sub-agent envelopes, the
+   * app's own continuation prompts) ride mid-turn and a steer the harness has
+   * not taken yet opens no turn at all, so both are skipped   the same boundary
+   * the main process folds its turn stream by. This is the instant the turn on
+   * screen is measured from, and unlike the run store's in-memory start it is
+   * persisted, so it survives a window reload.
    */
   function turnAnchorCreatedAt(): number | null {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]
       if (!message || message.role !== 'user') continue
-      if (
-        message.parts.length > 0 &&
-        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-      ) {
-        continue
-      }
+      if (isActivityOnlyUserMessage(message)) continue
+      if (threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)) continue
       return message.createdAt || null
     }
     return null
@@ -12829,7 +12843,7 @@
               olderPartsAvailable={streamHasOlder}
               onLoadOlderParts={loadOlderStreamParts}
               totalSteps={streamTotalSteps}
-              startTime={activeTurnStartTime}
+              startTime={unmirroredTraceStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
               providerName={currentWorkingTraceAttribution.providerName}
