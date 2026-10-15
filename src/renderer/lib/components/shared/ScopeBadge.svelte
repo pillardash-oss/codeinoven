@@ -46,7 +46,7 @@
         <Pin size={size === 'xs' ? 9 : 11} />
       </span>
     {/if}
-    <span class="min-w-0 max-w-40 truncate">{label}</span>
+    <span class="scope-badge-label min-w-0 max-w-40 truncate">{label}</span>
   </code>
 {:else}
   <code
@@ -66,6 +66,6 @@
         <Pin size={size === 'xs' ? 9 : 11} />
       </span>
     {/if}
-    <span class="min-w-0 max-w-40 truncate">{label}</span>
+    <span class="scope-badge-label min-w-0 max-w-40 truncate">{label}</span>
   </code>
 {/if}

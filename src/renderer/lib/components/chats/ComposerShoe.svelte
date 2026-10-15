@@ -1,4 +1,8 @@
 <script lang="ts" module>
+  // Aliased: this file also imports the component itself, and the type is the
+  // union the component renders while the value is the component.
+  import type { ComposerIdentity as ComposerIdentityData } from './ComposerIdentity.svelte'
+
   /**
    * Worker threads only: whether the finished task is handed back to the
    * Sr. Engineer for review, or stays a private iteration loop the user drives.
@@ -10,102 +14,85 @@
     onChange: (enabled: boolean) => void
   }
 
-  /** Everything the composer/host needs to render the scope shoe. */
-  export interface ComposerScopeShoe {
+  /**
+   * The scope segment's data. Only a project thread has a scope: a chat, a
+   * routine task and a browser conversation have no board to belong to.
+   */
+  export interface ComposerScope {
     projectId: string
     threadId: string
     bucket: ScopeBucket
-    source?: 'local' | 'ssh'
-    host?: string
+    /** New threads can reassign the scope; existing ones toggle the scope view. */
     isNewThread: boolean
-    /** While the thread is actively working, scope interactions are inert. */
-    isWorking?: boolean
-    /** Project identity on the shoe   the project picker stays live only before the first message. */
-    project?: ComposerProject
-    /** Reassigns the thread's project; only honoured before the first message. */
-    onSwitchProject?: (projectId: string) => void
+    /** Opens the projects/threads scope view for this thread (existing threads). */
     onOpenScopeView?: () => void | Promise<void>
-    /** Runs whenever the scope picker menu closes, so the composer can win its
-     *  focus back and resume typing at the saved caret. */
-    onScopeMenuClosed?: () => void
-    /** Worker reporting control; absent on every non-worker thread. */
+  }
+
+  /**
+   * Everything the shoe states about one composer, in the order it renders:
+   * what the composer writes into, the scope it belongs to (projects), the Oven
+   * the work runs on, and   inside `identity`   the branch. This is the whole
+   * contract: every composer in the app renders the same shoe, and a surface the
+   * shoe cannot name yet is a missing `ComposerIdentity` member, not a new bar.
+   */
+  export interface ComposerShoeData {
+    /** What this composer writes into, which names and marks the identity segment. */
+    identity: ComposerIdentityData
+    /** Project threads only. */
+    scope?: ComposerScope
+    /** While a turn streams, scope interactions are inert and the tips gain the
+     *  steer key. */
+    isWorking?: boolean
+    /** The Oven segment, rendered by the host through a snippet it owns. */
     oven?: import('svelte').Snippet
+    /** Opens the Oven picker from a slash command or palette action. */
     onOpenOven?: () => void
+    /** Worker threads only. */
     report?: ComposerWorkerReport
   }
 </script>
 
 <script lang="ts">
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import {
-    ChevronDown,
-    ClipboardCheck,
-    ClipboardX,
-    FolderTree,
-    Folder,
-    Globe,
-    GitBranch,
-    Monitor
-  } from '@lucide/svelte'
+  import { ChevronDown, ClipboardCheck, ClipboardX, FolderTree, GitBranch } from '@lucide/svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
-  import type { ComposerProject } from '$shared/types'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { projectIdentityTitle } from '$lib/project-location'
+  import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ScopePickerMenu from '$lib/components/shared/ScopePickerMenu.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
+  import ComposerIdentity from './ComposerIdentity.svelte'
   import { uniqueScopeName } from '$shared/scope-naming'
-  import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
 
   interface Props {
-    projectId: string
-    threadId: string
-    /** The bucket the thread currently belongs to (default when unset). */
-    bucket: ScopeBucket
-    /** Where the project runs   scope work targets that box. */
-    source?: 'local' | 'ssh'
-    host?: string
-    /** New threads can reassign the scope; existing ones toggle the scope view. */
-    isNewThread: boolean
-    /** While the thread is actively working, scope interactions are inert. */
-    isWorking?: boolean
-    /** Project identity on the shoe   the project picker stays live only before the first message. */
-    project?: ComposerProject
-    /** Reassigns the thread's project; only honoured before the first message. */
-    onSwitchProject?: (projectId: string) => void
-    /** Opens the projects/threads scope view for this thread (existing threads). */
-    onOpenScopeView?: () => void | Promise<void>
-    /** Runs whenever the scope picker menu closes, so the composer can win its
-     *  focus back and resume typing at the saved caret. */
+    shoe: ComposerShoeData
+    /** Runs whenever the scope picker menu closes, so the composer that renders
+     *  the shoe can win its focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
-    /** Worker reporting control; absent on every non-worker thread. */
-    report?: ComposerWorkerReport
-    oven?: import('svelte').Snippet
   }
 
-  let {
-    projectId,
-    threadId,
-    bucket,
-    source,
-    host,
-    isNewThread,
-    isWorking = false,
-    project,
-    onSwitchProject,
-    onOpenScopeView,
-    onScopeMenuClosed,
-    report,
-    oven
-  }: Props = $props()
+  let { shoe, onScopeMenuClosed }: Props = $props()
+
+  /** The project this thread belongs to, whichever way the shoe learned it. */
+  let projectId = $derived(
+    shoe.identity.kind === 'project' ? shoe.identity.activeProjectId : (shoe.scope?.projectId ?? '')
+  )
+  let threadId = $derived(shoe.scope?.threadId ?? '')
+  let bucket = $derived(shoe.scope?.bucket)
+  let isNewThread = $derived(shoe.scope?.isNewThread ?? false)
+  let isWorking = $derived(shoe.isWorking ?? false)
+  let project = $derived(shoe.identity.kind === 'project' ? shoe.identity.project : undefined)
+  /** Worker reporting is the one control the shoe states besides the identity. */
+  let report = $derived(shoe.report)
 
   let menuOpen = $state(false)
   let creatingAuto = $state(false)
@@ -226,7 +213,7 @@
   function toggleMenu(): void {
     if (!isNewThread) {
       menuOpen = false
-      void onOpenScopeView?.()
+      void shoe.scope?.onOpenScopeView?.()
       return
     }
     if (menuOpen) {
@@ -280,10 +267,10 @@
 
   /** Git remote origin URL for the project, surfaced on the branch pill. */
   let remoteOriginUrl = $derived(projectRemotes.get(projectId) ?? null)
-  let branchPillTitle = $derived(
+  let branchTitle = $derived(
     remoteOriginUrl ?? (project ? projectIdentityTitle(project) : undefined)
   )
-  // Resolve the project's Git remote so hovering the branch pill can reveal it.
+  // Resolve the project's Git remote so hovering the branch reveals it.
   $effect(() => {
     const path = project?.path
     if (!projectId || !path) return
@@ -292,149 +279,102 @@
 </script>
 
 <div class="flex min-w-0 items-center gap-px whitespace-nowrap">
-  <!-- Project scope -->
-  <div class="relative min-w-0">
-    <button
-      type="button"
-      class="group flex h-6 min-w-0 shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-haspopup="menu"
-      aria-expanded={menuOpen}
-      title={isNewThread
-        ? `Change the scope of this new thread   currently ${bucket.name}`
-        : `Toggle the scoped views for ${bucket.name}`}
-      onclick={toggleMenu}
-      oncontextmenu={(event: MouseEvent) => {
-        event.preventDefault()
-        if (isWorking) return
-        changeScopeOpen = true
-      }}
-      aria-disabled={isWorking}
-    >
-      {#if bucket.root.kind === 'worktree'}
-        <span
-          class="flex shrink-0 items-center"
-          role="img"
-          aria-label="Managed Git worktree scope on {bucket.root.branch}"
-          title="Managed Git worktree scope on {bucket.root.branch}"
-        >
-          <FolderTree size={12} class="text-warning" />
-        </span>
-      {/if}
-      <ScopeBadge {bucket} size="sm" variant="mark" />
-      {#if isNewThread}
-        <span
-          class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
-        >
-          <ChevronDown size={11} />
-        </span>
-      {/if}
-    </button>
-
-    {#if changeScopeOpen}
-      <ChangeScopeModal
-        open={changeScopeOpen}
-        {projectId}
-        {threadId}
-        currentBucketId={bucket.id}
-        onClose={() => (changeScopeOpen = false)}
-      />
-    {/if}
-
-    {#if isNewThread && menuOpen}
+  <!-- Scope: the board the thread belongs to. Project threads only. -->
+  {#if bucket}
+    <div class="relative min-w-0">
       <button
-        class="fixed inset-0 z-30 cursor-default"
-        aria-label="Close scope menu"
-        onclick={closeMenu}
-      ></button>
-      <div class="absolute bottom-full left-0 z-40 mb-1.5">
-        <ScopePickerMenu
-          {projectId}
-          target={{
-            bucket,
-            fallbackName: bucket.name,
-            hint: 'Inherited',
-            createLabel: 'Auto create new scope & worktree',
-            createHint: 'Copy env',
-            createTitle: 'Generate a new scope with its own isolated worktree (copy environment)'
-          }}
-          value={{ mode: 'inherit' }}
-          busy={creatingAuto}
-          autofocusSearch
-          label="Thread scope"
-          onSelect={selectScope}
-          onCreateScope={openCreateModal}
-          onClose={closeMenu}
-        />
-      </div>
-    {/if}
-  </div>
+        type="button"
+        class="group flex h-6 min-w-0 shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        title={isNewThread
+          ? `Change the scope of this new thread   currently ${bucket.name}`
+          : `Toggle the scoped views for ${bucket.name}`}
+        onclick={toggleMenu}
+        oncontextmenu={(event: MouseEvent) => {
+          event.preventDefault()
+          if (isWorking) return
+          changeScopeOpen = true
+        }}
+        aria-disabled={isWorking}
+      >
+        {#if bucket.root.kind === 'worktree'}
+          <span
+            class="flex shrink-0 items-center"
+            role="img"
+            aria-label="Managed Git worktree scope on {bucket.root.branch}"
+            title="Managed Git worktree scope on {bucket.root.branch}"
+          >
+            <FolderTree size={12} class="text-warning" />
+          </span>
+        {/if}
+        <ScopeBadge {bucket} size="sm" variant="mark" />
+        {#if isNewThread}
+          <span
+            class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
+          >
+            <ChevronDown size={11} />
+          </span>
+        {/if}
+      </button>
 
-  <!-- Project identity: live picker before the first message, show-only after -->
-  {#if project}
-    <ProjectSwitch
-      activeProjectId={projectId}
-      onSwitch={isNewThread ? onSwitchProject : undefined}
-      disabled={!isNewThread}
-      side="top"
-      align="start"
-      class="shoe-project group flex h-6 max-w-48 min-w-0 shrink items-center justify-start gap-1.5 px-1.5 text-[0.6875rem] text-muted hover:text-foreground"
-      ariaLabel={isNewThread ? 'Change the project of this new thread' : `Project: ${project.name}`}
-    >
-      {#if project.iconUrl}
-        <img src={project.iconUrl} alt="" class="h-3 w-3 shrink-0 rounded" />
-      {:else}
-        <Folder
-          size={12}
-          class="shrink-0 text-dimmed transition-colors group-hover:text-foreground"
+      {#if changeScopeOpen}
+        <ChangeScopeModal
+          open={changeScopeOpen}
+          {projectId}
+          {threadId}
+          currentBucketId={bucket.id}
+          onClose={() => (changeScopeOpen = false)}
         />
       {/if}
-      <ProjectIdentity
-        {project}
-        class="shoe-identity min-w-0"
-        nameClass="text-[0.6875rem] font-semibold text-foreground"
-        locationClass="shoe-identity-location text-[0.5625rem] text-dimmed"
-        showLocation={hasProjectNameCollision(project, scopeState.projectRecords)}
-      />
-      {#if isNewThread}
-        <span
-          class="shoe-project-chevron shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
-        >
-          <ChevronDown size={11} />
-        </span>
+
+      {#if isNewThread && menuOpen}
+        <button
+          class="fixed inset-0 z-30 cursor-default"
+          aria-label="Close scope menu"
+          onclick={closeMenu}
+        ></button>
+        <div class="absolute bottom-full left-0 z-40 mb-1.5">
+          <ScopePickerMenu
+            {projectId}
+            target={{
+              bucket,
+              fallbackName: bucket.name,
+              hint: 'Inherited',
+              createLabel: 'Auto create new scope & worktree',
+              createHint: 'Copy env',
+              createTitle: 'Generate a new scope with its own isolated worktree (copy environment)'
+            }}
+            value={{ mode: 'inherit' }}
+            busy={creatingAuto}
+            autofocusSearch
+            label="Thread scope"
+            onSelect={selectScope}
+            onCreateScope={openCreateModal}
+            onClose={closeMenu}
+          />
+        </div>
       {/if}
-    </ProjectSwitch>
+    </div>
   {/if}
 
-  <!-- One hairline separates where the work runs from what runs it. -->
-  <span class="mx-1 h-3 w-px shrink-0 bg-border-strong" aria-hidden="true"></span>
+  <!-- What this composer writes into: a project, a plain chat, a routine, a task,
+       or the browser tab a conversation answers about. -->
+  <ComposerIdentity identity={shoe.identity} />
 
-  {#if oven}
-    {@render oven()}
-  {:else}
-    <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
-    <span
-      class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs px-1.5 text-[0.6875rem] text-muted"
-      title={source === 'ssh'
-        ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
-        : 'Project runs locally on this machine'}
-    >
-      {#if source === 'ssh'}
-        <Globe size={11} class="shrink-0 text-dimmed" />
-        <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
-      {:else}
-        <Monitor size={11} class="shrink-0 text-dimmed" />
-        <span>Local</span>
-      {/if}
-    </span>
+  {#if shoe.oven}
+    <!-- One hairline separates what the work is from where it runs. -->
+    <span class="mx-1 h-3 w-px shrink-0 bg-border-strong" aria-hidden="true"></span>
+    {@render shoe.oven()}
   {/if}
 
   {#if project?.branch}
     <span
-      class="flex h-6 min-w-0 shrink items-center gap-1.5 rounded-xs px-1.5 text-[0.6875rem] text-muted"
-      title={branchPillTitle}
+      class="flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
+      title={branchTitle}
     >
       <GitBranch size={11} class="shrink-0 text-dimmed" />
-      <span class="truncate">{project.branch}</span>
+      <span class="shoe-branch-label truncate">{project.branch}</span>
     </span>
   {/if}
 
@@ -518,6 +458,18 @@
       {/if}
     </div>
   {/if}
+
+  <!-- The tips: the keys that end a message, there only to be read. Nothing here
+       lights up, because there is nothing to pick, and they are the first thing
+       the row gives up when the composer tightens. -->
+  <span class="shoe-tips flex h-6 shrink-0 items-center gap-1.5 px-2">
+    <ShortcutHint keys={keymapState.keysFor('chat-send')} />
+    <span class="shoe-tip-text text-[0.625rem] tracking-[0.02em] text-dimmed">send</span>
+    {#if isWorking}
+      <ShortcutHint keys={keymapState.keysFor('chat-steer')} />
+      <span class="shoe-tip-text text-[0.625rem] tracking-[0.02em] text-dimmed">steer</span>
+    {/if}
+  </span>
 </div>
 
 <ConfirmDialog
@@ -553,13 +505,13 @@
      `@container` class), so every threshold below is a width of the room the
      composer leaves that wrapper: the composer, less the wrapper's own inline
      padding. As the composer tightens, give the truncating stages room in
-     order   project name first, then location, connection label, and finally
-     only the icons remain.
+     order   the tips first (they are read once), then the branch and the worker
+     label, then the scope and Oven names, and the identity is what holds out
+     longest.
 
-     The project and identity classes below are handed to ProjectSwitch and
-     ProjectIdentity as props, so those elements belong to the child components
-     and only `:global(...)` reaches them from here. `shoe-report-label` is this
-     component's own markup and stays scoped. */
+     The scope badge and the Oven's label are drawn by child components, so only
+     `:global(...)` reaches them from here. `shoe-branch-label`, `shoe-report-label`
+     and `shoe-tips` are this component's own markup and stay scoped. */
 
   /* The reporting pill reserves the width of its widest label so flipping the
      switch never shifts the row, and truncates once the shoe runs out of room. */
@@ -567,32 +519,48 @@
     min-width: 4.5rem;
   }
 
-  @container (max-width: 630px) {
+  @container (max-width: 700px) {
     :global(.shoe-project) {
       max-width: 9rem;
     }
 
-    :global(.shoe-identity .shoe-identity-location) {
-      display: none;
+    :global(.scope-badge-label) {
+      max-width: 7rem;
+    }
+
+    .shoe-branch-label {
+      max-width: 6rem;
     }
 
     .shoe-report-label {
       min-width: 0;
-      max-width: 3.5rem;
+      max-width: 4.5rem;
     }
   }
 
-  @container (max-width: 490px) {
-    :global(.shoe-project) {
-      max-width: 1.75rem;
-    }
-
-    :global(.shoe-identity),
-    .shoe-project-chevron {
+  @container (max-width: 610px) {
+    .shoe-branch-label,
+    .shoe-report-label {
       display: none;
     }
 
-    .shoe-report-label {
+    :global(.shoe-identity-location) {
+      display: none;
+    }
+  }
+
+  /* The keys are a courtesy, not a control: they go before any name does. */
+  @container (max-width: 520px) {
+    .shoe-tips {
+      display: none;
+    }
+  }
+
+  /* Names give way to marks. The scope keeps its colour bar and the Oven keeps
+     its own icon, so both still say which one they are for anyone who hovers. */
+  @container (max-width: 420px) {
+    :global(.scope-badge-label),
+    :global(.oven-segment-label) {
       display: none;
     }
   }

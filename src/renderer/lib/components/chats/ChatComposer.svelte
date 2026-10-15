@@ -5,8 +5,6 @@
   import { fade } from 'svelte/transition'
   import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
   import { motionDuration } from '$lib/motion'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import ShortcutHint from '../ui/ShortcutHint.svelte'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -76,7 +74,7 @@
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
-  import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
+  import ComposerShoe, { type ComposerShoeData } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sessionTagKind } from '$shared/session-tags'
@@ -268,9 +266,10 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
-    /** Renders the scope shoe   the project scope + project type row at the
-     *  footer of the composer. Only set in project mode. */
-    scopeShoe?: ComposerScopeShoe
+    /** Renders the composer shoe   the one bar the composer owns, under the
+     *  message box: scope, identity, Oven, branch and the key tips. Every
+     *  composer sets it, so no surface is left without its properties. */
+    shoe?: ComposerShoeData
     /** Called instead of sending when the thread has no AI account or no model
      *  selected, so the host can show its setup card and keep the draft. */
     onNeedsAiAccount?: () => void
@@ -348,7 +347,7 @@
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
-    scopeShoe,
+    shoe,
     onNeedsAiAccount
   }: Props = $props()
 
@@ -652,13 +651,13 @@
   /** Whether the shared model picker renders the account picker (more than one
    *  account for the selected provider)   gates the `/account` slash action. */
   let accountPickerVisible = $state(false)
-  /** The scope shoe instance, so the `/scope` slash action can open its picker. */
-  let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
+  /** The shoe instance, so the `/scope` slash action can open its picker. */
+  let shoeComponent: ComposerShoe | undefined = $state(undefined)
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
    *  the `/scope` slash action the same way the shoe's badge chevron does. */
-  let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
+  let scopePickerAvailable = $derived(shoe?.scope?.isNewThread === true)
   let startAfterPickerOpen = $state(false)
   // The composer is remounted by the parent when a restore is required, so
   // capture the persisted dependencies exactly once at construction.
@@ -831,7 +830,7 @@
 
   function showScopeMenu(): void {
     closeAllMenus()
-    scopeShoeComponent?.openScopeMenu()
+    shoeComponent?.openScopeMenu()
   }
 
   trackEscapeMenu(
@@ -1110,7 +1109,7 @@
     getSupportsThinking: () => supportsThinking,
     getAccountPickerVisible: () => accountPickerVisible,
     getScopePickerVisible: () => scopePickerAvailable,
-    getOvenPickerVisible: () => !!scopeShoe?.onOpenOven,
+    getOvenPickerVisible: () => !!shoe?.onOpenOven,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -1260,7 +1259,7 @@
     }
 
     if (action.id === 'selector:oven') {
-      scopeShoe?.onOpenOven?.()
+      shoe?.onOpenOven?.()
       return
     }
 
@@ -1859,27 +1858,10 @@
   data-voice-trigger-root
   {@attach captureComposerRoot}
 >
-  <!-- Console header: the writing surface names itself, and the two keys that end
-       it are shown where the hand already is. While a turn streams the strip
-       adds the steer key that jumps the queue and nothing else: no trace, no
-       pulse, because motion in the field the user is typing into is noise. -->
-  <div
-    class="composer-head flex min-w-0 items-center gap-2 overflow-hidden border-b border-border bg-elevated px-3 py-1.5"
-  >
-    <span
-      class="composer-head-title shrink-0 text-[0.625rem] font-semibold tracking-[0.08em] text-foreground uppercase"
-      >Message</span
-    >
-    <span class="composer-head-hints ml-auto flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-      <ShortcutHint keys={keymapState.keysFor('chat-send')} />
-      <span class="composer-hint-text text-[0.625rem] tracking-[0.02em] text-dimmed">send</span>
-      {#if working}
-        <ShortcutHint keys={keymapState.keysFor('chat-steer')} />
-        <span class="composer-hint-text text-[0.625rem] tracking-[0.02em] text-dimmed">steer</span>
-      {/if}
-    </span>
-  </div>
-
+  <!-- The composer has no bar above its writing surface: the editor is the top
+       edge, so a card the composer grows under it reads as the message box
+       extended rather than as something with a strip beneath it. What the
+       composer is pointed at lives in the shoe below (see `.composer-shoe`). -->
   {#if imageDescriptorGateOpen}
     <ChatComposerImageGate
       {providers}
@@ -2225,17 +2207,18 @@
   </div>
 </div>
 
-<!-- Scope shoe   floats underneath the composer as its own inset bar,
-     sized to the status row it holds, centered under the composer; project mode
-     only. It slides up behind the composer (z below it) so the shoe's top edge
-     is tucked under the composer's bottom border   only the lower half shows,
-     like a shoe.
+<!-- The composer shoe: the one bar the composer owns, floating just underneath
+     it, sized to the row it holds and centered under the composer. It slides up
+     behind the composer (z below it) so its top edge is tucked under the
+     composer's bottom border   only the lower half shows, like a shoe. It is
+     rendered by every composer, in every mode: the properties of whatever is
+     being written into are never a project-mode extra.
      No z-index on the wrapper: the composer (z-10) paints over the card, but
      the shoe's dropdown (z-40 inside) still opens above the composer.
      The wrapper is the shoe's own inline-size query container: the composer
      cannot query a sibling, and the card must stay free of containment so it
      can size itself to its content. -->
-{#if scopeShoe}
+{#if shoe}
   <div class="composer-shoe relative -mt-4 flex w-full justify-center px-4 pt-3 pb-2 @container">
     <!-- The card frame is the console shoe: one surface, tucked behind the
          composer so only its lower band shows. Its top padding is what holds the
@@ -2244,20 +2227,9 @@
       class="composer-shoe-card flex min-w-0 items-center justify-center rounded-xs border border-border bg-surface px-0.5 pt-1.5 pb-1"
     >
       <ComposerShoe
-        bind:this={scopeShoeComponent}
-        projectId={scopeShoe.projectId}
-        threadId={scopeShoe.threadId}
-        bucket={scopeShoe.bucket}
-        source={scopeShoe.source}
-        host={scopeShoe.host}
-        project={scopeShoe.project}
-        onSwitchProject={scopeShoe.onSwitchProject}
-        isNewThread={scopeShoe.isNewThread}
-        isWorking={scopeShoe.isWorking}
-        onOpenScopeView={scopeShoe.onOpenScopeView}
+        bind:this={shoeComponent}
+        {shoe}
         onScopeMenuClosed={focusComposerAtSavedCaret}
-        report={scopeShoe.report}
-        oven={scopeShoe.oven}
       />
     </div>
   </div>
@@ -2295,20 +2267,6 @@
   .chat-composer:focus-within {
     border-color: var(--color-border-strong);
     box-shadow: 0 0.5rem 1.5rem -0.75rem rgb(0 0 0 / 0.18);
-  }
-
-  /* The header strip: a thin band of chrome, so the composer reads as a console
-     block rather than an anonymous text box. Its key chips are the app's own
-     ShortcutHint, flipped to the surface colour they would otherwise blend into
-     on this elevated band (hence the :global   that element is a child
-     component's). The strip carries no motion of its own. */
-  :global(.composer-head kbd) {
-    height: 1rem;
-    padding-inline: 0.25rem;
-    background: var(--color-surface);
-    border-color: var(--color-border-strong);
-    color: var(--color-muted);
-    font-size: 0.5625rem;
   }
 
   /* The prompt marker sits in the editor's gutter, on the writing line, and
@@ -2396,36 +2354,22 @@
     .pending-stop-icon {
       display: block;
     }
-
-    /* The hint words go before the strip can wrap; the keys stay, because a key
-       chip with no word next to it still says which key it is. */
-    .composer-hint-text {
-      display: none;
-    }
   }
 
-  @container (max-width: 400px) {
-    .composer-head-hints {
-      display: none;
-    }
-  }
-
-  /* The shoe sizes to the status row it holds: never narrower than its 80%
-     resting share of the composer, never wider than the room the composer
-     leaves it. A long scope, project, or branch therefore widens the shoe
-     instead of squeezing the row   which used to push the scope badge out of
-     its own box and under the project icon. `.composer-shoe` is the query
-     container (see its `@container` class), so these rules and the shoe's own
-     truncation stages measure the composer, minus that wrapper's own inline
-     padding. */
+  /* The shoe sizes to the row it holds: never wider than the room the composer
+     leaves it, and as wide as that row needs, so the shoe reads as one bar
+     centered under the message box in every mode   a project thread with a scope
+     and a branch, a chat with nothing but its own name and the keys.
+     `.composer-shoe` is the query container (see its `@container` class), so
+     these rules and the shoe's own truncation stages measure the composer, minus
+     that wrapper's own inline padding. */
   .composer-shoe-card {
     width: max-content;
-    min-width: 80%;
     max-width: 100%;
   }
 
-  /* Tight composer: the shoe trims its own inline padding before the status row
-     has to ellipsize, so the row keeps the room it needs. */
+  /* Tight composer: the shoe trims its own inline padding before the row has to
+     ellipsize, so the row keeps the room it needs. */
   @container (max-width: 630px) {
     .composer-shoe-card {
       padding-inline: 0.375rem;

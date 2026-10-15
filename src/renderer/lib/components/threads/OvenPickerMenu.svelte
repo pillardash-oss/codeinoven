@@ -175,7 +175,7 @@
         class={variant === 'segment'
           ? 'shrink-0 text-dimmed transition-colors group-hover:text-foreground'
           : 'shrink-0'}
-      />{/if}<span class={variant === 'segment' ? 'min-w-0 truncate' : undefined}
+      />{/if}<span class={variant === 'segment' ? 'oven-segment-label min-w-0 truncate' : undefined}
       >{current?.name ?? (selectedId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
     >
     {#if variant === 'segment'}
