@@ -89,6 +89,25 @@ export function broadcastThreadUpdate(thread: Thread): void {
 }
 
 /**
+ * Push a thread snapshot another instance settled to every renderer window.
+ *
+ * Deliberately narrower than `broadcastThreadUpdate`: the change was produced by
+ * the sibling that owns the run, and that process already notified the user,
+ * rang its OS card, badged the icon and updated the power policy for it. Doing
+ * any of that again here would tell the user twice about one finished run. What
+ * this window owes its own renderer is the corrected row, so its sidebar, status
+ * counts and badges stop showing work that is no longer happening.
+ */
+export function broadcastCrossInstanceThreadUpdate(thread: Thread): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:updated', thread)
+  }
+  // The menu bar mirrors the thread states of the shared database, so a row
+  // corrected from a sibling's write is a moment its own state can have changed.
+  _backgroundAttention?.requestAttentionRefresh()
+}
+
+/**
  * Push just a thread's draft state (drafting flag + committed draft content)
  * to every renderer window. Deliberately lighter than `broadcastThreadUpdate`:
  * draft commits happen while the user is actively typing, and the full thread

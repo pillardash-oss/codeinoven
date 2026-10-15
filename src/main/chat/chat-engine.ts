@@ -29640,6 +29640,12 @@ export class ChatEngine {
       // other process that shares the durable checkpoint database.
       this.broadcast(checkpointEvent)
       instanceRegistry.publishCheckpointUpdated(checkpointEvent)
+      // The turn's `active_turns` row was released above, which is the moment a
+      // sibling's view of "who is running this thread" actually changes. The
+      // idle announcement fires earlier, before this checkpoint settles, so
+      // without a publish here a sibling keeps the finished turn marked as work
+      // in progress until its next heartbeat decides otherwise.
+      instanceRegistry.publishTurnActivity()
     } catch (error) {
       Logger.error('turn checkpoint completion failed:', error)
     }
