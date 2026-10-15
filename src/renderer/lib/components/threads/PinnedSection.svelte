@@ -1,9 +1,11 @@
 <script lang="ts">
   import { ChevronDown } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import type { Component, Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { Thread } from '$shared/types'
   import { pinnedFold, type PinnedSectionKey } from '$lib/stores/pinned-fold.svelte'
+  import { foldSlide } from '$lib/components/shared/card-motion'
 
   interface Props {
     /** Which persisted fold-state section this block belongs to. */
@@ -126,7 +128,13 @@
     </button>
 
     {#if !headerOnly && !folded}
-      <div class="space-y-px" role="list">
+      <!-- The fold plays the same motion as every other fold in the app
+           (`foldSlide`), so a pinned section closing or opening moves rather
+           than blinks. A status group's rows already get this: the sidebar drops
+           them from its own keyed list, which the `animate:` on that list
+           animates. This one owns its rows, so it carries the transition
+           itself. -->
+      <div transition:slide={foldSlide()} class="space-y-px" role="list">
         {#each threads as thread (thread.id)}
           {#if row}
             {@render row(thread)}
