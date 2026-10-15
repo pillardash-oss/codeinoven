@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from './logger'
@@ -67,9 +60,17 @@ export class CrossProcessMutex {
    * Acquire the lock, waiting for any other holder to release first. Resolves
    * to a release function. The callers runs inside the critical section until
    * it calls release; the lock is never re-entrant.
+   *
+   * `timeoutMs` bounds that wait for a caller that cannot stall on the answer,
+   * such as the GitHub token exchange sitting behind an IPC status read. A caller
+   * that reaches the bound overtakes the holder exactly like the default timeout
+   * does, so a short wait trades serialization for latency instead of wedging;
+   * the critical section must therefore re-read the shared state after it
+   * acquires the lock, never trust what it read before.
    */
-  async acquire(): Promise<() => void> {
-    const deadline = Date.now() + ACQUIRE_TIMEOUT_MS
+  async acquire(options: { timeoutMs?: number } = {}): Promise<() => void> {
+    const waitMs = options.timeoutMs ?? ACQUIRE_TIMEOUT_MS
+    const deadline = Date.now() + waitMs
     for (;;) {
       if (this.tryAcquireAtomically()) return this.makeRelease()
       const now = Date.now()
@@ -80,7 +81,7 @@ export class CrossProcessMutex {
       if (now > deadline) {
         Logger.info('Cross-process lock timed out; overtaking a held lock', {
           lock: this.dir,
-          elapsedMs: now - (deadline - ACQUIRE_TIMEOUT_MS)
+          elapsedMs: waitMs
         })
         try {
           rmSync(this.dir, { recursive: true, force: true })
@@ -172,3 +173,12 @@ export class CrossProcessMutex {
 
 /** Convenience path used by the Claude credential gate. */
 export const CLAUDE_CREDENTIAL_LOCK_NAME = 'claude-credential-refresh'
+
+/**
+ * Convenience path used by the GitHub credential gate.
+ *
+ * A GitHub refresh token is single use, so two instances redeeming one at the
+ * same time is exactly the race this lock exists to prevent: the loser is refused
+ * and would otherwise drop an account that is still usable.
+ */
+export const GITHUB_CREDENTIAL_LOCK_NAME = 'github-credential-refresh'
