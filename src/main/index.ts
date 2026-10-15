@@ -477,13 +477,31 @@ function createWindow(): BrowserWindow {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
-    if (!state.quitCleanupStarted) {
-      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
-        state,
-        database,
-        storage
+    if (state.quitCleanupStarted) return
+    // A renderer that left on its own, or one that was asked to stop, did not
+    // fail to start. `clean-exit` is the renderer walking away (a window
+    // teardown, a navigation that swapped processes), and `killed` with the
+    // SIGTERM exit code is somebody ending it politely: the OS taking the tree
+    // down, a scripted stop, `kill`. Neither is a crash   a real renderer
+    // failure reports `crashed`, `oom`, or an abnormal exit. Judging a stop as a
+    // startup failure painted "The workspace could not open" over a workspace
+    // that had been open for hours, on every stop of `scripts/probe.ts`, and the
+    // dialog then held the dying process until something killed it.
+    const stopped =
+      details.reason === 'clean-exit' ||
+      (details.reason === 'killed' && details.exitCode === 15)
+    if (stopped) {
+      Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
+        reason: details.reason,
+        exitCode: details.exitCode
       })
+      return
     }
+    void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+      state,
+      database,
+      storage
+    })
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
