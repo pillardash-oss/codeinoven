@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Server, Monitor } from '@lucide/svelte'
+  import { ChevronDown, Server, Monitor } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenProbe, OvenState } from '$shared/ovens'
@@ -21,10 +21,24 @@
     busy?: boolean
     /** Button title, so each surface names its own action. */
     label: string
+    /**
+     * `chip` is the standalone badge with its own raised fill; `segment` is the
+     * composer shoe's transparent segment, lit on hover. The shoe renders this
+     * picker through `OvenControls`, which forwards the prop, so the variant is
+     * declared here rather than sniffed out of context.
+     */
+    variant?: 'chip' | 'segment'
     /** Extra note rendered under the button when picking fails. */
     onSelect: (ovenId: string, ovenPath: string) => Promise<void> | void
   }
-  let { selectedId, selectedPath, busy = false, label, onSelect }: Props = $props()
+  let {
+    selectedId,
+    selectedPath,
+    busy = false,
+    label,
+    onSelect,
+    variant = 'chip'
+  }: Props = $props()
 
   let ovens = $state.raw<OvenState | null>(null)
   let probes = $state<Record<string, OvenProbe>>({})
@@ -120,11 +134,16 @@
   }
 </script>
 
-<div class="relative flex items-center gap-1 text-xs text-muted">
+<div
+  class={variant === 'segment'
+    ? 'relative flex min-w-0 shrink items-center'
+    : 'relative flex items-center gap-1 text-xs text-muted'}
+>
   <button
     type="button"
-    class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted hover:bg-elevated disabled:opacity-50"
-    style="border-radius: 0.375rem !important"
+    class={variant === 'segment'
+      ? 'group flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50'
+      : 'flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase hover:bg-elevated disabled:opacity-50'}
     title={label}
     aria-haspopup="menu"
     aria-expanded={editor}
@@ -133,19 +152,38 @@
     oncontextmenu={openOvenSettings}
   >
     {#if selectedId === LOCAL_OVEN_ID}
-      <Monitor size={10} class="shrink-0" />
+      <Monitor
+        size={variant === 'segment' ? 12 : 10}
+        class={variant === 'segment'
+          ? 'shrink-0 text-dimmed transition-colors group-hover:text-foreground'
+          : 'shrink-0'}
+      />
     {:else if current}
       <img
-        class="h-2.5 w-2.5 shrink-0 object-contain"
+        class={variant === 'segment'
+          ? 'h-3 w-3 shrink-0 object-contain'
+          : 'h-2.5 w-2.5 shrink-0 object-contain'}
         alt=""
         src={current.imageDataUrl ??
           (current.customSvg
             ? getCustomSvgDataUrl(current.customSvg, current.color)
             : getIconSvgDataUrl(current.icon, current.color))}
       />
-    {:else}<Server size={10} class="shrink-0" />{/if}<span
+    {:else}<Server
+        size={variant === 'segment' ? 12 : 10}
+        class={variant === 'segment'
+          ? 'shrink-0 text-dimmed transition-colors group-hover:text-foreground'
+          : 'shrink-0'}
+      />{/if}<span class={variant === 'segment' ? 'oven-segment-label min-w-0 truncate' : undefined}
       >{current?.name ?? (selectedId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
     >
+    {#if variant === 'segment'}
+      <span
+        class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
+      >
+        <ChevronDown size={11} />
+      </span>
+    {/if}
   </button>
   {#if error && !editor}<span class="text-danger" role="alert">{error}</span>{/if}
 
@@ -183,7 +221,7 @@
             aria-checked={oven.id === selectedId}
             data-oven-row={oven.id}
             onkeydown={(event) => rowKeydown(event, index)}
-            class="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
+            class="mt-1 flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
             disabled={busy || saving}
             title={`Use ${oven.name}`}
             onclick={() => void choose(oven.id)}
@@ -210,7 +248,7 @@
                 {#if inventory?.length}
                   {#each inventory.slice(0, 4) as item (item.harnessId)}
                     <span
-                      class="flex items-center rounded bg-elevated p-0.5"
+                      class="flex items-center bg-elevated p-0.5"
                       title={item.installedVersion
                         ? `${item.command} ${item.installedVersion}`
                         : item.command}
@@ -222,7 +260,7 @@
                   {#each probes[oven.id].harnesses
                     .filter((entry) => entry.path)
                     .slice(0, 4) as entry (entry.command)}
-                    <span class="flex items-center rounded bg-elevated p-0.5" title={entry.command}>
+                    <span class="flex items-center bg-elevated p-0.5" title={entry.command}>
                       <AgentIcon
                         agentId={ovenHarnessIdForCommand(entry.command) ?? entry.command}
                         label={entry.command}

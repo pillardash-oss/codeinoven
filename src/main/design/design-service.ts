@@ -181,6 +181,14 @@ function screenShotKey(
 export interface DesignServiceOptions {
   database: Database
   onHistoryChanged?: (projectId: string, directory: string) => void
+  /**
+   * Mirror a thread's authored-work kind to live UI the moment it is recorded.
+   *
+   * The row is what the sidebar draws its marker from, and the agent can open a
+   * design or video session on its own (a preview into a work root) with no tag,
+   * so this write has to reach the renderer just like the tag path's does.
+   */
+  onThreadKindChanged?: (projectId: string, threadId: string, kind: AuthoredWorkKind) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -504,7 +512,7 @@ export class DesignService {
     // mirror is unconditional so the row's marker never depends on which of the
     // two writers happened to run first. Fire-and-forget: the folder record above
     // is the fact this method exists to persist.
-    void this.rememberThreadKind(input.threadId, input.kind)
+    void this.rememberThreadKind(input.projectId, input.threadId, input.kind)
   }
 
   /**
@@ -591,12 +599,21 @@ export class DesignService {
    * must not fail the preview that triggered it. The repository guards the write,
    * so a navigation that records the same kind churns nothing.
    */
-  private async rememberThreadKind(threadId: string, kind: AuthoredWorkKind): Promise<void> {
+  private async rememberThreadKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind
+  ): Promise<void> {
     try {
       await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)
     } catch (error) {
       Logger.dev('Authored-work kind row update failed:', error)
+      return
     }
+    // The persisted value is the fact; telling the renderer is what makes the
+    // row's marker appear without a refresh, so the agent opening a session on
+    // its own reads the same as the user typing the tag.
+    this.options.onThreadKindChanged?.(projectId, threadId, kind)
   }
 
   forgetProject(projectId: string): void {
@@ -661,10 +678,12 @@ export class DesignService {
    *
    * A design's screen is opened in a tab of its own, so clicking one canvas never
    * replaces another canvas's tab (see `BrowserService.openDesignScreen`); a
-   * composition keeps the thread's tab, because its board holds one canvas. The
-   * folder is validated and the browser opens it in the background, then the tab
-   * is revealed: revealing is one mechanism, not two, so an existing tab and a
-   * brand-new one behave the same way for the user.
+   * composition is played by the video board's own view, which never enters the
+   * tab strip, so a user watching and editing in the board never has to open or
+   * find the browser. The folder is validated and the page is loaded in the
+   * background, then the tab is revealed where revealing applies: revealing is one
+   * mechanism, not two, so an existing tab and a brand-new one behave the same way
+   * for the user.
    */
   async open(
     projectId: string,
@@ -690,7 +709,11 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal,
-      tab: kind === 'design' ? 'screen' : 'thread'
+      // A composition is played by the board's own view, never the thread's
+      // browser tab: that is what lets a user watch and edit without opening the
+      // browser. A design screen keeps its own tab, and a design's other routes
+      // keep the thread's.
+      tab: kind === 'design' ? 'screen' : 'board'
     })
     if (forcedKind === undefined) {
       this.designs.upsert({
@@ -700,7 +723,7 @@ export class DesignService {
         entry: result.entry,
         kind
       })
-      await this.rememberThreadKind(threadId, kind)
+      await this.rememberThreadKind(projectId, threadId, kind)
     }
     if (!result.tabId) {
       throw new Error('The work opened without a browser tab to show it in.')
@@ -739,13 +762,15 @@ export class DesignService {
   /**
    * A small picture of the work, for the coordinator's preview.
    *
-   * It is shown in the thread's own tab, off screen, then captured. That is
-   * deliberate: the capture has to come from a page the app is actually rendering,
-   * and a hidden tab is the same page the user would see, at the same size, without
-   * a second browser and without stealing focus. A composition is captured as a
-   * still at its opening, because a picture for a board must not start playback: a
-   * frame is what the composition exists to draw, and the user asks for the moving
-   * one by clicking Preview.
+   * It is shown off screen, then captured. That is deliberate: the capture has to
+   * come from a page the app is actually rendering, and a hidden page is the same
+   * page the user would see, at the same size, without a second browser and
+   * without stealing focus. A design is captured in the thread's tab; a
+   * composition is captured in the video board's own view, which never enters the
+   * tab strip, so a picture of a composition costs the user no browser tab. A
+   * composition is captured as a still at its opening, because a picture for a
+   * board must not start playback: a frame is what the composition exists to
+   * draw, and the user asks for the moving one by watching it in the board.
    */
   async thumbnail(
     projectId: string,
@@ -770,7 +795,10 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal: false,
-      tab: 'thread',
+      // A composition is pictured through the board's own view, so a still of it
+      // never opens a browser tab the user did not ask for. A design keeps the
+      // thread's tab, which is where its canvas and screens live.
+      tab: kind === 'video' ? 'board' : 'thread',
       // A board's picture of a composition is a still, so selecting a video thread
       // must not start playback and sound in a tab the user never asked for. The
       // design kind has no timeline to freeze, so it is unaffected.
@@ -949,7 +977,7 @@ export class DesignService {
       return
     }
     this.designs.upsert(input)
-    await this.rememberThreadKind(input.threadId, input.kind)
+    await this.rememberThreadKind(input.projectId, input.threadId, input.kind)
   }
 
   /**
@@ -1025,14 +1053,14 @@ export class DesignService {
     attention: 'focus' | 'background'
     reveal: boolean
     /**
-     * Which tab the preview may use, design only.
+     * Which view the work may use.
      *
-     * The board's open is the user choosing a screen, so every screen keeps its
-     * own tab; the capability's own preview and both capture paths share the
-     * thread's. A composition board holds one canvas, so it keeps the thread's
-     * tab and the video path ignores this.
+     * The board's open is the user choosing a page, so every design screen keeps
+     * its own tab. A composition is played by the board's own view, which is a
+     * registered tab that never enters the tab strip. The capability's own
+     * preview and every capture share the thread's browser tab.
      */
-    tab: 'thread' | 'screen'
+    tab: 'thread' | 'screen' | 'board'
     /**
      * Load a still at this second instead of the moving composition. Video only:
      * a design is shown as it is, and the design path ignores this.
@@ -1049,13 +1077,18 @@ export class DesignService {
       defaultRoot: currentWorkRoot(input.kind),
       attention: input.attention,
       reveal: input.reveal,
-      posterSeconds: input.posterSeconds,
-      tab: input.tab
+      posterSeconds: input.posterSeconds
     }
     const result =
       input.kind === 'video'
-        ? await openVideoPreview(deps, target)
-        : await openDesignPreview(deps, target)
+        ? await openVideoPreview(deps, {
+            ...target,
+            mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
+          })
+        : await openDesignPreview(deps, {
+            ...target,
+            tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
+          })
     return {
       directory: result.directory,
       entry: result.entry,

@@ -200,7 +200,7 @@
     type="button"
     data-scope-row="inherit"
     onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'inherit')}
-    class="mt-1 flex w-full items-center gap-2 rounded-lg border-l-2 bg-raised px-2.5 py-1.5 text-left text-xs text-foreground focus:bg-elevated focus:outline-none"
+    class="mt-1 flex w-full items-center gap-2 border-l-2 bg-raised px-2.5 py-1.5 text-left text-xs text-foreground focus:bg-elevated focus:outline-none"
     style:border-left-color={inheritColor}
     title={`Inherited scope: ${inheritName}`}
     aria-label={`Inherited scope: ${inheritName}`}
@@ -223,7 +223,7 @@
     type="button"
     data-scope-row="dedicated"
     onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'dedicated')}
-    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
+    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
     title={target.createTitle}
     aria-label={target.createLabel}
     role="menuitemradio"
@@ -238,7 +238,7 @@
     type="button"
     data-scope-row="create"
     onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'create')}
-    class="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none"
+    class="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none"
     title="Open the full scope creation form"
     aria-label="Create a scope"
     onclick={openCreateScope}
@@ -255,7 +255,7 @@
       type="button"
       data-scope-row="scope:{candidate.id}"
       onkeydown={(event: KeyboardEvent) => rowKeydown(event, `scope:${candidate.id}`)}
-      class="flex w-full items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated focus:text-foreground focus:outline-none"
+      class="flex w-full items-center gap-2 border-l-2 px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated focus:text-foreground focus:outline-none"
       style:border-left-color={bucketColor(candidate)}
       title={candidate.name}
       aria-label={`Use scope: ${candidate.name}`}

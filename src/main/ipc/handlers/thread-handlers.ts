@@ -158,7 +158,7 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       projectId?: string
       limit?: number
       family?: 'projects' | 'chats' | 'assistant'
-      routineId?: string
+      assistantId?: string
     } = {}
     if (options !== undefined) {
       if (!isRecord(options)) throw new TypeError('Search options must be an object')
@@ -178,8 +178,8 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
         }
         safeOptions.family = options.family
       }
-      if (options.routineId !== undefined) {
-        safeOptions.routineId = validateEntityId(options.routineId, 'Routine ID')
+      if (options.assistantId !== undefined) {
+        safeOptions.assistantId = validateEntityId(options.assistantId, 'Assistant ID')
       }
     }
     return threadManager.searchThreads(safeQuery, safeOptions)
@@ -248,12 +248,12 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       const isProject = project?.source === 'local' && Boolean(project.path)
       // One resolver names the scratch pad of every conversation kind: a project
       // thread's repo `.cio/tmp`, an inbox chat's `chats-cwd/<threadId>/.cio/tmp`,
-      // an assistant task's `assistant-cwd/<routineId ?? threadId>/.cio/tmp`,
+      // an assistant task's `assistant-cwd/<assistantId ?? threadId>/.cio/tmp`,
       // and a browser tab's `browser-cwd/<threadId>/.cio/tmp`.
       const scratchDirectory = threadScratchDirectory(project ?? null, {
         projectId: safeProjectId,
         threadId: safeThreadId,
-        routineId: thread.routineId
+        assistantId: thread.assistantId
       })
       const destinationDirectory = join(scratchDirectory, 'transcripts')
 

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
-  import type { BrowserPanelShortcutAction, BrowserViewBounds } from '$shared/ipc-contract'
+  import { invoke } from '$lib/ipc.svelte'
+  import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import { DEFAULT_BOX_ID, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
@@ -93,27 +93,6 @@
   const findOpen = $derived(browserFindState.stateFor(tabId).open)
   /** A blank tab has no address yet: show the empty state instead of a native page. */
   const isBlank = $derived(tab.url === '' && !runtime.loading && !loadError)
-
-  /**
-   * Carry out a browser shortcut that belongs to this frame's tab.
-   *
-   * Main decides the key (the page is a native view, so a key pressed in it never
-   * reaches this renderer) and this surface answers it, because it is the one
-   * showing the page and therefore the one holding the find bar. The address bar
-   * and the tab strip are the sidebar's, so those actions are not answered here.
-   */
-  function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
-    if (eventTabId !== tabId) return
-    if (action === 'find') {
-      browserFindState.open(tabId)
-      return
-    }
-    if (action === 'find-next') {
-      browserFindState.step(tabId, 'next')
-      return
-    }
-    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
-  }
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -249,7 +228,6 @@
     // keep the view. Publishing it also flips `pageVisible`, which is what
     // attaches the page on the first paint.
     const releaseClaim = browserVisibility.claimTab(tabId, surface)
-    const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     let destroyed = false
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
@@ -263,7 +241,6 @@
       destroyed = true
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
-      unsubscribePanelShortcut()
       // The bar is gone with this frame, so its search ends with it: the page is
       // parked rather than destroyed, and a highlight left on it would still be
       // painted when the user comes back to this tab.
@@ -311,6 +288,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
+        tabId={tabId}
         projectId={GLOBAL_BROWSER_CONTEXT.projectId}
         threadId={GLOBAL_BROWSER_CONTEXT.threadId}
         boxId={tab.boxId}

@@ -24,7 +24,7 @@
     <button
       type="button"
       data-modal-primary
-      class="flex h-8 cursor-pointer items-center justify-center rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="flex h-8 cursor-pointer items-center justify-center bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
       onclick={() =>
         githubSignIn.phase === 'authorized' ? githubSignIn.close() : githubSignIn.start()}
     >
@@ -42,7 +42,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="mr-auto cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="mr-auto cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Cancel this sign-in and stop waiting for the code"
       aria-label="Cancel this sign-in"
       onclick={() => githubSignIn.close()}
@@ -51,7 +51,7 @@
     </button>
     <button
       type="button"
-      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
       title="Open the GitHub verification page in your default browser"
       disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
       onclick={() => void githubSignIn.openInDefaultBrowser()}
@@ -62,7 +62,7 @@
     <button
       type="button"
       data-modal-primary
-      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
       title="Sign in inside CodeInOven: opens the verification page in the app-wide browser and copies the code"
       disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
       onclick={() => void githubSignIn.openInCioBrowser()}

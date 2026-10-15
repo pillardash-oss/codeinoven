@@ -72,7 +72,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onCancel}
     >
       {cancelLabel}
@@ -81,7 +81,7 @@
       <button
         type="button"
         class={[
-          'rounded-lg border px-3 py-2 text-sm font-medium',
+          'border px-3 py-2 text-sm font-medium',
           secondaryAction.tone === 'danger'
             ? 'border-danger/40 text-danger hover:bg-danger/10'
             : 'bg-elevated hover:bg-overlay'
@@ -95,7 +95,7 @@
       type="button"
       data-modal-primary
       class={[
-        'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
         variant === 'danger' ? 'bg-danger text-on-danger' : 'bg-primary text-on-primary'
       ]}
       disabled={disabled || busy}

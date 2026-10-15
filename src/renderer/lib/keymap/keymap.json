@@ -51,7 +51,7 @@
           "id": "nav-assistant",
           "keys": ["mod", "9"],
           "label": "Assistant view",
-          "description": "Opens the Assistant view with its routines and tasks.",
+          "description": "Opens the Assistant view with its assistants and tasks.",
           "scenario": "Anywhere in the app."
         },
         {
@@ -130,14 +130,14 @@
           "id": "assistant-new-task",
           "keys": ["mod", "n"],
           "label": "New task",
-          "description": "Creates an assistant task: inside a routine it lands in that routine, otherwise it is a routine-less task.",
+          "description": "Creates an assistant task: inside an assistant it lands in that assistant, otherwise it is an assistant-less task.",
           "scenario": "Assistant view."
         },
         {
-          "id": "assistant-new-routine",
+          "id": "assistant-new-assistant",
           "keys": ["mod", "shift", "n"],
-          "label": "New routine",
-          "description": "Starts the new-routine flow, which seeds a first task and opens its how-to.",
+          "label": "New assistant",
+          "description": "Starts the new-assistant flow, which seeds a first task and opens its knowledge.",
           "scenario": "Assistant view."
         },
         {
@@ -883,6 +883,13 @@
           "label": "Run modal primary action",
           "description": "Activates the topmost open modal's primary action   start, save, merge, confirm, and so on   even when a text field inside the modal has focus.",
           "scenario": "A modal overlay is open."
+        },
+        {
+          "id": "video-primary-action",
+          "keys": ["mod", "enter"],
+          "label": "Run video primary action",
+          "description": "Saves edited video controls, or exports MP4 when there are no unsaved changes.",
+          "scenario": "Focus is inside Video controls."
         },
         {
           "id": "ui-close-modal",

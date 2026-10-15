@@ -16,6 +16,7 @@ import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/brows
 import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { publishBrowserAllowSiteKeymapOverride } from '$lib/browser-keymap-context'
 import {
   DEFAULT_APP_FONT_FAMILY,
   DEFAULT_APP_FONT_SIZE,
@@ -31,6 +32,9 @@ const DEFAULT_ZOOM_LEVEL = 1
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
 let browserHistoryLimit = $state(DEFAULT_BROWSER_HISTORY_LIMIT)
+/** Let a page keep a shortcut the app also binds; on until the config says
+ *  otherwise. Main reads it to decide which chords it claims in a page. */
+let browserAllowSiteKeymapOverride = $state(true)
 let openLocalhostInCioBrowser = $state(true)
 let openAllLinksInCioBrowser = $state(false)
 let browserSearchEngineId = $state('')
@@ -93,6 +97,10 @@ export const appConfigState = {
   get browserHistoryLimit(): number {
     return browserHistoryLimit
   },
+  /** Whether a page may keep a chord the app also binds. */
+  get browserAllowSiteKeymapOverride(): boolean {
+    return browserAllowSiteKeymapOverride
+  },
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
@@ -142,6 +150,7 @@ export const appConfigState = {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
     browserHistoryLimit = config.browserHistoryLimit
+    browserAllowSiteKeymapOverride = config.browserAllowSiteKeymapOverride
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     browserSearchEngineId = config.browserSearchEngine
@@ -156,6 +165,9 @@ export const appConfigState = {
       publishBrowserSearchEngine(
         findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
       )
+      // Likewise the page-override choice: main can only apply it to a browser
+      // that exists, and the runtime re-sends it when one comes up.
+      publishBrowserAllowSiteKeymapOverride(browserAllowSiteKeymapOverride)
     }
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,

@@ -144,7 +144,7 @@
 <div class="flex h-full min-h-0 flex-col">
   <header class="shrink-0 border-b bg-app px-6 pt-5 pb-4">
     <button
-      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+      class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
       type="button"
       title={backLabel}
       aria-label={backLabel}
@@ -157,7 +157,7 @@
     {#if entry}
       <div class="mt-4 flex min-w-0 items-start gap-4">
         <div
-          class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border bg-elevated text-xl font-semibold text-muted"
+          class="flex size-16 shrink-0 items-center justify-center overflow-hidden border bg-elevated text-xl font-semibold text-muted"
         >
           {#if icon}<img src={icon} alt="" class="size-full object-cover" />{:else}{pluginInitials(
               entry.displayName
@@ -178,7 +178,7 @@
         {#if entry.installed && installed}
           <button
             type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-sm hover:bg-overlay disabled:opacity-50"
+            class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-sm hover:bg-overlay disabled:opacity-50"
             onclick={() => void install(true)}
             disabled={busy}
             title={`Update ${entry.displayName}`}
@@ -189,7 +189,7 @@
           </button>
           <button
             type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm text-red-500 hover:bg-red-500/5 disabled:opacity-50"
+            class="flex h-9 items-center gap-1.5 border px-3 text-sm text-red-500 hover:bg-red-500/5 disabled:opacity-50"
             onclick={() => (confirmingUninstall = true)}
             disabled={busy}
             title={`Uninstall ${entry.displayName}`}
@@ -200,7 +200,7 @@
         {:else}
           <button
             type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary disabled:opacity-50"
+            class="flex h-9 items-center gap-1.5 bg-primary px-4 text-sm font-medium text-on-primary disabled:opacity-50"
             onclick={() => void install(false)}
             disabled={busy || !entry.supported}
             title={`Install ${entry.displayName}`}
@@ -212,7 +212,7 @@
         {/if}
         <button
           type="button"
-          class="flex size-9 items-center justify-center rounded-lg border bg-elevated hover:bg-overlay"
+          class="flex size-9 items-center justify-center border bg-elevated hover:bg-overlay"
           onclick={() => void toggleBookmark()}
           title={entry.bookmarked
             ? `Remove bookmark for ${entry.displayName}`
@@ -231,12 +231,12 @@
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pt-5 pb-24 lg:flex-row lg:gap-8">
     <div class="min-w-0 lg:flex-1">
       {#if error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
       {#if success}
-        <p class="mb-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+        <p class="mb-4 bg-success/10 px-3 py-2 text-xs text-success" role="status">
           {success}
         </p>
       {/if}
@@ -247,9 +247,9 @@
         </h2>
         {#if loading}
           <div class="space-y-3" aria-label="Loading plugin README">
-            <div class="h-4 w-3/5 animate-pulse rounded bg-raised"></div>
-            <div class="h-4 w-full animate-pulse rounded bg-raised"></div>
-            <div class="h-4 w-4/5 animate-pulse rounded bg-raised"></div>
+            <div class="h-4 w-3/5 animate-pulse bg-raised"></div>
+            <div class="h-4 w-full animate-pulse bg-raised"></div>
+            <div class="h-4 w-4/5 animate-pulse bg-raised"></div>
           </div>
         {:else if detail?.readme}
           <MarkdownView text={detail.readme} />
@@ -261,7 +261,7 @@
 
     <aside class="mt-8 flex flex-col gap-5 lg:mt-0 lg:w-80 lg:shrink-0 lg:overflow-y-auto">
       {#if entry}
-        <section aria-labelledby="plugin-contents-title" class="rounded-xl border bg-surface p-4">
+        <section aria-labelledby="plugin-contents-title" class="border bg-surface p-4">
           <h2 id="plugin-contents-title" class="mb-3 text-sm font-semibold">What it adds</h2>
           <p class="mb-3 text-xs text-muted">
             Everything below installs into the tool gateway, so every harness you use can reach it.
@@ -300,7 +300,7 @@
         </section>
 
         {#if unsupportedComponents.length > 0 || entry.unsupportedReason}
-          <section class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+          <section class="border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
             <p class="flex items-center gap-2 font-medium text-amber-600">
               <TriangleAlert size={14} /> Not fully supported
             </p>
@@ -312,7 +312,7 @@
         {/if}
 
         {#if installed && installed.requiredCredentialVariables.length > 0}
-          <section class="rounded-xl border bg-surface p-4 text-sm">
+          <section class="border bg-surface p-4 text-sm">
             <p class="font-medium">Setup needed</p>
             <p class="mt-1 text-xs text-muted">
               Configure {installed.requiredCredentialVariables.join(', ')} in this plugin's tool utilities
@@ -323,7 +323,7 @@
 
         <section
           aria-labelledby="plugin-source-title"
-          class="rounded-xl border bg-surface p-4 text-sm"
+          class="border bg-surface p-4 text-sm"
         >
           <h2 id="plugin-source-title" class="mb-3 text-sm font-semibold">Source</h2>
           <dl class="space-y-2 text-xs">
@@ -344,7 +344,7 @@
           </dl>
           <div class="mt-4 flex flex-wrap gap-2">
             <button
-              class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs hover:bg-overlay"
+              class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs hover:bg-overlay"
               type="button"
               title={`Open ${entry.source.repository} on GitHub`}
               aria-label={`Open ${entry.source.repository} on GitHub`}
@@ -355,7 +355,7 @@
             </button>
             {#if entry.homepage}
               <button
-                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs hover:bg-overlay"
+                class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs hover:bg-overlay"
                 type="button"
                 title="Open the plugin homepage"
                 aria-label="Open the plugin homepage"

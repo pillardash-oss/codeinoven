@@ -116,7 +116,7 @@
 
   The strip is not fixed to open instances. A surface whose tabs are sections of
   one panel omits `onNew`, `onCloseTab` and `icon`, and the strip then reads as a
-  section switcher instead of a tab bar: the assistant routine panel is exactly
+  section switcher instead of a tab bar: the assistant panel is exactly
   that case.
 -->
 <Modal

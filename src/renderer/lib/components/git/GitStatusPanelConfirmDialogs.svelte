@@ -87,7 +87,7 @@
       {discardConfirm.length === 1 ? 'file' : 'files'} will be permanently discarded. This cannot be undone.
     </p>
     {#if discardConfirm.length > 4}
-      <div class="max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2">
+      <div class="max-h-24 overflow-auto border border-border bg-elevated/50 p-2">
         {#each discardConfirm as path (path)}
           <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
         {/each}
@@ -130,7 +130,7 @@
       change. This cannot be undone.
     </p>
     {#if removal.paths.length > 1}
-      <div class="max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2">
+      <div class="max-h-24 overflow-auto border border-border bg-elevated/50 p-2">
         {#each removal.paths as path (path)}
           <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
         {/each}
@@ -200,7 +200,7 @@
           </span>
           <button
             type="button"
-            class="shrink-0 cursor-pointer rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="shrink-0 cursor-pointer border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy the full commit hash"
             aria-label="Copy the full commit hash"
             onclick={() => onCopyCommitHash(info)}
@@ -215,7 +215,7 @@
               -->
             <button
               type="button"
-              class="flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title={`Open commit ${info.shortHash} on GitHub`}
               aria-label={`Open commit ${info.shortHash} on GitHub`}
               data-external-url={commitInfoUrl}
@@ -250,7 +250,7 @@
             {#each info.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
               <span
                 class={[
-                  'rounded-sm px-1 py-px text-[0.5625rem] font-medium',
+                  'px-1 py-px text-[0.5625rem] font-medium',
                   ref.head
                     ? 'bg-primary text-on-primary'
                     : ref.kind === 'tag'
@@ -268,7 +268,7 @@
       <div>
         <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Message</p>
         <pre
-          class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated/50 p-2 font-mono text-[0.625rem] leading-relaxed text-foreground">{info.message}{info.body.trim()
+          class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words border border-border bg-elevated/50 p-2 font-mono text-[0.625rem] leading-relaxed text-foreground">{info.message}{info.body.trim()
             .length > 0
             ? `\n\n${info.body.trim()}`
             : ''}</pre>

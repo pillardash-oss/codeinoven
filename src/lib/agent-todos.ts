@@ -1,0 +1,302 @@
+import type { AgentMessage, AgentPart } from './types'
+import {
+  firstString,
+  isTodoToolName,
+  normalizeInteractionName,
+  parseRecord,
+  recordValue
+} from './agent-interactions'
+
+export type AgentTodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface AgentTodoItem {
+  id: string
+  label: string
+  status: AgentTodoStatus
+}
+
+export interface AgentTodoSnapshot {
+  items: AgentTodoItem[]
+  signature: string
+}
+
+/**
+ * Resolve the task that should be presented as active.
+ *
+ * Only a running turn has an active task. Harnesses do not always publish an
+ * `in_progress` transition before starting work, so while the turn is live fall
+ * back to the first pending item so the card still reflects observed agent
+ * activity.
+ *
+ * A stopped turn has no active task at all, not even one a harness published as
+ * `in_progress` and then abandoned: the card renders that index as live work (a
+ * spinner and "Working on N of M"), which left finished threads advertising a
+ * task the agent had already walked away from.
+ */
+export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): number {
+  if (!busy) return -1
+  const explicitIndex = items.findIndex((item) => item.status === 'in_progress')
+  if (explicitIndex >= 0) return explicitIndex
+  return items.findIndex((item) => item.status === 'pending')
+}
+
+export interface AgentTodoCounter {
+  /** The number the task card's header shows. */
+  value: number
+  /** What that number means, for the header's tooltip and screen reader copy. */
+  meaning: string
+}
+
+/**
+ * The reading in the task card's header.
+ *
+ * While a run is live it is the position of the task being worked on   "1/6" on
+ * the first task   because that is the number that moves as the run advances; a
+ * completed count would sit at "0/6" for as long as the first task takes, which
+ * reads as no progress at all. Once the run stops the list is a record of where
+ * it left off, so the reading becomes the completed count.
+ */
+export function agentTodoCounter(items: AgentTodoItem[], activeIndex: number): AgentTodoCounter {
+  if (activeIndex >= 0) {
+    return {
+      value: activeIndex + 1,
+      meaning: `Working on task ${activeIndex + 1} of ${items.length}`
+    }
+  }
+  const completedCount = items.filter((item) => item.status === 'completed').length
+  return {
+    value: completedCount,
+    meaning: `${completedCount} of ${items.length} tasks complete`
+  }
+}
+
+/**
+ * Whether a durable task-list snapshot still describes the turn the transcript
+ * is on.
+ *
+ * The snapshot is refreshed only while a view watches a live turn or crosses a
+ * boundary it observed, so it can lag the transcript. Because the snapshot is
+ * fed to the card as a synthetic trailing message and a task-list snapshot
+ * replaces the whole task map, a snapshot from an older turn would otherwise
+ * overrule the fresher message state and leave a stale list and a stale
+ * highlight on screen after the agent moved on. A transcript that has advanced
+ * past the snapshot's turn (`transcriptTurnStart > snapshotTurnStart`) must
+ * therefore ignore it. Either timestamp being unknown (no prompt yet on either
+ * side) cannot prove staleness, so the snapshot is trusted.
+ */
+export function todoSnapshotMatchesTurn(
+  snapshotTurnStart: number | null,
+  transcriptTurnStart: number | null
+): boolean {
+  if (snapshotTurnStart === null || transcriptTurnStart === null) return true
+  return transcriptTurnStart <= snapshotTurnStart
+}
+
+type ToolPart = Extract<AgentPart, { type: 'tool' }>
+
+export function isTodoToolPart(part: AgentPart): part is ToolPart {
+  if (part.type !== 'tool') return false
+  return isTodoToolName(part.tool)
+}
+
+export function latestAgentTodo(messages: AgentMessage[]): AgentTodoSnapshot | null {
+  let turnStartIndex = 0
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') {
+      turnStartIndex = index + 1
+      break
+    }
+  }
+
+  const hasAssistantMessage = messages
+    .slice(turnStartIndex)
+    .some((message) => message.role === 'assistant')
+  if (!hasAssistantMessage) return null
+
+  const tasks = new Map<string, AgentTodoItem>()
+  for (let index = turnStartIndex; index < messages.length; index++) {
+    const message = messages[index]
+    if (message?.role !== 'assistant') continue
+    for (const part of message.parts) {
+      if (!isTodoToolPart(part)) continue
+      applyTodoPart(tasks, part)
+    }
+  }
+
+  const latestItems = [...tasks.values()]
+  if (latestItems.length === 0 || latestItems.every((item) => item.status === 'completed')) {
+    return null
+  }
+
+  return {
+    items: latestItems,
+    signature: latestItems.map((item) => `${item.id}:${item.status}:${item.label}`).join('|')
+  }
+}
+
+function applyTodoPart(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
+  const tool = normalizeInteractionName(part.tool)
+  if (tool.endsWith('taskcreate')) {
+    applyTaskCreate(tasks, part)
+    return
+  }
+  if (tool.endsWith('taskupdate')) {
+    applyTaskUpdate(tasks, part.state.input)
+    return
+  }
+  if (tool.endsWith('tasklist')) {
+    const items = part.state.output ? parseTodoItems({}, part.state.output) : null
+    if (items) replaceTasks(tasks, items)
+    return
+  }
+  const items = parseTodoItems(part.state.input, part.state.output)
+  if (items) replaceTasks(tasks, items)
+}
+
+function applyTaskCreate(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
+  const input = part.state.input
+  const result = parseRecord(part.state.output)
+  const taskResult = recordValue(result?.['task'])
+  const id =
+    firstString(taskResult?.['id'], result?.['id'], input['taskId'], input['task_id']) ??
+    part.callID
+  const label = firstString(
+    taskResult?.['subject'],
+    input['subject'],
+    input['activeForm'],
+    input['description']
+  )
+  if (!label) return
+  tasks.delete(part.callID)
+  tasks.set(id, { id, label, status: normalizeStatus(input) })
+}
+
+function applyTaskUpdate(tasks: Map<string, AgentTodoItem>, input: Record<string, unknown>): void {
+  const id = firstString(input['taskId'], input['task_id'], input['id'])
+  if (!id) return
+  const rawStatus = firstString(input['status'], input['state'])?.toLowerCase()
+  if (rawStatus === 'deleted') {
+    tasks.delete(id)
+    return
+  }
+  const existing = tasks.get(id)
+  const label = firstString(
+    input['subject'],
+    input['activeForm'],
+    input['description'],
+    existing?.label
+  )
+  if (!label) return
+  tasks.set(id, {
+    id,
+    label,
+    status: rawStatus ? normalizeStatus(input) : (existing?.status ?? 'pending')
+  })
+}
+
+function replaceTasks(tasks: Map<string, AgentTodoItem>, items: AgentTodoItem[]): void {
+  tasks.clear()
+  for (const item of items) tasks.set(item.id, item)
+}
+
+/**
+ * Normalize a todo payload into items, or null when the payload carries no task
+ * list at all.
+ *
+ * The distinction matters: a whole-list tool that publishes an explicitly empty
+ * list is clearing its tasks, so the card has to drop them. Treating "no list in
+ * this payload" the same as "an empty list" would clear the state on every
+ * snapshot that does not restate the tasks (a mid-stream argument update, a
+ * tool result envelope), and treating both as "no change" leaves the card stuck
+ * on a list the agent already cleared.
+ */
+function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] | null {
+  const source =
+    findTodoArray(input) ?? (output ? findTodoArray(parseRecord(output) ?? {}) : undefined)
+  if (!source) return null
+
+  return source.flatMap((value, index) => {
+    if (typeof value === 'string' && value.trim()) {
+      return [
+        {
+          id: `todo-${index}`,
+          label: value.trim(),
+          status: 'pending' as const
+        }
+      ]
+    }
+    const item = recordValue(value)
+    if (!item) return []
+    const label = firstString(
+      item['content'],
+      item['step'],
+      item['text'],
+      item['title'],
+      item['task'],
+      item['name'],
+      item['label'],
+      item['summary'],
+      item['description']
+    )
+    if (!label) return []
+    const id = firstString(item['id'], item['key']) ?? `todo-${index}-${label}`
+    return [{ id, label, status: normalizeStatus(item) }]
+  })
+}
+
+function findTodoArray(input: Record<string, unknown>): unknown[] | undefined {
+  for (const key of [
+    'todos',
+    'todo_list',
+    'todoList',
+    'checklist',
+    'plan',
+    'plan_update',
+    'planUpdate',
+    'items',
+    'tasks',
+    'steps'
+  ]) {
+    const value = input[key]
+    if (Array.isArray(value)) return value
+  }
+  for (const key of ['input', 'arguments', 'payload', 'data']) {
+    const nested = recordValue(input[key])
+    if (!nested) continue
+    const value = findTodoArray(nested)
+    if (value) return value
+  }
+  return undefined
+}
+
+function normalizeStatus(item: Record<string, unknown>): AgentTodoStatus {
+  if (
+    item['completed'] === true ||
+    item['done'] === true ||
+    item['cancelled'] === true ||
+    item['canceled'] === true
+  )
+    return 'completed'
+  const status = firstString(item['status'], item['state'])
+    ?.toLowerCase()
+    .replace(/[\s-]+/gu, '_')
+  if (
+    status === 'completed' ||
+    status === 'complete' ||
+    status === 'done' ||
+    status === 'cancelled' ||
+    status === 'canceled'
+  ) {
+    return 'completed'
+  }
+  if (
+    status === 'in_progress' ||
+    status === 'inprogress' ||
+    status === 'active' ||
+    status === 'running' ||
+    status === 'doing'
+  ) {
+    return 'in_progress'
+  }
+  return 'pending'
+}

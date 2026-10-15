@@ -8,7 +8,7 @@ import { resolveConnections } from '$lib/components/assistant/assistant-view'
 import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
-  RoutineConnection,
+  AssistantConnection,
   UtilityCatalog,
   UtilityDefinitionFor
 } from '$shared/types'
@@ -129,7 +129,7 @@ describe('connection library', () => {
 
   it('links a stored connection to a discovered capability by its prefixed id', () => {
     const library = buildConnectionLibrary(null, capabilities({ mcp: [capability()] }))
-    const connection: RoutineConnection = {
+    const connection: AssistantConnection = {
       utilityId: capabilityConnectionId({ id: 'svelte-mcp' }),
       label: 'Svelte MCP'
     }
@@ -137,7 +137,7 @@ describe('connection library', () => {
   })
 })
 
-describe('routine connections against discovered capabilities', () => {
+describe('assistant connections against discovered capabilities', () => {
   it('reports an enabled discovered MCP as ready', () => {
     const views = resolveConnections(
       [{ utilityId: capabilityConnectionId({ id: 'svelte-mcp' }), label: 'Svelte MCP' }],

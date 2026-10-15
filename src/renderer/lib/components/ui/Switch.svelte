@@ -60,12 +60,12 @@
   onclick={toggle}
 >
   <span
-    class="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors {checked
+    class="relative inline-flex h-4 w-7 shrink-0 items-center transition-colors {checked
       ? activeClass
       : 'bg-overlay'}"
   >
     <span
-      class="inline-block h-3 w-3 rounded-full bg-surface transition-transform {checked
+      class="inline-block h-3 w-3 bg-surface transition-transform {checked
         ? 'translate-x-3.5'
         : 'translate-x-0.5'}"
     ></span>

@@ -20,7 +20,7 @@
   class="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-8 text-center {className}"
 >
   {#if Icon}
-    <div class="flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
+    <div class="flex h-10 w-10 items-center justify-center bg-elevated">
       <Icon size={18} class="text-dimmed" />
     </div>
   {/if}

@@ -18,10 +18,14 @@
  *
  *   - Chromium granted nothing for a name it does not know, so removing it cannot
  *     take a capability away from the extension.
- *   - The app's own `chrome.*` surface does not read the manifest at all: the
- *     compatibility preamble installs the namespaces it implements (its
- *     `contextMenus`, `privacy`, `webNavigation`, `notifications` and `sidePanel`
- *     bridges are unconditional), so a shimmed capability survives the strip.
+ *   - The app's own `chrome.*` surface installs the namespaces it implements
+ *     unconditionally (its `contextMenus`, `privacy`, `webNavigation`,
+ *     `notifications` and `sidePanel` bridges do not consult the manifest), so a
+ *     shimmed capability survives the strip. The one surface that does read the
+ *     manifest is the `chrome.permissions` bridge, which answers from the declared
+ *     names: a stripped name answers `false` to `contains` and `request`. That is
+ *     the same deliberate tradeoff as the paragraph below, seen from a second
+ *     reader.
  *   - What the extension declared is still the app's own record: the registry
  *     keeps `declaredPermissions` from the install, which is what the capability
  *     report and the extensions panel are built from (see
@@ -33,14 +37,14 @@
  * on every load. The extensions this app is used with read their manifest for the
  * version and their own declared files, not for their permissions.
  *
- * Measured, not assumed: `RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS` below was produced
- * by loading a manifest that declared the whole Chrome permission vocabulary
- * against Electron 44.7.0 (Chromium 152.0.7977.130, the build 44.4.5 already
- * carried) and reading back what Chromium called unknown. Two names
- * that warn for reasons of their own are deliberately NOT stripped, because their
- * warning is a fact about this runtime the user should keep seeing:
- * `'usb' is not allowed for specified platform` and `'webRequestBlocking' requires
- * manifest version of 2 or lower`.
+ * Measured, not assumed: `RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS` below is what
+ * Electron 44.7.2 (Chromium 152.0.7977.149) answered when one manifest declared
+ * every permission name this Chromium can carry. Chromium refuses `socket` and
+ * `usbDevices` without a value, which is itself proof that it knows them, so those
+ * two never appear in it. Two names that warn for reasons of their own are
+ * deliberately NOT stripped, because their warning is a fact about this runtime
+ * the user should keep seeing: `'usb' is not allowed for specified platform` and
+ * `'webRequestBlocking' requires manifest version of 2 or lower`.
  */
 
 import { readManifestObject, writeManifest, stringArray } from './browser-extension-source'
@@ -49,41 +53,119 @@ import { readManifestObject, writeManifest, stringArray } from './browser-extens
  * Permission names this runtime's extension loader reports as unknown.
  *
  * Declaring one cannot enable anything: Chromium ignores the name rather than
- * granting it, and prints the warning the user's log caught. Measured against
- * Electron 44.7.0 (Chromium 152.0.7977.130) with a manifest declaring the Chrome
- * vocabulary, loaded through
+ * granting it, and prints the warning the user's log caught. The list is the
+ * measurement described above, taken over the union of the three tables that name
+ * a manifest permission in the Chromium `DEPS` pins
+ * (`extensions/common/api/_permission_features.json`,
+ * `extensions/common/permissions/extensions_api_permissions.cc` and
+ * `chrome/common/extensions/permissions/chrome_api_permissions.cc`, the last of
+ * which Electron does not compile), loaded through
  * `session.extensions.loadExtension`; a runtime upgrade that starts supporting
  * one of these is a reason to re-measure rather than to keep the name here.
  */
 export const RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS: readonly string[] = [
+  'accessibilityFeatures.modify',
+  'accessibilityFeatures.read',
+  'accessibilityPrivate',
+  'accessibilityServicePrivate',
+  'activityLogPrivate',
+  'autofillPrivate',
+  'autotestPrivate',
+  'background',
   'bookmarks',
+  'brailleDisplayPrivate',
   'browsingData',
+  'certificateProvider',
+  'chromeosInfoPrivate',
+  'commandLinePrivate',
+  'commands.accessibility',
   'contentSettings',
   'contextMenus',
+  'contextualTasksPrivate',
   'cookies',
   'debugger',
   'declarativeContent',
+  'desktopCapture',
+  'developerPrivate',
   'devtools',
+  'dictationPrivate',
+  'documentScan',
   'downloads',
+  'downloads.open',
+  'downloads.shelf',
+  'downloads.ui',
+  'echoPrivate',
+  'enterprise.deviceAttributes',
+  'enterprise.hardwarePlatform',
+  'enterprise.kioskInput',
+  'enterprise.login',
+  'enterprise.networkingAttributes',
+  'enterprise.platformKeys',
+  'enterprise.platformKeysPrivate',
+  'enterprise.reportingPrivate',
+  'experimental',
+  'experimentalActor',
+  'experimentalAiData',
+  'favicon',
+  'fileBrowserHandler',
+  'fileManagerPrivate',
+  'fileSystemProvider',
   'fontSettings',
   'gcm',
   'geolocation',
+  'glicPrivate',
+  'glicPrivate.invoke',
   'history',
+  'homepage',
   'identity',
+  'identity.email',
+  'imageLoaderPrivate',
+  'imageWriterPrivate',
+  'indigoPrivate',
+  'input',
+  'inputMethodPrivate',
+  'languageSettingsPrivate',
+  'mdns',
+  'mediaPlayerPrivate',
+  'newTabPageOverride',
   'notifications',
   'omnibox',
+  'omnibox.directInput',
   'pageCapture',
+  'passwordsPrivate',
   'permissions',
+  'platformKeys',
   'privacy',
+  'processes',
+  'proxyOverrideRulesPrivate',
+  'readingList',
+  'runtime',
+  'safeBrowsingPrivate',
   'search',
+  'searchProvider',
   'sessions',
+  'settingsPrivate',
   'sidePanel',
+  'smartCardProviderPrivate',
+  'startupPages',
+  'systemPrivate',
   'tabCapture',
+  'tabCaptureForTab',
   'tabGroups',
+  'terminalPrivate',
   'topSites',
+  'transientBackground',
   'tts',
   'ttsEngine',
+  'usersPrivate',
+  'virtualKeyboardPrivate',
+  'wallpaper',
+  'webAuthenticationProxy',
   'webNavigation',
+  'webcamPrivate',
+  'webrtcDesktopCapturePrivate',
+  'webrtcLoggingPrivate',
+  'webrtcLoggingPrivate.audioDebug',
   'windows'
 ]
 

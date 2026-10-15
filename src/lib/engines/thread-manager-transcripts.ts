@@ -21,6 +21,39 @@ import type {
 } from '../types'
 
 /**
+ * Told when a durable transcript write changed a thread's mirrored conversation.
+ *
+ * Main wires this to the cross-instance announcement: two instances share this
+ * mirror, neither receives the other's writes, and a sibling window only learns
+ * to re-read a thread if the write says so. The report is deliberately not the
+ * messages themselves: a consumer re-reads the shared rows, so a lost report
+ * costs freshness, never correctness.
+ */
+export type TranscriptChangeListener = (projectId: string, threadId: string) => void
+
+/**
+ * The process-wide change listener, wired once by main.
+ *
+ * Module scope on purpose: every thread manager the app builds writes through
+ * this same store, so one wiring call covers all of them, and the engine layer
+ * never has to know how the app announces a change.
+ */
+let transcriptChangeListener: TranscriptChangeListener | null = null
+
+export function setTranscriptChangeListener(listener: TranscriptChangeListener | null): void {
+  transcriptChangeListener = listener
+}
+
+/** Report a durable write, never failing the write that produced it. */
+function reportTranscriptChanged(projectId: string, threadId: string): void {
+  try {
+    transcriptChangeListener?.(projectId, threadId)
+  } catch {
+    // Announcement is advisory; the rows are already written and shared.
+  }
+}
+
+/**
  * Owns every mirrored-transcript read and write for a thread: the rich
  * conversation, bounded history pages, the user-message jump list, and
  * child-agent transcripts. All heavy reads are cursor-paged through the
@@ -61,7 +94,7 @@ export class ThreadTranscriptStore {
    * Runs as one atomic transaction on the worker's connection when available
    * (falls back to the primary connection).
    */
-  async saveMessages(threadId: string, messages: AgentMessage[]): Promise<void> {
+  async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     // Batch the statements so one huge transcript never materializes a single
     // multi-megabyte transaction payload in memory. Every batch is its own
     // transaction; the delete+upsert sequence below preserves the same
@@ -84,6 +117,7 @@ export class ThreadTranscriptStore {
         })
       }
     }
+    reportTranscriptChanged(projectId, threadId)
   }
 
   /**
@@ -110,6 +144,10 @@ export class ThreadTranscriptStore {
     if (result.applied > 0 && messages.some((message) => message.role === 'user')) {
       this.forgetUserMessages(projectId, threadId)
     }
+    // Only a write that actually changed a row is announced: an unchanged
+    // snapshot is the common case during a provider resync, and a sibling
+    // re-reading the mirror for it would be pure cost.
+    if (result.applied > 0) reportTranscriptChanged(projectId, threadId)
     return result
   }
 
@@ -184,6 +222,7 @@ export class ThreadTranscriptStore {
    * Runs as one atomic worker transaction when available.
    */
   async saveSubagentMessages(
+    projectId: string,
     threadId: string,
     sessionId: string,
     messages: AgentMessage[]
@@ -198,6 +237,7 @@ export class ThreadTranscriptStore {
         }
       })
     }
+    reportTranscriptChanged(projectId, threadId)
   }
 
   /** Load a mirrored child-agent transcript without contacting the provider. */

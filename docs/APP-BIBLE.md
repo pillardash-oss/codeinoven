@@ -211,7 +211,7 @@ A restrained workspace aesthetic:
 - Strong numeric hierarchy with `tabular-nums`.
 - **Satoshi** as the product typeface.
 - **Lucide** icons (`@lucide/svelte`) for actions and module cues.
-- Rounded, tactile controls without playful decoration.
+- Tactile, square controls without playful decoration: no corner in the app is rounded (§ 3.13).
 
 The experience should resemble a focused professional dashboard, never a marketing homepage.
 
@@ -249,7 +249,7 @@ Every new UI element must work in **both** light and dark themes through tokens,
 
 - Dense, scannable layouts: full-width flow with constrained internal spacing.
 - Standard rhythm: `space-y-6`; panels at `p-4`/`p-5`/`p-6`.
-- `rounded-xl`/`rounded-2xl` for main panels and modals; `rounded-lg` for compact controls.
+- Every container is a right angle. A panel is a 1px `border` on `bg-surface`, never a rounded box; see § 3.13 for the square language and the control chamfer.
 - Cards for repeated items, metrics, empty states, modals, framed tools. **Never nest cards inside cards.**
 - Grids for metrics: `sm:grid-cols-2`, `xl:grid-cols-4`, or main/aside splits.
 - **Stable dimensions everywhere.** Toolbars, filters, buttons, tables, and icon buttons must not cause layout shift when toggled.
@@ -276,7 +276,7 @@ Reuse before you create:
 - Minimum action height: `h-8`/`h-9`/`h-10` or `min-h-[36px]`.
 - Lucide icons inside action buttons when the action benefits from a recognizable symbol.
 - **Icon-only controls require accessible labels (`aria-label`).**
-- `rounded-lg`/`rounded-xl` normally; fully-rounded reserved for avatars, circular icon buttons, and pills.
+- Every control is a right angle, apart from the 2px chamfer in § 3.13. Fully-rounded is never reserved for anything: an avatar, a status dot, a chip and a pill are all square.
 - Boolean Svelte props use the shorthand: `<Button active>`   never `active={true}`.
 - Use standard Tailwind classes where they exist: `z-10`, never `z-[10]`.
 
@@ -328,6 +328,7 @@ Accessibility is part of the design system, not an afterthought:
 ### 3.12 Design anti-patterns (forbidden)
 
 - Raw `black`/`white`/hex colors in UI code.
+- **Rounded corners.** No `rounded-*` utility, no directional or bracket variant, no `border-radius` in a style block, an injected stylesheet or a `style` attribute. See § 3.13.
 - Purple/blue gradient SaaS visuals, glassmorphism, decorative blobs, hero sections.
 - Oversized typography in operational screens.
 - Nested cards or floating decorative section cards.
@@ -337,6 +338,35 @@ Accessibility is part of the design system, not an afterthought:
 - Redundant/conflicting Tailwind classes (e.g., two text color utilities on one element).
 - Checkbox inputs or checkbox semantics for on/off controls   always the reusable `Switch`.
 - Relying on the native `title` tooltip   all tooltips go through the custom tooltip system.
+
+---
+
+### 3.13 The square language (corners)
+
+**CodeInOven has no rounded corners.** One corner shape exists in the whole
+application and it is a right angle.
+
+- Nothing declares `border-radius`: no `rounded-*` utility, no directional or
+  bracket variant (`rounded-t-lg`, `rounded-[3px]`), no `border-radius` in a
+  `<style>` block, an injected stylesheet, or a `style="..."` attribute.
+- The one deliberate exception is the **control chamfer**.
+  `src/renderer/app.css` applies `border-radius: 2px !important` to `button,
+  input, textarea, select, [role='menu'], [role='dialog']`. It is what makes an
+  interactive surface read as interactive rather than static. Never fight it,
+  never widen its selector, and never copy it onto a non-interactive element.
+- A **circle that is the function** keeps its circle: a rotating spinner arc, and
+  a progress ring drawn as a ring (`stroke-dasharray` with a rotation). Nothing
+  else. An avatar, a status dot, a state mark, the rail's active accent bar, the
+  switch track and its thumb, a toast card and its icon chip and close button are
+  all square.
+- The corner is only half of it. A rounded card usually floated as well, so the
+  sweep that squares a surface also settles it: structure with a 1px rule
+  (`border` alone inherits `--color-border` globally) on `bg-surface`,
+  `bg-elevated` or `bg-raised`; reserve a shadow for a surface that genuinely
+  floats (a modal, a dropdown, a tooltip, a toast, a docked panel); a section
+  header is an uppercase micro-label in `text-dimmed` ruled off with a 1px
+  `border-b`; a table draws one rule per row and none per column; a count is
+  `tabular-nums`.
 
 ---
 

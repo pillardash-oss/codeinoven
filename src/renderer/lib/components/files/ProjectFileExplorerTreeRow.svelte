@@ -94,7 +94,7 @@
       <input
         data-inline-input
         bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
+        class="h-6 min-w-0 flex-1 border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
         aria-label="New file name"
         placeholder="filename.ext"
         disabled={operationPending}
@@ -112,7 +112,7 @@
       <input
         data-inline-input
         bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
+        class="h-6 min-w-0 flex-1 border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
         aria-label="New folder name"
         placeholder="folder-name"
         disabled={operationPending}
@@ -172,7 +172,7 @@
         <input
           data-inline-input
           bind:value={inlineEdit.value}
-          class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
+          class="h-6 min-w-0 flex-1 border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
           aria-label={`Rename ${entry.name}`}
           disabled={operationPending}
           onkeydown={onInlineKeydown}
@@ -228,7 +228,7 @@
         {/if}
         <span class="min-w-0 flex-1 truncate">{entry.name}</span>
         {#if entry.kind === 'file' && projectState.sessions[entry.path] && projectState.sessions[entry.path].draft !== projectState.sessions[entry.path].source.content}
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"></span>
+          <span class="h-1.5 w-1.5 shrink-0 bg-accent" title="Unsaved changes"></span>
         {/if}
       </button>
     {/if}

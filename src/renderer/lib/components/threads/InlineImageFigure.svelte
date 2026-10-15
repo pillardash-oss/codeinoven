@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { Expand } from '@lucide/svelte'
+  import InlineFigure from './InlineFigure.svelte'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte.ts'
 
   const APPFILE_RETRY_DELAYS = [250, 500, 1000, 2000] as const
@@ -48,25 +48,29 @@
   onDestroy(clearRetryTimer)
 </script>
 
-<button
-  type="button"
-  class="group relative block max-w-full overflow-hidden rounded-lg border border-border bg-elevated transition-shadow hover:shadow-md"
-  title="Expand {filename}"
-  aria-label="Expand {filename}"
-  onclick={onExpand}
->
-  <img
-    src={imageUrls.getUrl(url)}
-    alt={filename}
-    class="block max-h-80 w-auto max-w-full object-contain"
-    loading="lazy"
-    onerror={handleImageError}
-    onload={clearRetryTimer}
-  />
-  <span
-    class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-black/0 px-2 py-1 text-[0.6875rem] font-medium text-white opacity-0 transition-all group-hover:bg-black/50 group-hover:opacity-100"
-  >
-    <span class="truncate">{filename}</span>
-    <Expand size={13} class="shrink-0" />
-  </span>
-</button>
+<!-- The picture sets the frame's size, so it is drawn whole at its own shape: a
+     tall picture is capped (the fullscreen viewer is where it is seen big) and a
+     wide one takes the column, and neither leaves a box behind wider than
+     itself. -->
+<InlineFigure {filename} {onExpand}>
+  <div class="relative">
+    <img
+      src={imageUrls.getUrl(url)}
+      alt={filename}
+      class="block max-h-96 w-auto max-w-full object-contain"
+      loading="lazy"
+      onerror={handleImageError}
+      onload={clearRetryTimer}
+    />
+    <!-- The whole picture is the expand target as well as the caption's button.
+         It is a second path to the same action, never the only one, so the
+         affordance itself stays visible in the caption. -->
+    <button
+      type="button"
+      class="absolute inset-0 cursor-zoom-in"
+      title="Expand {filename}"
+      aria-label="Expand {filename}"
+      onclick={onExpand}
+    ></button>
+  </div>
+</InlineFigure>

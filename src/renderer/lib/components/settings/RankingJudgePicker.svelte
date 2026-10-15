@@ -198,7 +198,7 @@
     {#each chipOptions as option (option.kind)}
       <button
         type="button"
-        class="flex h-7 items-center rounded-lg px-2.5 text-[0.6875rem] font-medium {selection ===
+        class="flex h-7 items-center px-2.5 text-[0.6875rem] font-medium {selection ===
         option.kind
           ? 'bg-overlay text-foreground'
           : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -226,7 +226,7 @@
         <label class="flex min-w-0 shrink-0 items-center gap-2 text-xs text-muted">
           <span class="shrink-0">Runs on</span>
           <select
-            class="max-w-44 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
+            class="max-w-44 border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
             aria-label="Harness that runs the pinned judging model"
             value={chosenHarness}
             disabled={busy}
@@ -274,7 +274,7 @@
 
   {#if error}
     <p
-      class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+      class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
       role="alert"
     >
       {error}

@@ -140,7 +140,7 @@
 
     {#if error}
       <p
-        class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[0.6875rem] text-danger"
+        class="border border-danger/30 bg-danger/10 px-3 py-2 text-[0.6875rem] text-danger"
       >
         {error}
       </p>
@@ -163,7 +163,7 @@
     {#if running}
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+        class="px-3 py-2 text-sm text-muted hover:bg-elevated"
         data-modal-dismiss
         onclick={onMinimize}
       >
@@ -177,7 +177,7 @@
       -->
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+        class="px-3 py-2 text-sm text-muted hover:bg-elevated"
         data-modal-dismiss
         onclick={onClose}
       >
@@ -185,7 +185,7 @@
       </button>
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={onAction}
       >
         {actionLabel}
@@ -193,7 +193,7 @@
     {:else}
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={onClose}
       >
         Done

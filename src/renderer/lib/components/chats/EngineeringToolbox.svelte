@@ -153,7 +153,7 @@
 <div class="relative">
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded-lg transition-colors {filled
+    class="flex h-8 w-8 items-center justify-center transition-colors {filled
       ? 'text-thread-spec'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     title="Engineering Toolbox"
@@ -180,7 +180,7 @@
     ></button>
     <div
       bind:this={panel}
-      class="fixed inset-x-3 bottom-3 z-40 rounded-2xl border bg-surface p-2 shadow-lg sm:absolute sm:inset-x-auto sm:bottom-9 sm:left-0 sm:w-80 sm:rounded-xl"
+      class="fixed inset-x-3 bottom-3 z-40 border bg-surface p-2 shadow-lg sm:absolute sm:inset-x-auto sm:bottom-9 sm:left-0 sm:w-80"
       role="menu"
       tabindex="-1"
       aria-label="Engineering lifecycle"
@@ -196,7 +196,7 @@
           onchange={(enabled) => void choose(row.stage, enabled)}
           title={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
           aria-label={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
-          class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+          class="w-full items-start justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
           activeClass="bg-thread-spec"
         >
           <span class="min-w-0 flex-1 pr-3">
@@ -213,7 +213,7 @@
         onchange={(enabled) => void chooseAutopilot(enabled)}
         title={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
         aria-label={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
-        class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+        class="w-full items-start justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
         activeClass="bg-thread-spec"
       >
         <span class="min-w-0 flex-1 pr-3">

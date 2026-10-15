@@ -120,7 +120,7 @@ describe('lean agent definitions', () => {
         expect(mapping['*']).toBe('deny')
         expect(mapping['curl *']).toBe('allow')
       } else if (mode === 'assistant') {
-        // A routine run owns its whole job, so it keeps a shell inside its own
+        // An assistant run owns its whole job, so it keeps a shell inside its own
         // workspace; the app's permission policy governs the risk of any call.
         expect(agent.permission['bash']).toBe('allow')
       } else {

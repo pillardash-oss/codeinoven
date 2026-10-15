@@ -38,8 +38,8 @@
 <button
   type="button"
   class="flex shrink-0 items-center justify-center transition-colors {size === 'sm'
-    ? 'h-6 w-6 rounded-md'
-    : 'h-7 w-7 rounded-lg'} {tone === 'danger'
+    ? 'h-6 w-6'
+    : 'h-7 w-7'} {tone === 'danger'
     ? 'text-danger hover:bg-danger/10'
     : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
   {title}

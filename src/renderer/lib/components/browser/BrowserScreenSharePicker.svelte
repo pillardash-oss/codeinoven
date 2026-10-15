@@ -55,7 +55,7 @@
               <button
                 type="button"
                 data-screen-source
-                class="group flex flex-col overflow-hidden rounded-lg border border-border bg-elevated text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary"
+                class="group flex flex-col overflow-hidden border border-border bg-elevated text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary"
                 title={`Share ${source.name}`}
                 aria-label={`Share ${source.name}`}
                 onclick={() => choose(source.id)}
@@ -91,7 +91,7 @@
               <button
                 type="button"
                 data-screen-source
-                class="group flex flex-col overflow-hidden rounded-lg border border-border bg-elevated text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary"
+                class="group flex flex-col overflow-hidden border border-border bg-elevated text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary"
                 title={`Share ${source.name}`}
                 aria-label={`Share ${source.name}`}
                 onclick={() => choose(source.id)}
@@ -124,7 +124,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="flex h-8 items-center rounded-lg border border-border px-4 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+      class="flex h-8 items-center border border-border px-4 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
       title="Do not share the screen"
       onclick={cancel}
     >

@@ -64,7 +64,7 @@
 
 {#if native}
   <select
-    class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary {className}"
+    class="w-full border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary {className}"
     value={scopes.length > 1 ? 'custom' : (scopes[0] ?? '')}
     aria-label={ariaLabel}
     {title}
@@ -83,7 +83,7 @@
 {:else}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex w-full items-center gap-2 rounded-lg border bg-elevated px-2.5 py-1.5 text-left text-sm text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+      class="flex w-full items-center gap-2 border bg-elevated px-2.5 py-1.5 text-left text-sm text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
       aria-label={ariaLabel}
       {title}
       {disabled}
@@ -97,10 +97,10 @@
         side="bottom"
         align="start"
         sideOffset={6}
-        class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+        class="z-60 min-w-56 border border-border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item
-          class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+          class="flex items-center gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
           textValue={allLabel}
           onSelect={(event) => {
             event.preventDefault()
@@ -116,7 +116,7 @@
 
         {#each options as option (option.value)}
           <DropdownMenu.Item
-            class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+            class="flex items-center gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
             textValue={option.label}
             onSelect={(event) => {
               event.preventDefault()

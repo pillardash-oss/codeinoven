@@ -81,7 +81,7 @@
     <button
       type="button"
       class={[
-        'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+        'flex h-6 w-6 items-center justify-center transition-colors hover:bg-overlay',
         bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
       ]}
       aria-label={bookmarked ? `Remove ${entry.title} from bookmarks` : `Bookmark ${entry.title}`}
@@ -93,7 +93,7 @@
     </button>
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-danger"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-danger"
       aria-label={`Forget ${entry.title}`}
       title="Forget this page"
       onclick={() => (forgettingUrl = entry.url)}

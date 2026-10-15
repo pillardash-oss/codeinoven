@@ -7,6 +7,7 @@ import type {
   UserMessagePresentation
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
+import { MAX_MARK_POINTS, type MarkPoint } from '$lib/annotation-marks'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -96,6 +97,26 @@ export interface QueuedResponseReference extends PromptReference {
   selector?: string
   /** Design references: the browser tab the element was picked from. */
   tabId?: string
+  /** Document annotations: the project-relative path of the document. */
+  filePath?: string
+  /** Video notes: the second on the composition the note was written at. */
+  seconds?: number
+  /** Video notes: the project-relative composition folder the moment belongs to. */
+  directory?: string
+  /** Media marks: the artifact part the stroke was drawn on, a still or a video. */
+  mediaUrl?: string
+  /** Media marks: the freehand stroke, normalized to 0..1 of the picture box. */
+  points?: MarkPoint[]
+  /** Media marks drawn on a video: the second whose frame was annotated. */
+  markSeconds?: number
+  /** Media marks: the colour the stroke was drawn in. */
+  markColor?: string
+  /** Media marks: the stroke's width in CSS pixels. */
+  markStrokeWidth?: number
+  /** Media marks: the picture's shorter edge in CSS pixels when it was drawn on. */
+  markSurfaceEdge?: number
+  /** SVG element picks: the artifact card the element was picked in. */
+  artifactKey?: string
 }
 
 /**
@@ -146,7 +167,7 @@ export interface RendererRecoverySnapshot {
   chatFavoriteModels: string[]
   /** Chats-tab recently used models, most recent first. */
   chatRecentModels: string[]
-  /** Assistant-task favorites, kept separate so a model picked for a routine
+  /** Assistant-task favorites, kept separate so a model picked for an assistant
    *  task never reshapes the Chats or project model lists. */
   assistantFavoriteModels: string[]
   /** Assistant-task recently used models, most recent first. */
@@ -289,7 +310,10 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== undefined &&
     value.kind !== 'selection' &&
     value.kind !== 'design' &&
-    value.kind !== 'file'
+    value.kind !== 'file' &&
+    value.kind !== 'video' &&
+    value.kind !== 'image' &&
+    value.kind !== 'svg'
   )
     return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
@@ -298,8 +322,45 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
+  if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
+  if (value.directory !== undefined && typeof value.directory !== 'string') return false
+  if (value.mediaUrl !== undefined && typeof value.mediaUrl !== 'string') return false
+  if (value.markSeconds !== undefined && typeof value.markSeconds !== 'number') return false
+  if (value.markColor !== undefined && typeof value.markColor !== 'string') return false
+  if (isInvalidPositiveNumber(value.markStrokeWidth)) return false
+  if (isInvalidPositiveNumber(value.markSurfaceEdge)) return false
+  if (value.artifactKey !== undefined && typeof value.artifactKey !== 'string') return false
+  if (value.points !== undefined && !isMarkPoints(value.points)) return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
+}
+
+/**
+ * Whether a stored number is present but not a positive finite one.
+ *
+ * Both mark measurements are lengths, so zero and negatives are as invalid as a
+ * string: a restored value the rasteriser would divide by has to be usable.
+ */
+function isInvalidPositiveNumber(value: unknown): boolean {
+  if (value === undefined) return false
+  return typeof value !== 'number' || !Number.isFinite(value) || value <= 0
+}
+
+/** A restored freehand stroke: every point a finite pair inside the unit square. */
+function isMarkPoints(value: unknown): value is MarkPoint[] {
+  if (!Array.isArray(value) || value.length > MAX_MARK_POINTS) return false
+  return value.every(
+    (point) =>
+      isRecord(point) &&
+      typeof point.x === 'number' &&
+      Number.isFinite(point.x) &&
+      point.x >= 0 &&
+      point.x <= 1 &&
+      typeof point.y === 'number' &&
+      Number.isFinite(point.y) &&
+      point.y >= 0 &&
+      point.y <= 1
+  )
 }
 
 function isUserMessagePresentation(value: unknown): value is UserMessagePresentation {

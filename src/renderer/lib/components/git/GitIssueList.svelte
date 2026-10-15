@@ -153,7 +153,7 @@
       </p>
       <button
         type="button"
-        class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -184,7 +184,7 @@
         />
         <button
           type="button"
-          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Refresh issues"
           aria-label="Refresh issues"
           onclick={() => void load(true)}
@@ -193,7 +193,7 @@
         </button>
         <button
           type="button"
-          class="h-6 shrink-0 cursor-pointer rounded-md bg-primary px-2 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover"
+          class="h-6 shrink-0 cursor-pointer bg-primary px-2 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover"
           onclick={onCreate}
         >
           New issue
@@ -230,7 +230,7 @@
           <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
           <button
             type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={onSignIn}
           >
             Sign in to GitHub
@@ -290,7 +290,7 @@
                   <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
                     {#each shownLabels as label (label.name)}
                       <span
-                        class="max-w-[9ch] truncate rounded-full px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
+                        class="max-w-[9ch] truncate px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
                         style={prLabelStyle(label.color)}
                         title={label.name}
                       >
@@ -354,7 +354,7 @@
       >
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           disabled={page <= 1}
           onclick={() => onPageChange(page - 1)}
         >
@@ -364,7 +364,7 @@
         <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!hasMore}
           onpointerenter={warmNextPage}
           onclick={() => onPageChange(page + 1)}

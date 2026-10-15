@@ -42,7 +42,7 @@ export const invokeAccountContract = {
         modelKeys?: string[]
         projectId?: string
         threadId?: string
-        routineId?: string
+        assistantId?: string
       }
     ],
     import('../types').MemoryEntry
@@ -82,7 +82,7 @@ export const invokeAccountContract = {
         modelKeys?: string[]
         projectId?: string
         threadId?: string
-        routineId?: string
+        assistantId?: string
       }
     ],
     import('../types').MemoryProposal

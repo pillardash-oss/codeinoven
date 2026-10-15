@@ -14,7 +14,7 @@ import {
   composeBrainstormSystemPrompt,
   composeTurnSystemPrompt
 } from '../../src/main/chat/chat-engine'
-import { routineRunContext } from '$shared/routine-run'
+import { assistantRunContext } from '$shared/assistant-run'
 import {
   composeBudgetedSend,
   computePromptBudget,
@@ -142,9 +142,9 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(total).toBeLessThanOrEqual(available)
   })
 
-  it('carries the routine contract in the system prompt, never in the user message', () => {
+  it('carries the assistant contract in the system prompt, never in the user message', () => {
     const available = modelBudget()
-    const contract = routineRunContext({ name: 'Slack digest', connections: [] })
+    const contract = assistantRunContext({ name: 'Slack digest', connections: [] })
     const systemBase = composeTurnSystemPrompt({
       chatPrompt: 'You are the CodeInOven assistant.',
       memoryInstruction: '',
@@ -152,7 +152,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       assignmentCoordinatorSystemPrompt: '',
       behaviorPrompt: '',
       utilityInstructions: 'CodeInOven utility contract (run)',
-      routineInstruction: contract,
+      assistantInstruction: contract,
       behaviorMode: 'chat'
     })
     expect(systemBase).toContain(contract)
@@ -169,8 +169,8 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(composition.driverText).not.toContain('cio_util_manage')
   })
 
-  it('omits the routine layer when no routine thread applies', () => {
-    const withoutRoutine = implementSystemBase()
-    expect(withoutRoutine).not.toContain('install_bundle')
+  it('omits the assistant layer when no assistant thread applies', () => {
+    const withoutAssistant = implementSystemBase()
+    expect(withoutAssistant).not.toContain('install_bundle')
   })
 })

@@ -4,40 +4,40 @@ import {
   UNGROUPED_MISSED_RUNS,
   assistantSubjectName,
   connectionsFromPlan,
-  extractHowToDraft,
-  extractRoutinePlanDraft,
-  groupMissedRunsByRoutine,
-  groupRunsByRoutine,
+  extractKnowledgeDraft,
+  extractAssistantPlanDraft,
+  groupMissedRunsByAssistant,
+  groupRunsByAssistant,
   groupRunsByTask,
   handoffSummary,
-  isRoutineConfirmation,
-  routineGap,
-  routineSiblingRuns,
-  latestHowToDraft,
-  latestRoutinePlanDraft,
+  isAssistantConfirmation,
+  assistantGap,
+  assistantSiblingRuns,
+  latestKnowledgeDraft,
+  latestAssistantPlanDraft,
   missedTabVisible,
-  parseHowToSections,
+  parseKnowledgeSections,
   parsePlanTime,
-  parseRoutinePlan,
+  parseAssistantPlan,
   previewRuns,
   resolveConnections,
   runRowLine,
-  serializeHowToSections,
+  serializeKnowledgeSections,
   taskHasMissed,
   taskRowIconKey,
   taskRunLine
 } from '$lib/components/assistant/assistant-view'
 import {
-  ROUTINE_PLAN_JSON_SCHEMA,
-  parseRoutinePlanJson,
-  parseRoutinePlanValue
-} from '$shared/routine-plan'
+  ASSISTANT_PLAN_JSON_SCHEMA,
+  parseAssistantPlanJson,
+  parseAssistantPlanValue
+} from '$shared/assistant-plan'
 import { STATUS_TONE_COLORS } from '$lib/stores/scope-board'
 import { STATUS_TONE_COLORS as STATUS_TONE_COLORS_VIA_SCOPE } from '$lib/stores/scope.svelte'
 import { THREAD_STATUS_POLICY } from '$shared/thread-status-policy'
 import type {
   MissedRun,
-  RoutineConnection,
+  AssistantConnection,
   UtilityCatalog,
   UtilityDefinitionFor
 } from '$shared/types'
@@ -62,14 +62,14 @@ describe('assistant-view presentation helpers', () => {
     expect(taskHasMissed([missedRun()])).toBe(true)
   })
 
-  it('groups missed runs per routine, keeping routine-less runs separate', () => {
+  it('groups missed runs per assistant, keeping assistant-less runs separate', () => {
     const runs = [
-      missedRun({ id: 'a:1', threadId: 'a', routineId: 'r1', title: 'A' }),
-      missedRun({ id: 'b:1', threadId: 'b', routineId: 'r2', title: 'B' }),
+      missedRun({ id: 'a:1', threadId: 'a', assistantId: 'r1', title: 'A' }),
+      missedRun({ id: 'b:1', threadId: 'b', assistantId: 'r2', title: 'B' }),
       missedRun({ id: 'c:1', threadId: 'c', title: 'C' }),
-      missedRun({ id: 'a:2', threadId: 'a', routineId: 'r1', title: 'A again' })
+      missedRun({ id: 'a:2', threadId: 'a', assistantId: 'r1', title: 'A again' })
     ]
-    const groups = groupMissedRunsByRoutine(
+    const groups = groupMissedRunsByAssistant(
       runs,
       new Map([
         ['r1', 'Daily PR triage'],
@@ -80,18 +80,18 @@ describe('assistant-view presentation helpers', () => {
     expect(groups.map((group) => group.label)).toEqual([
       'Daily PR triage',
       'Morning inbox report',
-      'Tasks without a routine'
+      'Tasks without an assistant'
     ])
-    // Runs of one routine stay together, in store order.
+    // Runs of one assistant stay together, in store order.
     expect(groups[0].runs.map((run) => run.id)).toEqual(['a:1', 'a:2'])
   })
 
-  it('falls back to a neutral routine label when the routine name is unknown', () => {
-    const [group] = groupMissedRunsByRoutine(
-      [missedRun({ id: 'x:1', threadId: 'x', routineId: 'missing' })],
+  it('falls back to a neutral assistant label when the assistant name is unknown', () => {
+    const [group] = groupMissedRunsByAssistant(
+      [missedRun({ id: 'x:1', threadId: 'x', assistantId: 'missing' })],
       new Map()
     )
-    expect(group.label).toBe('Routine')
+    expect(group.label).toBe('Assistant')
   })
 
   it('renders next-run first, then last-run, then Not scheduled', () => {
@@ -107,14 +107,14 @@ describe('assistant-view presentation helpers', () => {
     expect(taskRowIconKey({})).toBe('task')
   })
 
-  it('gives a routine how-to thread its own icon, custom still winning', () => {
-    expect(taskRowIconKey({ assistantGettingStarted: true })).toBe('how-to')
+  it('gives an assistant knowledge thread its own icon, custom still winning', () => {
+    expect(taskRowIconKey({ assistantGettingStarted: true })).toBe('knowledge')
     expect(taskRowIconKey({ assistantGettingStarted: true, assistantIconType: 'code' })).toBe(
       'custom'
     )
   })
 
-  it('marks a run thread as a run, never as a task or a how-to thread', () => {
+  it('marks a run thread as a run, never as a task or a knowledge thread', () => {
     expect(taskRowIconKey({ assistantTaskId: 'task-1' })).toBe('run')
     // A run is never a custom-icon row, but a custom icon still wins if one is set.
     expect(taskRowIconKey({ assistantTaskId: 'task-1', assistantIconType: 'code' })).toBe('custom')
@@ -146,37 +146,37 @@ describe('assistant-view presentation helpers', () => {
     expect(previewRuns(runs, true)).toHaveLength(5)
   })
 
-  it('groups runs under their routine, newest first, leaving routineless runs out', () => {
-    const grouped = groupRunsByRoutine([
+  it('groups runs under their assistant, newest first, leaving routineless runs out', () => {
+    const grouped = groupRunsByAssistant([
       { id: 'seed', createdAt: 1 },
-      { id: 'run-old', assistantTaskId: 'task-1', routineId: 'r1', createdAt: 10 },
-      { id: 'run-new', assistantTaskId: 'task-2', routineId: 'r1', createdAt: 30 },
+      { id: 'run-old', assistantTaskId: 'task-1', assistantId: 'r1', createdAt: 10 },
+      { id: 'run-new', assistantTaskId: 'task-2', assistantId: 'r1', createdAt: 30 },
       { id: 'loose-run', assistantTaskId: 'task-3', createdAt: 40 },
-      { id: 'other-run', assistantTaskId: 'task-4', routineId: 'r2', createdAt: 20 }
+      { id: 'other-run', assistantTaskId: 'task-4', assistantId: 'r2', createdAt: 20 }
     ])
     expect([...grouped.keys()]).toEqual(['r1', 'r2'])
     expect(grouped.get('r1')?.map((run) => run.id)).toEqual(['run-new', 'run-old'])
     expect(grouped.get('r2')?.map((run) => run.id)).toEqual(['other-run'])
   })
 
-  it('keeps a setting-up routine’s runs nested inside Getting started', () => {
+  it('keeps a setting-up assistant’s runs nested inside Getting started', () => {
     const runs = [
-      { id: 'run-new', assistantTaskId: 'seed', routineId: 'r1', createdAt: 30 },
-      { id: 'run-old', assistantTaskId: 'seed', routineId: 'r1', createdAt: 10 }
+      { id: 'run-new', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 30 },
+      { id: 'run-old', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 10 }
     ]
     const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
     const rendered = new Set(['seed'])
-    expect(routineSiblingRuns(runs, false, rendered, tasksById)).toEqual([])
+    expect(assistantSiblingRuns(runs, false, rendered, tasksById)).toEqual([])
   })
 
-  it('moves a set-up routine’s Getting started runs beside it, newest first', () => {
+  it('moves a set-up assistant’s Getting started runs beside it, newest first', () => {
     const runs = [
-      { id: 'run-old', assistantTaskId: 'seed', routineId: 'r1', createdAt: 10 },
-      { id: 'run-new', assistantTaskId: 'seed', routineId: 'r1', createdAt: 30 }
+      { id: 'run-old', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 10 },
+      { id: 'run-new', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 30 }
     ]
     const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
     const rendered = new Set(['seed'])
-    expect(routineSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
+    expect(assistantSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
       'run-new',
       'run-old'
     ])
@@ -184,14 +184,14 @@ describe('assistant-view presentation helpers', () => {
 
   it('hoists a hidden task’s runs, but never one whose task nests elsewhere', () => {
     const runs = [
-      { id: 'pinned-task-run', assistantTaskId: 'pinned-task', routineId: 'r1', createdAt: 5 },
-      { id: 'hidden-seed-run', assistantTaskId: 'hidden-seed', routineId: 'r1', createdAt: 15 }
+      { id: 'pinned-task-run', assistantTaskId: 'pinned-task', assistantId: 'r1', createdAt: 5 },
+      { id: 'hidden-seed-run', assistantTaskId: 'hidden-seed', assistantId: 'r1', createdAt: 15 }
     ]
     // The pinned task stays on screen (in the Pinned section), so its run is
-    // not rendered under the routine; the hidden seed is not on screen at all.
+    // not rendered under the assistant; the hidden seed is not on screen at all.
     const tasksById = new Map([['pinned-task', { assistantGettingStarted: false }]])
     const rendered = new Set<string>()
-    expect(routineSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
+    expect(assistantSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
       'hidden-seed-run'
     ])
   })
@@ -202,22 +202,22 @@ describe('assistant subject naming', () => {
   const setup = { title: 'Getting started', assistantGettingStarted: true }
 
   it('names a run for the task it ran', () => {
-    expect(assistantSubjectName(task, 'Morning routine', 'fallback')).toBe('Slack digest')
+    expect(assistantSubjectName(task, 'Morning assistant', 'fallback')).toBe('Slack digest')
   })
 
   it('never reports the Getting started authoring host as a job name', () => {
-    // A run of the seed task is named for its routine, so a saved routine's
+    // A run of the seed task is named for its assistant, so a saved assistant's
     // runs never read as another getting-started pass.
-    expect(assistantSubjectName(setup, 'Morning routine', 'fallback')).toBe('Morning routine')
+    expect(assistantSubjectName(setup, 'Morning assistant', 'fallback')).toBe('Morning assistant')
   })
 
-  it('falls back to the routine when the task row is gone', () => {
-    expect(assistantSubjectName(undefined, 'Morning routine', 'Assistant run')).toBe(
-      'Morning routine'
+  it('falls back to the assistant when the task row is gone', () => {
+    expect(assistantSubjectName(undefined, 'Morning assistant', 'Assistant run')).toBe(
+      'Morning assistant'
     )
   })
 
-  it('uses the fallback only when neither task nor routine is known', () => {
+  it('uses the fallback only when neither task nor assistant is known', () => {
     expect(assistantSubjectName(undefined, null, 'Assistant run')).toBe('Assistant run')
     expect(assistantSubjectName(setup, null, 'Assistant task')).toBe('Assistant task')
   })
@@ -240,53 +240,61 @@ describe('missed status tone', () => {
   })
 })
 
-describe('how-to draft extraction', () => {
-  it('reads a bare fence whose body starts with a how-to title line', () => {
+describe('knowledge draft extraction', () => {
+  it('reads a bare fence whose body starts with a knowledge title line', () => {
     const message = [
-      'Here is the exact instruction set for the routine.',
+      'Here is the exact instruction set for the assistant.',
       '',
       '```',
-      'how-to: Slack checkup drain',
+      'knowledge: Slack checkup drain',
       '',
       'GOAL',
       'Twice a day, sweep every Slack conversation.',
       '```',
       '',
-      'Send /save-how-to to commit this.'
+      'Send /save-knowledge to commit this.'
     ].join('\n')
-    expect(extractHowToDraft(message)).toBe('GOAL\nTwice a day, sweep every Slack conversation.')
+    expect(extractKnowledgeDraft(message)).toBe(
+      'GOAL\nTwice a day, sweep every Slack conversation.'
+    )
   })
 
-  it('reads a fence tagged how-to with or without a trailing title', () => {
-    expect(extractHowToDraft('```how-to\nCheck email at 08:30.\n```')).toBe('Check email at 08:30.')
-    expect(extractHowToDraft('```how-to: Morning mail\nCheck email at 08:30.\n```')).toBe(
+  it('reads a fence tagged knowledge with or without a trailing title', () => {
+    expect(extractKnowledgeDraft('```knowledge\nCheck email at 08:30.\n```')).toBe(
       'Check email at 08:30.'
     )
-    expect(extractHowToDraft('```howto\nCheck email.\n```')).toBe('Check email.')
-    expect(extractHowToDraft('```How-To - Morning mail\nCheck email.\n```')).toBe('Check email.')
+    expect(extractKnowledgeDraft('```knowledge: Morning mail\nCheck email at 08:30.\n```')).toBe(
+      'Check email at 08:30.'
+    )
+    expect(extractKnowledgeDraft('```knowledge\nCheck email.\n```')).toBe('Check email.')
+    expect(extractKnowledgeDraft('```Knowledge - Morning mail\nCheck email.\n```')).toBe(
+      'Check email.'
+    )
   })
 
   it('strips the marker line when the fence carries both a tag and a title line', () => {
-    expect(extractHowToDraft('```how-to\nhow-to: Morning mail\n\nCheck email at 08:30.\n```')).toBe(
-      'Check email at 08:30.'
+    expect(
+      extractKnowledgeDraft('```knowledge\nknowledge: Morning mail\n\nCheck email at 08:30.\n```')
+    ).toBe('Check email at 08:30.')
+  })
+
+  it('ignores blocks and messages that carry no knowledge', () => {
+    expect(extractKnowledgeDraft('No code block here at all.')).toBeNull()
+    expect(extractKnowledgeDraft('```ts\nconst x = 1\n```')).toBeNull()
+    expect(extractKnowledgeDraft('```json\n{"knowledge": "not a block"}\n```')).toBeNull()
+    expect(extractKnowledgeDraft('```\nknowledge: title only\n```')).toBeNull()
+  })
+
+  it('takes the newest knowledge block in a message', () => {
+    const message = ['```knowledge\nFirst draft.\n```', '```knowledge\nSecond draft.\n```'].join(
+      '\n'
     )
-  })
-
-  it('ignores blocks and messages that carry no how-to', () => {
-    expect(extractHowToDraft('No code block here at all.')).toBeNull()
-    expect(extractHowToDraft('```ts\nconst x = 1\n```')).toBeNull()
-    expect(extractHowToDraft('```json\n{"how-to": "not a block"}\n```')).toBeNull()
-    expect(extractHowToDraft('```\nhow-to: title only\n```')).toBeNull()
-  })
-
-  it('takes the newest how-to block in a message', () => {
-    const message = ['```how-to\nFirst draft.\n```', '```how-to\nSecond draft.\n```'].join('\n')
-    expect(extractHowToDraft(message)).toBe('Second draft.')
+    expect(extractKnowledgeDraft(message)).toBe('Second draft.')
   })
 
   it('keeps a nested command fence inside the draft instead of truncating at it', () => {
     const message = [
-      '```how-to',
+      '```knowledge',
       'GOAL',
       '',
       'Run this:',
@@ -297,7 +305,7 @@ describe('how-to draft extraction', () => {
       'Then summarise the result.',
       '```'
     ].join('\n')
-    expect(extractHowToDraft(message)).toBe(
+    expect(extractKnowledgeDraft(message)).toBe(
       [
         'GOAL',
         '',
@@ -313,47 +321,47 @@ describe('how-to draft extraction', () => {
 
   it('keeps nested fences in a four-backtick block and excludes trailing prose', () => {
     const message = [
-      '````how-to',
+      '````knowledge',
       'GOAL',
       '```bash',
       'ls',
       '```',
       '````',
       '',
-      'Send /save-how-to to commit this.'
+      'Send /save-knowledge to commit this.'
     ].join('\n')
-    expect(extractHowToDraft(message)).toBe(['GOAL', '```bash', 'ls', '```'].join('\n'))
+    expect(extractKnowledgeDraft(message)).toBe(['GOAL', '```bash', 'ls', '```'].join('\n'))
   })
 
-  it('stops at the how-to block even when a later fenced block follows it', () => {
+  it('stops at the knowledge block even when a later fenced block follows it', () => {
     const message = [
-      '```how-to',
+      '```knowledge',
       'GOAL',
       '```',
       '',
-      'Send /save-how-to.',
+      'Send /save-knowledge.',
       '',
       '```bash',
       'ls',
       '```'
     ].join('\n')
-    expect(extractHowToDraft(message)).toBe('GOAL')
+    expect(extractKnowledgeDraft(message)).toBe('GOAL')
   })
 
   it('takes the newest message that holds a draft', () => {
     const texts = [
-      '```how-to\nOlder draft.\n```',
+      '```knowledge\nOlder draft.\n```',
       'Still discussing the tools.',
-      '```\nhow-to: Slack digest\n\nNewer draft.\n```'
+      '```\nknowledge: Slack digest\n\nNewer draft.\n```'
     ]
-    expect(latestHowToDraft(texts)).toBe('Newer draft.')
-    expect(latestHowToDraft(['No draft yet.', '```ts\nconst x = 1\n```'])).toBeNull()
+    expect(latestKnowledgeDraft(texts)).toBe('Newer draft.')
+    expect(latestKnowledgeDraft(['No draft yet.', '```ts\nconst x = 1\n```'])).toBeNull()
   })
 })
 
-/** A representative excerpt of an authored how-to: ALL-CAPS titles, an
+/** A representative excerpt of an authored knowledge: ALL-CAPS titles, an
  *  indented report shape, and a numbered procedure. */
-const AUTHORED_HOW_TO = [
+const AUTHORED_KNOWLEDGE = [
   'GOAL',
   'Sweep every Slack conversation twice a day and record what arrived.',
   '',
@@ -372,9 +380,9 @@ const AUTHORED_HOW_TO = [
   '- The report never contains tool names.'
 ].join('\n')
 
-describe('how-to section parsing', () => {
+describe('knowledge section parsing', () => {
   it('splits ALL-CAPS titles, including a parenthesised one with lowercase inside', () => {
-    const sections = parseHowToSections(AUTHORED_HOW_TO)
+    const sections = parseKnowledgeSections(AUTHORED_KNOWLEDGE)
     expect(sections.map((section) => section.title)).toEqual([
       'GOAL',
       'REQUIRED CAPABILITIES',
@@ -390,14 +398,14 @@ describe('how-to section parsing', () => {
     expect(sections[3]?.body).toContain('2. Enumerate conversations with channels_list.')
   })
 
-  it('round-trips an authored how-to through serialize', () => {
-    const sections = parseHowToSections(AUTHORED_HOW_TO)
-    expect(serializeHowToSections(sections)).toBe(AUTHORED_HOW_TO)
+  it('round-trips an authored knowledge through serialize', () => {
+    const sections = parseKnowledgeSections(AUTHORED_KNOWLEDGE)
+    expect(serializeKnowledgeSections(sections)).toBe(AUTHORED_KNOWLEDGE)
   })
 
   it('splits markdown headings and keeps fenced content intact', () => {
     const markdown = [
-      '# Routine',
+      '# Assistant',
       'Intro line.',
       '',
       '## Steps',
@@ -411,23 +419,23 @@ describe('how-to section parsing', () => {
       '## Notes',
       'Done.'
     ].join('\n')
-    const sections = parseHowToSections(markdown)
-    expect(sections.map((section) => section.title)).toEqual(['Routine', 'Steps', 'Notes'])
+    const sections = parseKnowledgeSections(markdown)
+    expect(sections.map((section) => section.title)).toEqual(['Assistant', 'Steps', 'Notes'])
     expect(sections[1]?.body).toContain('## NOT A HEADING')
-    expect(serializeHowToSections(sections)).toBe(markdown)
+    expect(serializeKnowledgeSections(sections)).toBe(markdown)
   })
 
-  it('treats a heading-less how-to as one Instructions section', () => {
-    const sections = parseHowToSections('Just do the thing, twice.')
+  it('treats a heading-less knowledge as one Instructions section', () => {
+    const sections = parseKnowledgeSections('Just do the thing, twice.')
     expect(sections).toHaveLength(1)
     expect(sections[0]?.title).toBe('Instructions')
     expect(sections[0]?.heading).toBe('')
-    expect(serializeHowToSections(sections)).toBe('Just do the thing, twice.')
-    expect(parseHowToSections('   ')).toEqual([])
+    expect(serializeKnowledgeSections(sections)).toBe('Just do the thing, twice.')
+    expect(parseKnowledgeSections('   ')).toEqual([])
   })
 })
 
-describe('routine plan parsing', () => {
+describe('assistant plan parsing', () => {
   it('normalises every accepted time shape', () => {
     expect(parsePlanTime('8')).toBe('08:00')
     expect(parsePlanTime('8:30')).toBe('08:30')
@@ -440,7 +448,7 @@ describe('routine plan parsing', () => {
   })
 
   it('reads cadence, times, weekdays, and connections', () => {
-    const plan = parseRoutinePlan(
+    const plan = parseAssistantPlan(
       [
         'cadence: weekdays',
         'times: 08:30, 18:00',
@@ -456,7 +464,7 @@ describe('routine plan parsing', () => {
   })
 
   it('reads a free-text schedule line and ignores a weekday phrase it cannot parse', () => {
-    const plan = parseRoutinePlan(
+    const plan = parseAssistantPlan(
       ['schedule: every day at 8:05am', 'days: Monday to Friday'].join('\n')
     )
     // "Monday to Friday" is a phrase, not a weekday name, so it contributes no
@@ -466,7 +474,7 @@ describe('routine plan parsing', () => {
   })
 
   it('treats a mon-fri weekday set with no cadence as weekdays', () => {
-    const plan = parseRoutinePlan(['times: 09:00', 'weekdays: mon,tue,wed,thu,fri'].join('\n'))
+    const plan = parseAssistantPlan(['times: 09:00', 'weekdays: mon,tue,wed,thu,fri'].join('\n'))
     expect(plan?.schedule).toEqual({
       cadence: 'weekdays',
       times: ['09:00']
@@ -474,34 +482,34 @@ describe('routine plan parsing', () => {
   })
 
   it('accepts full weekday names', () => {
-    const plan = parseRoutinePlan(
+    const plan = parseAssistantPlan(
       ['times: 09:00', 'weekdays: monday,tuesday,wednesday,thursday,friday'].join('\n')
     )
     expect(plan?.schedule).toEqual({ cadence: 'weekdays', times: ['09:00'] })
   })
 
   it('ignores unknown keys and returns null when nothing is usable', () => {
-    expect(parseRoutinePlan('notes: the user prefers short reports')).toBeNull()
-    expect(parseRoutinePlan('')).toBeNull()
+    expect(parseAssistantPlan('notes: the user prefers short reports')).toBeNull()
+    expect(parseAssistantPlan('')).toBeNull()
   })
 
   it('extracts a tagged fence and a bare fence with a marker line', () => {
-    const tagged = ['```routine', 'cadence: daily', 'times: 08:30', '```'].join('\n')
-    expect(extractRoutinePlanDraft(tagged)?.schedule).toEqual({
+    const tagged = ['```assistant', 'cadence: daily', 'times: 08:30', '```'].join('\n')
+    expect(extractAssistantPlanDraft(tagged)?.schedule).toEqual({
       cadence: 'daily',
       times: ['08:30']
     })
-    const bare = ['```', 'routine: Slack digest', 'cadence: hourly', '```'].join('\n')
-    expect(extractRoutinePlanDraft(bare)?.schedule).toEqual({ cadence: 'hourly', times: [] })
-    expect(extractRoutinePlanDraft('```how-to\nGOAL\n```')).toBeNull()
+    const bare = ['```', 'assistant: Slack digest', 'cadence: hourly', '```'].join('\n')
+    expect(extractAssistantPlanDraft(bare)?.schedule).toEqual({ cadence: 'hourly', times: [] })
+    expect(extractAssistantPlanDraft('```knowledge\nGOAL\n```')).toBeNull()
   })
 
   it('takes the newest plan across messages', () => {
     const texts = [
-      '```routine\ncadence: daily\ntimes: 08:30\n```',
-      '```routine\ncadence: weekly\ntimes: 17:00\nweekdays: mon,fri\n```'
+      '```assistant\ncadence: daily\ntimes: 08:30\n```',
+      '```assistant\ncadence: weekly\ntimes: 17:00\nweekdays: mon,fri\n```'
     ]
-    expect(latestRoutinePlanDraft(texts)?.schedule).toEqual({
+    expect(latestAssistantPlanDraft(texts)?.schedule).toEqual({
       cadence: 'weekly',
       times: ['17:00'],
       weekdays: [1, 5]
@@ -509,9 +517,9 @@ describe('routine plan parsing', () => {
   })
 })
 
-describe('routine plan schema', () => {
+describe('assistant plan schema', () => {
   it('validates a schedule and connections from JSON', () => {
-    const plan = parseRoutinePlanJson(
+    const plan = parseAssistantPlanJson(
       JSON.stringify({
         schedule: { cadence: 'weekdays', times: ['08:30', '18:00'] },
         connections: [{ name: 'Slack' }, { name: 'Gmail', utilityId: 'gmail-mcp' }]
@@ -525,7 +533,7 @@ describe('routine plan schema', () => {
   })
 
   it('carries a connection setup prompt through the plan schema', () => {
-    const plan = parseRoutinePlanJson(
+    const plan = parseAssistantPlanJson(
       JSON.stringify({
         schedule: { cadence: 'daily', times: ['08:30'] },
         connections: [
@@ -547,7 +555,7 @@ describe('routine plan schema', () => {
   })
 
   it('normalises and sorts times, and accepts a plain-string connection', () => {
-    const plan = parseRoutinePlanValue({
+    const plan = parseAssistantPlanValue({
       schedule: { cadence: 'daily', times: ['18:00', '8:30', '8:30'] },
       connections: ['Slack', { name: '  ' }, { name: 'Gmail' }]
     })
@@ -556,17 +564,21 @@ describe('routine plan schema', () => {
   })
 
   it('rejects a schedule the scheduler could never fire', () => {
-    expect(parseRoutinePlanValue({ schedule: { cadence: 'daily', times: [] } })).toBeNull()
-    expect(parseRoutinePlanValue({ schedule: { cadence: 'once' } })).toBeNull()
+    expect(parseAssistantPlanValue({ schedule: { cadence: 'daily', times: [] } })).toBeNull()
+    expect(parseAssistantPlanValue({ schedule: { cadence: 'once' } })).toBeNull()
     expect(
-      parseRoutinePlanValue({ schedule: { cadence: 'nonsense', times: ['09:00'] } })
+      parseAssistantPlanValue({ schedule: { cadence: 'nonsense', times: ['09:00'] } })
     ).toBeNull()
   })
 
   it('keeps a one-shot schedule with its fire time', () => {
     expect(
-      parseRoutinePlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
+      parseAssistantPlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
     ).toEqual({
+      name: null,
+      personality: null,
+      scheduled: null,
+      scheduleName: null,
       schedule: { cadence: 'once', times: [], onceAt: 1_700_000_000_000 },
       connections: [],
       delivery: null,
@@ -574,30 +586,53 @@ describe('routine plan schema', () => {
     })
   })
 
-  it('ignores JSON that is not a plan and a non-JSON body', () => {
-    expect(parseRoutinePlanJson('notes: nothing here')).toBeNull()
-    expect(parseRoutinePlanJson('{ not json')).toBeNull()
-    expect(parseRoutinePlanValue({ connections: [] })).toBeNull()
+  it('keeps the name, the personality and the clock the conversation settled', () => {
+    const plan = parseAssistantPlanValue({
+      name: '  Jenny  ',
+      personality: 'You keep my X and LinkedIn moving.',
+      scheduled: false,
+      scheduleName: 'Daily account check',
+      connections: []
+    })
+    expect(plan?.name).toBe('Jenny')
+    expect(plan?.personality).toBe('You keep my X and LinkedIn moving.')
+    expect(plan?.scheduled).toBe(false)
+    expect(plan?.scheduleName).toBe('Daily account check')
+    // A plan that carries only the identity fields is still a plan: the
+    // conversation may settle who the assistant is in one turn and the schedule
+    // in the next.
+    expect(parseAssistantPlanValue({ name: 'Jenny' })?.name).toBe('Jenny')
+    expect(parseAssistantPlanValue({ name: '   ' })).toBeNull()
   })
 
-  it('reads a JSON plan inside the routine fence, ahead of the text fallback', () => {
+  it('ignores JSON that is not a plan and a non-JSON body', () => {
+    expect(parseAssistantPlanJson('notes: nothing here')).toBeNull()
+    expect(parseAssistantPlanJson('{ not json')).toBeNull()
+    expect(parseAssistantPlanValue({ connections: [] })).toBeNull()
+  })
+
+  it('reads a JSON plan inside the assistant fence, ahead of the text fallback', () => {
     const message = [
-      '```routine',
+      '```assistant',
       '{"schedule":{"cadence":"hourly"},"connections":[{"name":"Slack"}]}',
       '```'
     ].join('\n')
-    const plan = extractRoutinePlanDraft(message)
+    const plan = extractAssistantPlanDraft(message)
     expect(plan?.schedule).toEqual({ cadence: 'hourly', times: [] })
     expect(plan?.connections).toEqual([{ name: 'Slack' }])
   })
 
   it('describes the plan contract for the authoring prompt', () => {
-    const schema = ROUTINE_PLAN_JSON_SCHEMA as {
+    const schema = ASSISTANT_PLAN_JSON_SCHEMA as {
       required: string[]
       properties: Record<string, unknown>
     }
     expect(schema.required).toEqual(['schedule', 'connections'])
     expect(Object.keys(schema.properties)).toEqual([
+      'name',
+      'personality',
+      'scheduled',
+      'scheduleName',
       'schedule',
       'connections',
       'delivery',
@@ -606,21 +641,21 @@ describe('routine plan schema', () => {
   })
 })
 
-describe('routine confirmation', () => {
+describe('assistant confirmation', () => {
   it('accepts a plain go-ahead and nothing more', () => {
-    expect(isRoutineConfirmation('yes')).toBe(true)
-    expect(isRoutineConfirmation('Yes!')).toBe(true)
-    expect(isRoutineConfirmation('  go ahead  ')).toBe(true)
-    expect(isRoutineConfirmation('looks good.')).toBe(true)
-    expect(isRoutineConfirmation('👍')).toBe(true)
+    expect(isAssistantConfirmation('yes')).toBe(true)
+    expect(isAssistantConfirmation('Yes!')).toBe(true)
+    expect(isAssistantConfirmation('  go ahead  ')).toBe(true)
+    expect(isAssistantConfirmation('looks good.')).toBe(true)
+    expect(isAssistantConfirmation('👍')).toBe(true)
   })
 
   it('never reads a message that carries an instruction as a confirmation', () => {
-    expect(isRoutineConfirmation('yes, but change the time to 9am')).toBe(false)
-    expect(isRoutineConfirmation('no, make it weekly')).toBe(false)
-    expect(isRoutineConfirmation('')).toBe(false)
+    expect(isAssistantConfirmation('yes, but change the time to 9am')).toBe(false)
+    expect(isAssistantConfirmation('no, make it weekly')).toBe(false)
+    expect(isAssistantConfirmation('')).toBe(false)
     expect(
-      isRoutineConfirmation('yes and also please add a section about retries to the how-to')
+      isAssistantConfirmation('yes and also please add a section about retries to the knowledge')
     ).toBe(false)
   })
 })
@@ -650,11 +685,11 @@ function catalog(utilities: UtilityDefinitionFor<'mcp'>[]): UtilityCatalog {
   return { utilities, secureStorageAvailable: true }
 }
 
-function connection(overrides: Partial<RoutineConnection> = {}): RoutineConnection {
+function connection(overrides: Partial<AssistantConnection> = {}): AssistantConnection {
   return { utilityId: 'slack-mcp', label: 'Slack MCP', ...overrides }
 }
 
-describe('routine connections', () => {
+describe('assistant connections', () => {
   it('reports a linked, enabled, configured utility as ready', () => {
     const views = resolveConnections([connection()], catalog([mcpUtility()]))
     expect(views[0]?.status).toBe('ready')
@@ -793,22 +828,22 @@ describe('routine connections', () => {
   })
 })
 
-describe('routine readiness', () => {
-  it('names every gap a routine still has', () => {
-    expect(routineGap({ howTo: '', agents: undefined })).toBe('Needs a how-to and a model')
-    expect(routineGap({ howTo: 'Do it.', agents: undefined })).toBe('Needs a model')
+describe('assistant readiness', () => {
+  it('names every gap an assistant still has', () => {
+    expect(assistantGap({ knowledge: '', agents: undefined })).toBe('Needs a knowledge and a model')
+    expect(assistantGap({ knowledge: 'Do it.', agents: undefined })).toBe('Needs a model')
     expect(
-      routineGap({
-        howTo: '',
+      assistantGap({
+        knowledge: '',
         agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] }
       })
-    ).toBe('Needs a how-to')
+    ).toBe('Needs a knowledge')
   })
 
-  it('reports a routine with a how-to and a primary model as ready', () => {
+  it('reports an assistant with a knowledge and a primary model as ready', () => {
     expect(
-      routineGap({
-        howTo: 'Do it.',
+      assistantGap({
+        knowledge: 'Do it.',
         agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] }
       })
     ).toBeNull()
@@ -816,21 +851,21 @@ describe('routine readiness', () => {
 })
 
 describe('hand-off summary', () => {
-  it('carries the routine name and how-to into the fork seed', () => {
+  it('carries the assistant name and knowledge into the fork seed', () => {
     const summary = handoffSummary(
       { title: 'Slack drain', lastRunAt: 1_700_000_000_000 },
-      { name: 'Slack checkup drain', howTo: 'GOAL\nSweep Slack.' }
+      { name: 'Slack checkup drain', knowledge: 'GOAL\nSweep Slack.' }
     )
     expect(summary).toContain('Task: Slack drain')
-    expect(summary).toContain('Routine: Slack checkup drain')
+    expect(summary).toContain('Assistant: Slack checkup drain')
     expect(summary).toContain('How-to:\nGOAL\nSweep Slack.')
     expect(summary).toContain('Last scheduled run:')
   })
 
-  it('omits the routine and run lines for a routine-less task with no run', () => {
+  it('omits the assistant and run lines for an assistant-less task with no run', () => {
     const summary = handoffSummary({ title: 'Ad hoc task' }, null)
     expect(summary).toContain('Task: Ad hoc task')
-    expect(summary).not.toContain('Routine:')
+    expect(summary).not.toContain('Assistant:')
     expect(summary).not.toContain('Last scheduled run:')
   })
 })

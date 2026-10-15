@@ -31,7 +31,7 @@
 <!-- Permission level selector -->
 {#if readOnlyMode}
   <span
-    class="flex shrink-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
+    class="flex h-8 shrink-0 items-center gap-1 overflow-hidden bg-raised px-2 text-[0.6875rem] whitespace-nowrap text-muted"
     title="Temporary chats can inspect context but cannot modify files or run commands"
   >
     <Shield size={12} class="shrink-0" />
@@ -43,7 +43,7 @@
   <div class="relative shrink-0">
     <button
       type="button"
-      class="flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {permissionLevel ===
+      class="flex h-8 min-w-0 max-w-full items-center gap-1 overflow-hidden px-2 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {permissionLevel ===
       'full_access'
         ? 'font-bold text-warning'
         : 'text-muted hover:text-foreground'}"
@@ -66,13 +66,13 @@
     {#if menuOpen}
       <button class="fixed inset-0 z-30 cursor-default" aria-label="Close menu" onclick={onClose}
       ></button>
-      <div class="absolute bottom-9 left-0 z-40 w-36 rounded-xl border bg-surface p-1 shadow-lg">
+      <div class="absolute bottom-9 left-0 z-40 w-36 border bg-surface p-1 shadow-lg">
         {#if working}
           <p class="px-2 pb-1 pt-1 text-[0.5625rem] text-dimmed">Applies to the next turn</p>
         {/if}
         {#each PERMISSION_LEVELS as level (level.id)}
           <button
-            class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {permissionLevel ===
+            class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {permissionLevel ===
             level.id
               ? level.id === 'full_access'
                 ? 'font-bold text-warning'

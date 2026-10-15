@@ -40,7 +40,7 @@ CodeInOven is the workspace around the agent, not another agent. Five things it 
 - **It puts a lifecycle in front of implementation.** Brainstorm, PRD, Spec, Assignment, Achievement, and an independent audit, instead of one endless chat.
 - **It keeps the run visible.** Reasoning, commands, file reads, diffs, and checkpoints stay on screen while the work happens.
 - **It gives the agent real tools.** An attached terminal, an inner browser, a file explorer and editor, and a git panel that reviews pull requests and resolves merge conflicts.
-- **It runs work that outlives a single session.** Scope-owned git worktrees, scheduled routines in Assistant view, and sub-agent fan-out for larger objectives.
+- **It runs work that outlives a single session.** Scope-owned git worktrees, scheduled assistants in Assistant view, and sub-agent fan-out for larger objectives.
 
 ## Quick start
 
@@ -116,7 +116,7 @@ Keys are stored in a vault encrypted through the OS keychain (`secrets/vault.jso
 | Inner browser                        | A per-project isolated session for testing a running app and reading docs, which the agent can also drive through `cio:browser`. Manual browsing and agent-driven tabs share that one isolated session, so a sign-in survives across threads and runs, and the app exposes no raw-cookie interface. It runs with no preload and no Node access |
 | File explorer and editor             | Browse the scope, open files, edit in place                                                                                                                                                                                                                                                                                                    |
 | Git panel                            | Branches, stashes, staging, commits, and diffs, plus GitHub pull request review with conversation, checks, and merge dialogs, and a merge-conflict editor for the branches the agent produced                                                                                                                                                  |
-| Assistant view                       | Routines and tasks that run agents on a schedule, one fresh thread per run, with missed-run detection, connection picks, an agent-authored how-to, and hand-off of a task into a project                                                                                                                                                       |
+| Assistant view                       | Assistants and tasks that run agents on a schedule, one fresh thread per run, with missed-run detection, connection picks, an agent-authored knowledge, and hand-off of a task into a project                                                                                                                                                  |
 | Design and video authoring           | Agents build HTML prototypes into the design studio and cut compositions into the video studio, with preview and frame capture                                                                                                                                                                                                                 |
 | Speech                               | Local dictation, spoken replies, and cleanup through locally downloaded models. See [`docs/SPEECH.md`](docs/SPEECH.md)                                                                                                                                                                                                                         |
 | Computer use                         | Supported models drive desktop interfaces through the computer-use bridge to verify their own work, with a picture-in-picture control surface                                                                                                                                                                                                  |
@@ -125,7 +125,7 @@ Keys are stored in a vault encrypted through the OS keychain (`secrets/vault.jso
 
 ## Data and privacy
 
-- All app state lives under the config root, `~/.config/pillardash/codeinoven/`: projects, threads, specs, history, checkpoints, memory, routines, and speech models.
+- All app state lives under the config root, `~/.config/pillardash/codeinoven/`: projects, threads, specs, history, checkpoints, memory, assistants, and speech models.
 - The repository is changed only by agent actions you approve, or by your own edits in the file editor and git panel. State writes are atomic (`.tmp` then rename), history is chunked, and thread counts are capped.
 - Provider credentials are encrypted at rest through the OS keychain. Harness-native logins (for example a Claude or Codex sign-in) stay in that harness's own credential store, where they already live.
 - Nothing routes through CodeInOven's servers. Report a vulnerability through the [GitHub private advisory](https://github.com/pillardash-oss/codeinoven/security/advisories/new) or `hey@pillardash.com`.
@@ -138,7 +138,7 @@ Requirements:
 - Node `>=22.13.0`
 - Git
 
-Electron `^44.7.0` is installed as a dependency, so you do not install it yourself. The stack is Electron, Svelte 5, TypeScript, and Tailwind v4.
+Electron `^44.7.2` is installed as a dependency, so you do not install it yourself. The stack is Electron, Svelte 5, TypeScript, and Tailwind v4.
 
 ```bash
 git clone https://github.com/pillardash-oss/codeinoven.git
@@ -194,7 +194,7 @@ Download an x64 Windows ffmpeg build from [gyan.dev](https://www.gyan.dev/ffmpeg
 | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [`docs/APP-BIBLE.md`](docs/APP-BIBLE.md)                                         | Product philosophy, design system, engineering standards. This one wins conflicts. |
 | [`docs/ENGINEERING-LIFECYCLE.md`](docs/ENGINEERING-LIFECYCLE.md)                 | Stage order, human gates, Assignment workers, Auto Pilot, recovery                 |
-| [`docs/ASSISTANT-VIEW.md`](docs/ASSISTANT-VIEW.md)                               | Routines, tasks, scheduled runs, missed runs, hand-off                             |
+| [`docs/ASSISTANT-VIEW.md`](docs/ASSISTANT-VIEW.md)                               | Assistants, tasks, scheduled runs, missed runs, hand-off                           |
 | [`docs/GIT-WORKTREES.md`](docs/GIT-WORKTREES.md)                                 | Scope-owned worktrees, setup, health, destructive lifecycle                        |
 | [`docs/EMBEDDED_BROWSER_ARCHITECTURE.md`](docs/EMBEDDED_BROWSER_ARCHITECTURE.md) | Inner browser, its trust boundaries, and its lifecycle                             |
 | [`docs/SPEECH.md`](docs/SPEECH.md)                                               | Local speech runtimes, model catalog, dictation, cleanup                           |

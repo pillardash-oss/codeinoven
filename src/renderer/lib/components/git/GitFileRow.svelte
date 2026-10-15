@@ -208,7 +208,7 @@
           {#if change.status === 'conflicted' && onResolveConflict}
             <button
               type="button"
-              class="shrink-0 rounded px-2 py-1 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10"
+              class="shrink-0 px-2 py-1 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10"
               aria-label={`Resolve conflict in ${change.path}`}
               title={`Resolve conflict in ${change.path}`}
               onclick={() => onResolveConflict(change.path)}
@@ -226,7 +226,7 @@
             <button
               type="button"
               class={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-40',
+                'flex h-6 w-6 shrink-0 items-center justify-center transition-colors disabled:pointer-events-none disabled:opacity-40',
                 change.staged
                   ? 'text-danger hover:bg-danger/10'
                   : 'text-dimmed opacity-0 hover:bg-elevated hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100'
@@ -250,7 +250,7 @@
     {#if hasActions}
       <ContextMenu.Portal>
         <ContextMenu.Content
-          class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+          class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
           side="bottom"
           align="start"
           sideOffset={4}
@@ -259,7 +259,7 @@
           {#if change.status === 'conflicted'}
             {#if onResolveConflict}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onResolveConflict?.(change.path)}
               >
                 <GitMerge size={12} class="text-warning" />
@@ -268,7 +268,7 @@
             {/if}
             {#if onOpenInEditor}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onOpenInEditor?.(change.path)}
               >
                 <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
@@ -278,7 +278,7 @@
           {:else}
             {#if !readonly}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onToggleStage()}
               >
                 {#if change.staged}
@@ -293,7 +293,7 @@
             {#if onStash}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onStash?.(change.path)}
               >
                 <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
@@ -302,7 +302,7 @@
             {/if}
             {#if onOpenInEditor}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onOpenInEditor?.(change.path)}
               >
                 <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
@@ -313,14 +313,14 @@
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               {#if onRestore}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   onSelect={() => onRestore?.(change.path, 'staged')}
                 >
                   <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
                   Restore to index
                 </ContextMenu.Item>
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   onSelect={() => onRestore?.(change.path, 'worktree')}
                 >
                   <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
@@ -329,7 +329,7 @@
               {/if}
               {#if onRemoveFromCommit}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
                   onSelect={() => onRemoveFromCommit?.(change.path)}
                 >
                   <FileMinus size={12} class="shrink-0" />
@@ -341,7 +341,7 @@
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               {#if onIgnore}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   onSelect={() => onIgnore?.(change.path)}
                 >
                   <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
@@ -350,7 +350,7 @@
               {/if}
               {#if onDiscard}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
                   onSelect={() => onDiscard?.(change.path)}
                 >
                   <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>

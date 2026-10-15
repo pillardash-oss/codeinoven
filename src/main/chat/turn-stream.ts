@@ -67,12 +67,39 @@ export type TurnStreamEvent =
  * segment may pull earlier turns' parts into the newest trace; callers derive
  * `minTs` from the mirror's newest real user message, the start of the current
  * logical turn.
+ *
+ * `maxTs`, when supplied, closes the fold at the next turn's boundary. Together
+ * the pair describes one closed turn of the log, which is what lets a turn a
+ * steer interrupted stay readable after the fold moved past it.
  */
+/** A folded turn stream, with the wall-clock time each surviving part last moved. */
+export interface FoldedTurnStream {
+  parts: AgentPart[]
+  /** Last activity timestamp of each surviving part, by part id. */
+  lastActivityTs: Map<string, number>
+}
+
 export function foldTurnStreamEvents(
   events: TurnStreamEvent[],
   turnId?: string,
-  minTs?: number
+  minTs?: number,
+  maxTs?: number
 ): AgentPart[] {
+  return foldTurnStreamDetailed(events, turnId, minTs, maxTs).parts
+}
+
+/**
+ * The same fold as `foldTurnStreamEvents`, returned with the time each part last
+ * moved. A transcript rebuilt from the log has no other ordering signal: the
+ * parts themselves may carry no timestamps at all, so the stream's own event
+ * times are the only honest order for the messages they are grouped into.
+ */
+export function foldTurnStreamDetailed(
+  events: TurnStreamEvent[],
+  turnId?: string,
+  minTs?: number,
+  maxTs?: number
+): FoldedTurnStream {
   const parts: AgentPart[] = []
   const indexById = new Map<string, number>()
   // Text length already present in the stored part, so a delta never re-appends
@@ -86,6 +113,10 @@ export function foldTurnStreamEvents(
 
   for (const event of events) {
     if (turnId !== undefined && event.turnId !== turnId && event.turnId !== '') continue
+    // An upper bound closes the fold at a boundary between turns: the events at
+    // or after it belong to the turn that boundary opened, so neither their
+    // snapshots nor their deltas may reach this one.
+    if (maxTs !== undefined && event.ts >= maxTs) continue
     if (event.kind === 'part.updated') {
       const part = event.part
       const existingIndex = indexById.get(part.id)
@@ -145,12 +176,71 @@ export function foldTurnStreamEvents(
     }
   }
 
-  if (minTs === undefined) return parts
+  if (minTs === undefined) return { parts, lastActivityTs }
   // Boundary filter: a part survives only if it was touched at or after the
   // boundary. Snapshots streamed before it still fold (so deltas can append
   // and text stays intact), but stale parts from before the boundary are
   // excluded from the output.
-  return parts.filter((part) => (lastActivityTs.get(part.id) ?? 0) >= minTs)
+  const surviving: AgentPart[] = []
+  const survivingTs = new Map<string, number>()
+  for (const part of parts) {
+    const touched = lastActivityTs.get(part.id) ?? 0
+    if (touched < minTs) continue
+    surviving.push(part)
+    survivingTs.set(part.id, touched)
+  }
+  return { parts: surviving, lastActivityTs: survivingTs }
+}
+
+/** One provider message rebuilt from the durable stream log. */
+export interface StreamRebuiltMessage {
+  /** The provider message id every part in `parts` streamed under. */
+  id: string
+  /** The message's parts, in first-seen order. */
+  parts: AgentPart[]
+  /** Earliest wall-clock time any of its parts reported, when one did. */
+  startedAt?: number
+}
+
+/** The time one part reported starting, when the harness reported one. */
+function partStartedAt(part: AgentPart): number | undefined {
+  if (part.type === 'tool') return part.state.time?.start
+  if (part.type === 'reasoning') return part.time?.start
+  if (part.type === 'subagent') return part.activity.time?.start
+  return undefined
+}
+
+/**
+ * Group a folded stream part list into the provider messages it streamed under,
+ * in first-seen order.
+ *
+ * Every streamed part carries the provider message id it belongs to, so a turn
+ * whose provider never got to report it can still be rebuilt as the assistant
+ * messages the harness was streaming when the turn ended. Parts that carry no
+ * message id share one bucket, so nothing is silently dropped.
+ */
+export function groupStreamPartsIntoMessages(
+  parts: readonly AgentPart[],
+  timeById?: ReadonlyMap<string, number>
+): StreamRebuiltMessage[] {
+  const messages: StreamRebuiltMessage[] = []
+  const indexById = new Map<string, number>()
+  for (const part of parts) {
+    const id = part.messageID
+    const existing = indexById.get(id)
+    const started = timeById?.get(part.id) ?? partStartedAt(part)
+    if (existing === undefined) {
+      indexById.set(id, messages.length)
+      messages.push({ id, parts: [part], startedAt: started })
+      continue
+    }
+    const message = messages[existing]
+    message.parts.push(part)
+    if (started !== undefined && (message.startedAt === undefined || started < message.startedAt)) {
+      message.startedAt = started
+    }
+  }
+  return messages
 }
 
 /**

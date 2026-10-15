@@ -861,9 +861,13 @@
 
 <div class="relative {containerClass}">
   {#if empty}
+    <!-- The placeholder sits at the writing line's first column. A host that
+         draws its own marker in a gutter next to the field   the composer's
+         console prompt   moves this over by setting `--editor-gutter` on an
+         ancestor, so the two never overlap. -->
     <span
       aria-hidden="true"
-      class="pointer-events-none absolute top-3 left-3.5 text-sm leading-5 text-dimmed"
+      class="pointer-events-none absolute top-3 left-[var(--editor-gutter,0.875rem)] text-sm leading-5 text-dimmed"
     >
       {placeholder}
     </span>

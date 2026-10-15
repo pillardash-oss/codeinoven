@@ -43,7 +43,6 @@
     display: block;
     width: 2px;
     height: 6px;
-    border-radius: 1px;
     background: var(--color-warning);
     animation: cio-wave-bars 0.9s ease-in-out infinite;
   }

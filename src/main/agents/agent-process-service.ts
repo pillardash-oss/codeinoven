@@ -174,6 +174,10 @@ async function defaultSnapshotter(): Promise<ProcessSnapshotEntry[]> {
   return process.platform === 'win32' ? snapshotWindowsProcesses() : snapshotUnixProcesses()
 }
 
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 function descendantsOf(
   rootPid: number,
   childrenByParent: ReadonlyMap<number, ProcessSnapshotEntry[]>
@@ -281,29 +285,14 @@ export class AgentProcessService implements AgentProcessObserver {
    */
   async listAll(): Promise<TaskManagerProcess[]> {
     await this.scan()
-    const snapshotByPid = new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
-    const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
-    for (const entry of this.lastSnapshot) {
-      const children = childrenByParent.get(entry.parentPid) ?? []
-      children.push(entry)
-      childrenByParent.set(entry.parentPid, children)
-    }
-    const resourcesFor = (pid: number, tree: boolean) => {
-      const root = snapshotByPid.get(pid)
-      const entries = root ? [root, ...(tree ? descendantsOf(pid, childrenByParent) : [])] : []
-      const cpuValues = entries.flatMap((entry) =>
-        entry.cpuPercent === null || !Number.isFinite(entry.cpuPercent) ? [] : [entry.cpuPercent]
-      )
-      const memoryValues = entries.flatMap((entry) =>
-        entry.memoryBytes === null || !Number.isFinite(entry.memoryBytes) ? [] : [entry.memoryBytes]
-      )
-      return {
-        cpuPercent: cpuValues.length > 0 ? cpuValues.reduce((sum, value) => sum + value, 0) : null,
-        memoryBytes:
-          memoryValues.length > 0 ? memoryValues.reduce((sum, value) => sum + value, 0) : null,
-        resourceScope: tree ? ('tree' as const) : ('process' as const)
-      }
-    }
+    const snapshotByPid = this.snapshotTable()
+    // One row reports the resources of that one process. A harness root is not
+    // given its descendants' totals: every descendant it spawns is listed as its
+    // own row, so folding a tree into the root would show the same bytes twice
+    // and read as the root process using them (a 2.3 GB `svelte-check` child
+    // made its `pi` parent look like it used 2.5 GB). Totals live on the owner
+    // and app nodes, which sum the rows actually listed.
+    const resourcesFor = (pid: number) => this.ownResources(pid, snapshotByPid)
     const pids = new Set<number>()
     for (const processes of this.tracked.values()) {
       for (const process of processes.values()) pids.add(process.pid)
@@ -327,7 +316,7 @@ export class AgentProcessService implements AgentProcessObserver {
           projectId: owner.projectId,
           threadId: owner.threadId,
           ports: portsByPid.get(root.pid) ?? [],
-          ...resourcesFor(root.pid, true)
+          ...resourcesFor(root.pid)
         })
       }
       for (const process of this.tracked.get(sessionId)?.values() ?? []) {
@@ -341,7 +330,7 @@ export class AgentProcessService implements AgentProcessObserver {
           projectId: owner.projectId,
           threadId: owner.threadId,
           ports: portsByPid.get(process.pid) ?? [],
-          ...resourcesFor(process.pid, false)
+          ...resourcesFor(process.pid)
         })
       }
     }
@@ -358,7 +347,7 @@ export class AgentProcessService implements AgentProcessObserver {
         projectId: null,
         threadId: null,
         ports: portsByPid.get(root.pid) ?? [],
-        ...resourcesFor(root.pid, true)
+        ...resourcesFor(root.pid)
       })
     }
     for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
@@ -372,10 +361,47 @@ export class AgentProcessService implements AgentProcessObserver {
         projectId: null,
         threadId: null,
         ports: portsByPid.get(process.pid) ?? [],
-        ...resourcesFor(process.pid, false)
+        ...resourcesFor(process.pid)
       })
     }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
+  }
+
+  /**
+   * Own-process CPU and memory for arbitrary pids, read after a snapshot scan.
+   *
+   * A registered service is the app's own child (a thread's stdio MCP server,
+   * the model gateway), so no harness root reaches it and it is never a row in
+   * `listAll()`. The task manager still needs those numbers to make an owner
+   * node's total the total of everything under it. A pid the snapshot does not
+   * know reports null rather than zero, so a stale pid never reads as idle.
+   */
+  async processResources(
+    pids: readonly number[]
+  ): Promise<Map<number, { cpuPercent: number | null; memoryBytes: number | null }>> {
+    const resources = new Map<number, { cpuPercent: number | null; memoryBytes: number | null }>()
+    if (pids.length === 0) return resources
+    await this.scan()
+    const snapshotByPid = this.snapshotTable()
+    for (const pid of pids) resources.set(pid, this.ownResources(pid, snapshotByPid))
+    return resources
+  }
+
+  /** Snapshot of the last scan, indexed by pid. */
+  private snapshotTable(): Map<number, ProcessSnapshotEntry> {
+    return new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
+  }
+
+  /** Own-process resources for one pid, out of a snapshot table. */
+  private ownResources(
+    pid: number,
+    snapshotByPid: ReadonlyMap<number, ProcessSnapshotEntry>
+  ): { cpuPercent: number | null; memoryBytes: number | null } {
+    const entry = snapshotByPid.get(pid)
+    return {
+      cpuPercent: finiteOrNull(entry?.cpuPercent),
+      memoryBytes: finiteOrNull(entry?.memoryBytes)
+    }
   }
 
   /**
@@ -515,6 +541,9 @@ export class AgentProcessService implements AgentProcessObserver {
   async reapOrphans(options: ReapOrphansOptions = {}): Promise<ReapOrphansResult> {
     if (!this.journal) return { killed: [], skipped: [] }
     const roots = await this.journal.load()
+    // Nothing journaled means nothing to reap, and the snapshot below reads the
+    // whole process table: skip it rather than paying for it to iterate nothing.
+    if (roots.length === 0) return { killed: [], skipped: [] }
     const snapshot = await this.snapshotter().catch(() => [])
     const alive = new Set(snapshot.map((entry) => entry.pid))
     const parentOf = new Map(snapshot.map((entry) => [entry.pid, entry.parentPid]))

@@ -37,7 +37,7 @@
 </script>
 
 <section
-  class="mt-4 overflow-hidden rounded-xl border border-border"
+  class="mt-4 overflow-hidden border border-border"
   aria-labelledby="design-ranking-heading"
 >
   <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -50,7 +50,7 @@
     </div>
     <button
       type="button"
-      class="rounded-lg p-2 text-muted hover:bg-elevated"
+      class="p-2 text-muted hover:bg-elevated"
       title="Refresh design quality rankings"
       aria-label="Refresh design quality rankings"
       disabled={loading}

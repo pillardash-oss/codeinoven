@@ -1,6 +1,8 @@
 import {
+  COMPLETED_TURN_PAGE_SIZE,
   WORKING_TRACE_PAGE_SIZE,
   type AgentPart,
+  type TurnStreamCompletedTurn,
   type TurnStreamPartsChange,
   type TurnStreamPartsPage,
   type TurnStreamPartsQuery
@@ -21,6 +23,46 @@ const MAX_PAGE_SIZE = 500
  */
 export function isTodoTracePart(part: AgentPart): boolean {
   return part.type === 'tool' && isTodoToolName(part.tool)
+}
+
+/**
+ * Cut one bounded window out of a completed turn's folded entries.
+ *
+ * A completed turn is read the same way the live one is   newest entries first,
+ * with `beforeId` walking back through the rest   because a turn closed by a
+ * steer can hold hundreds of steps and only a window of them should cross IPC
+ * at a time. Task-list tool parts are excluded exactly as they are from the live
+ * window: they drive the task card, never the trace.
+ */
+export function completedTurnWindow(
+  turn: { startTs: number; endTs: number; parts: readonly AgentPart[] },
+  query: TurnStreamPartsQuery = {}
+): TurnStreamCompletedTurn {
+  const trace = turn.parts.filter((part) => !isTodoTracePart(part))
+  const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
+  const limit = Math.min(
+    Math.max(Math.trunc(query.limit ?? COMPLETED_TURN_PAGE_SIZE), 1),
+    MAX_PAGE_SIZE
+  )
+  let start: number
+  let end: number
+  if (query.beforeId !== undefined) {
+    const index = trace.findIndex((part) => part.id === query.beforeId)
+    end = index >= 0 ? index : trace.length
+    start = Math.max(0, end - limit)
+  } else {
+    end = trace.length
+    start = Math.max(0, trace.length - limit)
+  }
+  return {
+    startTs: turn.startTs,
+    endTs: turn.endTs,
+    parts: trace.slice(start, end),
+    total: trace.length,
+    totalSteps,
+    start,
+    hasOlder: start > 0
+  }
 }
 
 /**
@@ -64,12 +106,16 @@ export function pageTurnStreamParts(
   const trace = folded.filter((part) => !isTodoTracePart(part))
   const todoParts = folded.filter(isTodoTracePart).slice(-TODO_PARTS_CAP)
   const cursor = events.length
+  // The header reports how much thinking and tool work the whole turn holds,
+  // independent of how many steps the renderer has mounted.
+  const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
 
   if (query.changedSince !== undefined) {
     return {
       kind: 'change',
       parts: touchedTraceParts(trace, events, query.changedSince),
       total: trace.length,
+      totalSteps,
       cursor,
       todoParts,
       turnStartTs
@@ -104,6 +150,7 @@ export function pageTurnStreamParts(
     kind: 'window',
     parts: trace.slice(start, end),
     total: trace.length,
+    totalSteps,
     start,
     hasOlder: start > 0,
     cursor,

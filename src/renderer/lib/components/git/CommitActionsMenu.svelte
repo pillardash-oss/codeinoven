@@ -29,7 +29,7 @@
   }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
 
 {#if onShowInfo}
@@ -57,7 +57,7 @@
     Reset to here…
   </DropdownMenu.SubTrigger>
   <DropdownMenu.SubContent
-    class="z-50 min-w-56 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+    class="z-50 min-w-56 overflow-hidden border border-border bg-surface p-1 shadow-xl"
     sideOffset={4}
   >
     <DropdownMenu.Item class={itemClass} onSelect={() => onReset('soft')} disabled={resetBusy}>
@@ -88,7 +88,7 @@
 <DropdownMenu.Separator class="my-1 h-px bg-border" />
 
 <DropdownMenu.Item
-  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
   onSelect={onDelete}
   disabled={deleteBusy || resetBusy}
 >

@@ -62,16 +62,16 @@
 </script>
 
 <section
-  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-lg {collapsed
+  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border border-border {collapsed
     ? 'w-16'
-    : 'min-w-0 flex-1'} {dropActive ? 'bg-primary/5' : 'bg-app'}"
+    : 'min-w-0 flex-1'} {dropActive ? 'bg-primary/5' : 'bg-surface'}"
   aria-label="{STAGE_LABELS[stage]} threads"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
   <div
-    class="sticky top-0 z-20 flex h-9 shrink-0 items-center rounded-t-lg border-b bg-surface"
+    class="sticky top-0 z-20 flex h-9 shrink-0 items-center border-b border-border bg-surface"
     style="border-top: 2px solid {STAGE_COLORS[stage]}"
   >
     <button

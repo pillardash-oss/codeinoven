@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { usageAnalytics } from './system/usage-analytics'
@@ -48,7 +49,7 @@ import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
-import { computeAttention, hasUpcomingWork } from './system/background-work-state'
+import { computeAttention, hasUpcomingWork, residencyReason } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import { startStartupUpdater } from './bootstrap/startup-updater'
 import { getMainBundleDirectory } from './bootstrap/bundle-directory'
@@ -77,7 +78,12 @@ app.enableSandbox()
 // Custom scheme must be registered as privileged before the app is ready so
 // Chromium recognizes it when the renderer frames `appfile://` previews.
 registerFilePreviewScheme()
-if (process.platform === 'win32') {
+// A packaged (MSIX) build already has an Application User Model ID that Windows
+// derives from its package identity, and Windows attributes toasts and taskbar
+// pinning to whichever AUMID the process claims. Overriding it there would
+// detach notifications from the package that owns them, so the explicit
+// reverse-DNS id is only set for the traditionally installed build.
+if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
 if (app.isPackaged) {
@@ -300,7 +306,13 @@ function getMacIconPath(): string {
  * `...Template.png` file, so the attention variant is a second asset rather
  * than a second colour.
  */
-function getTrayIconPath(attention: boolean): string {
+function getTrayIconPath(attention: boolean, darkTaskbar = false): string {
+  if (process.platform === 'win32') {
+    const name = `tray${attention ? 'Attention' : ''}-${darkTaskbar ? 'dark' : 'light'}.ico`
+    return !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/windows', name)
+      : join(mainBundleDirectory, '../renderer/windows', name)
+  }
   const name = attention ? 'trayAttentionTemplate.png' : 'trayTemplate.png'
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/macos', name)
@@ -358,15 +370,19 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     }
   },
   hasUpcomingWork: () => hasUpcomingWork(state, database),
+  // The other half of the park decision: a windowless process only keeps its
+  // menu bar icon, its SQLite handle and its schedule alive for as long as this
+  // returns a reason (see `BackgroundLifecycleService.evaluateResidency`).
+  residencyReason: () => residencyReason(state, database),
   computeAttention: () => computeAttention(database),
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while
     // nobody owned the scheduler.
-    void state.routineScheduler
+    void state.assistantScheduler
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
-  resolveTrayIcon: (attention) => getTrayIconPath(attention)
+  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar)
 })
 state.backgroundLifecycle = backgroundLifecycle
 
@@ -461,13 +477,30 @@ function createWindow(): BrowserWindow {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
-    if (!state.quitCleanupStarted) {
-      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
-        state,
-        database,
-        storage
+    if (state.quitCleanupStarted) return
+    // A renderer that left on its own, or one that was asked to stop, did not
+    // fail to start. `clean-exit` is the renderer walking away (a window
+    // teardown, a navigation that swapped processes), and `killed` with the
+    // SIGTERM exit code is somebody ending it politely: the OS taking the tree
+    // down, a scripted stop, `kill`. Neither is a crash   a real renderer
+    // failure reports `crashed`, `oom`, or an abnormal exit. Judging a stop as a
+    // startup failure painted "The workspace could not open" over a workspace
+    // that had been open for hours, on every stop of `scripts/probe.ts`, and the
+    // dialog then held the dying process until something killed it.
+    const stopped =
+      details.reason === 'clean-exit' || (details.reason === 'killed' && details.exitCode === 15)
+    if (stopped) {
+      Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
+        reason: details.reason,
+        exitCode: details.exitCode
       })
+      return
     }
+    void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+      state,
+      database,
+      storage
+    })
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
@@ -493,6 +526,13 @@ function createWindow(): BrowserWindow {
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
     const park = !state.quitForUpdate && (state.backgroundLifecycle?.shouldPark() ?? false)
+    // Worth a line: a close that does not park is a quit, and the reason is the
+    // whole decision. Without it, "why did it quit" and "why is it still in the
+    // menu bar" are both unanswerable from outside the process.
+    Logger.dev('Close requested', {
+      park,
+      reason: state.backgroundLifecycle?.residencyReason() ?? null
+    })
     requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 

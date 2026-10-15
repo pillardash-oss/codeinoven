@@ -134,7 +134,7 @@
   }}
 >
   <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={title}
     {title}
   >
@@ -146,7 +146,7 @@
       sideOffset={8}
       collisionPadding={16}
       align="end"
-      class="z-50 w-80 overflow-hidden rounded-xl border bg-surface shadow-lg"
+      class="z-50 w-80 overflow-hidden border bg-surface shadow-lg"
       aria-label="Search {contextLabel}"
       onCloseAutoFocus={(e) => e.preventDefault()}
     >
@@ -164,7 +164,7 @@
         />
         {#if query}
           <button
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={() => {
@@ -195,7 +195,7 @@
             {#each results as result (result.thread.id)}
               {@const thread = result.thread}
               <button
-                class="flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                class="flex w-full flex-col gap-0.5 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
                 title={thread.title}
                 onclick={() => void openThread(thread)}
               >

@@ -136,7 +136,7 @@
       {#if !running && onOpenAudit}
         <button
           type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+          class="flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
           title={partialReport && reportAvailable
             ? 'Ask the auditor to re-run the unvalidated verification facts and update the report'
             : auditFailed
@@ -155,7 +155,7 @@
       {#if reportAvailable && onViewReport}
         <button
           type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="flex flex-1 items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Open the latest report in Audit Studio"
           onclick={onViewReport}
         >
@@ -167,7 +167,7 @@
     {#if canStartFreshAudit && onNewAudit}
       <button
         type="button"
-        class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
+        class="mt-2 flex w-full items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
         disabled={running}
         title={running
           ? 'The auditor is still working. Wait for it to finish before starting a new audit.'
@@ -184,10 +184,7 @@
     <section class="border-b border-border p-4" aria-label="Independent audit progress">
       <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
       <div class="mt-2 flex items-start gap-2">
-        <span
-          class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-current {progress.tone}"
-          aria-hidden="true"
-        ></span>
+        <span class="mt-1.5 h-2 w-2 shrink-0 bg-current {progress.tone}" aria-hidden="true"></span>
         <div class="min-w-0">
           <p class="text-xs font-semibold {progress.tone}">{progress.label}</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
@@ -197,7 +194,7 @@
 
     <section class="border-b border-border p-4" aria-label="Independent auditor model">
       <div class="flex items-start gap-3">
-        <div class="rounded-lg bg-primary/10 p-2 text-primary">
+        <div class="bg-primary/10 p-2 text-primary">
           <FileSearch size={16} />
         </div>
         <div class="min-w-0 flex-1">
@@ -269,7 +266,7 @@
     <footer class="shrink-0 border-t border-border p-3">
       <button
         type="button"
-        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
         title="Back to the thread that owns this audit"
         aria-label="Back to the thread that owns this audit"
         onclick={onBackToCoordinator}
@@ -294,7 +291,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Keep the current auditor thread"
       onclick={() => (newAuditOpen = false)}
     >
@@ -303,7 +300,7 @@
     <button
       type="button"
       data-modal-primary
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Delete the auditor thread and start a fresh audit"
       onclick={confirmNewAudit}
     >

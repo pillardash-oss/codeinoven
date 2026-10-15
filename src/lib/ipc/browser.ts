@@ -366,9 +366,16 @@ export interface BrowserDevToolsState {
 /**
  * What the browser surface claims while it owns the keyboard.
  *
- * The set is Chrome's, scoped to the browser and nothing else: a key pressed
- * inside a browser tab must act on that tab, never on the application around
- * it, and an unbound action leaves the key to the rest of the app.
+ * The set is the chords a browser reserves and no page can answer: reload and
+ * hard reload, history back and forward, focusing the address bar, zoom,
+ * DevTools, and the tab actions. A page holds the keyboard through its own view,
+ * so a key pressed in a page would otherwise reach the application menu; these
+ * are claimed so it acts on the page instead.
+ *
+ * Most of the set is the browser's reserved chrome, which no page can answer and
+ * which the app therefore claims whether or not the user lets a site override the
+ * app's keymaps. `savePage` is the one page-overridable member: a site that draws
+ * its own Save handler keeps `mod+s` and this only runs for a site that does not.
  */
 export const BROWSER_SHORTCUT_ACTIONS = [
   'reload',
@@ -385,18 +392,7 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'designRedo',
   'closeTab',
   'newTab',
-  'reopenTab',
-  'toggleNotes',
-  'find',
-  'findNext',
-  'findPrevious',
-  'nav-projects',
-  'nav-threads',
-  'nav-projects-with-scope',
-  'nav-scope',
-  'nav-chats',
-  'nav-browser',
-  'nav-assistant'
+  'reopenTab'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -436,9 +432,31 @@ export interface BrowserSwitcherKey {
 }
 
 /**
+ * One keyboard chord a page did not handle, reported up so the app can act on it.
+ *
+ * The page is a native `WebContentsView`, so a key pressed in it never reaches the
+ * renderer's DOM handlers, and a page that draws its own shortcut (its own find,
+ * its own save) must keep the chord. An injected page script therefore reports a
+ * chord only when the page's own handlers left it unhandled, and main replays it as
+ * this shape: enough of the DOM event to rebuild one the app's keymap can match.
+ */
+export interface BrowserPageKey {
+  /** Lowercase `KeyboardEvent.key` the chord ends on, e.g. `'k'`. */
+  key: string
+  /** `KeyboardEvent.code`, for the handlers that read a physical key. */
+  code: string
+  meta: boolean
+  control: boolean
+  shift: boolean
+  alt: boolean
+  /** True for an auto-repeated press while the key is held. */
+  repeat: boolean
+}
+
+/**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip or holds the find bar: focusing the address bar, closing, opening or
- * reopening a tab, showing the tab's notes, and find.
+ * strip or holds the address field: focusing the address bar, closing, opening
+ * or reopening a tab, and the design screen history.
  */
 export type BrowserPanelShortcutAction =
   | 'design-undo'
@@ -447,10 +465,6 @@ export type BrowserPanelShortcutAction =
   | 'close-tab'
   | 'new-tab'
   | 'reopen-tab'
-  | 'toggle-notes'
-  | 'find'
-  | 'find-next'
-  | 'find-previous'
 
 /**
  * One find request for a tab's page.

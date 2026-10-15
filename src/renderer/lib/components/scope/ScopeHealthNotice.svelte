@@ -128,7 +128,7 @@
     {#if repairable}
       <button
         type="button"
-        class="rounded-md bg-primary px-2 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="bg-primary px-2 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         title="Repair the managed worktree of {name ?? 'this scope'}"
         aria-label="Repair the managed worktree of {name ?? 'this scope'}"
         disabled={busyAction !== null}
@@ -143,7 +143,7 @@
     {#if setupStale}
       <button
         type="button"
-        class="rounded-md border border-overlay px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+        class="border border-overlay px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
         title="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
         aria-label="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
         disabled={busyAction !== null}
@@ -161,7 +161,7 @@
 {#if visible && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   {#if variant === 'inline'}
     <div
-      class="flex min-w-0 items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2 py-1.5"
+      class="flex min-w-0 items-center gap-2 border border-warning/30 bg-warning/10 px-2 py-1.5"
       role="status"
     >
       <TriangleAlert size={12} class="shrink-0 text-warning" />
@@ -181,7 +181,7 @@
     </div>
   {:else}
     <div
-      class="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5"
+      class="flex items-start gap-2.5 border border-warning/30 bg-warning/10 px-3 py-2.5"
       role="status"
     >
       <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />

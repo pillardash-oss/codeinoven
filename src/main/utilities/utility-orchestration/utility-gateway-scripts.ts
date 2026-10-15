@@ -7,6 +7,7 @@ import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
+import { videoStudioTools } from '../../video/video-studio-tools'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 
@@ -126,7 +127,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current page title, URL, visible text, and interactive elements. In a browser assistant conversation this reads the user tab until you open one of your own. You may navigate and interact with that tab to carry out the user request. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for routine steps within the user request; call the operation and let the app enforce approval.',
+      'Read the current page title, URL, visible text, and interactive elements. In a browser assistant conversation this reads the user tab until you open one of your own. You may navigate and interact with that tab to carry out the user request. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for assistant steps within the user request; call the operation and let the app enforce approval.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -422,6 +423,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
 export function videoUtilityTools(roots: WorkRoots): McpTool[] {
   const videoRoot = workRootForKind(roots, 'video')
   return [
+    ...videoStudioTools(),
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {

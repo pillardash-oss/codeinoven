@@ -8,6 +8,7 @@
  *  - `favicon.png`                    → renderer favicon
  *  - `macos/AppIcon*.png` + `.icns`   → macOS Dock/Finder (via `iconutil`)
  *  - `logo.png`                       → large opaque logo raster
+ *  - `../build/appx/*.png`            → MSIX Store tile and taskbar logos
  *
  * Rerun after editing the master SVG: `bun scripts/build-app-icons.ts`.
  * Requires macOS for the `.icns` step (`iconutil`); every other output is
@@ -15,21 +16,50 @@
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
 import pngToIco from 'png-to-ico'
 import { Logger } from '../src/main/system/logger'
+import { buildWindowsTrayIcons } from './build-windows-tray-icons'
 
 const root = join(import.meta.dir, '..')
 const staticDir = join(root, 'src/renderer/static')
 const macosDir = join(staticDir, 'macos')
+/**
+ * MSIX user assets. electron-builder's `appx` target reads its user asset
+ * directory straight out of the build resources directory by this name
+ * (`APPX_ASSETS_DIR_NAME`), and maps whatever it finds to `assets\` inside the
+ * package, so the manifest references these exact file names.
+ */
+const appxDir = join(root, 'build/appx')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
 
 /** Render an SVG string to a PNG buffer at the requested pixel size. */
 function renderPng(svg: string, size: number): Buffer {
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()
   return Buffer.from(png)
+}
+
+/**
+ * Render the master mark centred on a wider transparent canvas.
+ *
+ * MSIX tile art is landscape (a 310x150 wide tile), while the master is a square
+ * squircle that already draws its own tile body. Rendering the square straight
+ * into a landscape canvas would stretch it, so the master's inner content is
+ * re-wrapped in an outer document and scaled to sit centred at `mark` pixels.
+ * The squircle's own fill rules have to be repeated on the wrapping group: they
+ * are set as attributes on the master's root element, and attributes do not
+ * inherit through a child `<g>`.
+ */
+function renderTile(svg: string, width: number, height: number, mark: number): Buffer {
+  const scale = mark / 1024
+  const inner = svg.slice(svg.indexOf('>', svg.indexOf('<svg')) + 1, svg.lastIndexOf('</svg>'))
+  const wrapped =
+    `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" ` +
+    `xmlns="http://www.w3.org/2000/svg"><g fill-rule="evenodd" clip-rule="evenodd" ` +
+    `transform="translate(${(width - mark) / 2} ${(height - mark) / 2}) scale(${scale})">` +
+    `${inner}</g></svg>`
+  return renderPng(wrapped, width)
 }
 
 /** Render the master (or a variant) flattened onto an opaque backdrop for
@@ -42,56 +72,85 @@ function renderOpaque(svg: string, size: number, backdrop: string): Buffer {
   return renderPng(withBackdrop, size)
 }
 
-const outputs: Array<[string, Buffer]> = [
-  ['icon.png', renderPng(master, 1024)],
-  ['favicon.png', renderPng(master, 180)],
-  // Opaque rasters: Windows shows taskbar/window icons over arbitrary
-  // surfaces, and the historic flat black look came from a fully opaque
-  // square — keep those rasters opaque but let the squircle corners show the
-  // dark backdrop instead of pure black.
-  ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
-]
-
-for (const [name, buffer] of outputs) {
-  writeFileSync(join(staticDir, name), buffer)
-}
-Logger.dev(`[build-app-icons] Wrote ${outputs.length} raster assets to ${staticDir}.`)
-
-// Multi-size Windows favicon: PNG-compressed 16→256 entries in one .ico.
-const icoSizes = [16, 24, 32, 48, 64, 128, 256]
-const ico = await pngToIco(icoSizes.map((size) => renderPng(master, size)))
-writeFileSync(join(staticDir, 'favicon.ico'), ico)
-Logger.dev(`[build-app-icons] Wrote favicon.ico (${icoSizes.join('/')}px).`)
-
-// macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
-// shape with transparent margins; macOS composites its own drop shadow.
-const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
-mkdirSync(macosDir, { recursive: true })
-for (const size of iconSizes) {
-  writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
-}
-if (process.platform === 'darwin') {
-  const iconset = mkdtempSync(join(tmpdir(), 'cio-iconset-'))
-  const setDir = join(iconset, 'AppIcon.iconset')
-  mkdirSync(setDir)
-  const entries: Array<[string, number]> = [
-    ['icon_16x16.png', 16],
-    ['icon_16x16@2x.png', 32],
-    ['icon_32x32.png', 32],
-    ['icon_32x32@2x.png', 64],
-    ['icon_128x128.png', 128],
-    ['icon_128x128@2x.png', 256],
-    ['icon_256x256.png', 256],
-    ['icon_256x256@2x.png', 512],
-    ['icon_512x512.png', 512],
-    ['icon_512x512@2x.png', 1024]
+// Allow tray-only regeneration without rewriting unrelated app/Dock assets.
+if (!Bun.argv.includes('--windows-tray-only')) {
+  const outputs: Array<[string, Buffer]> = [
+    ['icon.png', renderPng(master, 1024)],
+    ['favicon.png', renderPng(master, 180)],
+    // Opaque rasters: Windows shows taskbar/window icons over arbitrary
+    // surfaces, and the historic flat black look came from a fully opaque
+    // square — keep those rasters opaque but let the squircle corners show the
+    // dark backdrop instead of pure black.
+    ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
   ]
-  for (const [name, size] of entries) {
-    writeFileSync(join(setDir, name), renderPng(master, size))
+
+  for (const [name, buffer] of outputs) {
+    writeFileSync(join(staticDir, name), buffer)
   }
-  execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
-  rmSync(iconset, { recursive: true, force: true })
-  Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
+  Logger.dev(`[build-app-icons] Wrote ${outputs.length} raster assets to ${staticDir}.`)
+
+  // Multi-size Windows favicon: PNG-compressed 16→256 entries in one .ico.
+  const icoSizes = [16, 24, 32, 48, 64, 128, 256]
+  const ico = await pngToIco(icoSizes.map((size) => renderPng(master, size)))
+  writeFileSync(join(staticDir, 'favicon.ico'), ico)
+  Logger.dev(`[build-app-icons] Wrote favicon.ico (${icoSizes.join('/')}px).`)
+
+  // macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
+  // shape with transparent margins; macOS composites its own drop shadow.
+  const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
+  mkdirSync(macosDir, { recursive: true })
+  for (const size of iconSizes) {
+    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
+  }
+  // MSIX tile and taskbar logos. The four base names are the ones the generated
+  // manifest references: `Properties/Logo` (StoreLogo), both `VisualElements`
+  // square logos, and a wide tile, which the template always emits even though
+  // the schema calls it optional. `Square44x44Logo` additionally gets targetsize
+  // variants, which is what Windows uses for the taskbar, Alt+Tab, Task View and
+  // the Start tile corner; providing any variant also makes electron-builder run
+  // `makepri` and ship a `resources.pri` alongside them.
+  mkdirSync(appxDir, { recursive: true })
+  const square44TargetSizes = [16, 24, 32, 48, 256]
+  const appxOutputs: Array<[string, Buffer]> = [
+    ['StoreLogo.png', renderPng(master, 50)],
+    ['Square150x150Logo.png', renderPng(master, 150)],
+    ['Square44x44Logo.png', renderPng(master, 44)],
+    ...square44TargetSizes.map(
+      (size) =>
+        [`Square44x44Logo.targetsize-${size}.png`, renderPng(master, size)] as [string, Buffer]
+    ),
+    ['Wide310x150Logo.png', renderTile(master, 310, 150, 120)]
+  ]
+  for (const [name, buffer] of appxOutputs) {
+    writeFileSync(join(appxDir, name), buffer)
+  }
+  Logger.dev(`[build-app-icons] Wrote ${appxOutputs.length} MSIX assets to ${appxDir}.`)
+
+  if (process.platform === 'darwin') {
+    const scratchDir = join(root, '.cio/tmp')
+    mkdirSync(scratchDir, { recursive: true })
+    const iconset = mkdtempSync(join(scratchDir, 'cio-iconset-'))
+    const setDir = join(iconset, 'AppIcon.iconset')
+    mkdirSync(setDir)
+    const entries: Array<[string, number]> = [
+      ['icon_16x16.png', 16],
+      ['icon_16x16@2x.png', 32],
+      ['icon_32x32.png', 32],
+      ['icon_32x32@2x.png', 64],
+      ['icon_128x128.png', 128],
+      ['icon_128x128@2x.png', 256],
+      ['icon_256x256.png', 256],
+      ['icon_256x256@2x.png', 512],
+      ['icon_512x512.png', 512],
+      ['icon_512x512@2x.png', 1024]
+    ]
+    for (const [name, size] of entries) {
+      writeFileSync(join(setDir, name), renderPng(master, size))
+    }
+    execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
+    rmSync(iconset, { recursive: true, force: true })
+    Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
+  }
 }
 
 // Menu bar tray template images.
@@ -116,6 +175,20 @@ const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
   'color:#000000'
 )
 const TRAY_STROKE_WIDTH = 24
+/**
+ * The Windows notification area gets the same artwork at a lighter weight, and
+ * the two must not be unified.
+ *
+ * Windows draws this mark at 16 device pixels on a 100% display. At that size
+ * the artwork's own walls are a fraction of a pixel wide, so the macOS stroke
+ * lands on top of them and closes the gaps that separate the oven's window,
+ * handle, and code glyph: the mark reads as a smudge. Measured from the 16px
+ * entry, the macOS weight inks 81% of the mark's bounding box and leaves 32
+ * pixels of interior space, against 75% and 42 pixels at the weight below. The
+ * macOS template survives it because the menu bar normally draws the `@2x` file,
+ * where the extra ink resolves as legible thickness instead of clog.
+ */
+const WINDOWS_TRAY_STROKE_WIDTH = 8
 const TRAY_ATTENTION_SCALE = 0.78
 
 /** Thicken a template's outline with a same-colour stroke. */
@@ -129,26 +202,34 @@ function boldenTray(svg: string, strokeWidth: number): string {
 const monoMaster = boldenTray(monoBase, TRAY_STROKE_WIDTH)
 // The attention variant scales the mark down and sets a bold exclamation beside
 // it, so the two shapes stay legible at menu bar size instead of overlapping.
-const attentionMaster = boldenTray(
-  monoBase
-    .replace(
-      '<g id="svg"',
-      `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
-    )
-    .replace(
-      '</svg>',
-      '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
-    ),
-  TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE
-)
+// Held unweighted so each platform can apply its own stroke below.
+const attentionBase = monoBase
+  .replace(
+    '<g id="svg"',
+    `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
+  )
+  .replace(
+    '</svg>',
+    '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
+  )
+const attentionMaster = boldenTray(attentionBase, TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE)
 const trayOutputs: Array<[string, Buffer]> = [
   ['trayTemplate.png', renderPng(monoMaster, 16)],
   ['trayTemplate@2x.png', renderPng(monoMaster, 32)],
   ['trayAttentionTemplate.png', renderPng(attentionMaster, 16)],
   ['trayAttentionTemplate@2x.png', renderPng(attentionMaster, 32)]
 ]
-for (const [name, buffer] of trayOutputs) {
-  writeFileSync(join(macosDir, name), buffer)
+if (!Bun.argv.includes('--windows-tray-only')) {
+  for (const [name, buffer] of trayOutputs) {
+    writeFileSync(join(macosDir, name), buffer)
+  }
+  Logger.dev(
+    `[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`
+  )
 }
-Logger.dev(`[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`)
+await buildWindowsTrayIcons(
+  boldenTray(monoBase, WINDOWS_TRAY_STROKE_WIDTH),
+  boldenTray(attentionBase, WINDOWS_TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE),
+  join(staticDir, 'windows')
+)
 Logger.dev('[build-app-icons] Done.')

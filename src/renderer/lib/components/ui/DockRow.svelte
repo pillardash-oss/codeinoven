@@ -204,7 +204,7 @@
     overlaps them, which is how a buried dock is pulled back out.
   -->
   <div
-    class="flex shrink-0 cursor-grab touch-none items-center rounded-lg border bg-surface px-0.5 text-dimmed shadow-xl transition-colors select-none hover:bg-elevated hover:text-foreground {dragging
+    class="flex shrink-0 cursor-grab touch-none items-center border bg-surface px-0.5 text-dimmed shadow-xl transition-colors select-none hover:bg-elevated hover:text-foreground {dragging
       ? 'cursor-grabbing'
       : ''}"
     data-native-dock-handle

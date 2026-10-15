@@ -233,7 +233,7 @@
       </p>
     </div>
     <button
-      class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="flex h-8 shrink-0 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={providers.length === 0}
       onclick={openCreate}
     >
@@ -242,22 +242,22 @@
   </div>
 
   {#if providersError}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {providersError}
     </p>
   {/if}
   {#if heartbeatStore.error}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {heartbeatStore.error}
     </p>
   {/if}
 
   {#if heartbeatStore.loading && heartbeatStore.heartbeats.length === 0}
-    <div class="rounded-xl border border-dashed p-6 text-center">
+    <div class="border border-dashed p-6 text-center">
       <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
     </div>
   {:else if heartbeatStore.heartbeats.length === 0}
-    <div class="rounded-xl border border-dashed p-6 text-center">
+    <div class="border border-dashed p-6 text-center">
       <HeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
       <p class="text-xs text-muted">No heartbeats configured yet.</p>
       {#if providers.length === 0 && !providersLoading}
@@ -269,11 +269,11 @@
       {/if}
     </div>
   {:else}
-    <div class="overflow-hidden rounded-xl border bg-surface">
+    <div class="overflow-hidden border bg-surface">
       {#each heartbeatStore.heartbeats as config (config.id)}
         {@const account = accountFor(config)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
-          <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
+          <div class="mt-0.5 bg-primary/10 p-1.5 text-primary">
             <AgentIcon agentId={config.harnessId} size={16} />
           </div>
           <div class="min-w-0 flex-1">
@@ -307,7 +307,7 @@
             </p>
             {#if account}
               <span
-                class="mt-1 inline-flex max-w-full truncate rounded-full border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
+                class="mt-1 inline-flex max-w-full truncate border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                 title="Account: {account.label}"
               >
                 <UserRound size={10} class="mr-1 shrink-0" />{account.label}
@@ -315,7 +315,7 @@
             {/if}
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
-                <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
+                <span class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-muted">
                   {formatTimeOfDay(time)}
                 </span>
               {/each}
@@ -323,7 +323,7 @@
           </div>
           <div class="flex shrink-0 items-center gap-1">
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg {triggeringId === config.id
+              class="flex h-7 w-7 items-center justify-center {triggeringId === config.id
                 ? 'text-primary'
                 : 'text-muted'} hover:bg-overlay hover:text-foreground"
               aria-label="Trigger {config.name} now"
@@ -344,7 +344,7 @@
               title={config.enabled ? 'Disable heartbeat' : 'Enable heartbeat'}
             />
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
               aria-label="Edit {config.name}"
               title="Edit {config.name}"
               onclick={() => openEdit(config)}
@@ -352,7 +352,7 @@
               <Pencil size={13} />
             </button>
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+              class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
               aria-label="Delete {config.name}"
               title="Delete {config.name}"
               onclick={() => (deleteTarget = config)}
@@ -373,14 +373,14 @@
 >
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={closeEditor}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       type="button"
       disabled={heartbeatStore.saving}
       onclick={() => void saveDraft()}
@@ -392,14 +392,14 @@
 
   <div class="space-y-4">
     {#if draftError}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{draftError}</p>
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{draftError}</p>
     {/if}
 
     <div>
       <label class="mb-1 block text-xs font-medium text-muted" for="heartbeat-name">Name</label>
       <input
         id="heartbeat-name"
-        class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
         placeholder="e.g. Codex Sub, Claude Work"
         bind:value={draftName}
       />
@@ -449,12 +449,12 @@
       <div class="flex gap-2">
         <input
           type="time"
-          class="h-9 flex-1 rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+          class="h-9 flex-1 border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
           bind:value={draftTimeInput}
         />
         <button
           type="button"
-          class="flex h-9 items-center gap-1 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-1 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           disabled={!draftTimeInput}
           onclick={addDraftTime}
         >
@@ -465,7 +465,7 @@
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each draftTimes as time (time)}
             <span
-              class="flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-[0.6875rem] text-muted"
+              class="flex items-center gap-1 border border-border bg-raised px-2 py-1 text-[0.6875rem] tabular-nums text-muted"
             >
               {formatTimeOfDay(time)}
               <button
@@ -489,14 +489,14 @@
 <Modal open={deleteTarget !== null} title="Delete heartbeat" onClose={() => (deleteTarget = null)}>
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={() => (deleteTarget = null)}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
       type="button"
       disabled={heartbeatStore.saving}
       onclick={() => void removeHeartbeat()}

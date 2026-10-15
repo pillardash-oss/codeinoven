@@ -18,7 +18,7 @@
   const activeLabel = $derived(options.find((option) => option.id === group)?.label ?? 'Date')
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated'
+    'flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated'
 
   /** A radio group reports a plain string, so the option list decides what it names. */
   function handleChange(value: string): void {
@@ -29,7 +29,7 @@
 
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     title="Group notifications by {activeLabel.toLowerCase()}"
     aria-label="Group notifications, currently by {activeLabel.toLowerCase()}"
   >
@@ -41,7 +41,7 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+      class="z-50 w-44 overflow-hidden border border-border bg-surface py-1 shadow-xl"
     >
       <p
         class="px-2 pt-1.5 pb-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"

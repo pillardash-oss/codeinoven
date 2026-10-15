@@ -1,4 +1,4 @@
-import { createSubscriber, SvelteSet } from 'svelte/reactivity'
+import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
 import { BotMessageSquare, Download, MessageSquare, Timeline } from '@lucide/svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -10,13 +10,13 @@ import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
 import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
-import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import {
-  coordinatorHasActiveDelegates,
-  isOrchestrationChildThread,
-  threadTracksReadStatus
-} from '$shared/types'
-import { threadWorkingForIndicator } from './app-header-thread-status'
+  countThreadStates,
+  countThreadStatesByGroup,
+  emptyThreadStateCounts,
+  type ThreadStateCounts
+} from '$lib/thread-state-counts'
+import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 
@@ -34,20 +34,13 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
  * out of every list, and the profile keeps downloading after the user leaves the
  * view, so its item reports both ({@link ViewRailActivity.browserAssistant} and
  * {@link ViewRailActivity.browserTransfers}).
+ *
+ * The figures themselves come from `$lib/thread-state-counts`, the one pass over
+ * the one in-memory thread list that also feeds the sidebar's project rows: the
+ * rail and a project strip are two views of the same counts, so they can never
+ * report different numbers for the same threads.
  */
-export interface ViewFamilyActivity {
-  working: number
-  attention: number
-  /** True when an attention thread in the family has actually failed. */
-  attentionError: boolean
-  retry: number
-}
-
-export interface ViewActivityCounts {
-  projects: ViewFamilyActivity
-  chats: ViewFamilyActivity
-  assistant: ViewFamilyActivity
-}
+export type ViewActivityCounts = Record<ContentThreadFamily, ThreadStateCounts>
 
 export type ViewBadgeTone = 'working' | 'attention' | 'error' | 'retry'
 
@@ -65,8 +58,6 @@ export interface ViewBadge {
 export interface ViewRailBadges {
   activity: ViewBadge | null
   unread: ViewBadge | null
-  /** The family has active work, regardless of the visible status label. */
-  hasWorkingThreads: boolean
   /** A browser surface behind this item is playing sound right now. */
   playing: boolean
 }
@@ -107,10 +98,6 @@ const subscribeToRetryClock = createSubscriber((update) => {
   return () => window.clearInterval(timer)
 })
 
-function emptyFamilyActivity(): ViewFamilyActivity {
-  return { working: 0, attention: 0, attentionError: false, retry: 0 }
-}
-
 /** The family a rail view belongs to. Every project-mode view shares one badge. */
 export function viewOptionFamily(optionId: HeaderViewOptionId): ContentThreadFamily {
   if (optionId === 'chats') return 'chats'
@@ -123,8 +110,8 @@ function plural(noun: string, count: number): string {
 }
 
 /** Tooltip/aria text naming every active group in the family, so a hidden
- *  attention or retry group is still reachable from the single pill. */
-function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyActivity): string {
+ *  attention, error or retry group is still reachable from the single pill. */
+function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateCounts): string {
   const noun = FAMILY_NOUN[family]
   const parts: string[] = []
   if (activity.working > 0) {
@@ -146,87 +133,43 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
 /**
  * Thread counts per family, feeding the activity badges on the view rail.
  *
- * Working threads pulse in the working tone; threads parked on
- * `working-paused` pulse in the retry tone; threads in `awaiting_approval` or
- * `failed` pulse in the attention tone (error-red when a failure is inside the
- * family). Orchestration children are folded into their coordinator (same rule
- * as the sidebar rows) so a delegated run counts once instead of inflating the
- * total with hidden worker threads. A live-working thread always counts as
- * working, never as attention/retry, so no thread is ever double-counted.
+ * One pass over the one in-memory thread list (`scopeState.allScopeThreads`),
+ * on the shared state rule, so the rail and the sidebar's project rows report
+ * the same figures for the same threads ({@link countThreadStatesByGroup}).
+ *
+ * Working threads wear the working tone; threads parked on `working-paused`
+ * wear the retry tone; threads parked on the user (a permission, question or
+ * secret) wear the attention tone, and a failed total wears the error tone. A
+ * badge carries its count and never animates, because a running animation keeps
+ * the compositor producing frames for as long as it runs, which a parked state
+ * can hold open indefinitely. Orchestration children are folded into their
+ * coordinator (same rule as the sidebar rows) so a delegated run counts once
+ * instead of inflating the total with hidden worker threads. A live-working
+ * thread always counts as working, never as attention/retry, so no thread is
+ * ever double-counted.
+ *
+ * The unread axis lives inside the same counts: the mark under the activity pill
+ * reads `counts[family].unread`, so the rail and every project strip count the
+ * same threads on the same rule.
  */
 export class ViewRailActivity {
   counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {
-    const threads = scopeState.allScopeThreads
     // Re-check on a coarse clock only while a retry deadline is tracked, so a
     // 6h+ parked wait rejoins the count once its reset gets close.
     if (agentRuns.hasPendingRetry) subscribeToRetryClock()
-    const now = Date.now()
-    const working = threads.filter(
-      (thread) => !thread.archived && threadWorkingForIndicator(thread, now)
+    const counts = countThreadStatesByGroup(scopeState.allScopeThreads, (thread) =>
+      contentThreadFamily(thread)
     )
-    // The working predicate reads the agent-run store, so evaluate it once per
-    // thread instead of once in the filter above and again in the loop below.
-    const workingIds = new SvelteSet(working.map((thread) => thread.id))
-    const counts: ViewActivityCounts = {
-      projects: emptyFamilyActivity(),
-      chats: emptyFamilyActivity(),
-      assistant: emptyFamilyActivity()
+    return {
+      projects: counts.get('projects') ?? emptyThreadStateCounts(),
+      chats: counts.get('chats') ?? emptyThreadStateCounts(),
+      assistant: counts.get('assistant') ?? emptyThreadStateCounts()
     }
-    for (const thread of threads) {
-      if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const bucket = counts[contentThreadFamily(thread)]
-      const isWorking = workingIds.has(thread.id) || coordinatorHasActiveDelegates(thread, working)
-      if (isWorking) {
-        bucket.working += 1
-        continue
-      }
-      if (thread.status === 'working-paused') {
-        bucket.retry += 1
-        continue
-      }
-      if (thread.status === 'awaiting_approval' || thread.status === 'failed') {
-        bucket.attention += 1
-        if (thread.status === 'failed') bucket.attentionError = true
-      }
-    }
-    return counts
-  })
-
-  /** Persisted unread threads, rebuilt from the same startup-hydrated thread
-   *  snapshot used by the sidebar. This survives app restarts and includes
-   *  routine execution threads stored in the assistant space. */
-  unreadCounts: Record<ContentThreadFamily, number> = $derived.by(() => {
-    const threads = scopeState.allScopeThreads
-    const unread: Record<ContentThreadFamily, number> = {
-      projects: 0,
-      chats: 0,
-      assistant: 0
-    }
-    const unreadById = new SvelteSet(
-      threads
-        .filter(
-          (thread) =>
-            !thread.archived &&
-            thread.status === 'completed' &&
-            threadTracksReadStatus(thread) &&
-            !thread.read
-        )
-        .map((thread) => thread.id)
-    )
-    for (const thread of threads) {
-      if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const hasUnread =
-        unreadById.has(thread.id) ||
-        threads.some(
-          (candidate) => candidate.coordinatorThreadId === thread.id && unreadById.has(candidate.id)
-        )
-      if (hasUnread) unread[contentThreadFamily(thread)] += 1
-    }
-    return unread
   })
 
   /**
-   * A browser tab's assistant conversation, counted apart from every other family.
+   * A browser tab's assistant conversation, counted apart from every other
+   * family.
    *
    * These rows are held out of `scopeState.allScopeThreads` on purpose, so no
    * family badge can ever see them and the Browser item used to report only
@@ -236,26 +179,15 @@ export class ViewRailActivity {
    * Counted with the same rules as a family ({@link ViewRailActivity.counts}), so
    * a browser chat and a workspace chat read identically on the rail.
    */
-  browserAssistant: ViewFamilyActivity = $derived.by((): ViewFamilyActivity => {
+  browserAssistant: ThreadStateCounts = $derived.by((): ThreadStateCounts => {
     // Same retry clock as the family counts: a browser chat parked on a long
     // scheduled retry has to leave this count on its own, without waiting for
     // some other family's row to keep the clock alive.
     if (agentRuns.hasPendingRetry) subscribeToRetryClock()
-    const activity = emptyFamilyActivity()
-    const now = Date.now()
-    for (const thread of browserAssistant.threads) {
-      if (thread.archived) continue
-      if (threadWorkingForIndicator(thread, now)) {
-        activity.working += 1
-        continue
-      }
-      if (thread.status === 'awaiting_approval') activity.attention += 1
-      else if (thread.status === 'failed') {
-        activity.attention += 1
-        activity.attentionError = true
-      } else if (thread.status === 'working-paused') activity.retry += 1
-    }
-    return activity
+    return countThreadStates(
+      browserAssistant.threads.filter((thread) => !thread.archived),
+      Date.now()
+    )
   })
 
   /**
@@ -309,14 +241,17 @@ export class ViewRailActivity {
  * The speaker mark ({@link ViewRailBadges.playing}) is separate from that pill:
  * it rides the same option the family's badge does, so a view that is working and
  * playing sound shows both without either hiding the other.
+ *
+ * The unread mark carries the family's unread count, read off the same counts
+ * ({@link ThreadStateCounts.unread}), so it counts only a completed run nobody
+ * has opened and never doubles as a failure, a parked card, or a ready spec.
  */
 export function viewBadgesFor(
   optionId: HeaderViewOptionId,
   projectBadgeOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts,
-  unreadCounts: Record<ContentThreadFamily, number>,
   browserTransfers: BrowserDownloadOutstanding,
-  browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity(),
+  browserAssistantActivity: ThreadStateCounts = emptyThreadStateCounts(),
   audio: ViewAudioActivity = NO_AUDIO_ACTIVITY
 ): ViewRailBadges {
   if (optionId === 'browser') {
@@ -324,19 +259,18 @@ export function viewBadgesFor(
       activity:
         browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
       unread: null,
-      hasWorkingThreads: browserAssistantActivity.working > 0,
       playing: audio.global
     }
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) {
-    return { activity: null, unread: null, hasWorkingThreads: false, playing: false }
+    return { activity: null, unread: null, playing: false }
   }
   // The project family shares one badge option, so its sound mark rides the same
   // option its activity badge does; Chats and Assistant own their single view.
   const playing = audio.families.has(family)
   const unread = notificationPanelState.unreadRailSummary(family)
-  const threadUnreadCount = unreadCounts[family]
+  const threadUnreadCount = counts[family].unread
   const unreadCount = Math.max(unread?.count ?? 0, threadUnreadCount)
   const unreadBadge: ViewBadge | null =
     unreadCount > 0
@@ -363,20 +297,18 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: true,
       playing
     }
   }
   if (activity.attention > 0) {
     return {
       activity: {
-        tone: activity.attentionError ? 'error' : 'attention',
+        tone: 'attention',
         count: activity.attention,
         label: familyActivityLabel(family, activity),
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false,
       playing
     }
   }
@@ -389,11 +321,10 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false,
       playing
     }
   }
-  return { activity: null, unread: unreadBadge, hasWorkingThreads: false, playing }
+  return { activity: null, unread: unreadBadge, playing }
 }
 
 /**
@@ -405,10 +336,10 @@ export function viewBadgesFor(
  * the one thing on this view that time alone does not clear, so it is the one
  * thing the badge must not hide behind a download count.
  */
-function browserAgentBadge(activity: ViewFamilyActivity): ViewBadge | null {
+function browserAgentBadge(activity: ThreadStateCounts): ViewBadge | null {
   if (activity.attention > 0) {
     return {
-      tone: activity.attentionError ? 'error' : 'attention',
+      tone: 'attention',
       count: activity.attention,
       label: browserAssistantLabel(activity.attention, activity.attention === 1 ? 'needs' : 'need'),
       icon: FAMILY_ICONS.chats

@@ -288,13 +288,13 @@
     </p>
   </div>
 
-  <section class="mb-4 rounded-xl border bg-surface" aria-label="Agent defaults">
+  <section class="mb-4 border bg-surface" aria-label="Agent defaults">
     <div class="divide-y">
       {#each roles as role (role.id)}
         {@const Icon = role.icon}
         {@const selection = selectionFor(role.id)}
         <div class="flex items-center gap-4 p-4">
-          <div class="rounded-lg bg-primary/10 p-2 text-primary"><Icon size={18} /></div>
+          <div class="bg-primary/10 p-2 text-primary"><Icon size={18} /></div>
           <div class="min-w-0 flex-1">
             <h2 class="text-sm font-semibold text-foreground">{role.label}</h2>
             <p class="mt-0.5 text-xs text-muted">{role.description}</p>
@@ -335,7 +335,7 @@
             {#if selection}
               <button
                 type="button"
-                class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+                class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
                 title={`Clear ${role.label} default`}
                 aria-label={`Clear ${role.label} default`}
                 onclick={() => void clearModel(role.id)}
@@ -376,9 +376,9 @@
     </div>
   </section>
 
-  <section class="rounded-xl border bg-surface" aria-label="Image descriptor default">
+  <section class="border bg-surface" aria-label="Image descriptor default">
     <div class="flex items-center gap-4 p-4">
-      <div class="rounded-lg bg-primary/10 p-2 text-primary"><Eye size={18} /></div>
+      <div class="bg-primary/10 p-2 text-primary"><Eye size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Image descriptor</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -424,7 +424,7 @@
         {#if defaults.imageDescriptor}
           <button
             type="button"
-            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
             title="Clear image descriptor default"
             aria-label="Clear image descriptor default"
             onclick={() => void clearImageDescriptor()}
@@ -435,7 +435,7 @@
       </div>
     </div>
     <div class="flex items-center gap-4 border-t p-4">
-      <div class="rounded-lg bg-elevated p-2 text-muted"><RefreshCw size={18} /></div>
+      <div class="bg-elevated p-2 text-muted"><RefreshCw size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Fallback</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -485,7 +485,7 @@
         {#if defaults.imageDescriptorFallback}
           <button
             type="button"
-            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
             title="Clear image descriptor fallback default"
             aria-label="Clear image descriptor fallback default"
             onclick={() => void clearImageDescriptorFallback()}

@@ -16,7 +16,9 @@
     <p class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground" title={entry.label}>
       {entry.label}
     </p>
-    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
+    <span
+      class="shrink-0 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
+    >
       {memoryScopeLabel(entry)}
     </span>
   </div>

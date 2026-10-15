@@ -32,7 +32,7 @@
 
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-border bg-elevated px-4 py-3 transition-colors hover:border-muted"
+      class="flex w-full cursor-pointer items-center justify-center gap-2 border border-border bg-elevated px-4 py-3 transition-colors hover:border-muted"
       title="Copy the code"
       aria-label="Copy the device code"
       onclick={() => void githubSignIn.copyCode()}
@@ -70,7 +70,7 @@
   </div>
 {:else if githubSignIn.phase === 'authorized'}
   <div class="flex flex-col items-center justify-center py-8 text-center">
-    <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10">
+    <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
       <Check size={18} class="text-success" />
     </div>
     <p class="text-xs font-medium text-foreground">Signed in to GitHub</p>
@@ -80,7 +80,7 @@
   </div>
 {:else if githubSignIn.phase === 'expired'}
   <div class="flex flex-col items-center justify-center py-8 text-center">
-    <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-warning/10">
+    <div class="mb-2 flex h-10 w-10 items-center justify-center bg-warning/10">
       <TimerOff size={18} class="text-warning" />
     </div>
     <p class="text-xs font-medium text-foreground">Code expired</p>

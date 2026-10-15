@@ -174,20 +174,17 @@
   </div>
 
   {#if loading}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface px-4 py-3 text-xs text-muted">
+    <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
       <Loader2 size={14} class="animate-spin" /> Loading TypeSafe settings…
     </div>
   {:else}
     {#if loadError}
-      <p
-        class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger"
-        role="alert"
-      >
+      <p class="border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger" role="alert">
         {loadError}
       </p>
     {/if}
 
-    <div class="space-y-3 rounded-xl border bg-surface p-4">
+    <div class="space-y-3 border bg-surface p-4">
       {#if sourceLabel}
         <p class="flex items-center gap-1.5 text-xs text-muted">
           <CircleCheck size={14} class="shrink-0 text-success" />
@@ -213,7 +210,7 @@
             <KeyRound size={14} class="shrink-0" /> API key
           </span>
           <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+            class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
             type="password"
             autocomplete="off"
             placeholder={status?.hasKey
@@ -225,7 +222,7 @@
         </label>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Store this key on this device"
           disabled={!keyDraft.trim() || saving || !status?.secureStorageAvailable}
           onclick={() => void saveKey()}
@@ -250,7 +247,7 @@
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Test the key with a live TypeSafe request"
           disabled={checking || !status?.hasKey}
           onclick={() => void check()}
@@ -264,7 +261,7 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the TypeSafe console to manage keys and credits"
           data-external-url={TYPESAFE_CONSOLE_URL}
           onclick={() => void openInBrowser(TYPESAFE_CONSOLE_URL)}
@@ -274,7 +271,7 @@
         {#if status?.keySource === 'device'}
           <button
             type="button"
-            class="flex h-9 items-center gap-2 rounded-lg border border-danger/30 px-3 text-xs font-medium text-danger hover:bg-danger/10"
+            class="flex h-9 items-center gap-2 border border-danger/30 px-3 text-xs font-medium text-danger hover:bg-danger/10"
             title="Remove the key stored on this device"
             onclick={() => (confirmingRemove = true)}
           >

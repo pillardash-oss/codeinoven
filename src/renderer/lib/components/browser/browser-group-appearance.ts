@@ -51,7 +51,7 @@ export function browserGroupAccent(group: GlobalBrowserGroup): string {
 
 /**
  * The icon of anything wearing the browser appearance vocabulary, drawn by the
- * very resolver projects and routines use, so a picked image, a pasted SVG, a
+ * very resolver projects and assistants use, so a picked image, a pasted SVG, a
  * library icon and the colour fallback all render through one code path.
  * `storedImageUrl` is the data URL read back from the entity's `imagePath`,
  * when one has been loaded. Shared by the group and box rows.
@@ -91,7 +91,7 @@ export function browserGroupIconUrl(
 
 /**
  * The image path a tab or group should end up with after an edit, mirroring how
- * a routine's image and SVG icon interact:
+ * an assistant's image and SVG icon interact:
  *
  *  - a freshly picked image wins,
  *  - a pasted SVG replaces a stored image,

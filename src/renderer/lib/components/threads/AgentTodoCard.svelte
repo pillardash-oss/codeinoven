@@ -1,12 +1,9 @@
 <script lang="ts">
-  import { Check, ChevronDown, Circle, ListChecks, Loader2, X } from '@lucide/svelte'
-  import { slide } from 'svelte/transition'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
-  import {
-    activeAgentTodoIndex,
-    agentTodoProgressLabel,
-    type AgentTodoItem
-  } from '$lib/agent-todos'
+  import { ListChecks, TriangleAlert, X } from '@lucide/svelte'
+  import { fly } from 'svelte/transition'
+  import CardStack from '../shared/CardStack.svelte'
+  import { rowArrive } from '../shared/card-motion'
+  import { activeAgentTodoIndex, agentTodoCounter, type AgentTodoItem } from '$lib/agent-todos'
 
   interface Props {
     items: AgentTodoItem[]
@@ -14,36 +11,75 @@
     busy: boolean
     /** The run is over, so the list on screen is a record and not live progress. */
     stopped: boolean
+    /**
+     * Another CodeInOven instance is streaming this thread's turn right now.
+     * `busy` is false here because none of that stream reaches this window, so
+     * without this the list would report a live run as stopped.
+     */
+    foreign?: boolean
+    /** Another card sits directly above the list, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
 
-  let { items, signature, busy, stopped, onClose }: Props = $props()
+  let {
+    items,
+    signature,
+    busy,
+    stopped,
+    foreign = false,
+    stackedAbove = false,
+    onClose
+  }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
   let lastSignature = $state('')
 
-  let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
   /**
-   * The task line beside the counter on a collapsed card. Only a running turn
-   * has a current task: a stopped turn left its list behind, and naming a task
-   * here would read as work still in progress.
+   * A run that is live, wherever it streams from: this window's own turn, or the
+   * one another instance is streaming. Either way the list on screen is live
+   * progress and the task the run is on has to be named.
    */
-  let currentItem = $derived(
-    busy
-      ? (items.find((item) => item.status === 'in_progress') ??
-          items.find((item) => item.status === 'pending'))
-      : undefined
+  let live = $derived(busy || foreign)
+  let activeIndex = $derived(activeAgentTodoIndex(items, live))
+  let counter = $derived(agentTodoCounter(items, activeIndex))
+  /**
+   * What the list is, in one reading. A run another window is streaming is live
+   * work, not a stopped one: the item that is marked active is marked by that
+   * window's activity, and calling it "Stopped" here contradicts the transfer
+   * card sitting under it.
+   */
+  let chip = $derived(
+    foreign
+      ? { text: 'Live elsewhere' }
+      : busy
+        ? { text: 'Running' }
+        : { text: 'Stopped', tone: 'urgent' as const }
   )
-  let activeIndex = $derived(activeAgentTodoIndex(items, busy))
-  let progressLabel = $derived(agentTodoProgressLabel(items.length, completedCount, activeIndex))
   /**
    * The turn stopped with tasks it never completed, so the list on screen is a
    * record of where the run left off and not live progress. Naming that state
    * keeps a reader from taking an abandoned list for the app having lost track.
    */
   let stoppedUnfinished = $derived(stopped && items.some((item) => item.status !== 'completed'))
+
+  /**
+   * The stack's fold control writes `folded` directly, so expose `!open` through
+   * a getter/setter: unfolding pins the card open and folding clears the pin,
+   * exactly what the old header toggle did before the control moved into the head.
+   */
+  const foldState = {
+    get folded(): boolean {
+      return !open
+    },
+    set folded(value: boolean) {
+      open = !value
+      userPinnedOpen = !value
+    }
+  }
 
   $effect(() => {
     const currentSignature = signature
@@ -59,54 +95,41 @@
     }, 4_000)
     return () => window.clearTimeout(timer)
   })
-
-  function toggleOpen(): void {
-    if (open) {
-      open = false
-      userPinnedOpen = false
-      return
-    }
-    open = true
-    userPinnedOpen = true
-  }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="overflow-hidden rounded-t-xl border border-b-0 border-info/20 bg-elevated/50"
-  aria-label="Agent task progress"
+<CardStack
+  label="Agent task progress"
+  icon={ListChecks}
+  title="Tasks"
+  {chip}
+  warn={stoppedUnfinished}
+  {stackedAbove}
+  bind:folded={foldState.folded}
+  foldLabel="task list"
 >
-  <!-- Header is a row rather than one full-width button so the close control can
-  sit beside the fold toggle instead of inside it. -->
-  <div class="flex items-center">
-    <button
-      type="button"
-      class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-elevated"
-      aria-expanded={open}
-      onclick={toggleOpen}
+  {#snippet meta()}
+    <span
+      class="border border-border px-1.5 py-0.5 text-[0.6875rem] tabular-nums text-foreground"
+      title={counter.meaning}
     >
-      <ListChecks size={14} class="shrink-0 text-info" />
-      <span class="shrink-0 text-xs font-semibold text-foreground">Tasks</span>
-      <span class="shrink-0 text-[0.6875rem] tabular-nums text-dimmed">
-        {progressLabel}
+      {counter.value}/{items.length}
+    </span>
+    <span class="sr-only">{counter.meaning}</span>
+    {#if stoppedUnfinished}
+      <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-warning">
+        <TriangleAlert size={12} class="shrink-0" />
+        Agent did not finish their turn
       </span>
-      {#if !open && currentItem}
-        <span class="min-w-0 flex-1 truncate text-xs text-muted">{currentItem.label}</span>
-      {:else}
-        <span class="flex-1"></span>
-      {/if}
-      <ChevronDown
-        size={13}
-        class="shrink-0 text-dimmed transition-transform {open ? '' : 'rotate-180'}"
-      />
-    </button>
+    {/if}
+  {/snippet}
 
+  {#snippet controls()}
     <!-- Only offered once the turn stops, so a closed card can never hide live
     task progress. -->
     {#if !busy}
       <button
         type="button"
-        class="mr-2 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Close task list"
         title="Close task list"
         onclick={onClose}
@@ -114,35 +137,28 @@
         <X size={13} />
       </button>
     {/if}
-  </div>
+  {/snippet}
 
-  {#if open}
-    <div
-      transition:slide={foldSlide()}
-      class="max-h-56 overflow-y-auto border-t px-3 py-2"
-      aria-live="polite"
-    >
+  {#snippet body()}
+    <div class="max-h-56 overflow-y-auto px-3 py-2" aria-live="polite">
       <ul class="space-y-1.5">
+        <!-- A task the agent adds arrives as a row; a task that changes state
+           inks to its new colour where it stands, so progress reads as movement
+           in the list the user is already watching rather than a redraw. -->
         {#each items as item, index (`${item.id}-${index}`)}
-          <li class="flex items-start gap-2 text-xs">
-            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
-              {#if item.status === 'completed'}
-                <span
-                  class="flex h-4 w-4 items-center justify-center rounded-full bg-success/15 text-success"
-                >
-                  <Check size={11} />
-                </span>
-              {:else if index === activeIndex}
-                <Loader2 size={13} class="animate-spin text-info" />
-              {:else}
-                <Circle size={12} class="text-dimmed" />
-              {/if}
-            </span>
+          <li class="flex items-start gap-2 text-xs" in:fly={rowArrive()}>
+            <span
+              class="mt-1 h-2 w-2 shrink-0 transition-colors {item.status === 'completed'
+                ? 'bg-success'
+                : index === activeIndex
+                  ? 'bg-info'
+                  : 'border border-border-strong'}"
+            ></span>
             <span
               class:line-through={item.status === 'completed'}
               class:text-dimmed={item.status === 'completed'}
               class:text-foreground={item.status !== 'completed'}
-              class="min-w-0 flex-1 leading-relaxed"
+              class="min-w-0 flex-1 leading-relaxed transition-colors"
             >
               {item.label}
             </span>
@@ -150,11 +166,5 @@
         {/each}
       </ul>
     </div>
-  {/if}
-
-  {#if stoppedUnfinished}
-    <p class="border-t px-3 py-1.5 text-center text-[0.6875rem] leading-relaxed text-warning">
-      The agent ended its turn without clearing this list
-    </p>
-  {/if}
-</section>
+  {/snippet}
+</CardStack>

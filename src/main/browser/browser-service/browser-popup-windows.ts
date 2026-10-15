@@ -303,11 +303,21 @@ export class BrowserPopupWindows {
    * it downloads.
    */
   tabIdForContents(contentsId: number): string | undefined {
+    return this.recordForContents(contentsId)?.tabId
+  }
+
+  /**
+   * The popup window a `WebContents` is the page of, if any.
+   *
+   * A popup's page is a page in the app's browser just like a tab's, so the same
+   * reports arrive with its contents; this is how a caller tells the two apart.
+   */
+  recordForContents(contentsId: number): BrowserPopupWindowRecord | null {
     for (const record of this.popups.values()) {
       const page = pageOf(record)
-      if (page && page.id === contentsId) return record.tabId
+      if (page && page.id === contentsId) return record
     }
-    return undefined
+    return null
   }
 
   has(id: string): boolean {

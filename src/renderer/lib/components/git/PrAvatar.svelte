@@ -53,7 +53,7 @@
   `alt` on the image, exactly as the monogram was before it had a picture.
 -->
 <span
-  class="relative flex {boxClass} shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold uppercase {tone}"
+  class="relative flex {boxClass} shrink-0 items-center justify-center overflow-hidden font-semibold uppercase {tone}"
   aria-hidden="true"
 >
   {initial}

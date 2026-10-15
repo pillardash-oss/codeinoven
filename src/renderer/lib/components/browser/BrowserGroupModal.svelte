@@ -42,7 +42,7 @@
   let name = $state(existing?.name ?? '')
   let description = $state(existing?.description ?? '')
   let pinned = $state(existing?.pinned ?? false)
-  // The same appearance vocabulary as a project or an assistant routine: a hex
+  // The same appearance vocabulary as a project or an assistant: a hex
   // colour, a shared SVG icon key, a pasted SVG, and a picked image file.
   let color = $state<string | undefined>(existing?.color ?? undefined)
   let iconType = $state<string | undefined>(existing?.iconType ?? undefined)
@@ -151,7 +151,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Name</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       placeholder="Research"
       maxlength={MAX_BROWSER_GROUP_NAME_LENGTH}
       bind:value={name}
@@ -167,13 +167,13 @@
   <label class="block">
     <span class="mb-1.5 block text-xs font-medium text-muted">Description</span>
     <textarea
-      class="min-h-20 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+      class="min-h-20 w-full resize-y border bg-elevated px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
       placeholder="What this group is for"
       maxlength={MAX_BROWSER_GROUP_DESCRIPTION_LENGTH}
       bind:value={description}></textarea>
   </label>
 
-  <div class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+  <div class="flex items-center justify-between gap-3 border px-3 py-2.5">
     <div class="min-w-0">
       <p class="text-sm text-foreground">Pin group</p>
       <p class="mt-0.5 text-[0.6875rem] text-dimmed">
@@ -188,7 +188,7 @@
       {#if existing}
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          class="flex items-center gap-1.5 px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
           title="Delete this group. Its tabs stay open."
           onclick={() => (confirmDelete = true)}
         >
@@ -200,7 +200,7 @@
         {#if hasAppearance}
           <button
             type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
             title="Reset appearance"
             onclick={resetAppearance}
           >
@@ -209,7 +209,7 @@
         {/if}
         <button
           type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
           title="Close without saving"
           onclick={onClose}
         >
@@ -217,7 +217,7 @@
         </button>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex items-center gap-1.5 bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={!canSave}
           title={existing ? 'Save this group' : 'Create this group'}
           onclick={save}

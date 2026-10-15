@@ -16,7 +16,7 @@
 </script>
 
 <span
-  class={`inline-flex shrink-0 items-center justify-center rounded-md text-muted ${className}`}
+  class={`inline-flex shrink-0 items-center justify-center text-muted ${className}`}
   style:width={`${size}px`}
   style:height={`${size}px`}
   title={accessibleLabel}

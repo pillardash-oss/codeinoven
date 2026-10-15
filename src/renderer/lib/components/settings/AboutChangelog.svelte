@@ -37,15 +37,15 @@
   })
 </script>
 
-<div id="settings-block-about-changelog" class="mt-4 rounded-xl border bg-surface p-4">
-  <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <h3 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+<div id="settings-block-about-changelog" class="mt-4 border bg-surface p-4">
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+    <h3 class="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
       <ScrollText size={13} />
       Changelog
     </h3>
     {#if changelog}
       <div class="flex items-center gap-2 text-[0.6875rem] text-muted">
-        <span class="rounded-lg bg-elevated px-2 py-0.5 font-mono">{changelog.tag}</span>
+        <span class="border border-border bg-elevated px-2 py-0.5 font-mono">{changelog.tag}</span>
         {#if formattedDate}
           <span>{formattedDate}</span>
         {/if}
@@ -67,7 +67,7 @@
       <span>Changelog is unavailable right now.</span>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs font-medium hover:bg-overlay"
+        class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs font-medium hover:bg-overlay"
         title="Retry fetching the changelog"
         onclick={() => void load()}
       >

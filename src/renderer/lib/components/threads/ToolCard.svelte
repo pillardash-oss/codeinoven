@@ -15,10 +15,12 @@
     XCircle
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
+  import { formatDurationMs } from '$lib/format/duration'
   import LongTextBlock from '../markdown/LongTextBlock.svelte'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
@@ -49,7 +51,6 @@
   }: Props = $props()
 
   let open = $state(false)
-  let userToggled = $state(false)
   const clock = new ElapsedTimer()
   let checkpointDiffs = $state<ToolFileDiff[]>([])
   let loadedCheckpointKey = $state<string | null>(null)
@@ -61,10 +62,9 @@
   const displayDiffs = $derived(fileDiffs.length > 0 ? fileDiffs : checkpointDiffs)
 
   $effect(() => {
-    if (displayDiffs.length > 0 && !userToggled) open = true
-  })
-
-  $effect(() => {
+    // Nothing is read until the reader opens the card: a trace can mount
+    // hundreds of folded rows, and each diff read is an IPC round trip.
+    if (!open) return
     const paths = checkpointPathsForTool(part, checkpointPaths)
     const currentProjectId = projectId
     const currentThreadId = threadId
@@ -126,6 +126,8 @@
   })
 
   const inputPreview = $derived(formatInput(part.state.input))
+  /** The tool-kind glyph: washed out with the row, brighter on hover. */
+  const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
     // Code mode outranks the name heuristics: a call a script made can carry
     // any inner tool name (read, bash, an MCP call), and it belongs to the
@@ -156,12 +158,19 @@
     part.state.title ?? (toolKind === 'code' ? 'Code mode' : part.tool)
   )
 
+  /** Bound on the collapsed row's input preview. The row truncates to the
+   *  width it actually has in CSS, so this only stops a pathological first
+   *  argument (a whole file's contents) being copied into a second string on
+   *  every render; it is far beyond any width the row can show. */
+  const PREVIEW_MAX_CHARS = 2_000
+
   function formatInput(input: Record<string, unknown>): string {
     const entries = Object.entries(input)
     if (entries.length === 0) return ''
     const first = entries[0]
     const value = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1])
-    const preview = value.length > 80 ? `${value.slice(0, 80)}…` : value
+    const preview =
+      value.length > PREVIEW_MAX_CHARS ? `${value.slice(0, PREVIEW_MAX_CHARS)}…` : value
     return `${first[0]}: ${preview}`
   }
 
@@ -187,15 +196,14 @@
   const giantInput = $derived(inputJson.length > GIANT_TOOL_STRING_CHARS ? inputJson : null)
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-surface">
+<div class="min-w-0">
   <button
     type="button"
-    class="flex w-full items-center gap-2 overflow-x-auto overflow-y-hidden px-3 py-2 text-left transition-colors hover:bg-elevated"
+    class="group/tool flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
       open = !open
-      userToggled = true
     }}
   >
     {#if statusMeta.icon === Loader2}
@@ -208,30 +216,34 @@
       <Clock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
     {#if toolKind === 'code'}
-      <CodeXml size={12} class="shrink-0 text-dimmed" />
+      <CodeXml size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
-      <BookOpenText size={12} class="shrink-0 text-dimmed" />
+      <BookOpenText size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
-      <FilePenLine size={12} class="shrink-0 text-dimmed" />
+      <FilePenLine size={12} class={kindIconClass} />
     {:else if toolKind === 'write'}
-      <FilePlus2 size={12} class="shrink-0 text-dimmed" />
+      <FilePlus2 size={12} class={kindIconClass} />
     {:else if toolKind === 'search'}
-      <Search size={12} class="shrink-0 text-dimmed" />
+      <Search size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}
-      <GlobeCode size={12} class="shrink-0 text-dimmed" />
+      <GlobeCode size={12} class={kindIconClass} />
     {:else if toolKind === 'shell'}
-      <Terminal size={12} class="shrink-0 text-dimmed" />
+      <Terminal size={12} class={kindIconClass} />
     {:else}
-      <Wrench size={12} class="shrink-0 text-dimmed" />
+      <Wrench size={12} class={kindIconClass} />
     {/if}
-    <span class="shrink-0 font-mono text-xs font-medium text-foreground">
+    <span class="shrink-0 font-mono font-medium">
       {codeModeLabel}
     </span>
     {#if start}
-      <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDurationSeconds(elapsed)}</span>
+      <span
+        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
+        >{formatDurationMs(elapsed * 1000)}</span
+      >
     {/if}
     {#if !open && inputPreview}
-      <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed"
+      <span
+        class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
         >{inputPreview}</span
       >
     {:else}
@@ -239,12 +251,14 @@
     {/if}
     <ChevronRight
       size={13}
-      class="shrink-0 text-dimmed transition-transform {open ? 'rotate-90' : ''}"
+      class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
+        ? 'rotate-90'
+        : ''}"
     />
   </button>
 
   {#if open}
-    <div class="space-y-2 border-t px-3 py-2">
+    <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pr-3 pl-3">
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}
@@ -260,7 +274,7 @@
             Input
           </p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{inputJson}</pre>
+            class="max-h-40 overflow-auto bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{inputJson}</pre>
         </div>
       {/if}
       {#if displayDiffs.length === 0 && part.state.output}
@@ -272,7 +286,7 @@
             <LongTextBlock text={giantOutput} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
           {:else}
             <pre
-              class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
+              class="max-h-40 overflow-auto bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
                 .state.output}</pre>
           {/if}
         </div>
@@ -286,7 +300,7 @@
             <LongTextBlock text={giantError} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
           {:else}
             <pre
-              class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
+              class="max-h-40 overflow-auto bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
                 .state.error}</pre>
           {/if}
         </div>

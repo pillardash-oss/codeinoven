@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { ShieldCheck } from '@lucide/svelte'
+  import { Check, ExternalLink, RefreshCw, ShieldCheck } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type { AuditReport, ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -51,6 +55,11 @@
 
   let folded = $state(false)
 
+  const chip: CardChipData = {
+    text: 'Ready',
+    title: 'The audit report is ready to read'
+  }
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -91,104 +100,104 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="rounded-xl border bg-surface p-4"
-  aria-label="Auditor is done"
->
-  <div class="flex items-start gap-3">
-    <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
-    <div class="min-w-0 flex-1">
-      <h3 class="text-sm font-semibold">Auditor is done</h3>
-      {#if !folded}
-        <p class="mt-1 text-xs text-muted">
-          Read the findings, add annotations, and send required changes to the primary agent.
-        </p>
-        <p class="mt-1 text-[0.6875rem] text-dimmed">
-          Audited by {report.provenance.providerId ?? 'provider'} /
-          {report.provenance.modelId ?? 'model'}
-        </p>
-        {#if report.assignmentVersion !== undefined}
-          <p class="mt-1 text-[0.6875rem] font-medium text-muted">
-            Assignment v{report.assignmentVersion} · {report.reworkCycle
-              ? `Rework ${report.reworkCycle}`
-              : 'Initial implementation'}
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Auditor is done">
+    <CardHead
+      icon={ShieldCheck}
+      title="Auditor is done"
+      {chip}
+      bind:folded
+      foldLabel="audit report"
+    />
+
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-1.5 px-3 py-2.5">
+          <p class="text-xs leading-relaxed text-muted">
+            Read the findings, add annotations, and send required changes to the primary agent.
           </p>
-        {/if}
-      {/if}
-    </div>
-    <CardFoldToggle bind:folded label="audit report" />
-  </div>
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-        <button
-          class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay"
-          disabled={busy || !onCancel}
-          title="Cancel this audit cycle"
-          onclick={cancelAudit}
-        >
-          Cancel
-        </button>
-        <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {#if settings}
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={settings.harnessId}
-              providerId={settings.providerId}
-              modelId={settings.modelId}
-              accountId={settings.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="top"
-              label="Change"
-              variant="action"
-              onSelect={chooseModel}
-              thinkingLevel={settings.thinkingLevel}
-              runtimeSettings={settings}
-              onSelectThinking={chooseThinking}
-              onSelectRuntime={chooseRuntime}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
-          {:else}
-            <button
-              class="rounded-lg border bg-elevated px-3 py-2 text-xs font-medium text-muted disabled:opacity-50"
-              disabled
-              title="Choose an auditor model before running another audit"
-            >
-              Change
-            </button>
-          {/if}
-          <button
-            class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:opacity-50"
-            disabled={busy || !settings || !onReaudit}
-            title="Run the audit again with the selected auditor model"
-            onclick={() => settings && onReaudit?.(settings)}
-          >
-            Reaudit
-          </button>
-          <button
-            class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-            title="View the audit report"
-            onclick={viewReport}
-          >
-            View report
-          </button>
-          {#if report.annotations.length === 0}
-            <button
-              class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              disabled={busy || !onComplete}
-              title="Complete this audit cycle"
-              onclick={completeAudit}
-            >
-              Complete
-            </button>
+          <p class="text-[0.6875rem] text-dimmed">
+            Audited by {report.provenance.providerId ?? 'provider'} /
+            {report.provenance.modelId ?? 'model'}
+          </p>
+          {#if report.assignmentVersion !== undefined}
+            <p class="text-[0.6875rem] font-medium text-muted">
+              Assignment v{report.assignmentVersion} · {report.reworkCycle
+                ? `Rework ${report.reworkCycle}`
+                : 'Initial implementation'}
+            </p>
           {/if}
         </div>
+
+        <CardFoot>
+          {#snippet left()}
+            <CardButton
+              label="Cancel"
+              title="Cancel this audit cycle"
+              variant="ghost"
+              disabled={busy || !onCancel}
+              onclick={cancelAudit}
+            />
+          {/snippet}
+          {#snippet right()}
+            {#if settings}
+              <ModelPicker
+                {providers}
+                {projectId}
+                harnessId={settings.harnessId}
+                providerId={settings.providerId}
+                modelId={settings.modelId}
+                accountId={settings.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="top"
+                label="Change"
+                variant="action"
+                onSelect={chooseModel}
+                thinkingLevel={settings.thinkingLevel}
+                runtimeSettings={settings}
+                onSelectThinking={chooseThinking}
+                onSelectRuntime={chooseRuntime}
+                {onToggleFavorite}
+                {onReorderFavorite}
+              />
+            {:else}
+              <CardButton
+                label="Change"
+                title="Choose an auditor model before running another audit"
+                variant="secondary"
+                disabled
+              />
+            {/if}
+            <CardButton
+              label="Reaudit"
+              title="Run the audit again with the selected auditor model"
+              icon={RefreshCw}
+              variant="secondary"
+              disabled={busy || !settings || !onReaudit}
+              onclick={() => settings && onReaudit?.(settings)}
+            />
+            <CardButton
+              label="View report"
+              title="View the audit report"
+              icon={ExternalLink}
+              variant="secondary"
+              onclick={viewReport}
+            />
+            {#if report.annotations.length === 0}
+              <CardButton
+                label="Complete"
+                title="Complete this audit cycle"
+                icon={Check}
+                variant="primary"
+                disabled={busy || !onComplete}
+                onclick={completeAudit}
+              />
+            {/if}
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

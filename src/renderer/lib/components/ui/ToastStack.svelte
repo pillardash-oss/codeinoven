@@ -49,7 +49,7 @@
   {infoIcon}
   toastOptions={{
     classes: {
-      toast: 'group toast shadow-lg rounded-lg font-[inherit]',
+      toast: 'group toast shadow-lg font-[inherit]',
       title: 'text-[0.8125rem] font-semibold tracking-tight',
       description: 'group-[.toast]:text-muted text-xs',
       actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-on-primary',

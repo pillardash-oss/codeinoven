@@ -43,11 +43,11 @@
   <span class="flex min-w-0 shrink-0 items-center gap-0.5" title={`Runs in ${label}`}>
     {#each boxes.slice(0, MAX_CHIPS) as box (box.id)}
       {@const url = iconUrl(box)}
-      <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm" title={box.name}>
+      <span class="flex h-4 w-4 shrink-0 items-center justify-center" title={box.name}>
         {#if url}
-          <img src={url} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          <img src={url} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <span class="h-2 w-2 rounded-full" style:background-color={browserAppearanceAccent(box)}
+          <span class="h-2 w-2" style:background-color={browserAppearanceAccent(box)}
           ></span>
         {/if}
       </span>

@@ -54,7 +54,7 @@ export function reviewBrowserAction(
     reason
   })
   if (operation === 'viewport' || operation === 'reload') {
-    return allow('Routine browser presentation or reload action.')
+    return allow('Assistant browser presentation or reload action.')
   }
   if (operation === 'navigate') {
     return typeof input.url === 'string' && browsingUrl(input.url)

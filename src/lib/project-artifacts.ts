@@ -35,24 +35,24 @@ export function chatThreadWorkspaceDirectory(threadId: string): string {
 }
 
 /**
- * Storage-root-relative workspace directory every task of one routine mounts.
- * A routine behaves like a project, so its tasks share one folder.
+ * Storage-root-relative workspace directory every task of one assistant mounts.
+ * An assistant behaves like a project, so its tasks share one folder.
  */
-export function assistantRoutineWorkspaceDirectory(routineId: string): string {
-  return join(ASSISTANT_CWD_DIR, routineId)
+export function assistantWorkspaceDirectory(assistantId: string): string {
+  return join(ASSISTANT_CWD_DIR, assistantId)
 }
 
 /**
- * Storage-root-relative workspace directory of one assistant task. A routine
- * behaves like a project, so every task in it shares `assistant-cwd/<routineId>`;
- * a routine-less task falls back to its own thread id so it still lives under
- * the assistant root without colliding with any routine.
+ * Storage-root-relative workspace directory of one assistant task. An assistant
+ * behaves like a project, so every task in it shares `assistant-cwd/<assistantId>`;
+ * an assistant-less task falls back to its own thread id so it still lives under
+ * the assistant root without colliding with any assistant.
  */
 export function assistantThreadWorkspaceDirectory(
   threadId: string,
-  routineId?: string | null
+  assistantId?: string | null
 ): string {
-  return assistantRoutineWorkspaceDirectory(routineId ?? threadId)
+  return assistantWorkspaceDirectory(assistantId ?? threadId)
 }
 
 /** Storage-root-relative workspace directory of one browser tab's agent chat:

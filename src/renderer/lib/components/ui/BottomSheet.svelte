@@ -27,7 +27,7 @@
     <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-dimmed">{title}</p>
     <button
       type="button"
-      class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
+      class="flex h-9 w-9 cursor-pointer items-center justify-center text-muted transition-colors active:bg-elevated"
       aria-label="Close {title}"
       title="Close"
       onclick={onClose}

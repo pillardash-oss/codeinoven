@@ -2,9 +2,11 @@ import type {
   BaseUrlProvider,
   BaseUrlProviderCreateRequest,
   BaseUrlProviderModel,
-  BaseUrlProviderUpdateRequest
+  BaseUrlProviderUpdateRequest,
+  BaseUrlProviderUsageFormat
 } from '../../lib/types'
 import { CODEINOVEN_CUSTOM_PROVIDER_PREFIX } from '../../lib/custom-provider-id'
+import { isBaseUrlProviderUsageFormat } from '../../lib/provider-usage-format'
 import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
@@ -37,6 +39,7 @@ interface NormalizedBaseUrlProvider {
   headers?: Record<string, string>
   models: BaseUrlProviderModel[]
   usagePath?: string
+  usageFormat?: BaseUrlProviderUsageFormat
   modelsPath?: string
   enabled: boolean
 }
@@ -200,6 +203,10 @@ export class BaseUrlProviderService {
         ...(patch.usagePath === undefined
           ? { usagePath: current.usagePath ?? '' }
           : { usagePath: patch.usagePath }),
+        // An explicit empty string clears the format; undefined keeps it.
+        ...(patch.usageFormat === undefined
+          ? { usageFormat: current.usageFormat }
+          : { usageFormat: patch.usageFormat || undefined }),
         // An explicit empty string clears the route; undefined keeps it.
         ...(patch.modelsPath === undefined
           ? { modelsPath: current.modelsPath ?? '' }
@@ -341,6 +348,7 @@ function normalizeCreateInput(
   const headers = normalizeHeaders(input.headers)
   const models = normalizeModels(input.models, id)
   const usagePath = normalizeUsagePath(input.usagePath)
+  const usageFormat = normalizeUsageFormat(input.usageFormat)
   const modelsPath = normalizeUsagePath(input.modelsPath)
   const enabled = typeof input.enabled === 'boolean' ? input.enabled : true
   return {
@@ -351,6 +359,7 @@ function normalizeCreateInput(
     headers,
     models,
     ...(usagePath ? { usagePath } : {}),
+    ...(usageFormat ? { usageFormat } : {}),
     ...(modelsPath ? { modelsPath } : {}),
     enabled
   }
@@ -378,6 +387,22 @@ export function normalizeUsagePath(value: string | undefined): string | undefine
   }
   if (trimmed.length > 2_048) {
     throw new TypeError('Usage route must be at most 2048 characters')
+  }
+  return trimmed
+}
+
+/**
+ * Validate the optional usage response format. An empty string clears it (the
+ * reader then auto-detects); any other value must be a known format id.
+ */
+export function normalizeUsageFormat(
+  value: string | undefined
+): BaseUrlProviderUsageFormat | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (!isBaseUrlProviderUsageFormat(trimmed)) {
+    throw new TypeError('Usage format must be a known provider usage format id')
   }
   return trimmed
 }
@@ -537,6 +562,14 @@ function parseProvider(value: unknown): BaseUrlProvider {
     /^\/?[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*$/u,
     'Model list route'
   )
+  const usagePath = optionalStringMatching(
+    raw['usagePath'],
+    /^(?:https?:\/\/|\/)?[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*$/u,
+    'Usage route'
+  )
+  const usageFormat = isBaseUrlProviderUsageFormat(raw['usageFormat'])
+    ? raw['usageFormat']
+    : undefined
   return {
     id,
     harnessId,
@@ -549,6 +582,8 @@ function parseProvider(value: unknown): BaseUrlProvider {
     ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
     ...(apiKeyEnvVar === undefined ? {} : { apiKeyEnvVar }),
     ...(headers === undefined ? {} : { headers }),
+    ...(usagePath ? { usagePath } : {}),
+    ...(usageFormat === undefined ? {} : { usageFormat }),
     ...(modelsPath ? { modelsPath } : {}),
     models
   }

@@ -81,8 +81,8 @@
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { getRoutineIcon } from '$lib/routine-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { getAssistantIcon } from '$lib/assistant-icons'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -120,7 +120,7 @@
     type AppConfigPatch,
     type InstanceRole,
     type Project,
-    type Routine,
+    type Assistant,
     type ThemePreference,
     type Thread
   } from '$shared/types'
@@ -156,7 +156,7 @@
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
   let instanceRole = $state<InstanceRole | null>(null)
-  /** The one-time start-at-login offer, raised once after the first routine how-to. */
+  /** The one-time start-at-login offer, raised once after the first assistant knowledge. */
   let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController(
@@ -170,7 +170,7 @@
   const assistantSearch = new ThreadSearchPaletteController(
     {
       openThread: (thread) => void openThreadFromSearch(thread),
-      openRoutine: (routine) => void openRoutineFromSearch(routine)
+      openAssistant: (assistant) => void openAssistantFromSearch(assistant)
     },
     'assistant'
   )
@@ -249,7 +249,7 @@
   let spotlightScreenId = $derived(resolveSpotlightScreen())
 
   /** The footer filter for a project-scoped search: the local projects, driving
-   *  the same multi-select picker the routine and browser-group screens use. */
+   *  the same multi-select picker the assistant and browser-group screens use. */
   function projectFooterFilter(
     selectedIds: readonly string[],
     onChange: (ids: string[]) => void
@@ -270,24 +270,24 @@
     }
   }
 
-  /** The footer filter for assistant search: one row per routine. */
-  function routineFooterFilter(
+  /** The footer filter for assistant search: one row per assistant. */
+  function assistantFooterFilter(
     selectedIds: readonly string[],
     onChange: (ids: string[]) => void
   ): PaletteFooterFilter {
     return {
-      options: assistantRoutines.routines.map((routine) => ({
-        id: routine.id,
-        label: routine.name,
-        ...(routine.color ? { color: routine.color } : {}),
-        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+      options: assistants.assistants.map((assistant) => ({
+        id: assistant.id,
+        label: assistant.name,
+        ...(assistant.color ? { color: assistant.color } : {}),
+        iconUrl: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
       })),
       selectedIds,
       onChange,
-      allLabel: 'All Routines',
-      ariaLabel: 'Scope search to routines',
-      searchPlaceholder: 'Search routines…',
-      emptyMessage: 'No matching routines'
+      allLabel: 'All Assistants',
+      ariaLabel: 'Scope search to assistants',
+      searchPlaceholder: 'Search assistants…',
+      emptyMessage: 'No matching assistants'
     }
   }
 
@@ -391,15 +391,15 @@
           ...shell,
           actions: assistantSearch.actions,
           title: 'Search assistant tasks',
-          placeholder: 'Search routines, tasks, and messages…',
+          placeholder: 'Search assistants, tasks, and messages…',
           emptyLabel: assistantSearch.loading
             ? 'Searching assistant tasks…'
-            : 'Type at least two characters to search assistant tasks and routines',
+            : 'Type at least two characters to search assistant tasks and assistants',
           headerIcon: CONTENT_FAMILY_ICONS.assistant,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
-          filter: routineFooterFilter(assistantSearch.scopeIds, (ids) =>
+          filter: assistantFooterFilter(assistantSearch.scopeIds, (ids) =>
             assistantSearch.setScope(ids)
           ),
           onBack: backToSpotlightHome,
@@ -556,7 +556,7 @@
   /**
    * Answer the one-time start-at-login offer. The choice and the flag that keeps
    * the question from ever being raised again are saved together, so no later
-   * routine setup asks a second time however this one is answered.
+   * assistant setup asks a second time however this one is answered.
    */
   function answerStartAtLoginOffer(startAtLogin: boolean): void {
     startAtLoginOfferOpen = false
@@ -885,7 +885,7 @@
         ) {
           contextSidebarState.hide()
         } else {
-          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.routineId)
+          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.assistantId)
         }
         return
       }
@@ -991,16 +991,21 @@
   }
 
   /**
-   * Focus a routine picked in assistant search: land on the Assistant view, open
-   * the routine's seed thread so its context becomes the active one, then dock
-   * that routine's how-to panel on it.
+   * Focus an assistant picked in assistant search: land on the Assistant view, open
+   * the assistant's seed thread so its context becomes the active one, then dock
+   * that assistant's knowledge panel on it.
    */
-  async function openRoutineFromSearch(routine: Routine): Promise<void> {
+  async function openAssistantFromSearch(assistant: Assistant): Promise<void> {
     navigate('assistant')
-    const anchor = await assistantRoutines.howToThread(routine.id).catch(() => null)
+    const anchor = await assistants.knowledgeThread(assistant.id).catch(() => null)
     if (!anchor) return
     await openThreadFromNotification(anchor, null)
-    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+    contextSidebarState.openAssistantKnowledge(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      assistant.id,
+      assistant.name
+    )
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch
@@ -1677,14 +1682,14 @@
     }
     if (
       keymapState.matches('nav-new-project', e) ||
-      keymapState.matches('assistant-new-routine', e)
+      keymapState.matches('assistant-new-assistant', e)
     ) {
       e.preventDefault()
       if (e.repeat) return
-      // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
+      // The Assistant view owns Cmd/Ctrl+Shift+N for a new assistant.
       if (activeView === 'assistant') {
         if (spotlightScreenId) closeSpotlight()
-        workspaceState.requestAssistantRoutine()
+        workspaceState.requestAssistant()
         return
       }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
@@ -1702,8 +1707,8 @@
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
-      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the routine
-      // the user is currently in when there is one, routine-less otherwise.
+      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the assistant
+      // the user is currently in when there is one, assistant-less otherwise.
       if (activeView === 'assistant') {
         workspaceState.requestAssistantTask()
         return
@@ -2049,10 +2054,10 @@
     {/key}
   {/if}
   {#if startAtLoginOfferOpen}
-    <!-- The one-time start-at-login offer. Raised right after a routine is given
-         its first how-to, so the question is about the runs the user has just
+    <!-- The one-time start-at-login offer. Raised right after an assistant is given
+         its first knowledge, so the question is about the runs the user has just
          set up, and floated above every view because that save happens in the
-         thread the routine belongs to. -->
+         thread the assistant belongs to. -->
     {#await import('$lib/components/layout/StartAtLoginPrompt.svelte') then { default: StartAtLoginPrompt }}
       <StartAtLoginPrompt open onChoose={answerStartAtLoginOffer} />
     {/await}

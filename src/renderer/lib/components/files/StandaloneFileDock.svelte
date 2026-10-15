@@ -39,7 +39,7 @@
   {#snippet headerActions()}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Open this file full screen"
       title="Full screen"
       onclick={() => standaloneFiles.showFullscreen()}
@@ -50,10 +50,10 @@
 
   {#snippet dock()}
     <DockRow {storageKey} label="Move docked files">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"
-          class="flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           aria-label={`Show ${active?.name ?? 'the file'}`}
           title={active?.path ?? 'Show the file'}
           onclick={() => standaloneFiles.restore()}
@@ -70,7 +70,7 @@
           </span>
           {#if activeDirty}
             <span
-              class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+              class="h-1.5 w-1.5 shrink-0 bg-accent"
               role="status"
               aria-label="Unsaved changes"
               title="Unsaved changes"

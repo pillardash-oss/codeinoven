@@ -20,6 +20,7 @@ import {
   validateRemoteImageUrls
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
+import { rememberLocalDownloadName } from '../../system/local-download-names'
 import type { SaveFileInput } from '../../../lib/ipc/invoke-app'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
@@ -171,6 +172,25 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       Logger.error('dialog:saveFile failed:', error)
       return null
     }
+  })
+
+  // Name the blob this renderer is handing to Chromium. A save of one of our own
+  // blob URLs is allowed through the session's download guard, and the name
+  // registered here is what its save dialog suggests (a blob URL alone is a
+  // bare UUID). Nothing is saved by this call, so it needs no privilege beyond
+  // the trusted-sender check every renderer channel already pays.
+  ipcMain.handle('download:nameLocalBlob', (_event, rawUrl: unknown, rawFileName: unknown) => {
+    const url = requireString(rawUrl, 'Blob URL')
+    if (!url.startsWith('blob:') || url.length > 2048)
+      throw new TypeError('A blob URL is required.')
+    if (rawFileName === null) {
+      rememberLocalDownloadName(url, null)
+      return
+    }
+    const fileName = requireString(rawFileName, 'File name')
+    if (fileName.length > 255 || /[\\/\0\r\n]/u.test(fileName))
+      throw new TypeError('Choose a plain file name without a path.')
+    rememberLocalDownloadName(url, fileName)
   })
 
   ipcMain.handle('dialog:pickFile', async (_event, rawScope: unknown) => {

@@ -359,7 +359,7 @@ export const invokeAgentContract = {
       presentation?: UserMessagePresentation,
       taskReferences?: PromptAssignmentTaskReference[]
     ],
-    AgentMessage
+    { message: AgentMessage; held: boolean }
   >,
   'agent:sendTemporaryPrompt': {} as Contract<
     [

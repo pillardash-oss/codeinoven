@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { getConfigRoot, getRoutinePath } from './utils'
+import { getConfigRoot, getAssistantPath } from './utils'
 import {
   ASSISTANT_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
@@ -28,7 +28,7 @@ import {
  * - a thread inside a local project works in the project's own checkout, so its
  *   scratch is that repo's `.cio/tmp`;
  * - a standalone chat owns `chats-cwd/<threadId>` in app storage;
- * - an assistant task shares `assistant-cwd/<routineId>` with its routine;
+ * - an assistant task shares `assistant-cwd/<assistantId>` with its assistant;
  * - a browser tab's agent chat owns `browser-cwd/<threadId>`, where the thread id
  *   is the tab's own id, so one tab owns one directory;
  * - anything else that is not local (a remote project) keeps the generic
@@ -49,7 +49,7 @@ type ScratchProject = Pick<Project, 'source' | 'path'> | null
  */
 export function threadScratchDirectory(
   project: ScratchProject,
-  scope: { projectId: string; threadId: string; routineId?: string | null }
+  scope: { projectId: string; threadId: string; assistantId?: string | null }
 ): string {
   // A project thread works inside the repo, so its scratch is the repo's own
   // `.cio/tmp`: the same directory the agent is told to write to, inside the
@@ -69,7 +69,7 @@ export function threadScratchDirectory(
   if (scope.projectId === ASSISTANT_SPACE_ID) {
     return join(
       getConfigRoot(),
-      assistantThreadWorkspaceDirectory(scope.threadId, scope.routineId),
+      assistantThreadWorkspaceDirectory(scope.threadId, scope.assistantId),
       PROJECT_DATA_DIRECTORY,
       'tmp'
     )
@@ -91,11 +91,11 @@ export function threadScratchDirectory(
  * scratch pad (`.cio/tmp/attachments`), one folder per thread. A conversation
  * with no folder of its own stages them in the scratch pad of the workspace it
  * runs in, so nothing it stages is scattered across app storage; because a
- * routine's workspace is shared by every task in it, an assistant task keeps a
- * folder of its own inside the routine's. */
+ * assistant's workspace is shared by every task in it, an assistant task keeps a
+ * folder of its own inside the assistant's. */
 export function threadAttachmentDirectory(
   project: ScratchProject,
-  scope: { projectId: string; threadId: string; routineId?: string | null }
+  scope: { projectId: string; threadId: string; assistantId?: string | null }
 ): string {
   if (project?.source === 'local' && project.path) {
     return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
@@ -126,7 +126,7 @@ export function threadOwnedDirectories(
   project: ScratchProject,
   projectId: string,
   threadId: string,
-  routineId?: string | null
+  assistantId?: string | null
 ): string[] {
   const dirs: string[] = []
   if (projectId === INBOX_PROJECT_ID) {
@@ -140,10 +140,10 @@ export function threadOwnedDirectories(
     dirs.push(join(getConfigRoot(), browserThreadWorkspaceDirectory(threadId)))
   }
   if (projectId === ASSISTANT_SPACE_ID) {
-    // The routine's workspace holds every task's scratch, so only this task's
-    // own attachment folder goes with the task; the rest is the routine's and
-    // `routineOwnedDirectories` removes it.
-    dirs.push(threadAttachmentDirectory(null, { projectId, threadId, routineId }))
+    // The assistant's workspace holds every task's scratch, so only this task's
+    // own attachment folder goes with the task; the rest is the assistant's and
+    // `assistantOwnedDirectories` removes it.
+    dirs.push(threadAttachmentDirectory(null, { projectId, threadId, assistantId }))
   }
   dirs.push(
     // Thread-scoped utility installs: a skill or MCP server installed for this
@@ -163,12 +163,12 @@ export function threadOwnedDirectories(
 }
 
 /**
- * Every app-owned directory one routine owns on disk: its icon and how-to
+ * Every app-owned directory one assistant owns on disk: its icon and knowledge
  * checkpoint folder, and the workspace every task in it mounts. Deleting a
- * routine removes both, so its artifacts never outlive the container the user
+ * assistant removes both, so its artifacts never outlive the container the user
  * removed. Callers should remove these with `{ recursive: true, force: true }`
  * since either may be absent.
  */
-export function routineOwnedDirectories(routineId: string): string[] {
-  return [getRoutinePath(routineId), join(getConfigRoot(), ASSISTANT_CWD_DIR, routineId)]
+export function assistantOwnedDirectories(assistantId: string): string[] {
+  return [getAssistantPath(assistantId), join(getConfigRoot(), ASSISTANT_CWD_DIR, assistantId)]
 }

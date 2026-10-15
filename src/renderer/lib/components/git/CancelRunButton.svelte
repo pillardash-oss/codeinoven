@@ -66,7 +66,7 @@
 {#if cancellable}
   <button
     type="button"
-    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-danger/40 px-2 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {className}"
+    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-danger/40 px-2 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {className}"
     title="Cancel this workflow run and skip its remaining jobs"
     aria-label="Cancel this workflow run"
     disabled={busy}

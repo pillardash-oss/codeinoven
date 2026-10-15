@@ -44,7 +44,7 @@
   {#if onToggleAll}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {allSelected
+      class="flex h-8 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {allSelected
         ? 'border-primary bg-primary text-on-primary'
         : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
       {disabled}
@@ -55,7 +55,7 @@
   {#each options as option (option.id)}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {value.includes(
+      class="flex h-8 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {value.includes(
         option.id
       )
         ? 'border-primary bg-primary text-on-primary'

@@ -127,7 +127,7 @@
      input field   this modal's search bar   so typing can start immediately. -->
 <Modal {open} title="Change Scope" {onClose}>
   <div class="space-y-3">
-    <div class="flex items-center gap-2 rounded-lg border bg-elevated px-3 py-2">
+    <div class="flex items-center gap-2 border bg-elevated px-3 py-2">
       <Search size={14} class="shrink-0 text-dimmed" />
       <input
         bind:this={searchInput}
@@ -141,7 +141,7 @@
       />
       {#if noMatch}
         <button
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-primary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-primary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
           aria-label="Create scope {query.trim()}"
           title="Create scope {query.trim()}"
           onclick={openCreateModal}
@@ -151,7 +151,7 @@
       {/if}
       {#if query}
         <button
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Clear search"
           title="Clear search"
           onclick={() => {
@@ -170,7 +170,7 @@
     <div class="max-h-72 space-y-0.5 overflow-y-auto">
       {#each buckets as bucket (bucket.id)}
         <button
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors {bucket.id ===
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors {bucket.id ===
           currentBucketId
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -193,7 +193,7 @@
               draggable="false"
             />
           {:else}
-            <span class="h-4 w-4 shrink-0 rounded-full bg-dimmed/20"></span>
+            <span class="h-4 w-4 shrink-0 bg-dimmed/20"></span>
           {/if}
           <span class="flex-1 truncate">{bucket.name}</span>
           {#if bucket.id === currentBucketId}

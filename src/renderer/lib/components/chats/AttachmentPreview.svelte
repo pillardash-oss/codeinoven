@@ -222,7 +222,7 @@
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
         title="Save attachment (Cmd/Ctrl+S)"
         onclick={() => void saveText()}
@@ -237,7 +237,7 @@
       <button
         type="button"
         class={[
-          'titlebar-no-drag flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground',
+          'titlebar-no-drag flex h-7 w-7 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground',
           wrapTextState.wrapped ? 'text-primary' : 'text-dimmed'
         ]}
         aria-label={wrapTitle}
@@ -249,7 +249,7 @@
       </button>
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Download attachment"
         title="Download attachment"
         onclick={handleDownload}
@@ -259,7 +259,7 @@
       {#if revealable}
         <button
           type="button"
-          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={`Reveal path of ${filename}`}
           title="Reveal path"
           onclick={revealFromButton}
@@ -269,7 +269,7 @@
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Close attachment editor"
         title="Close attachment editor (Esc)"
         onclick={requestClose}
@@ -299,6 +299,48 @@
       return true
     }}
   >
+    <!-- A preview is a chrome-less lightbox, so nothing would otherwise keep its
+         content out of the window controls drawn over the top-left corner. The
+         band doubles as the preview's header: it reserves the same inset the app
+         header occupies, stays draggable like every other full screen surface,
+         and names the file with its actions here instead of below the content. -->
+    <div
+      class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-border pr-3"
+      style={trafficLightInsetStyle()}
+    >
+      <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+        {filename}
+      </span>
+      {#if revealable}
+        <button
+          type="button"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Reveal path of ${filename}`}
+          title="Reveal path"
+          onclick={revealFromButton}
+        >
+          <FolderOpen size={14} />
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Download file"
+        title="Download file"
+        onclick={downloadFromButton}
+      >
+        <Download size={14} />
+      </button>
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Close preview"
+        title="Close preview (Esc)"
+        onclick={closeFromButton}
+      >
+        <X size={14} />
+      </button>
+    </div>
     <div
       role="presentation"
       class="relative flex min-h-0 flex-1 items-center justify-center"
@@ -354,32 +396,27 @@
           ></iframe>
         {:else if kind === 'document' && documentLoading}
           <div
-            class="flex h-full w-full items-center justify-center rounded-lg bg-surface text-muted shadow-2xl"
+            class="flex h-full w-full items-center justify-center bg-surface text-muted shadow-2xl"
             role="status"
           >
             <Loader2 size={24} class="animate-spin" />
             <span class="sr-only">Loading document preview</span>
           </div>
         {:else if kind === 'markdown' && text !== undefined}
-          <div
-            class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface p-4 shadow-2xl"
-          >
+          <div class="flex min-h-0 w-full flex-1 flex-col overflow-auto bg-surface p-4 shadow-2xl">
             <MarkdownView {text} class="text-sm text-foreground" />
           </div>
         {:else if kind === 'text' && text !== undefined}
           <pre
-            class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
+            class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
         {:else}
           <div
-            class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"
+            class="flex h-full w-full flex-col items-center justify-center gap-2 bg-surface text-muted shadow-2xl"
           >
             <FileQuestion size={32} class="text-dimmed" />
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
-        <div class="mt-3 flex shrink-0 items-center gap-3">
-          <span class="max-w-full truncate text-xs text-muted">{filename}</span>
-        </div>
       </div>
       {#if pagerState || (kind === 'image' && src)}
         <div class="absolute right-3 bottom-3 flex items-center gap-2">
@@ -391,37 +428,6 @@
           {/if}
         </div>
       {/if}
-      <div class="absolute right-4 top-4 flex flex-col gap-2">
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-          aria-label="Close preview"
-          title="Close preview (Esc)"
-          onclick={closeFromButton}
-        >
-          <X size={18} />
-        </button>
-        {#if revealable}
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-            aria-label={`Reveal path of ${filename}`}
-            title="Reveal path"
-            onclick={revealFromButton}
-          >
-            <FolderOpen size={16} />
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-          aria-label="Download file"
-          title="Download file"
-          onclick={downloadFromButton}
-        >
-          <Download size={16} />
-        </button>
-      </div>
     </div>
   </Modal>
 {/if}

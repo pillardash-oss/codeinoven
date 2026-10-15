@@ -125,7 +125,7 @@
 >
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={playing ? 'Pause the composition' : 'Play the composition'}
     title={playing ? 'Pause the composition' : 'Play the composition'}
     onclick={togglePlay}
@@ -138,7 +138,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Stop and return to the start"
     title="Stop and return to the start"
     onclick={stop}
@@ -147,7 +147,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Step back one frame"
     title={`Step back one frame (${composition.fps} fps)`}
     onclick={() => step(-1)}
@@ -156,7 +156,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Step forward one frame"
     title={`Step forward one frame (${composition.fps} fps)`}
     onclick={() => step(1)}
@@ -184,7 +184,7 @@
   <button
     type="button"
     class={[
-      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
+      'flex h-7 w-7 shrink-0 items-center justify-center transition-colors',
       loop ? 'bg-elevated text-foreground' : 'text-dimmed hover:bg-elevated hover:text-foreground'
     ]}
     aria-label={loop ? 'Stop looping at the end' : 'Loop the composition'}
@@ -211,7 +211,6 @@
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
-    border-radius: 9999px;
     background: linear-gradient(
       to right,
       var(--color-primary) 0%,
@@ -229,7 +228,6 @@
     -webkit-appearance: none;
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);
@@ -238,7 +236,6 @@
   .composition-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);

@@ -5,6 +5,7 @@
  */
 
 import { validateNativeDockTypography } from '../../../lib/native-dock'
+import { MAX_OVERLAY_TOASTS } from '../../../lib/browser-overlay'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
@@ -54,6 +55,7 @@ import type {
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   BrowserStripOverlayTab,
+  ToastOverlayIcon,
   ToastOverlayInteraction,
   ToastOverlayInteractionReport,
   ToastOverlayKind,
@@ -244,10 +246,10 @@ const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
 /** Chords an action may carry. The keymap binds one or two alternatives per
  *  action, so a larger list is a caller bug rather than a layout. */
 const MAX_SHORTCUT_CHORDS_PER_ACTION = 6
-/** The app's own keymap, which is a whole registry rather than one action. */
-const MAX_APP_SHORTCUT_CHORDS = 512
 /** The switcher is one gesture, so it carries at most these chords. */
 const MAX_SWITCHER_CHORDS = 6
+/** The app's own keymap, which is a whole registry rather than one action. */
+const MAX_APP_SHORTCUT_CHORDS = 512
 /** Ceiling on a chord's key token, matching the longest DOM key name. */
 const MAX_SHORTCUT_KEY_LENGTH = 24
 
@@ -299,8 +301,19 @@ export function validateBrowserSwitcherBindings(value: unknown): BrowserSwitcher
   return value.map((entry) => validateBrowserShortcutChord(entry))
 }
 
+/**
+ * Validate the app keymap chords a page may override.
+ *
+ * The same trust boundary as the other two tables applies: every entry is a
+ * single key with an explicit modifier set, and the whole registry is capped.
+ * These chords are never claimed by main itself, only matched against a chord a
+ * page reported as unhandled and replayed, so an over-wide list costs a scan
+ * rather than a stolen key.
+ */
 export function validateBrowserAppShortcutChords(value: unknown): BrowserShortcutChord[] {
-  if (!Array.isArray(value)) throw new TypeError('Browser app shortcut chords must be an array')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser app shortcut chords must be an array')
+  }
   if (value.length > MAX_APP_SHORTCUT_CHORDS) {
     throw new TypeError('Browser app shortcut chord count exceeds the cap')
   }
@@ -1195,13 +1208,6 @@ export function isSameViewport(a: BrowserViewport | undefined | null, b: Browser
   return a !== undefined && a !== null && a.width === b.width && a.height === b.height
 }
 
-/**
- * The most cards the overlay is ever asked to draw. svelte-sonner keeps three on
- * screen at once, and the stack is projected whole, so this only bounds a
- * payload that would otherwise be free to fill a whole window.
- */
-export const MAX_OVERLAY_TOASTS = 16
-
 /** Characters kept from one projected text field. A toast is a line or two; the
  *  ceiling is here so a pathological message cannot cross IPC whole. */
 const MAX_OVERLAY_TEXT_LENGTH = 4_000
@@ -1214,6 +1220,19 @@ const OVERLAY_KINDS: ReadonlySet<string> = new Set([
   'info',
   'loading'
 ])
+
+/**
+ * The icons a card may lead with, as the app renderer's registry names them.
+ *
+ * Listed here rather than passed through, because a card's icon is drawn by
+ * resolving this token to a component, and a token the overlay does not know is
+ * a card built around a chip that never paints. A missing entry is not harmless:
+ * the memory proposal's icon spent its life as a kind this file's own kind set
+ * did not carry, was quietly rewritten to `default`, and every downstream fix
+ * went on fixing a card the boundary had already stripped. Keep this list and
+ * `ToastOverlayIcon` (`src/lib/browser-overlay.ts`) in step.
+ */
+const OVERLAY_ICONS: ReadonlySet<string> = new Set(['memory', 'clipboard'])
 
 function overlayText(value: unknown, limit = MAX_OVERLAY_TEXT_LENGTH): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
@@ -1264,7 +1283,15 @@ export function validateToastOverlayInteraction(value: unknown): ToastOverlayInt
  * `null` is a real request: nothing covers the toaster's corner any more, so the
  * overlay takes itself down. Every field is optional in the projection, so a
  * malformed card is dropped rather than rejected whole: one odd toast must never
- * cost the renderer its stack.
+ * cost the renderer its stack. This validator is a whitelist, though, so a field
+ * it does not name is a field the card loses in silence: the icon the memory
+ * proposal led with crossed as a `memory` kind this file's kind set did not
+ * carry, and the card was drawn without it while every reader upstream believed
+ * it had been sent. A list longer than the ceiling is trimmed for the
+ * same reason, and for one more: while a page covers the toaster's corner this
+ * overlay is the only surface a card reaches, so refusing an over-long update
+ * does not bound the payload, it hides every notification in it. Sonner keeps its
+ * toasts newest first, so the trim keeps the cards that would have been on screen.
  */
 export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest {
   if (value === null) return null
@@ -1276,11 +1303,10 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
   if (!Array.isArray(rawToasts)) {
     throw new TypeError('The toast overlay request must carry a toast list')
   }
-  if (rawToasts.length > MAX_OVERLAY_TOASTS) {
-    throw new TypeError('The toast overlay request carries too many toasts')
-  }
+  const entries =
+    rawToasts.length > MAX_OVERLAY_TOASTS ? rawToasts.slice(0, MAX_OVERLAY_TOASTS) : rawToasts
   const toasts: ToastOverlayToast[] = []
-  for (const raw of rawToasts) {
+  for (const raw of entries) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const entry = raw as Record<string, unknown>
     const id = entry['id']
@@ -1289,12 +1315,17 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
     if (title === undefined) continue
     const kind = entry['kind']
     const duration = entry['duration']
+    const icon = entry['icon']
     toasts.push({
       id,
       kind:
         typeof kind === 'string' && OVERLAY_KINDS.has(kind)
           ? (kind as ToastOverlayKind)
           : 'default',
+      icon:
+        typeof icon === 'string' && OVERLAY_ICONS.has(icon)
+          ? (icon as ToastOverlayIcon)
+          : undefined,
       title,
       description: overlayText(entry['description']),
       duration:

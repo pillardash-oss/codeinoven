@@ -15,8 +15,49 @@ import type {
 import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
+import type { VideoStudioDocument, VideoJob } from '../video/studio'
+import type { VideoProjectManifest } from '../video/project'
+import type { VideoPackagesState } from './video-packages'
 
 export const invokeDesignContract = {
+  /**
+   * The composition's saved edits, plus the manifest a timeline is drawn from:
+   * its duration is the ruler and its rate is the frame step, and neither of
+   * those is part of the editable document.
+   */
+  'video:studio': {} as Contract<
+    [projectId: string, directory: string],
+    { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
+  >,
+  'video:save': {} as Contract<
+    [projectId: string, directory: string, document: VideoStudioDocument, revision: string],
+    { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
+  >,
+  'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
+  'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
+  'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
+  /**
+   * A waveform picture for one audio source's used range, as a data URL.
+   *
+   * A timeline draws one band per audio track, and a band wants a picture of the
+   * sound rather than its samples: the app cannot decode the file itself (the
+   * preview origin sends no CORS header), so ffmpeg draws a bounded 1200x240
+   * picture and the band is an image. Null means the source has no audio to
+   * draw, which is a plain band rather than a failure.
+   */
+  'video:waveform': {} as Contract<
+    [projectId: string, directory: string, source: string, offset: number, duration: number],
+    string | null
+  >,
+  /**
+   * The optional video inference pack the GPU background-removal operation
+   * needs. It installs at runtime into the app's config folder, so the shipped
+   * installer never carries the heavy matting stack.
+   */
+  'video:packages:state': {} as Contract<[], VideoPackagesState>,
+  'video:packages:install': {} as Contract<[], void>,
+  'video:packages:remove': {} as Contract<[], void>,
+  'video:packages:cancel': {} as Contract<[], boolean>,
   'design:rankings': {} as Contract<[startAt: number, endAt: number], DesignModelRanking[]>,
   'design:export': {} as Contract<
     [projectId: string, directory: string, entry: string | null, format: DesignExportFormat],
@@ -29,13 +70,14 @@ export const invokeDesignContract = {
    */
   'design:state': {} as Contract<[projectId: string, threadId: string], ThreadDesignState>,
   /**
-   * Serve a design folder or composition and show it in the in-app browser.
+   * Serve a design folder or composition and show it.
    *
    * A design's screen opens in a tab of its own, so clicking one canvas never
    * replaces another canvas's tab: the screen's own tab is navigated when it
    * exists and opened when it does not. `reveal` brings that tab to the user;
-   * without it the page loads in the background. A composition keeps the
-   * thread's single tab, because its board holds one canvas.
+   * without it the page loads in the background. A composition opens in the video
+   * board's own view, which is a registered tab that never enters the tab strip,
+   * so the board can play and edit it without the user opening the browser.
    */
   'design:open': {} as Contract<
     [

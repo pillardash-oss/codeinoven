@@ -379,7 +379,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: ASSIGNMENT_PLAN_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Submit the complete Assignment task graph for ${APP_NAME} to validate and persist as the thread's unsigned Assignment draft. The draft decomposes either the approved specification or the thread conversation, and the user signs it off before any worker starts.`,
+    description: `Submit the complete Assignment task graph for ${APP_NAME} to validate and persist as the thread's unsigned Assignment draft. The draft decomposes either the approved specification or the thread conversation, and the user signs it off before any worker starts. An Assignment gives each worker a thread the user can monitor and prompt independently, so reach for it when the user wants to steer the workers themselves; leave work the user does not need to steer to inline sub-agents.`,
     inputSchema: ASSIGNMENT_PLAN_SCHEMA,
     source: 'application',
     sentWhen: 'Assignment generation and every Assignment discussion turn before sign-off'

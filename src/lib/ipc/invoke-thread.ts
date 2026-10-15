@@ -88,7 +88,7 @@ export const invokeThreadContract = {
         projectId?: string
         limit?: number
         family?: 'projects' | 'chats' | 'assistant'
-        routineId?: string
+        assistantId?: string
       }
     ],
     import('../types').ThreadSearchResult[]
@@ -194,9 +194,12 @@ export const invokeThreadContract = {
   >,
   'thread:loadStreamParts': {} as Contract<
     [projectId: string, threadId: string, query?: import('../types').TurnStreamPartsQuery],
-    import('../types').TurnStreamPartsPage | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamPartsPage
+    | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamCompletedTurns
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
+  'thread:markUnread': {} as Contract<[projectId: string, threadId: string], Thread>,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */
   'thread:draftActivity': {} as Contract<
     [projectId: string, threadId: string, drafting: boolean],

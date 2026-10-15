@@ -29,7 +29,7 @@
 {#if jobs.length > 0}
   <DockRow {storageKey} {label}>
     <div
-      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto border bg-surface p-1.5 shadow-xl"
       role="group"
       aria-label={groupLabel}
     >
@@ -37,7 +37,7 @@
         {@const description = expandLabel(job)}
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={description}
           aria-label={description}
           onclick={() => onExpand(job.id)}

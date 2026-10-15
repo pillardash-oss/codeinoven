@@ -56,7 +56,7 @@
         role="option"
         aria-selected={index === highlight}
         class={[
-          'cursor-pointer flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none transition-colors',
+          'cursor-pointer flex w-full items-center gap-2.5 px-2.5 text-left outline-none transition-colors',
           compact ? 'py-1' : 'py-1.5',
           index === highlight ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated'
         ]}

@@ -34,7 +34,7 @@
   {title}
   aria-label={title}
   aria-pressed={bookmarked}
-  class="flex shrink-0 items-center justify-center gap-1.5 rounded-lg transition-colors {bookmarked
+  class="flex shrink-0 items-center justify-center gap-1.5 transition-colors {bookmarked
     ? 'text-accent'
     : 'text-muted hover:text-foreground'} {labelled ? 'h-8 px-2.5 text-xs font-medium' : 'h-7 w-7'}
   {className}"

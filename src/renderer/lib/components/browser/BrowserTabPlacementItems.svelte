@@ -25,9 +25,9 @@
   let { onCreate }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
   const subContentClass =
-    'z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg'
+    'z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto border border-border bg-surface p-1 shadow-lg'
 </script>
 
 <ContextMenu.Sub>
@@ -50,7 +50,7 @@
       {#each globalBrowser.boxes as box (box.id)}
         <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ boxId: box.id })}>
           <span
-            class="h-2 w-2 shrink-0 rounded-full"
+            class="h-2 w-2 shrink-0"
             style="background-color: {browserAppearanceAccent(box)}"
           ></span>
           <span class="truncate">{box.name}</span>
@@ -80,7 +80,7 @@
       {#each globalBrowser.orderedGroups as group (group.id)}
         <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ groupId: group.id })}>
           <span
-            class="h-2 w-2 shrink-0 rounded-full"
+            class="h-2 w-2 shrink-0"
             style="background-color: {browserGroupAccent(group)}"
           ></span>
           <span class="truncate">{group.name}</span>

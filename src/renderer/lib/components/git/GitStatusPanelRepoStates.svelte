@@ -18,7 +18,7 @@
   </div>
 {:else if repoState === 'git_unavailable'}
   <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-    <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
+    <div class="mb-2 flex h-10 w-10 items-center justify-center bg-elevated">
       <Unplug size={18} class="text-dimmed" />
     </div>
     <p class="text-xs font-medium text-muted">Git is not available</p>
@@ -33,7 +33,7 @@
   </div>
 {:else}
   <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-    <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
+    <div class="mb-2 flex h-10 w-10 items-center justify-center bg-elevated">
       <GitFork size={18} class="text-dimmed" />
     </div>
     <p class="text-xs font-medium text-muted">Not a Git repository</p>
@@ -42,7 +42,7 @@
     </p>
     <button
       type="button"
-      class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
+      class="mt-3 flex h-8 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
       disabled={gitState.isBusy('init')}
       onclick={onInitialize}
     >

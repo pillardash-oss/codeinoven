@@ -28,7 +28,7 @@
   }
 
   function buttonClass(active: boolean, disabled = false): string {
-    return `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-150 focus-visible:outline-none ${
+    return `relative flex h-8 w-8 shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:outline-none ${
       active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
     } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`
   }

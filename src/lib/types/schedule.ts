@@ -1,8 +1,8 @@
 /**
- * Schedule model for Assistant View routines and tasks.
+ * Schedule model for Assistant View assistants and tasks.
  *
  * Pure, dependency-free next-run / previous-due math shared by the main-process
- * scheduler and the renderer (routine rows, the how-to panel's schedule editor).
+ * scheduler and the renderer (assistant rows, the knowledge panel's schedule editor).
  * All computation is local-time based: the app fires schedules against the
  * machine's clock, so a "daily 9am" cadence means 9am wherever the app runs.
  */
@@ -11,9 +11,9 @@ import { formatDateTime, formatTimeOfDay } from '../date-time-format'
 
 export type ScheduleCadence = 'once' | 'hourly' | 'daily' | 'weekdays' | 'weekly'
 
-/** One recurring (or one-shot) schedule. A routine carries the default; a task
+/** One recurring (or one-shot) schedule. An assistant carries the default; a task
  *  may override it. */
-export interface RoutineSchedule {
+export interface AssistantSchedule {
   cadence: ScheduleCadence
   /** `HH:mm` times of day used by `daily`, `weekdays`, and `weekly`. */
   times: string[]
@@ -39,8 +39,8 @@ export interface MissedRun {
   id: string
   /** The assistant task thread whose run was missed. */
   threadId: string
-  /** Owning routine, when the task belongs to one. */
-  routineId?: string
+  /** Owning assistant, when the task belongs to one. */
+  assistantId?: string
   /** Intended fire time (epoch ms). */
   dueAt: number
   /** When the miss was detected (epoch ms). */
@@ -57,13 +57,13 @@ export interface MissedRun {
 }
 
 /** A scheduled slot the user explicitly skipped for an assistant task. */
-export interface SkippedRoutineRun {
+export interface SkippedRun {
   /** Stable identity: one record per (task, intended fire time). */
   id: string
   /** The assistant task whose scheduled slot was skipped. */
   taskId: string
-  /** Owning routine when the slot was skipped. */
-  routineId: string
+  /** Owning assistant when the slot was skipped. */
+  assistantId: string
   /** Intended fire time (epoch ms). */
   dueAt: number
 }
@@ -85,8 +85,8 @@ export type BackgroundRunOutcome = 'completed' | 'failed' | 'parked'
 export interface BackgroundRun {
   /** The assistant task whose run this is. */
   taskId: string
-  /** Owning routine, when the task belongs to one. */
-  routineId?: string
+  /** Owning assistant, when the task belongs to one. */
+  assistantId?: string
   /** Thread the run executed on. The ledger never joins to this row. */
   runThreadId: string
   /** Why the run started: its scheduled slot, or a catch-up after sleep/relaunch. */
@@ -132,7 +132,7 @@ export function parseTimeOfDay(value: string): { hours: number; minutes: number 
 }
 
 /** Ascending, de-duplicated `HH:mm` values, dropping malformed entries. */
-export function normalizedTimes(schedule: RoutineSchedule): string[] {
+export function normalizedTimes(schedule: AssistantSchedule): string[] {
   const seen = new Set<string>()
   const result: string[] = []
   for (const raw of schedule.times) {
@@ -146,7 +146,7 @@ export function normalizedTimes(schedule: RoutineSchedule): string[] {
   return result.sort()
 }
 
-function dayMatches(schedule: RoutineSchedule, day: Date): boolean {
+function dayMatches(schedule: AssistantSchedule, day: Date): boolean {
   const weekday = day.getDay()
   if (schedule.cadence === 'weekdays') return weekday >= 1 && weekday <= 5
   if (schedule.cadence === 'weekly') {
@@ -157,7 +157,7 @@ function dayMatches(schedule: RoutineSchedule, day: Date): boolean {
 }
 
 /** Whether the schedule can ever fire (has a target time configured). */
-export function scheduleIsActive(schedule: RoutineSchedule | null | undefined): boolean {
+export function scheduleIsActive(schedule: AssistantSchedule | null | undefined): boolean {
   if (!schedule) return false
   if (schedule.cadence === 'once') return schedule.onceAt !== undefined
   if (schedule.cadence === 'hourly') return true
@@ -170,7 +170,7 @@ export function scheduleIsActive(schedule: RoutineSchedule | null | undefined): 
  * schedule whose weekdays never match can never loop forever.
  */
 export function nextRunAt(
-  schedule: RoutineSchedule | null | undefined,
+  schedule: AssistantSchedule | null | undefined,
   from: number
 ): number | null {
   if (!schedule) return null
@@ -215,7 +215,7 @@ export function nextRunAt(
  * reveal the next scheduled occurrence without changing the schedule itself.
  */
 export function nextRunAtExcluding(
-  schedule: RoutineSchedule | null | undefined,
+  schedule: AssistantSchedule | null | undefined,
   from: number,
   excluded: ReadonlySet<number>
 ): number | null {
@@ -234,7 +234,7 @@ export function nextRunAtExcluding(
  * decide between dispatching a run and recording a missed run.
  */
 export function previousDueAt(
-  schedule: RoutineSchedule | null | undefined,
+  schedule: AssistantSchedule | null | undefined,
   now: number
 ): number | null {
   if (!schedule) return null
@@ -277,7 +277,7 @@ export function previousDueAt(
  * Times are stored as `HH:mm` and read as the app's 12-hour clock, so a daily
  * `08:05` reads `Daily at 8:05 AM`.
  */
-export function describeSchedule(schedule: RoutineSchedule | null | undefined): string {
+export function describeSchedule(schedule: AssistantSchedule | null | undefined): string {
   if (!scheduleIsActive(schedule) || !schedule) return 'Not scheduled'
   const times = normalizedTimes(schedule).map(formatTimeOfDay)
   if (schedule.cadence === 'once') {
@@ -310,6 +310,6 @@ export function missedRunId(threadId: string, dueAt: number): string {
 }
 
 /** Dedup key for one skipped occurrence of one task. */
-export function skippedRoutineRunId(taskId: string, dueAt: number): string {
+export function skippedAssistantRunId(taskId: string, dueAt: number): string {
   return `${taskId}:${dueAt}`
 }

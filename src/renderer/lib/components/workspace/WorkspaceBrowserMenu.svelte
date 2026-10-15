@@ -20,13 +20,13 @@
   }}
 ></button>
 <div
-  class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
+  class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden border bg-surface p-1 shadow-lg"
   role="menu"
   aria-label="Browser menu"
 >
   <button
     type="button"
-    class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+    class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
     role="menuitem"
     title="Manage downloaded files"
     onclick={() => browser.openDownloads()}
@@ -35,7 +35,7 @@
     <span>Manage downloads</span>
     {#if browser.unfinishedDownloadCount > 0}
       <span
-        class="ml-auto rounded-full bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
+        class="ml-auto bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
       >
         {browser.unfinishedDownloadCount}
       </span>
@@ -43,7 +43,7 @@
   </button>
   <button
     type="button"
-    class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
+    class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
     role="menuitem"
     title="Clear browser cookies and site data"
     onclick={() => browser.requestDataClear()}

@@ -205,7 +205,7 @@
   {:else}
     <button
       type="button"
-      class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
+      class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 px-2 py-1 text-left text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
       title="Reply to @{githubDisplayLogin(entry.author)}"
       onclick={() => (replyEntry = entry)}
     >

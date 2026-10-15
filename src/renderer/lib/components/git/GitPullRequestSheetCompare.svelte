@@ -43,7 +43,7 @@
 </script>
 
 <!-- Compare first, like GitHub: pick the branches, then write about the change. -->
-<div class="rounded-lg border border-border bg-surface p-2.5">
+<div class="border border-border bg-surface p-2.5">
   <div class="flex items-end gap-2">
     <div class="min-w-0 flex-1">
       <label
@@ -54,7 +54,7 @@
       </label>
       <select
         id="pr-head"
-        class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
+        class="h-8 w-full cursor-pointer border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
         value={head}
         disabled={branches.length === 0}
         onchange={onHeadChange}
@@ -74,7 +74,7 @@
       </label>
       <select
         id="pr-base"
-        class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
+        class="h-8 w-full cursor-pointer border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
         value={base}
         disabled={branches.length === 0}
         onchange={onBaseChange}
@@ -125,7 +125,7 @@
       </p>
       <button
         type="button"
-        class="h-8 shrink-0 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 shrink-0 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         title="Sign in to GitHub"
         onclick={onSignIn}
       >
@@ -134,7 +134,7 @@
     </div>
   {/if}
   {#if existingPr}
-    <div class="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+    <div class="mt-2 border border-warning/30 bg-warning/10 px-3 py-2">
       <div class="flex items-start gap-2">
         <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
         <div class="min-w-0 flex-1">
@@ -148,7 +148,7 @@
           </p>
           <button
             type="button"
-            class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+            class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
             title="Open the existing pull request in the Git panel"
             onclick={onViewExistingPr}
           >

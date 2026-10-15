@@ -15,7 +15,7 @@
 <button
   type="button"
   class={[
-    'flex h-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+    'flex h-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7'
   ]}
   disabled={!canUndo}
@@ -29,7 +29,7 @@
 <button
   type="button"
   class={[
-    'flex h-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+    'flex h-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7'
   ]}
   disabled={!canRedo}

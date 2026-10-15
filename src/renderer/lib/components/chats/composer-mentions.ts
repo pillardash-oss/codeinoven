@@ -97,6 +97,17 @@ export function composerMentionQuery(textBeforeCaret: string): string | null {
   return match[2] ?? ''
 }
 
+/**
+ * One built-in tag by id, so a surface that writes the token itself (the
+ * assisted utility setup thread seeds a draft with it) cannot drift from the
+ * token the mention menu inserts.
+ */
+export function composerBuiltInTag(id: ComposerBuiltInTag['id']): ComposerBuiltInTag {
+  const tag = COMPOSER_BUILT_IN_TAGS.find((entry) => entry.id === id)
+  if (!tag) throw new Error(`Unknown built-in composer tag: ${id}`)
+  return tag
+}
+
 export function composerMentionKey(mention: ComposerMentionEntry): string {
   if (mention.type === 'project') return `project:${mention.entry.path}`
   if (mention.type === 'task') return `task:${mention.entry.id}`

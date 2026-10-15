@@ -696,7 +696,7 @@
   {#snippet actions()}
     {#if canEdit}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
+        class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
         disabled={busy}
         title="Discuss changes to this session report with the Sr. Engineer"
         onclick={() => {
@@ -718,7 +718,7 @@
           Additional notes
           <RichMarkdownEditor
             bind:this={decisionNotesEditor}
-            class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
+            class="mt-1 min-h-14 w-full resize-y border border-border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder={pendingAction === 'review'
               ? 'Explain what should change or what still feels misaligned…'
@@ -728,7 +728,7 @@
           />
         </label>
         <button
-          class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay"
+          class="px-3 py-2 text-xs text-muted hover:bg-overlay"
           title="Cancel"
           onclick={() => (pendingAction = null)}>Cancel</button
         >
@@ -739,7 +739,7 @@
           disabled={busy}
         />
         <button
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+          class="bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy || submittingAction}
           title={pendingAction === 'review' ? 'Discuss report changes' : 'Prepare specification'}
           onclick={() => void submitAction(pendingAction!)}
@@ -763,7 +763,7 @@
     {#each annotationMarkers as marker (marker.annotation.id)}
       <button
         data-brainstorm-annotation-marker={marker.annotation.id}
-        class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
+        class="absolute z-10 grid h-7 w-7 place-items-center border bg-surface text-info shadow-sm hover:bg-elevated"
         style:left={compactViewport.matches
           ? undefined
           : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
@@ -792,7 +792,7 @@
         <EditableMarkdown
           text={draft.content.summary}
           readOnly={!canEdit}
-          class="brainstorm-markdown w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
+          class="brainstorm-markdown w-full whitespace-pre-wrap px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
           ariaLabel="Brainstorm session snapshot"
           onChange={(value) => {
             draft.content.summary = value
@@ -829,7 +829,7 @@
           <EditableMarkdown
             text={section.markdown}
             readOnly={!canEdit}
-            class="brainstorm-markdown mt-3 w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+            class="brainstorm-markdown mt-3 w-full whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
             ariaLabel={section.title}
             onChange={(value) => setSectionMarkdown(section.id, value)}
           />
@@ -840,7 +840,7 @@
             >
               {#each annotationsFor(section.id) as annotation (annotation.id)}
                 <button
-                  class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
+                  class="max-w-64 shrink-0 border border-border bg-surface px-3 py-2 text-left hover:bg-elevated"
                   title="Open annotation"
                   onclick={() => void openAnnotation(annotation)}
                 >
@@ -859,13 +859,13 @@
         <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
         <div class="mt-4 grid gap-3 sm:grid-cols-2">
           {#each draft.content.prototypes as prototype (prototype.id)}
-            <article class="rounded-xl border bg-surface p-4 shadow-sm">
+            <article class="border border-border bg-surface p-4">
               <div class="flex items-start justify-between gap-3">
                 <div>
                   <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
                   <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
                 </div>
-                <span class="rounded-full bg-raised px-2 py-1 text-[0.625rem] text-muted">
+                <span class="border border-border bg-raised px-2 py-1 text-[0.625rem] text-muted">
                   {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
                 </span>
               </div>
@@ -881,7 +881,7 @@
                 {#if prototype.fidelity === 'lofi' && draft.status === 'draft' && onGenerateHifi}
                   <button
                     type="button"
-                    class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                    class="bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
                     onclick={() => void onGenerateHifi?.(prototype.id)}
                   >
                     HiFi from this
@@ -890,7 +890,7 @@
                 {#if onOpenPrototype}
                   <button
                     type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    class="px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     onclick={() => void onOpenPrototype?.(prototype.previewPath)}
                   >
                     View prototype
@@ -898,7 +898,7 @@
                 {/if}
                 <button
                   type="button"
-                  class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+                  class="px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
                   onclick={() => void copyText(prototype.previewPath)}
                 >
                   Copy path

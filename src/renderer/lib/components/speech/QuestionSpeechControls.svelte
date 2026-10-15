@@ -73,7 +73,7 @@
   <div class="flex shrink-0 items-center gap-1.5">
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
       title={buttonTitle}
       aria-label={buttonTitle}
       {disabled}
@@ -123,7 +123,6 @@
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
-    border-radius: 9999px;
     background: linear-gradient(
       to right,
       var(--color-primary) 0%,
@@ -141,7 +140,6 @@
     -webkit-appearance: none;
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);
@@ -150,7 +148,6 @@
   .question-tts-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);

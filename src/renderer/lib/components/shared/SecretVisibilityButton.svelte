@@ -15,7 +15,7 @@
 
 <button
   type="button"
-  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+  class="flex h-8 w-8 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
   aria-pressed={revealed}
   {title}
   aria-label={title}

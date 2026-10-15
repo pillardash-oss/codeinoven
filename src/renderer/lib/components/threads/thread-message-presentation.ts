@@ -46,6 +46,18 @@ export function explicitMessagePresentation(msg: AgentMessage): UserMessagePrese
   return part?.presentation ?? null
 }
 
+/**
+ * True when a user message records an app action rather than text the user
+ * typed: an answered agent question, a connection retry, a spec apply. These
+ * carry a `user-presentation` part and no visible text, so the history panel
+ * draws them italic; they are not authored prompts.
+ */
+export function isActionUserMessage(msg: AgentMessage): boolean {
+  if (msg.role !== 'user') return false
+  if (explicitMessagePresentation(msg) === null) return false
+  return rawMessageText(msg).trim().length === 0
+}
+
 export function specActionLabel(action: SpecActionIntent): string {
   if (action === 'request') return 'Spec requested'
   return action === 'implement' ? 'Implement spec' : 'Review spec'
@@ -126,7 +138,7 @@ function inlineChipHtml(reference: PromptProjectReference): string {
   // A real control, not decoration: the chip names a file the reader can jump
   // to. It carries the same `data-file-chip` path across the message render,
   // and MarkdownView + the citation context menu pick it up by delegation.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
 }
 
 function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
@@ -135,11 +147,13 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   // active theme (black on light, white on dark). The chip's
   // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
   const icon = getVendorIconSvg(APP_NAME)
-  const safeTitle = escapeHtmlForChip(`${APP_NAME} ${tag.chipLabel}`)
+  // The complete tag, not just its short label, so a hover proves which tag a
+  // send actually carried.
+  const safeTitle = escapeHtmlForChip(`${tag.token} · ${tag.description}`)
   const iconHtml = icon
     ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
     : ''
-  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
+  return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
 }
 
 export function inlineFileTagsForMessage(

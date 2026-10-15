@@ -546,14 +546,14 @@
   </div>
 
   <div
-    class="mb-4 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
     role="tablist"
     aria-label="Harness settings tabs"
   >
     <button
       type="button"
-      class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
-        ? 'bg-surface text-foreground shadow-sm'
+      class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'harnesses'}
@@ -564,9 +564,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'accounts'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'accounts'}
@@ -577,9 +577,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'auxiliary'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'auxiliary'}
@@ -590,9 +590,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'custom'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'custom'}
@@ -601,7 +601,9 @@
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
-        <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed">
+        <span
+          class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+        >
           {baseUrlProviderStore.providers.length}
         </span>
       {/if}
@@ -621,13 +623,13 @@
           type="text"
           placeholder="Search harnesses…"
           aria-label="Search harnesses"
-          class="h-8 w-full rounded-lg border bg-elevated pl-8 pr-14 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
+          class="h-8 w-full border bg-elevated pl-8 pr-14 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
         />
         <div class="absolute right-2 top-1/2 -translate-y-1/2">
           {#if searchQuery}
             <button
               type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-surface hover:text-foreground"
+              class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-surface hover:text-foreground"
               aria-label="Clear search"
               title="Clear search"
               onclick={() => {
@@ -639,7 +641,7 @@
             </button>
           {:else}
             <kbd
-              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
+              class="border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
             >
               {displayShortcutLabel('Ctrl K')}
             </kbd>
@@ -648,7 +650,7 @@
       </div>
 
       <div
-        class="flex shrink-0 items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+        class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
         role="tablist"
         aria-label="Filter harnesses by status"
       >
@@ -657,14 +659,15 @@
           role="tab"
           aria-selected={statusFilter === 'all'}
           title="Show all harnesses"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'all'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'all')}
         >
           All
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{allCount}</span
           >
         </button>
@@ -673,17 +676,18 @@
           role="tab"
           aria-selected={statusFilter === 'updates'}
           title="Show harnesses with an update available"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'updates'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'updates')}
         >
           {#if updatesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true"></span>
+            <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
           {/if}
           Updates
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{updatesCount}</span
           >
         </button>
@@ -692,24 +696,25 @@
           role="tab"
           aria-selected={statusFilter === 'issues'}
           title="Show harnesses that need attention"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'issues'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'issues')}
         >
           {#if issuesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true"></span>
+            <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
           {/if}
           Issues
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{issuesCount}</span
           >
         </button>
       </div>
 
       <button
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Re-check all harnesses"
         onclick={() => void recheckAll()}
         disabled={providerStore.checkingCount > 0}
@@ -726,7 +731,9 @@
         <SettingsEntry {expanded}>
           <div class="grid grid-cols-[13rem_10rem_11rem_minmax(0,1fr)_auto] items-center gap-3">
             <div class="flex min-w-0 items-center gap-3">
-              <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-elevated">
+              <div
+                class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+              >
                 <AgentIcon agentId={provider.id} label={provider.name} size={20} />
               </div>
               <div class="min-w-0">
@@ -767,7 +774,7 @@
                   {#if provider.resolvedPath}
                     <button
                       type="button"
-                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       title="Copy path"
                       aria-label="Copy {provider.name} path"
                       onclick={() => void copyPath(provider)}
@@ -811,7 +818,7 @@
             <div class="flex items-center justify-end gap-2">
               {#if provider.status === 'error'}
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                  class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                   title="Re-check {provider.name}"
                   onclick={() => void checkOne(provider.id)}
                 >
@@ -819,7 +826,7 @@
                   Retry
                 </button>
                 <button
-                  class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
                   aria-expanded={expanded}
                   onclick={() => toggleSettings(provider.id)}
@@ -829,7 +836,7 @@
               {:else}
                 {#if provider.status === 'not_found'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                    class="flex items-center gap-1.5 border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
                     title="Install {provider.name} in the embedded terminal"
                     disabled={harnessLifecycleStore.isRunning(provider.id)}
                     onclick={() =>
@@ -843,7 +850,7 @@
                     Install
                   </button>
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     title="Open the {provider.name} install page for your operating system"
                     onclick={() => void openInstallPage(provider)}
                   >
@@ -851,7 +858,7 @@
                   </button>
                 {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                    class="flex items-center gap-1.5 border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
                     title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
                       provider.id
                     )?.latestVersion}"
@@ -868,7 +875,7 @@
                   </button>
                 {/if}
                 <button
-                  class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                  class="flex items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
                   title={canAddProvider(provider)
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
@@ -903,7 +910,7 @@
               {#if provider.status === 'error'}
                 <p class="text-xs font-semibold text-foreground">Details</p>
                 <pre
-                  class="overflow-auto rounded-lg border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                  class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
                     >{provider.detail ?? 'No additional detail available.'}</code
                   ></pre>
               {:else}
@@ -926,7 +933,7 @@
                       {#if entry.confirmed}
                         <button
                           type="button"
-                          class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                          class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                           title="Clear the confirmed value and fall back to the declared manifest"
                           disabled={manifestSaving[provider.id]}
                           onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
@@ -978,7 +985,7 @@
           {/if}
         </SettingsEntry>
       {:else}
-        <div class="rounded-xl border border-dashed p-6 text-center text-xs text-dimmed">
+        <div class="border border-dashed p-6 text-center text-xs text-dimmed">
           {#if searchQuery || statusFilter !== 'all'}
             No harnesses match the current filter.
           {:else}
@@ -988,7 +995,7 @@
       {/each}
     </div>
 
-    <div class="mt-6 rounded-xl border border-dashed p-4 text-center">
+    <div class="mt-6 border border-dashed p-4 text-center">
       <Plug size={18} class="mx-auto mb-1 text-dimmed" />
       <p class="text-xs text-dimmed">
         Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
@@ -1053,13 +1060,13 @@
   <Modal open title={`Uninstall ${uninstallTarget.name}?`} onClose={cancelUninstall}>
     {#snippet footer()}
       <button
-        class="h-9 rounded-lg border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="h-9 border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         onclick={cancelUninstall}
       >
         Cancel
       </button>
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
         onclick={() => void confirmUninstall()}
         disabled={uninstallBusy || uninstallLoading || !!uninstallError}
       >
@@ -1078,18 +1085,18 @@
       </p>
       {#if uninstallLoading}
         <div
-          class="flex items-center gap-2 rounded-lg border border-border bg-raised p-3 font-mono text-xs text-muted"
+          class="flex items-center gap-2 border border-border bg-raised p-3 font-mono text-xs text-muted"
         >
           <Loader2 size={13} class="animate-spin" />
           Resolving uninstall command…
         </div>
       {:else if uninstallError}
-        <div class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
+        <div class="border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
           {uninstallError}
         </div>
       {:else}
         <pre
-          class="overflow-auto rounded-lg border border-border bg-raised p-3 font-mono text-xs leading-relaxed text-foreground"><code
+          class="overflow-auto border border-border bg-raised p-3 font-mono text-xs leading-relaxed text-foreground"><code
             >{uninstallCommand}</code
           ></pre>
         <p class="text-xs text-dimmed">

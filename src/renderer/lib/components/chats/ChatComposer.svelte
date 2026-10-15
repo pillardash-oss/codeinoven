@@ -23,7 +23,6 @@
   import AttachmentPreview from './AttachmentPreview.svelte'
   import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
-  import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
@@ -64,6 +63,7 @@
   } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -74,7 +74,7 @@
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
-  import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
+  import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sessionTagKind } from '$shared/session-tags'
@@ -266,18 +266,24 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
-    /** Renders the scope shoe   the project scope + project type row at the
-     *  footer of the composer. Only set in project mode. */
-    scopeShoe?: ComposerScopeShoe
+    /** Renders the composer shoe   the one bar the composer owns, under the
+     *  message box: scope, identity, Oven, branch and the key tips. Every
+     *  composer sets it, so no surface is left without its properties. */
+    shoe?: ComposerShoeData
     /** Called instead of sending when the thread has no AI account or no model
      *  selected, so the host can show its setup card and keep the draft. */
     onNeedsAiAccount?: () => void
+    /** True when a stack (the task list, a queued message) sits on the
+     *  composer's top edge: the composer's top rule then breaks into the dashed
+     *  line that carries the join, and the stack drops its own bottom rule. */
+    stackedAbove?: boolean
   }
 
   let {
     onSend,
     disabled = false,
     working = false,
+    stackedAbove = false,
     onStop,
     placeholder = 'Send a message...',
     autofocus = false,
@@ -346,7 +352,7 @@
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
-    scopeShoe,
+    shoe,
     onNeedsAiAccount
   }: Props = $props()
 
@@ -449,7 +455,7 @@
     ...COMPOSER_BUILT_IN_TAGS.filter((tag) => value.includes(tag.token)).map((tag) => ({
       iconSvg: codeInOvenIconSvg,
       label: tag.chipLabel,
-      title: `${APP_NAME} ${tag.chipLabel}`,
+      title: `${tag.token} · ${tag.description}`,
       value: tag.token
     })),
     ...projectReferences.map((reference) => ({
@@ -568,6 +574,8 @@
   let slashOpen = $state(false)
   let slashQuery = $state('')
   let slashIndex = $state(0)
+  /** Guards the async resolve against a second send landing inside its window. */
+  let resolvingSend = false
   let lastCaretText: string | null = null
   let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
@@ -648,13 +656,31 @@
   /** Whether the shared model picker renders the account picker (more than one
    *  account for the selected provider)   gates the `/account` slash action. */
   let accountPickerVisible = $state(false)
-  /** The scope shoe instance, so the `/scope` slash action can open its picker. */
-  let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
+  /** The shoe instance, so the `/scope` slash action can open its picker. */
+  let shoeComponent: ComposerShoe | undefined = $state(undefined)
+  /**
+   * The context reading the shoe carries. It is the composer's own data, so it
+   * stays out of the shoe contract the host builds. It is always present: the
+   * battery is how the user checks what a model choice will cost before sending
+   * the first message of a thread, and hovering it is what fetches live quota.
+   */
+  let usageReading = $derived<ComposerUsage>({
+    usage: contextUsage,
+    efficiencyKpis,
+    harnessUsage,
+    canCompact,
+    compacting,
+    onCompact,
+    onActivateBankedReset,
+    onReveal: onRevealUsage,
+    onHide: onHideUsage,
+    refreshing: usageRefreshing
+  })
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
    *  the `/scope` slash action the same way the shoe's badge chevron does. */
-  let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
+  let scopePickerAvailable = $derived(shoe?.scope?.isNewThread === true)
   let startAfterPickerOpen = $state(false)
   // The composer is remounted by the parent when a restore is required, so
   // capture the persisted dependencies exactly once at construction.
@@ -827,7 +853,7 @@
 
   function showScopeMenu(): void {
     closeAllMenus()
-    scopeShoeComponent?.openScopeMenu()
+    shoeComponent?.openScopeMenu()
   }
 
   trackEscapeMenu(
@@ -1106,7 +1132,7 @@
     getSupportsThinking: () => supportsThinking,
     getAccountPickerVisible: () => accountPickerVisible,
     getScopePickerVisible: () => scopePickerAvailable,
-    getOvenPickerVisible: () => !!scopeShoe?.onOpenOven,
+    getOvenPickerVisible: () => !!shoe?.onOpenOven,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -1117,11 +1143,14 @@
   let savedValue = $state('')
   let hasText = $derived(value.trim().length > 0)
 
-  /** True when an attached selection carries a user comment, so an otherwise
-   *  empty message can still be sent (the comment is the payload). */
-  let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
+  /** True when an attached reference is a payload in its own right, so an
+   *  otherwise empty message can still be sent: a commented selection is the
+   *  comment, and a mark drawn on a picture is the mark. */
+  let hasCommentReference = $derived(
+    references.some((reference) => Boolean(reference.comment) || reference.kind === 'image')
+  )
 
-  /** Whether there is anything to send: text, an attachment, or a commented selection. */
+  /** Whether there is anything to send: text, an attachment, or a payload reference. */
   let hasSendableContent = $derived(hasText || attachments.length > 0 || hasCommentReference)
 
   /** Whether the button should show the stop icon (agent working, nothing to send). */
@@ -1253,7 +1282,7 @@
     }
 
     if (action.id === 'selector:oven') {
-      scopeShoe?.onOpenOven?.()
+      shoe?.onOpenOven?.()
       return
     }
 
@@ -1285,7 +1314,7 @@
     void onActionSelect?.({ action, query: selectedQuery, method })
   }
 
-  function submit(direct?: boolean): void {
+  async function submit(direct?: boolean): Promise<void> {
     if (mentions.open && mentions.entries[mentions.index]) {
       selectMention(mentions.entries[mentions.index])
       return
@@ -1301,6 +1330,16 @@
       return
     }
     cancelStop()
+    // A tag typed but never picked still targets what it names. Resolve it
+    // before anything reads the draft, so the expert gate sees a session tag
+    // and the dispatched turn carries the tagged reference.
+    if (resolvingSend) return
+    resolvingSend = true
+    try {
+      await resolveTypedTargetsIntoDraft()
+    } finally {
+      resolvingSend = false
+    }
     const msg = normalizeComposerMessage(value, projectReferences)
     if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
@@ -1414,6 +1453,28 @@
     // the rest of the text behave normally.
     if (slashOpen && slashActions.length === 0) {
       slashOpen = false
+    }
+  }
+
+  /**
+   * Rewrite the `@` tags a send was typed with but never picked from the
+   * dropdown. The mention search owns the matching; the composer only applies
+   * the resolved text and the references it returns, so a send targets the same
+   * file or built-in tag a dropdown pick would have produced.
+   */
+  async function resolveTypedTargetsIntoDraft(): Promise<void> {
+    const draft = value
+    const resolved = await mentions.resolveTypedTargets(draft, projectReferences)
+    // A keystroke that landed during the lookup owns a newer draft than the one
+    // resolved against; never overwrite what the user has since typed.
+    if (value !== draft) return
+    if (resolved.text !== value) {
+      value = resolved.text
+      onValueChange?.(value)
+    }
+    if (resolved.references.length > 0) {
+      projectReferences = [...projectReferences, ...resolved.references]
+      onProjectReferencesChange?.(projectReferences)
     }
   }
 
@@ -1813,13 +1874,17 @@
 />
 
 <div
-  class="chat-composer relative z-10 border bg-surface shadow-sm {expansion.maximized
-    ? 'composer-maximized'
-    : ''}"
+  class="chat-composer relative z-10 border bg-surface {stackedAbove
+    ? 'border-t border-dashed border-border-strong'
+    : ''} {expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
 >
+  <!-- The composer has no bar above its writing surface: the editor is the top
+       edge, so a card the composer grows under it reads as the message box
+       extended rather than as something with a strip beneath it. What the
+       composer is pointed at lives in the shoe below (see `.composer-shoe`). -->
   {#if imageDescriptorGateOpen}
     <ChatComposerImageGate
       {providers}
@@ -1851,30 +1916,21 @@
   {/if}
 
   {#if ovenModelNotice}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="warn">
       {ovenModelNotice}
-    </div>
+    </CardNotice>
   {/if}
 
   {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="danger">
       This model cannot accept file attachments. Choose another model before sending this file.
-    </div>
+    </CardNotice>
   {/if}
 
   {#if textAttachmentError}
-    <div
-      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
-      role="status"
-    >
+    <CardNotice placement="composer" tone="danger">
       {textAttachmentError}
-    </div>
+    </CardNotice>
   {/if}
 
   <ChatComposerAttachmentStrip
@@ -1904,7 +1960,7 @@
     {onRemoveAllReferences}
   />
 
-  <div class="relative">
+  <div class="relative" style="--editor-gutter: 2.25rem">
     {#if slashOpen}
       <SlashActionMenu
         actions={slash.available}
@@ -1930,7 +1986,7 @@
     {#if showExpandControl}
       <button
         type="button"
-        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         transition:fade={{ duration: motionDuration(140) }}
         aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
         aria-pressed={expansion.maximized}
@@ -1947,10 +2003,14 @@
       </button>
     {/if}
 
+    <!-- The console prompt: the marker the writing line hangs off, in the gold
+         this workstation keeps for the few places that earn it. It inks up and
+         steps forward while the field has focus, and it is never selectable. -->
+    <span class="composer-prompt" aria-hidden="true">&gt;</span>
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
-      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-3.5 text-sm leading-5 text-foreground outline-none {showExpandControl
+      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-9 text-sm leading-5 text-foreground outline-none {showExpandControl
         ? 'pr-10'
         : 'pr-3.5'}"
       bind:value
@@ -1967,7 +2027,9 @@
   </div>
 
   <!-- Bottom bar: + menu · model · thinking ··· send -->
-  <div class="composer-toolbar flex min-w-0 items-center gap-1 px-3 pb-2 pt-1">
+  <div
+    class="composer-toolbar flex min-w-0 items-center gap-1 border-t border-dashed border-border-strong px-3 pb-2 pt-1.5"
+  >
     <ChatComposerPlusMenu
       open={plusMenuOpen}
       onToggle={() => {
@@ -2077,7 +2139,7 @@
     {#if usageCreditsCommandId}
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Switch to API usage credits"
         title="Switch this session to pay-as-you-go API usage credits"
         onclick={runUsageCredits}
@@ -2087,19 +2149,6 @@
     {/if}
 
     <span class="flex-1"></span>
-
-    <ContextUsageIndicator
-      usage={contextUsage}
-      {efficiencyKpis}
-      {harnessUsage}
-      {canCompact}
-      {compacting}
-      {onCompact}
-      {onActivateBankedReset}
-      onReveal={onRevealUsage}
-      onHide={onHideUsage}
-      refreshing={usageRefreshing}
-    />
 
     <!-- Keep the mic mounted in one stable slot so recording state never resets
          when the composer gains text and the send control appears. -->
@@ -2118,11 +2167,11 @@
            - Stop confirmation pending:   "Stop?" danger label -->
       <button
         type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
+        class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors {pendingStop
           ? 'bg-danger text-on-danger hover:bg-danger-hover'
           : canStop
             ? 'bg-danger/10 text-danger hover:bg-danger/20'
-            : 'bg-primary text-on-primary hover:bg-primary-hover'}"
+            : 'bg-accent text-on-accent hover:bg-accent-hover'}"
         aria-label={pendingStop
           ? 'Confirm stop'
           : canStop
@@ -2159,36 +2208,30 @@
   </div>
 </div>
 
-<!-- Scope shoe   floats underneath the composer as its own inset bar,
-     sized to the status row it holds, centered under the composer; project mode
-     only. It slides up behind the composer (z below it) so the shoe's top edge
-     is tucked under the composer's bottom border   only the lower half shows,
-     like a shoe.
+<!-- The composer shoe: the one bar the composer owns, floating just underneath
+     it, sized to the row it holds and centered under the composer. It slides up
+     behind the composer (z below it) so its top edge is tucked under the
+     composer's bottom border   only the lower half shows, like a shoe. It is
+     rendered by every composer, in every mode: the properties of whatever is
+     being written into are never a project-mode extra.
      No z-index on the wrapper: the composer (z-10) paints over the card, but
      the shoe's dropdown (z-40 inside) still opens above the composer.
      The wrapper is the shoe's own inline-size query container: the composer
      cannot query a sibling, and the card must stay free of containment so it
      can size itself to its content. -->
-{#if scopeShoe}
+{#if shoe}
   <div class="composer-shoe relative -mt-4 flex w-full justify-center px-4 pt-3 pb-2 @container">
+    <!-- The card frame is the console shoe: one surface, tucked behind the
+         composer so only its lower band shows. Its top padding is what holds the
+         segments clear of the composer's lower edge. -->
     <div
-      class="composer-shoe-card flex min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
+      class="composer-shoe-card flex min-w-0 items-center justify-center border border-border bg-surface px-0.5 pt-1.5 pb-1"
     >
       <ComposerShoe
-        bind:this={scopeShoeComponent}
-        projectId={scopeShoe.projectId}
-        threadId={scopeShoe.threadId}
-        bucket={scopeShoe.bucket}
-        source={scopeShoe.source}
-        host={scopeShoe.host}
-        project={scopeShoe.project}
-        onSwitchProject={scopeShoe.onSwitchProject}
-        isNewThread={scopeShoe.isNewThread}
-        isWorking={scopeShoe.isWorking}
-        onOpenScopeView={scopeShoe.onOpenScopeView}
+        bind:this={shoeComponent}
+        {shoe}
+        usage={usageReading}
         onScopeMenuClosed={focusComposerAtSavedCaret}
-        report={scopeShoe.report}
-        oven={scopeShoe.oven}
       />
     </div>
   </div>
@@ -2216,7 +2259,44 @@
     width: 100%;
     transition:
       width 240ms ease,
-      margin-inline 240ms ease;
+      margin-inline 240ms ease,
+      border-color 220ms ease,
+      box-shadow 420ms ease;
+  }
+
+  /* At rest the composer is a bordered field; focus inks the border and lifts it
+     a hair, so the surface being written on is what the eye lands on. */
+  .chat-composer:focus-within {
+    border-color: var(--color-border-strong);
+    box-shadow: 0 0.5rem 1.5rem -0.75rem rgb(0 0 0 / 0.18);
+  }
+
+  /* The prompt marker sits in the editor's gutter, on the writing line, and
+     steps forward as focus arrives. It is decorative: the marker is
+     aria-hidden and the gutter is why the placeholder is inset too. */
+  .composer-prompt {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.875rem;
+    font-weight: 700;
+    line-height: 1.25rem;
+    color: var(--color-accent-hover);
+    opacity: 0.55;
+    pointer-events: none;
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease;
+  }
+
+  .chat-composer:focus-within .composer-prompt {
+    opacity: 1;
+    transform: translateX(0.125rem);
+  }
+
+  /* The shoe card carries the console shadow: a soft, short drop that separates
+     the bar from the canvas without turning it into a floating panel. */
+  .composer-shoe-card {
+    box-shadow: 0 0.5rem 1.25rem -0.875rem rgb(0 0 0 / 0.4);
   }
 
   /* Maximize   the editor is the composer's typing surface, so the control is
@@ -2278,22 +2358,20 @@
     }
   }
 
-  /* The shoe sizes to the status row it holds: never narrower than its 80%
-     resting share of the composer, never wider than the room the composer
-     leaves it. A long scope, project, or branch therefore widens the shoe
-     instead of squeezing the row   which used to push the scope badge out of
-     its own box and under the project icon. `.composer-shoe` is the query
-     container (see its `@container` class), so these rules and the shoe's own
-     truncation stages measure the composer, minus that wrapper's own inline
-     padding. */
+  /* The shoe sizes to the row it holds: never wider than the room the composer
+     leaves it, and as wide as that row needs, so the shoe reads as one bar
+     centered under the message box in every mode   a project thread with a scope
+     and a branch, a chat with nothing but its own name and the keys.
+     `.composer-shoe` is the query container (see its `@container` class), so
+     these rules and the shoe's own truncation stages measure the composer, minus
+     that wrapper's own inline padding. */
   .composer-shoe-card {
     width: max-content;
-    min-width: 80%;
     max-width: 100%;
   }
 
-  /* Tight composer: the shoe trims its own inline padding before the status row
-     has to ellipsize, so the row keeps the room it needs. */
+  /* Tight composer: the shoe trims its own inline padding before the row has to
+     ellipsize, so the row keeps the room it needs. */
   @container (max-width: 630px) {
     .composer-shoe-card {
       padding-inline: 0.375rem;

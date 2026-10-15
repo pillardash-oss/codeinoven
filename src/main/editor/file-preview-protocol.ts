@@ -4,9 +4,10 @@ import { protocol } from 'electron'
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { Readable } from 'node:stream'
-import { extname, join, sep } from 'path'
+import { join, sep } from 'path'
 import { realpath } from 'fs/promises'
 import { getConfigRoot } from '../../lib/utils'
+import { previewTypeForPath, type PreviewType } from '../../lib/preview-types'
 import { Logger } from '../system/logger'
 import type { ProjectFilesService } from './project-files-service'
 
@@ -16,49 +17,9 @@ const ATTACHMENT_ID_PATTERN = /^[a-f0-9]{24}$/u
 /** Thread IDs follow the same safe-entity charset as project IDs. */
 const THREAD_ID_PATTERN = /^[a-zA-Z0-9._-]+$/u
 
-interface PreviewType {
-  extension: string
-  maxBytes: number
-  mime: string
-}
-
-const MIB = 1024 * 1024
-const IMAGE_MAX_BYTES = 32 * MIB
-const DOCUMENT_MAX_BYTES = 64 * MIB
-const MEDIA_MAX_BYTES = 512 * MIB
-
-function previewType(extension: string, mime: string, maxBytes: number): PreviewType {
-  return { extension, mime, maxBytes }
-}
-
-const PREVIEW_TYPES: Record<string, PreviewType> = {
-  '.png': previewType('.png', 'image/png', IMAGE_MAX_BYTES),
-  '.jpg': previewType('.jpg', 'image/jpeg', IMAGE_MAX_BYTES),
-  '.jpeg': previewType('.jpeg', 'image/jpeg', IMAGE_MAX_BYTES),
-  '.gif': previewType('.gif', 'image/gif', IMAGE_MAX_BYTES),
-  '.webp': previewType('.webp', 'image/webp', IMAGE_MAX_BYTES),
-  '.avif': previewType('.avif', 'image/avif', IMAGE_MAX_BYTES),
-  // SVG is intentionally excluded: project-controlled active XML must not run
-  // in a privileged custom-scheme document. It remains available as text.
-  '.ico': previewType('.ico', 'image/x-icon', IMAGE_MAX_BYTES),
-  '.bmp': previewType('.bmp', 'image/bmp', IMAGE_MAX_BYTES),
-  '.pdf': previewType('.pdf', 'application/pdf', DOCUMENT_MAX_BYTES),
-  '.mp4': previewType('.mp4', 'video/mp4', MEDIA_MAX_BYTES),
-  '.m4v': previewType('.m4v', 'video/x-m4v', MEDIA_MAX_BYTES),
-  '.webm': previewType('.webm', 'video/webm', MEDIA_MAX_BYTES),
-  '.mov': previewType('.mov', 'video/quicktime', MEDIA_MAX_BYTES),
-  '.mpeg': previewType('.mpeg', 'video/mpeg', MEDIA_MAX_BYTES),
-  '.mpg': previewType('.mpg', 'video/mpeg', MEDIA_MAX_BYTES),
-  '.ogv': previewType('.ogv', 'video/ogg', MEDIA_MAX_BYTES),
-  '.ogg': previewType('.ogg', 'audio/ogg', MEDIA_MAX_BYTES),
-  '.oga': previewType('.oga', 'audio/ogg', MEDIA_MAX_BYTES),
-  '.mp3': previewType('.mp3', 'audio/mpeg', MEDIA_MAX_BYTES),
-  '.wav': previewType('.wav', 'audio/wav', MEDIA_MAX_BYTES),
-  '.m4a': previewType('.m4a', 'audio/mp4', MEDIA_MAX_BYTES),
-  '.flac': previewType('.flac', 'audio/flac', MEDIA_MAX_BYTES),
-  '.aac': previewType('.aac', 'audio/aac', MEDIA_MAX_BYTES),
-  '.opus': previewType('.opus', 'audio/opus', MEDIA_MAX_BYTES)
-}
+// Which extensions may be served, and how large each may be, is one shared
+// declaration (`src/lib/preview-types.ts`): the inline artifact pipeline reads
+// the same table, so a type the app can publish is always a type it can stream.
 
 /**
  * Register the `appfile://` scheme as privileged. Must run before the app is
@@ -81,10 +42,6 @@ export function registerFilePreviewScheme(): void {
       }
     }
   ])
-}
-
-function typeFromPath(path: string): PreviewType | null {
-  return PREVIEW_TYPES[extname(path).toLowerCase()] ?? null
 }
 
 function notFound(): Response {
@@ -237,7 +194,7 @@ function decodeSegments(pathname: string): string[] {
  * - `appfile://thread/<projectId>/<threadId>/<relativePath>`   resolved against
  *   the conversation's own app-owned workspace directory (a chat's
  *   `chats-cwd/<threadId>`, an assistant task's
- *   `assistant-cwd/<routineId ?? threadId>`)
+ *   `assistant-cwd/<assistantId ?? threadId>`)
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
  * - `appfile://standalone/file?path=<absolute>&name=<label>`   a single file
@@ -263,7 +220,7 @@ export function installFilePreviewProtocol(
         if (!PROJECT_ID_PATTERN.test(projectId)) return notFound()
         const relativePath = segments.slice(1).join('/')
         if (!relativePath) return notFound()
-        const type = typeFromPath(relativePath)
+        const type = previewTypeForPath(relativePath)
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
@@ -279,7 +236,7 @@ export function installFilePreviewProtocol(
         if (!THREAD_ID_PATTERN.test(threadId)) return notFound()
         const relativePath = segments.slice(2).join('/')
         if (!relativePath) return notFound()
-        const type = typeFromPath(relativePath)
+        const type = previewTypeForPath(relativePath)
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
@@ -298,7 +255,7 @@ export function installFilePreviewProtocol(
         const absolutePath = url.searchParams.get('path') ?? ''
         const name = url.searchParams.get('name') ?? absolutePath
         if (!absolutePath) return notFound()
-        const type = typeFromPath(name)
+        const type = previewTypeForPath(name)
         if (!type) return notFound()
         // Authorization is shared with privileged IPC: only paths the user
         // opened (or picked in a dialog) resolve to a canonical path here.
@@ -333,7 +290,7 @@ export function installFilePreviewProtocol(
         }
 
         const name = url.searchParams.get('name') ?? ''
-        const type = typeFromPath(name)
+        const type = previewTypeForPath(name)
         if (!type) return notFound()
         return serveFile(absolutePath, type, request)
       }

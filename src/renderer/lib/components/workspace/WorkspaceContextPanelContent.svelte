@@ -13,14 +13,15 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { getAssistantIcon, assistantAccentColor } from '$lib/assistant-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
+  import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
@@ -53,6 +54,10 @@
     navigate: (view: MainView) => void
     /** Open an assistant task, so the workspace owns the selection. */
     onOpenAssistantTask: (task: Thread) => void
+    /** Open one assistant connection's setup as a new thread of that assistant. */
+    onSetupAssistantConnection: (input: ConnectionSetupRequest) => void
+    /** Move a task that belongs to no assistant into one the user picks. */
+    onAdoptAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -71,7 +76,9 @@
     onContinueInThread,
     onOpenSubagent,
     navigate,
-    onOpenAssistantTask
+    onOpenAssistantTask,
+    onSetupAssistantConnection,
+    onAdoptAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -129,26 +136,26 @@
 
   /**
    * Identity of the file tree's root: its name, the label shown beside its icon,
-   * its icon, and its accent colour. A routine behaves like a project, and an
-   * assistant task's tree mounts on the routine's own workspace, so the routine's
+   * its icon, and its accent colour. An assistant behaves like a project, and an
+   * assistant task's tree mounts on the assistant's own workspace, so the assistant's
    * edited icon and colour stand in for the hidden assistant space's everywhere
-   * the root is drawn. A routine's name is often a whole sentence, so a routine
+   * the root is drawn. An assistant's name is often a whole sentence, so an assistant
    * root shows no label at all: the icon carries it, and the name is the icon's
    * tooltip.
    */
   let filesRootIdentity = $derived.by(() => {
-    const routine = assistantRoutines.routineForTask(
+    const assistant = assistants.assistantForTask(
       filesThreadId === null
         ? null
         : (scopeState.allScopeThreads.find((candidate) => candidate.id === filesThreadId) ?? null)
     )
-    if (routine) {
+    if (assistant) {
       return {
-        name: routine.name,
+        name: assistant.name,
         label: '',
-        routine: true,
-        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
-        accentColor: routineAccentColor(routine)
+        assistant: true,
+        iconUrl: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
+        accentColor: assistantAccentColor(assistant)
       }
     }
     // The notifications tab carries no project, so the fallback name reads the
@@ -162,7 +169,7 @@
     return {
       name,
       label: name,
-      routine: false,
+      assistant: false,
       iconUrl: activeProject
         ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
         : null,
@@ -214,7 +221,7 @@
               projectId={activeContextTab.projectId}
               projectName={filesRootIdentity.name}
               projectLabel={filesRootIdentity.label}
-              routineRoot={filesRootIdentity.routine}
+              assistantRoot={filesRootIdentity.assistant}
               projectIconUrl={filesRootIdentity.iconUrl}
               projectAccentColor={filesRootIdentity.accentColor}
             />
@@ -296,15 +303,17 @@
           {#if active}
             <div class="h-full" {@attach appPanelSlot}></div>
           {/if}
-        {:else if activeContextTab.kind === 'assistant-how-to'}
-          {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
-            <HowToPanel
+        {:else if activeContextTab.kind === 'assistant-knowledge'}
+          {#await import('../assistant/AssistantPanel.svelte') then { default: KnowledgePanel }}
+            <KnowledgePanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
-              routineId={activeContextTab.routineId}
+              assistantId={activeContextTab.assistantId}
               bind:panelTab={activeContextTab.panelTab}
               {navigate}
               onOpenTask={onOpenAssistantTask}
+              onSetupConnection={onSetupAssistantConnection}
+              onAdoptTask={onAdoptAssistantTask}
             />
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}
@@ -335,7 +344,7 @@
               {#snippet action()}
                 <button
                   type="button"
-                  class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+                  class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
                   onclick={onDismissCoordinator}
                 >
                   Close panel
@@ -349,7 +358,7 @@
               variant="sidebar"
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
-              routineId={activeContextTab.routineId}
+              assistantId={activeContextTab.assistantId}
               bind:activeSection={activeContextTab.memorySection}
             />
           {/await}

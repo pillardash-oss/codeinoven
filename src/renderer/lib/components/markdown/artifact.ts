@@ -35,32 +35,129 @@ export function artifactNeedsCodeFallback(code: string): boolean {
 }
 
 /**
+ * How tall an inline artifact picture may be drawn in the conversation.
+ *
+ * The same ceiling the inline picture and media figures carry (`max-h-96`): an
+ * artifact is shown whole, and the expanded viewer is where it is seen big.
+ */
+const ARTIFACT_PICTURE_MAX_HEIGHT = '24rem'
+
+/**
+ * The shape an SVG artifact asks to be drawn in, or `null` when it states none.
+ *
+ * A `viewBox` answers whenever it exists: it is the coordinate system the
+ * picture is drawn in, so it holds even when the root also carries a percentage
+ * size. Non-relative `width`/`height` attributes are the fallback. A source that
+ * states neither (a percentage size with no `viewBox`) has no shape of its own,
+ * and the caller keeps the plain document viewport instead of guessing one.
+ */
+export function svgArtifactIntrinsicRatio(code: string): number | null {
+  // A commented-out tag is not the root, and the first `<svg` in the text is not
+  // always the element the picture is drawn with.
+  const source = code.replace(/<!--[\s\S]*?-->/gu, '')
+  const opening = /<svg\b[^>]*>/iu.exec(source)?.[0]
+  if (!opening) return null
+  const box = svgViewBoxRatio(svgAttribute(opening, 'viewBox'))
+  if (box !== null) return box
+  const width = svgLength(svgAttribute(opening, 'width'))
+  const height = svgLength(svgAttribute(opening, 'height'))
+  if (width === null || height === null || height <= 0) return null
+  return usableRatio(width / height)
+}
+
+/**
+ * The box an inline artifact picture is drawn in: the artifact's own shape, at
+ * the largest size that fits both the message column and the height ceiling.
+ *
+ * `max-width` is what keeps the box honest when the ceiling is the binding
+ * constraint, so a portrait composition is drawn at the width its own shape
+ * gives it rather than inside a box wider than the picture.
+ */
+export function artifactPictureFrameStyle(ratio: number): string {
+  return `aspect-ratio:${ratio};max-height:${ARTIFACT_PICTURE_MAX_HEIGHT};max-width:min(100%,calc(${ARTIFACT_PICTURE_MAX_HEIGHT} * ${ratio}));`
+}
+
+/** One attribute off an already-matched opening tag, in either quote style. */
+function svgAttribute(opening: string, name: string): string | null {
+  // The name has to start an attribute: a plain `width` lookup must not answer
+  // with the tail of `stroke-width`.
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'iu')
+  const match = pattern.exec(opening)
+  return match?.[1] ?? match?.[2] ?? null
+}
+
+/** A length in the user unit or `px`; anything relative states no shape. */
+function svgLength(value: string | null): number | null {
+  if (value === null) return null
+  const match = /^\s*(\d*\.?\d+)\s*(?:px)?\s*$/iu.exec(value)
+  if (!match) return null
+  return Number(match[1])
+}
+
+/** The shape a `viewBox` states (`minX minY width height`). */
+function svgViewBoxRatio(value: string | null): number | null {
+  if (value === null) return null
+  const parts = value.trim().split(/[\s,]+/u)
+  if (parts.length !== 4) return null
+  const [minX, minY, width, height] = parts.map(Number)
+  if ([minX, minY, width, height].some((part) => !Number.isFinite(part))) return null
+  return usableRatio(width / height)
+}
+
+/** A ratio a box can be laid out at, rounded so the style string stays short. */
+function usableRatio(ratio: number): number | null {
+  if (!Number.isFinite(ratio) || ratio <= 0) return null
+  return Number(ratio.toFixed(4))
+}
+
+/**
+ * Sanitize SVG artifact source to the SVG profile.
+ *
+ * One policy for both renderings of an SVG artifact: the preview, which embeds
+ * the result as an `<img>` data URL, and the inspector, which places it inline
+ * in a shadow root so its elements can be picked. Scripts, foreign objects and
+ * event handlers are stripped either way, so the sanitized markup is safe to
+ * insert into the document.
+ */
+export function sanitizedSvgArtifact(code: string): string {
+  return DOMPurify.sanitize(code.trim(), {
+    USE_PROFILES: { svg: true, svgFilters: true }
+  })
+}
+
+/**
  * Build a sandboxed `iframe srcdoc` document for an artifact.
  *
  * HTML goes through the shared `htmlPreviewFrame` sanitizer (scripts, forms
- * and remote references stripped); the caller always mounts with
- * `sandbox=""`. SVG is sanitized to the SVG profile and embedded as an
- * `<img>` data URL, so embedded scripts can never execute.
+ * and remote references stripped) as a canvas, so the artifact owns the whole
+ * frame; the caller always mounts with `sandbox=""`. SVG is sanitized to the SVG
+ * profile and embedded as an `<img>` data URL, so embedded scripts can never
+ * execute, and it is drawn whole inside the frame: a picture that states its own
+ * shape is contained, and one that states none is a canvas authored to fill the
+ * box it is given.
  */
 export function buildArtifactSrcdoc(kind: ArtifactKind, code: string, themeStyles = ''): string {
-  if (kind === 'html') return htmlPreviewFrame(code, undefined, themeStyles)
-  const svg = DOMPurify.sanitize(code.trim(), {
-    USE_PROFILES: { svg: true, svgFilters: true }
-  })
-  const themedSvg = svg.replace(
+  if (kind === 'html') return htmlPreviewFrame(code, undefined, themeStyles, { canvas: true })
+  const sized = svgArtifactIntrinsicRatio(code) !== null
+  const themedSvg = sanitizedSvgArtifact(code).replace(
     /<svg\b[^>]*>/iu,
     (opening) =>
       `${opening}<style>${themeStyles}svg{font-family:var(--font-app);color:var(--color-foreground);fill:currentColor;}</style>`
   )
   const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedSvg)}`
+  // The picture is never scaled past the frame's edges, and no padding is
+  // injected around it   the artifact's own canvas is the frame.
+  const picture = sized
+    ? 'max-width: 100%; max-height: 100%; width: auto; height: auto;'
+    : 'width: 100%; height: 100%;'
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <style>
 ${themeStyles}
-body { box-sizing: border-box; display: flex; min-height: 100vh; margin: 0; padding: 1.25rem; align-items: center; justify-content: center; background: var(--color-app); }
-img { max-width: 100%; height: auto; }
+body { box-sizing: border-box; display: flex; height: 100vh; margin: 0; overflow: hidden; align-items: center; justify-content: center; background: var(--color-app); }
+img { display: block; min-width: 0; min-height: 0; ${picture} }
 </style>
 </head>
 <body><img src="${dataUrl}" alt="SVG artifact"></body>

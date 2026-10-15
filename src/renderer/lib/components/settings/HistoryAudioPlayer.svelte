@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
   import { Download, LoaderCircle, Play } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
+  import { osFileManagerLabel, revealExportedPathInOsFileManager } from '$lib/os-file-manager'
   import { speechController } from '../../speech/speech-controller.svelte'
   import { registerHistoryAudio, setCurrentHistoryAudio } from '../../speech/global-audio'
 
@@ -16,6 +18,7 @@
   let downloadName = $state('')
   let audioEl = $state<HTMLAudioElement | null>(null)
   let preparing = $state(false)
+  let saving = $state(false)
   let error = $state<string | null>(null)
   let isPlaying = $state(false)
   let unregister: (() => void) | null = null
@@ -43,6 +46,9 @@
       )
       url = next
       downloadName = `recording-${attemptId}${result.value.extension}`
+      // Chromium names a download after its URL, and a blob URL is a bare UUID,
+      // so the media controls' own Download item is told what this file is.
+      void invoke('download:nameLocalBlob', next, downloadName).catch(() => undefined)
       return true
     } catch (cause) {
       error = describe(cause)
@@ -74,6 +80,45 @@
       : 'The recording could not be played.'
   }
 
+  /**
+   * Save the recording to a path the user picks.
+   *
+   * The bytes are written by the main process, never handed to the browser's own
+   * download: every renderer-initiated download is denied at the session level
+   * (see `src/main/bootstrap/session-guards.ts`), which is why the anchor this
+   * button used to be did nothing at all   no dialog, no file, no error. The
+   * answer also tells the three outcomes apart: a path means the file was
+   * written, null means the user closed the dialog, and a failed result is
+   * reported here instead of vanishing.
+   */
+  async function saveRecording(): Promise<void> {
+    if (saving) return
+    saving = true
+    error = null
+    try {
+      const result = await invoke('speech:exportRecording', attemptId)
+      if (!result.ok) throw new Error(result.error.message)
+      if (!result.value) return
+      const savedPath = result.value
+      toast.success('Recording saved', {
+        description: savedPath,
+        action: {
+          label: osFileManagerLabel(),
+          onClick: () => void revealSavedRecording(savedPath)
+        }
+      })
+    } catch (cause) {
+      error = describe(cause)
+    } finally {
+      saving = false
+    }
+  }
+
+  async function revealSavedRecording(savedPath: string): Promise<void> {
+    const revealed = await revealExportedPathInOsFileManager(savedPath)
+    if (!revealed) toast.error('The saved recording is no longer where it was written.')
+  }
+
   function handlePlaybackStarted(): void {
     isPlaying = true
     if (audioEl) setCurrentHistoryAudio(audioEl)
@@ -100,12 +145,15 @@
 
   onDestroy(() => {
     unregister?.()
-    if (url) URL.revokeObjectURL(url)
+    if (url) {
+      void invoke('download:nameLocalBlob', url, null).catch(() => undefined)
+      URL.revokeObjectURL(url)
+    }
     if (audioEl && !audioEl.paused) audioEl.pause()
   })
 </script>
 
-<div class="rounded-lg border bg-elevated p-2">
+<div class="border bg-elevated p-2">
   <!-- One stable element: play() always targets the element carrying the src. -->
   <audio
     bind:this={audioEl}
@@ -125,7 +173,7 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
+        class="inline-flex items-center gap-1.5 border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
         title="Load and play recording with seek and download"
         aria-label="Play recording {attemptId}"
         disabled={preparing}
@@ -144,17 +192,22 @@
   {:else}
     <div class="mt-1.5 flex items-center justify-between gap-2">
       <span class="text-[0.625rem] text-dimmed"
-        >{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player · download below</span
+        >{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player</span
       >
-      <a
-        href={url}
-        download={downloadName || `recording-${attemptId}`}
-        class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground"
-        title="Download recording"
-        aria-label="Download recording {attemptId}"
+      <button
+        type="button"
+        class="inline-flex items-center gap-1 border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground disabled:opacity-50"
+        title="Save this recording to a file"
+        aria-label="Save recording {attemptId} to a file"
+        disabled={saving}
+        onclick={() => void saveRecording()}
       >
-        <Download size={11} aria-hidden="true" /> Download
-      </a>
+        {#if saving}
+          <LoaderCircle size={11} class="animate-spin" aria-hidden="true" /> Saving…
+        {:else}
+          <Download size={11} aria-hidden="true" /> Download
+        {/if}
+      </button>
     </div>
   {/if}
 

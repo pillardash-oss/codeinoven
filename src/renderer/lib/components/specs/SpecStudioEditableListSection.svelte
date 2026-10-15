@@ -43,7 +43,7 @@
       />
     </button>
     <button
-      class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
+      class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
       title={`Add ${title.toLowerCase()} item`}
       onclick={onAdd}
     >
@@ -53,7 +53,7 @@
   </div>
   <ul class="mt-3 space-y-2">
     {#each items as item, index (`${id}:${index}`)}
-      <li class="group flex items-start gap-2 rounded-lg px-2 py-1 text-muted hover:bg-surface">
+      <li class="group flex items-start gap-2 px-2 py-1 text-muted hover:bg-surface">
         <Check size={13} class="mt-1.5 shrink-0 text-success" />
         <EditableMarkdown
           class="min-w-0 flex-1 outline-none focus:text-foreground"
@@ -62,7 +62,7 @@
           onChange={(value) => onEdit(index, value)}
         />
         <button
-          class="mt-0.5 rounded p-1 text-dimmed opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
+          class="mt-0.5 p-1 text-dimmed opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
           aria-label={`Remove item ${index + 1}`}
           title={`Remove item ${index + 1}`}
           onclick={() => onRemove(index)}

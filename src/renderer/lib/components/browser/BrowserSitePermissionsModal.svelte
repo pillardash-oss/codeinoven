@@ -113,7 +113,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="flex h-8 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+      class="flex h-8 items-center bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover"
       onclick={() => globalBrowser.dismissSitePermissions()}
     >
       Done

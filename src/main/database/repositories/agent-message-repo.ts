@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { capPersistedParts } from '../../chat/bounded-tool-output'
+import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { Database } from '../database'
 import type {
   AgentMessage,
@@ -16,13 +17,29 @@ import type {
 } from '../../../lib/types'
 import { attachmentGrantStatements, syncAttachmentGrants } from './attachment-grant-repo'
 
-/** Plain-text content of a user-authored agent message (mirrors the renderer). */
-function userMessageText(partsJson: string): string {
+/**
+ * Display summary of a user-authored agent message (mirrors the renderer's
+ * `messageText`). A message an app action produced   an answered question, a
+ * connection retry, a spec apply   carries only a `user-presentation` part and
+ * no text, so reading text parts alone left its history row blank. The action
+ * and its body are the row's real content, and the flag tells the history
+ * panel to draw it as an action instead of an authored message.
+ */
+function summarizeUserMessage(partsJson: string): { content: string; isAction: boolean } {
   const parts = JSON.parse(partsJson) as AgentPart[]
-  return parts
+  const text = parts
     .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
     .map((p) => p.text)
     .join('\n')
+  const presentation = parts.find(
+    (p): p is Extract<AgentPart, { type: 'user-presentation' }> => p.type === 'user-presentation'
+  )
+  if (!presentation) return { content: text, isAction: false }
+  const { action, body } = presentation.presentation
+  return {
+    content: [action, body].filter(Boolean).join('\n\n'),
+    isAction: text.trim().length === 0
+  }
 }
 
 /** Plain-text content of an agent message used for full-text search indexing. */
@@ -198,12 +215,37 @@ export interface ProviderDeltaSyncResult {
   noop: boolean
 }
 
+/**
+ * Remove a thinking tag a harness leaked into an assistant text part.
+ *
+ * The mirror keeps what arrived, and the driver strips the tag before it is
+ * persisted now. Rows written before that still hold it, so a read-side pass
+ * keeps restored conversations clean without rewriting the stored record. The
+ * array and its parts are only rebuilt when something actually changed, so a
+ * clean message keeps its identity for the cache's merge comparisons.
+ */
+function stripStoredThinkingArtifacts(role: string, parts: AgentPart[]): AgentPart[] {
+  if (role !== 'assistant') return parts
+  let changed = false
+  const cleaned = parts.map((part) => {
+    if (part.type !== 'text') return part
+    const text = stripThinkingArtifacts(part.text)
+    if (text === part.text) return part
+    changed = true
+    return { ...part, text }
+  })
+  return changed ? cleaned : parts
+}
+
 function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMessage {
   // Defensive read-side cap: threads persisted before the persist-time output
   // cap existed can still carry multi-megabyte tool outputs in their rows.
   // Capping at decode time keeps every later consumer (transcript page loads,
   // forks, exports) bounded even for legacy rows.
-  const decodedParts = capPersistedParts(JSON.parse(row.parts) as AgentPart[])
+  const decodedParts = stripStoredThinkingArtifacts(
+    row.role,
+    capPersistedParts(JSON.parse(row.parts) as AgentPart[])
+  )
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
@@ -912,11 +954,15 @@ export class AgentMessageRepo {
        ORDER BY created_at ASC, id ASC`,
       threadId
     )
-    return rows.map((row) => ({
-      id: row.id,
-      content: userMessageText(row.parts),
-      createdAt: row.created_at
-    }))
+    return rows.map((row) => {
+      const summary = summarizeUserMessage(row.parts)
+      return {
+        id: row.id,
+        content: summary.content,
+        isAction: summary.isAction,
+        createdAt: row.created_at
+      }
+    })
   }
 
   loadAllByThread(threadId: string): AgentMessage[] {
@@ -974,7 +1020,13 @@ export function mapMessageRows(rows: unknown[], includeTransport = false): Agent
 export function mapUserMessageRows(rows: unknown[]): UserMessageSummary[] {
   return rows.map((row) => {
     const r = row as { id: string; parts: string; created_at: number }
-    return { id: r.id, content: userMessageText(r.parts), createdAt: r.created_at }
+    const summary = summarizeUserMessage(r.parts)
+    return {
+      id: r.id,
+      content: summary.content,
+      isAction: summary.isAction,
+      createdAt: r.created_at
+    }
   })
 }
 

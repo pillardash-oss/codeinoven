@@ -78,7 +78,7 @@
   <div class="flex shrink-0 items-center gap-2">
     {#if tab === 'custom'}
       <button
-        class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
         type="button"
         onclick={onOpenCustom}
       >
@@ -86,7 +86,7 @@
       </button>
     {:else if step === 'labeling'}
       <button
-        class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="button"
         disabled={finalizingAccount}
         onclick={onSaveAccount}
@@ -96,7 +96,7 @@
       </button>
     {:else if step === 'running'}
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
+        class="flex h-9 items-center gap-1.5 border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
         type="button"
         onclick={onCancelConnection}
       >
@@ -105,7 +105,7 @@
     {:else if canSignIn}
       {#if apiKeyEntry}
         <button
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
           title={step === 'picking' && selectedProvider
             ? `Store the API key for ${selectedProvider.name}`
@@ -125,7 +125,7 @@
         </button>
       {:else}
         <button
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
           disabled={!pickerLogin && step === 'picking' && !selectedProvider}
           onclick={() =>
@@ -148,7 +148,7 @@
       {/if}
     {:else}
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-dimmed"
+        class="flex h-9 items-center gap-1.5 bg-elevated px-4 text-xs font-medium text-dimmed"
         type="button"
         disabled
         title="This harness does not expose a login flow CodeInOven can run"

@@ -134,7 +134,7 @@
     </span>
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Close extension panel"
       title="Close extension panel"
       onclick={() => browserExtensionSidePanels.close(extensionId)}

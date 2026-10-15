@@ -55,7 +55,7 @@
 
 <div
   class={[
-    'flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-2 shadow-xl',
+    'flex h-10 shrink-0 items-center gap-1.5 border border-border bg-surface px-2 shadow-xl',
     floating ? 'absolute right-3 top-3 z-30 w-64' : 'w-full'
   ]}
   role="dialog"
@@ -70,7 +70,7 @@
     type="text"
     inputmode="numeric"
     pattern="[0-9]*"
-    class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs tabular-nums text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+    class="h-7 min-w-0 flex-1 border border-border bg-app px-2.5 text-xs tabular-nums text-foreground outline-none placeholder:text-dimmed focus:border-primary"
     aria-label={`Line number from 1 to ${maxLine}`}
     placeholder="1"
     {value}
@@ -80,7 +80,7 @@
   <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">/ {maxLine}</span>
   <button
     type="button"
-    class="flex h-7 shrink-0 items-center justify-center rounded-lg bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+    class="flex h-7 shrink-0 items-center justify-center bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
     disabled={!value}
     onclick={submit}
   >
@@ -88,7 +88,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Close go to line"
     title="Close go to line (Escape)"
     onclick={close}

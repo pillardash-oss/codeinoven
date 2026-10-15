@@ -1,7 +1,9 @@
 import type { AgentPart } from '$shared/types'
+import { isCodeModeToolName } from '$shared/agent-interactions'
 import { subagentStatusIsTerminal } from './subagent-presentation'
 
 export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
+export type TraceTextPart = Extract<AgentPart, { type: 'text' }>
 
 /**
  * Keep one renderable lifecycle state per part ID while preserving the order in
@@ -15,6 +17,7 @@ export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
 export function latestWorkingTraceParts(parts: AgentPart[]): AgentPart[] {
   const renderable = parts.filter((part) => {
     if (part.type === 'text') return part.text.trim().length > 0
+    if (part.type === 'step-start') return false
     if (part.type === 'step-finish') return Boolean(part.reason)
     return true
   })
@@ -32,6 +35,130 @@ export function latestWorkingTraceParts(parts: AgentPart[]): AgentPart[] {
   }
 
   return latestParts
+}
+
+/**
+ * One chain of thought in a turn's trace: the thinking and tool work an agent
+ * runs, closed by the text it writes when it stops to report.
+ */
+export interface TraceChain {
+  /**
+   * Stable key for the chain. A chain that produced an output is keyed by that
+   * output's id, because the text is the boundary that defines it and older
+   * entries can only ever be added before it. A trailing chain with no output
+   * yet is keyed by its first step.
+   *
+   * The first step is deliberately not the key for an output chain: paging an
+   * older page into the window prepends steps to the chain the window starts
+   * inside, which would change a first-step key and remount the chain  and
+   * replay its fold  for nothing.
+   */
+  id: string
+  /** Reasoning, tool, sub-agent, compaction and file entries behind the output. */
+  steps: AgentPart[]
+  /** The text this chain produced, or null while its work is still in flight. */
+  output: TraceTextPart | null
+}
+
+/**
+ * Group a turn's trace entries into chains of thought.
+ *
+ * A chain of thought is the work an agent does before it says something: the
+ * reasoning and tool calls it runs, closed by the text it writes when it stops
+ * to report. Grouping on the text is what keeps a long trace readable, because
+ * each block the agent wrote is the outcome of the steps above it, so the trace
+ * reads as a sequence of answered questions instead of one flat log.
+ *
+ * The turn's closing statement is not in this list (the transcript renders it),
+ * so the steps that led to the answer form a trailing chain with no output.
+ * Models that never reason still group correctly: their tool runs sit between
+ * whatever running commentary the harness recorded as text.
+ */
+export function groupTraceIntoChains(parts: readonly AgentPart[]): TraceChain[] {
+  const chains: TraceChain[] = []
+  let steps: AgentPart[] = []
+  for (const part of parts) {
+    if (part.type === 'text') {
+      chains.push({ id: part.id, steps, output: part })
+      steps = []
+      continue
+    }
+    steps.push(part)
+  }
+  if (steps.length > 0) chains.push({ id: steps[0].id, steps, output: null })
+  return chains
+}
+
+/** Wall-clock window one step occupied, when the harness reported timestamps. */
+export interface TraceChainSpan {
+  start: number
+  end: number
+}
+
+function stepTime(part: AgentPart): { start?: number; end?: number } | undefined {
+  if (part.type === 'tool') return part.state.time
+  if (part.type === 'reasoning') return part.time
+  if (part.type === 'subagent') return part.activity.time
+  return undefined
+}
+
+/**
+ * Earliest start and latest end across a set of parts, or null when none of
+ * them reported a timestamp. The end falls back to the start so a span whose
+ * entries never closed still has a stable duration to render instead of an
+ * open range.
+ */
+function spanOfParts(parts: readonly AgentPart[]): TraceChainSpan | null {
+  let start = Number.POSITIVE_INFINITY
+  let end = Number.NEGATIVE_INFINITY
+  for (const part of parts) {
+    const time = stepTime(part)
+    if (time?.start !== undefined) start = Math.min(start, time.start)
+    if (time?.end !== undefined) end = Math.max(end, time.end)
+  }
+  if (start === Number.POSITIVE_INFINITY) return null
+  return { start, end: end === Number.NEGATIVE_INFINITY ? start : Math.max(end, start) }
+}
+
+/** The wall-clock span a chain's steps occupied, or null when none reported one. */
+export function traceChainSpan(chain: TraceChain): TraceChainSpan | null {
+  return spanOfParts(chain.steps)
+}
+
+/**
+ * What a chain of thought holds, for the per-chain markers on its header: a
+ * compaction, how many sub-agents it delegated to, and whether it ran code-mode
+ * work. It lets a reader see where an action happened without opening the
+ * steps, while the trace header keeps the turn-wide totals.
+ */
+export interface TraceChainMarkers {
+  compacted: boolean
+  subagentCount: number
+  codeMode: boolean
+}
+
+export function traceChainMarkers(chain: TraceChain): TraceChainMarkers {
+  let compacted = false
+  let subagentCount = 0
+  let codeMode = false
+  for (const step of chain.steps) {
+    if (step.type === 'compaction' || step.type === 'compaction-summary') compacted = true
+    else if (step.type === 'subagent') subagentCount += 1
+    else if (step.type === 'tool' && (step.codeMode === true || isCodeModeToolName(step.tool))) {
+      codeMode = true
+    }
+  }
+  return { compacted, subagentCount, codeMode }
+}
+
+/**
+ * The wall-clock span an entire trace occupied: the earliest start to the
+ * latest end across every entry it holds. This is what the trace header shows
+ * as the turn's total duration, so it reads the same whether the work arrived
+ * as one chain or several.
+ */
+export function tracePartsSpan(parts: readonly AgentPart[]): TraceChainSpan | null {
+  return spanOfParts(parts)
 }
 
 /**

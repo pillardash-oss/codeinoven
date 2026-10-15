@@ -1,4 +1,5 @@
 import type { BrowserService } from '../browser/browser-service'
+import { compositionBoardTabId } from '../browser/browser-service/composition-board-tab'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { resolveServedEntry, resolveServedFolder, servedFileUrl } from '../preview/served-folder'
 import { videoCaptureUrl } from '../../lib/video/project'
@@ -9,8 +10,13 @@ import { videoCaptureUrl } from '../../lib/video/project'
  * Two callers need it: the video capability's `preview` operation, which the
  * agent runs to watch the work, and its `capture` operation, which loads the
  * same folder frozen at one second. Both must serve the folder on the same
- * loopback origin and show it in the same thread tab, so the serve-and-show
- * path lives here and the two cannot drift.
+ * loopback origin, so the serve-and-show path lives here and the two cannot
+ * drift.
+ *
+ * Which view receives the page is the caller's choice (see `mode`): the agent's
+ * preview and every capture move through the thread's own browser tab, while the
+ * video board plays the composition in a view of its own that never enters the
+ * tab strip.
  *
  * A viewing and a capture differ by one query parameter. The project reads
  * `cio-capture` and `cio-time` to know it should draw a single frame and start
@@ -46,6 +52,16 @@ export interface VideoPreviewRequest {
   attention: 'focus' | 'background'
   /** Bring the tab to the user even when it already existed. */
   reveal: boolean
+  /**
+   * Which view the composition is shown in.
+   *
+   * `thread` (the default) is the thread's own browser tab, which is where the
+   * agent's `preview` and `capture` operate and where the in-app browser can
+   * check the work. `board` is the video board's own view: a registered tab that
+   * never appears in the tab strip, so a user editing in the board never has to
+   * open or find the browser at all.
+   */
+  mode?: 'thread' | 'board'
   /**
    * When set, the tab loads the composition frozen at this second instead of
    * moving. The caller still draws the frame itself before capturing; this only
@@ -117,6 +133,37 @@ export async function openVideoPreview(
   const origin = new URL(registration.url).origin
 
   const browser = deps.browser()
+  const served = {
+    directory: directory.display,
+    entry: entry?.requested ?? null,
+    playUrl,
+    origin,
+    served: (entry ? 'file' : 'folder listing') as 'file' | 'folder listing'
+  }
+  // The board's view is its own, so it is asked for by identity rather than
+  // through the thread's tab. Nothing here consults the agent's tab: a
+  // composition the board is playing is not the page the agent previewed, and
+  // neither may replace the other.
+  if (browser && request.mode === 'board') {
+    const boardTabId = compositionBoardTabId({
+      projectId: request.projectId,
+      threadId: request.threadId,
+      directory: directory.display
+    })
+    // A board view already playing this composition is the page the user is
+    // watching, so a poster request leaves it alone instead of reloading it to a
+    // still. Every other board request is a folder switch or a first open, and
+    // loads the page it asked for.
+    const playing = posterUrl !== null && browser.tabUrl(boardTabId) === playUrl
+    const showUrl = playing ? playUrl : url
+    const shown = await browser.showCompositionBoardTab({
+      projectId: request.projectId,
+      threadId: request.threadId,
+      directory: directory.display,
+      url: showUrl
+    })
+    return { ...served, url: showUrl, tab: shown.tab, tabId: shown.tabId }
+  }
   let tab: 'reused' | 'opened' | null = null
   let tabId: string | null = null
   // What the tab holds when this returns, which is not always what was asked for:
@@ -165,12 +212,8 @@ export async function openVideoPreview(
   }
 
   return {
-    directory: directory.display,
-    entry: entry?.requested ?? null,
-    playUrl,
+    ...served,
     url: loaded,
-    origin,
-    served: entry ? 'file' : 'folder listing',
     tab,
     tabId
   }

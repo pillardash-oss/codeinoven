@@ -35,6 +35,7 @@ import type {
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
+  IdleNativeSessionHandOffProbe,
   IdleNativeSessionReleaseResult,
   SendPromptOptions,
   SteerPromptOptions,
@@ -851,43 +852,13 @@ export class CodexDriver extends PersistentCliDriver {
     projectPath: string,
     sessionId: string
   ): Promise<IdleNativeSessionReleaseResult> {
-    const session = await this.requireSession(projectPath, sessionId)
-    const nativeThreadId = session.nativeSessionId
-    if (!nativeThreadId) return { owner: false, released: false }
+    const nativeThreadId =
+      (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
+    if (!host) return { owner: false, released: false }
 
-    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
-    const host = this.hostsByProjectPath.get(projectPath)
-    if (
-      !host ||
-      !binding ||
-      binding.sessionId !== sessionId ||
-      binding.projectPath !== projectPath
-    ) {
-      return { owner: false, released: false }
-    }
-
-    if (this.activeTurns.has(sessionId)) {
-      return {
-        owner: true,
-        released: false,
-        reason: 'This Codex thread still has an active turn.'
-      }
-    }
-    const hostBusy =
-      [...this.activeTurns.values()].some((active) => active.host === host) ||
-      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
-      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
-      [...this.serverRequests.values()].some(
-        (request) => request.host === host && request.sessionId !== sessionId
-      ) ||
-      host.pending.size > 0
-    if (hostBusy) {
-      return {
-        owner: true,
-        released: false,
-        reason: 'Another Codex operation is still using this app-server.'
-      }
-    }
+    const blocker = this.handOffBlockerFor(host, sessionId)
+    if (blocker) return { owner: true, released: false, reason: blocker }
 
     if (this.hostsByProjectPath.get(projectPath) === host) {
       this.hostsByProjectPath.delete(projectPath)
@@ -907,6 +878,86 @@ export class CodexDriver extends PersistentCliDriver {
       if (sessionOwner.projectPath === projectPath) this.threadSessionsByNativeId.delete(threadId)
     }
     return { owner: true, released: true }
+  }
+
+  /**
+   * Whether this thread's writer could be released once its own turn stops,
+   * judged without stopping anything.
+   *
+   * A transfer stops the run before it releases the writer, because Codex only
+   * hands an app-server over while no turn is running on it. Answering the same
+   * question beforehand is what lets the transfer refuse while the run is still
+   * alive, instead of stopping it and only then finding the hand-off impossible.
+   */
+  async canHandOffIdleSession(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionHandOffProbe> {
+    let nativeThreadId: string | null
+    try {
+      nativeThreadId = (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    } catch (error) {
+      // A session this process cannot even read is one it cannot hand over.
+      Logger.dev('Codex hand-off probe could not read the session:', error)
+      return { blocked: true, reason: 'This Codex session is no longer available to hand over.' }
+    }
+    const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
+    // No writer here means this process is not the one holding the thread, so a
+    // hand-off has nothing to wait on.
+    if (!host) return { blocked: false }
+    const blocker = this.handOffBlockerFor(host, sessionId, { ignoreOwnTurn: true })
+    return blocker ? { blocked: true, reason: blocker } : { blocked: false }
+  }
+
+  /**
+   * The resident host whose native writer this session's thread lives in, or
+   * null when this process holds no writer for it.
+   */
+  private writerHostFor(
+    projectPath: string,
+    sessionId: string,
+    nativeThreadId: string | null
+  ): CodexAppServerHost | null {
+    if (!nativeThreadId) return null
+    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (
+      !host ||
+      !binding ||
+      binding.sessionId !== sessionId ||
+      binding.projectPath !== projectPath
+    ) {
+      return null
+    }
+    return host
+  }
+
+  /**
+   * Why the host cannot be stopped for a hand-off right now, or null when it can.
+   *
+   * `ignoreOwnTurn` covers a transfer's pre-flight: the thread being handed over
+   * is still running its turn at that moment, and the transfer stops it before
+   * it releases the writer.
+   */
+  private handOffBlockerFor(
+    host: CodexAppServerHost,
+    sessionId: string,
+    options: { ignoreOwnTurn?: boolean } = {}
+  ): string | null {
+    if (!options.ignoreOwnTurn && this.activeTurns.has(sessionId)) {
+      return 'This Codex thread still has an active turn.'
+    }
+    const hostBusy =
+      [...this.activeTurns.entries()].some(
+        ([turnSessionId, active]) => active.host === host && turnSessionId !== sessionId
+      ) ||
+      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
+      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
+      [...this.serverRequests.values()].some(
+        (request) => request.host === host && request.sessionId !== sessionId
+      ) ||
+      host.pending.size > 0
+    return hostBusy ? 'Another Codex operation is still using this app-server.' : null
   }
 
   override dispose(): void {
@@ -1355,17 +1406,34 @@ export class CodexDriver extends PersistentCliDriver {
       const error = recordValue(params['error'])
       const message = stringValue(error?.['message']) ?? 'Codex turn failed'
       if (params['willRetry'] === true) {
+        const retryIssue = codexRetryIssue(error, message)
+        // Codex's reconnecting loop cannot satisfy an expired credential: it
+        // re-fails the same 401 until it gives up, which used to leave the
+        // thread parked on a connection-wait card whose only actions were
+        // Retry and Stop, with no way to sign in again. Report the terminal
+        // sign-in verdict now, and keep it so the turn's teardown carries it.
+        if (retryIssue.kind === 'authentication') {
+          active.waitingForRetry = false
+          active.failure = retryIssue.message
+          active.failureIssue = retryIssue
+          this.emit({
+            type: 'session.status',
+            sessionId: active.session.id,
+            status: { state: 'error', issue: retryIssue }
+          })
+          return
+        }
         active.failure = undefined
         active.waitingForRetry = true
         this.emit({
           type: 'session.status',
           sessionId: active.session.id,
-          status: { state: 'waiting', issue: codexRetryIssue(error, message) }
+          status: { state: 'waiting', issue: retryIssue }
         })
       } else {
         active.waitingForRetry = false
         active.failure = message
-        active.failureIssue = codexUsageLimitIssue(error, message)
+        active.failureIssue = codexUsageLimitIssue(error, message) ?? active.failureIssue
       }
       return
     }

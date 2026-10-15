@@ -9,9 +9,15 @@
     thread: Thread
     settings: ThreadSettings
     busy: boolean
+    /**
+     * How the picker's trigger reads where it is rendered. The composer shoe
+     * draws its controls as segments inside one card, so it asks for
+     * `segment`; every other surface keeps the standalone chip.
+     */
+    variant?: 'chip' | 'segment'
     onSettingsChange: (settings: ThreadSettings) => void
   }
-  let { thread, settings, busy, onSettingsChange }: Props = $props()
+  let { thread, settings, busy, variant = 'chip', onSettingsChange }: Props = $props()
   let menu: OvenPickerMenu | undefined = $state(undefined)
 
   onMount(() => {
@@ -48,6 +54,7 @@
   selectedId={settings.ovenId ?? LOCAL_OVEN_ID}
   selectedPath={settings.ovenPath}
   {busy}
+  {variant}
   label="Choose the Oven for this chat"
   onSelect={select}
 />

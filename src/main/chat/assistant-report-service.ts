@@ -7,7 +7,7 @@ import {
   isAssistantReportThread
 } from '../../lib/assistant-reports'
 import { assistantThreadWorkspaceDirectory } from '../../lib/project-artifacts'
-import type { RoutinePriority, Thread, ThreadStatus } from '../../lib/types'
+import type { AssistantPriority, Thread, ThreadStatus } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
 
 export interface AssistantReportInput {
@@ -15,10 +15,10 @@ export interface AssistantReportInput {
   thread: Thread
   /** The task the run belongs to, for the report's heading. */
   taskTitle: string
-  /** The routine's name, when the task is grouped. */
-  routineName?: string
-  /** The routine's agreed urgency default, when it has one. */
-  priority?: RoutinePriority
+  /** The assistant's name, when the task is grouped. */
+  assistantName?: string
+  /** The assistant's agreed urgency default, when it has one. */
+  priority?: AssistantPriority
   /** The turn's final answer, verbatim. */
   report: string
   /** How the turn settled. */
@@ -29,7 +29,7 @@ export interface AssistantReportInput {
 
 /**
  * Copy one settled assistant run's report to a durable Markdown file under
- * `reports/` in the routine's own workspace.
+ * `reports/` in the assistant's own workspace.
  *
  * Written from the turn's final answer in the main process, not handed to the
  * agent as a file-writing step, so the durable copy exists even when the model
@@ -47,7 +47,7 @@ export async function writeAssistantReport(
   const report = input.report.trim()
   if (report.length === 0) return null
 
-  const directory = assistantThreadWorkspaceDirectory(input.thread.id, input.thread.routineId)
+  const directory = assistantThreadWorkspaceDirectory(input.thread.id, input.thread.assistantId)
   const relativePath = join(
     directory,
     ASSISTANT_REPORTS_DIRECTORY,
@@ -55,7 +55,7 @@ export async function writeAssistantReport(
   )
   const document = buildAssistantReportDocument({
     taskTitle: input.taskTitle,
-    routineName: input.routineName,
+    assistantName: input.assistantName,
     priority: input.priority,
     report,
     status: input.status,

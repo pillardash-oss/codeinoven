@@ -21,7 +21,7 @@
 {#each states as option (option.id)}
   <button
     type="button"
-    class="h-6 shrink-0 cursor-pointer rounded-md px-2 text-[0.625rem] font-medium transition-colors {state ===
+    class="h-6 shrink-0 cursor-pointer px-2 text-[0.625rem] font-medium transition-colors {state ===
     option.id
       ? 'bg-elevated text-foreground'
       : 'text-muted hover:text-foreground'}"

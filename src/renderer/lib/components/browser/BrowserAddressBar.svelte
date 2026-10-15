@@ -5,6 +5,7 @@
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
+  import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
@@ -12,6 +13,9 @@
     /** The address of the page on screen, which the field mirrors until the user
      *  types over it. */
     url: string
+    /** Tab that owns this field. Keys the shared blank draft so typing that
+     *  started in the empty state continues here with the same caret. */
+    tabId?: string | null
     /** The surface this field's tab belongs to, which is what decides whose
      *  history is offered under it. */
     projectId: string
@@ -31,6 +35,7 @@
 
   let {
     url,
+    tabId = null,
     projectId,
     threadId,
     boxId,
@@ -83,8 +88,12 @@
     }
   }
   /** What the user has typed, or null while the field still mirrors the page's
-   *  own address. */
-  let draft = $state<string | null>(null)
+   *  own address. A blank tab starts from the shared empty-state draft so
+   *  opening fullscreen mid-typing continues seamlessly. */
+  // svelte-ignore state_referenced_locally
+  let draft = $state<string | null>(
+    url === '' && tabId ? (browserBlankDraft.get(tabId)?.text ?? null) : null
+  )
   /** The highlighted history row, or -1 while the typed text is what Enter opens. */
   let highlight = $state(-1)
   /** Whether the drawer has been asked for. It comes up with the first keystroke
@@ -118,15 +127,56 @@
     input?.select()
   }
 
+  /**
+   * Take the keyboard with the caret at `offset` (or the stored blank offset
+   * when omitted). This is the fullscreen continuation: the text the user was
+   * typing stays, and typing resumes exactly where it stopped.
+   */
+  export function focusWithCaret(offset?: number | null): void {
+    const element = input
+    if (!element) return
+    element.focus()
+    const fallback =
+      offset ?? (tabId && url === '' ? (browserBlankDraft.get(tabId)?.caret ?? element.value.length) : element.value.length)
+    try {
+      element.setSelectionRange(fallback, fallback)
+    } catch {
+      // Focus alone is the fallback.
+    }
+  }
+
   /** Drop the draft and the drawer: the field goes back to being the page's own
-   *  address. */
+   *  address. A blank tab keeps its shared draft, so leaving the field never
+   *  discards text the fullscreen surface must continue. */
   function close(): void {
+    if (tabId && url === '') {
+      const stored = browserBlankDraft.get(tabId)?.text
+      if (stored) {
+        draft = stored
+        highlight = -1
+        drawerOpen = false
+        return
+      }
+    }
     draft = null
     highlight = -1
     drawerOpen = false
   }
 
+  /** Handle blur without dropping a blank continuation. */
+  function onBlur(): void {
+    highlight = -1
+    drawerOpen = false
+    if (tabId && url === '' && draft !== null && draft !== '') {
+      return
+    }
+    if (!(tabId && url === '' && browserBlankDraft.get(tabId))) {
+      draft = null
+    }
+  }
+
   function open(target: string): void {
+    if (tabId) browserBlankDraft.clear(tabId)
     close()
     onNavigate(target)
   }
@@ -149,6 +199,19 @@
     // never hijacked by a suggestion that merely matches it.
     highlight = -1
     drawerOpen = true
+    // Mirror blank-tab typing into the shared draft so the empty-state field
+    // and the other surface's bar show the same continuation.
+    if (tabId && url === '') {
+      browserBlankDraft.set(tabId, draft, target.selectionStart ?? draft.length)
+    }
+  }
+
+  /** Caret-only moves keep the shared caret exact for the handoff. */
+  function onCaretMove(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLInputElement)) return
+    if (!tabId || url !== '' || draft === null || draft === '') return
+    browserBlankDraft.set(tabId, draft, target.selectionStart ?? draft.length)
   }
 
   /** Move the highlight through the list. From nothing highlighted, either arrow
@@ -187,7 +250,7 @@
   {#if url !== ''}
     <button
       type="button"
-      class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title={secure ? 'Site settings' : 'Connection is not secure'}
       aria-label={secure ? 'Site settings' : 'Connection is not secure'}
       aria-haspopup="menu"
@@ -206,7 +269,7 @@
     type="text"
     role="combobox"
     class={[
-      'h-7 w-full rounded-lg border border-border bg-elevated text-xs text-foreground outline-none transition-colors placeholder:text-dimmed',
+      'h-7 w-full border border-border bg-elevated text-xs text-foreground outline-none transition-colors placeholder:text-dimmed',
       fieldPadding
     ]}
     placeholder="Search or enter an address"
@@ -219,8 +282,11 @@
     autocomplete="off"
     {value}
     oninput={onInput}
+    onkeyup={onCaretMove}
+    onclick={onCaretMove}
+    onselect={onCaretMove}
     onkeydown={onKeydown}
-    onblur={close}
+    onblur={onBlur}
   />
   <!--
     The load indicator is filled, not just drawn: it sits over the end of the
@@ -232,7 +298,7 @@
   {#if loading}
     <span
       role="img"
-      class="pointer-events-none absolute inset-y-px right-px flex w-7 items-center justify-center rounded-r-md bg-elevated"
+      class="pointer-events-none absolute inset-y-px right-px flex w-7 items-center justify-center bg-elevated"
       title="Loading page"
       aria-label="Loading page"
     >
@@ -242,7 +308,7 @@
   {#if drawerVisible}
     <div
       {@attach trackBrowserOcclusion}
-      class="absolute top-full right-0 left-0 z-20 mt-1 max-h-[min(16rem,50vh)] overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-lg"
+      class="absolute top-full right-0 left-0 z-20 mt-1 max-h-[min(16rem,50vh)] overflow-y-auto border border-border bg-surface p-1.5 shadow-lg"
     >
       <BrowserHistorySuggestions
         {listId}

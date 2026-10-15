@@ -41,6 +41,12 @@
     onRemove: () => void
     onClose: () => void
     attach?: Attachment<HTMLDivElement>
+    /** What the field asks for; the caller knows what is being commented on. */
+    placeholder?: string
+    removeTitle?: string
+    doneTitle?: string
+    /** Keep Remove available with an empty comment. See the form. */
+    allowEmptyRemove?: boolean
   }
 
   let {
@@ -55,7 +61,11 @@
     onDone,
     onRemove,
     onClose,
-    attach
+    attach,
+    placeholder,
+    removeTitle,
+    doneTitle,
+    allowEmptyRemove
   }: Props = $props()
 </script>
 
@@ -92,5 +102,9 @@
     {onDone}
     {onRemove}
     {onClose}
+    {placeholder}
+    {removeTitle}
+    {doneTitle}
+    {allowEmptyRemove}
   />
 </div>

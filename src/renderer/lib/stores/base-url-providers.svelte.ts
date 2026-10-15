@@ -6,6 +6,8 @@ import type {
   BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
+  BaseUrlProviderUsagePreview,
+  BaseUrlProviderUsagePreviewRequest,
   CustomProviderUsage,
   DiscoveredBaseUrlModel,
   ThinkingLevel
@@ -108,6 +110,13 @@ class BaseUrlProviderStore {
    *  provider declares no route or the route yields nothing usable. */
   async fetchUsage(harnessId: string, id: string): Promise<CustomProviderUsage | null> {
     return invoke('baseUrlProviders:fetchUsage', harnessId, id)
+  }
+
+  /** Read a usage route for the provider being edited, before it is saved. */
+  async previewUsage(
+    request: BaseUrlProviderUsagePreviewRequest
+  ): Promise<BaseUrlProviderUsagePreview> {
+    return invoke('baseUrlProviders:previewUsage', request)
   }
 
   /** The stored custom model backing a harness catalog entry, if any. */

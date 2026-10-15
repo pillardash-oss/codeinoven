@@ -1,17 +1,17 @@
 <script lang="ts">
   import {
-    Clock1,
     FolderGit2,
     FolderPlus,
     GraduationCap,
     MessageSquarePlus,
     PanelLeft,
-    Settings2,
-    Workflow
+    Settings2
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
 
   interface Props {
     /**
@@ -31,9 +31,9 @@
     onToggleSidebar?: () => void
     /** Start a standalone chat without a project. */
     onNewChat?: () => void
-    /** Start the new-routine flow (Assistant). */
-    onNewRoutine?: () => void
-    /** Create a routine-less task (Assistant). */
+    /** Start the new-assistant flow (Assistant). */
+    onNewAssistant?: () => void
+    /** Create an assistant-less task (Assistant). */
     onNewTask?: () => void
     /** Open the add-project flow. */
     onAddProject?: () => void
@@ -50,7 +50,7 @@
     sidebarHasContent = false,
     onToggleSidebar,
     onNewChat,
-    onNewRoutine,
+    onNewAssistant,
     onNewTask,
     onAddProject,
     onCloneRepo,
@@ -100,26 +100,26 @@
     return items.map((item, index) => (index === 0 ? { ...item, highlight: true } : item))
   }
 
-  /** The Assistant's empty state: a routine first, then a one-off task, then
+  /** The Assistant's empty state: an assistant first, then a one-off task, then
    *  the app's own settings, then its tour. */
   function assistantActions(): ActionItem[] {
     const items: ActionItem[] = []
-    if (onNewRoutine) {
+    if (onNewAssistant) {
       items.push({
-        id: 'new-routine',
-        icon: Workflow,
-        title: 'Start a new routine',
-        description: 'A job that repeats, with a how-to the agent works from',
-        run: () => onNewRoutine?.(),
+        id: 'new-assistant',
+        icon: AssistantIcon,
+        title: 'Start a new assistant',
+        description: 'Someone you hand something over to, once',
+        run: () => onNewAssistant?.(),
         highlight: true
       })
     }
     if (onNewTask) {
       items.push({
         id: 'new-task',
-        icon: Clock1,
+        icon: AssistantTaskIcon,
         title: 'Start a new task',
-        description: 'One piece of work for the agent, with no schedule',
+        description: 'One thing to do, inside an assistant',
         run: () => onNewTask?.()
       })
     }
@@ -218,11 +218,11 @@
     {#each actions as action (action.id)}
       <button
         type="button"
-        class="group flex w-full items-center gap-3.5 rounded-xl px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+        class="group flex w-full items-center gap-3.5 px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
         onclick={action.run}
       >
         <span
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+          class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors
             {action.highlight
             ? 'bg-primary/10 group-hover:bg-primary/20'
             : 'bg-elevated group-hover:bg-overlay'}"

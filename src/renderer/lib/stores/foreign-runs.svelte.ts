@@ -11,7 +11,8 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
-import type { ForeignRunNotice } from '$shared/types'
+import { showToastError } from '$lib/stores/app-errors.svelte'
+import type { ForeignRunNotice, ThreadTransferResult } from '$shared/types'
 
 /**
  * Which transfer requests are in flight, and how the last one failed.
@@ -86,21 +87,27 @@ class ForeignRunsStore {
     this.#setTransferState(key, { pending: true, error: null })
     try {
       const result = await invoke('thread:transferRun', projectId, threadId)
-      // A push that arrived while the request was in flight already removed the
-      // thread (this instance owns it now), so there is no card to update.
-      if (!this.runs.has(key)) return
-      this.#setTransferState(key, {
-        pending: false,
-        error: result.ok ? null : result.reason
-      })
+      this.#settleTransfer(key, result)
     } catch (error) {
       logRendererError('Cross-instance thread transfer failed', error)
-      if (!this.runs.has(key)) return
-      this.#setTransferState(key, {
-        pending: false,
-        error: 'The transfer could not be completed.'
-      })
+      this.#settleTransfer(key, { ok: false, reason: 'The transfer could not be completed.' })
     }
+  }
+
+  /**
+   * Record a transfer verdict, and make sure the user can read it.
+   *
+   * A transfer that fails after the other instance stopped the run drops the
+   * thread from the foreign set before the answer arrives, so the card is already
+   * gone when the verdict lands. The verdict is stored anyway, because the thread
+   * can come back to the set (the other instance resumed the run it stopped), and
+   * when no card is on screen to carry the reason it is toasted instead. Dropping
+   * it there is what leaves a stopped run with nothing explaining it.
+   */
+  #settleTransfer(key: string, result: ThreadTransferResult): void {
+    const cardOnScreen = this.runs.has(key)
+    this.#setTransferState(key, { pending: false, error: result.ok ? null : result.reason })
+    if (!result.ok && !cardOnScreen) showToastError(result.reason)
   }
 
   #setTransferState(key: string, state: ForeignTransferState): void {

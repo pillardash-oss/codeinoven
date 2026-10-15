@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { RefreshCw, Trash2 } from '@lucide/svelte'
+  import { Check, RefreshCw, Trash2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
+  import { speechSettingsStore as speech, type SpeechRetryStatus } from '$lib/stores/speech.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
+  import HistoryTranscriptCopyMenu from './HistoryTranscriptCopyMenu.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'
 
   interface Props {
@@ -34,6 +35,15 @@
     })
   })
 
+  /**
+   * Transient retry feedback for a row: `running` spins the retry button,
+   * `done` shows its check and highlights the copy control, `undefined` is the
+   * resting state.
+   */
+  function retryStatusOf(attemptId: string): SpeechRetryStatus | undefined {
+    return speech.retryStatus[attemptId]
+  }
+
   async function saveHistoryLimit(
     event: Event & { currentTarget: HTMLInputElement }
   ): Promise<void> {
@@ -44,10 +54,10 @@
   }
 </script>
 
-<section id="settings-block-sound-history" class="rounded-xl border bg-surface p-4">
-  <div class="mb-3 flex items-center justify-between gap-3">
+<section id="settings-block-sound-history" class="border bg-surface p-4">
+  <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
     <div>
-      <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Recording history</h2>
+      <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Recording history</h2>
       <p class="mt-1 text-[0.6875rem] text-dimmed">
         Every success and failure counts toward retention. Audio, raw transcript, and cleaned
         transcript are kept per attempt. Oldest attempts are evicted first at the limit.
@@ -55,7 +65,7 @@
     </div>
     <label class="flex items-center gap-2 text-xs text-muted"
       >Keep <input
-        class="w-16 rounded-lg border bg-elevated px-2 py-1 text-right"
+        class="w-16 border bg-elevated px-2 py-1 text-right"
         type="number"
         min="1"
         max="500"
@@ -87,7 +97,7 @@
                 : ''}
             </p>
           </div>
-          {#if attempt.audioAvailable && attempt.stage === 'failed'}
+          {#if attempt.audioAvailable && (attempt.stage === 'failed' || retryStatusOf(attempt.id))}
             {@const asr = speech.catalog?.artifacts.find(
               (item) =>
                 item.capability === 'asr' &&
@@ -96,19 +106,37 @@
                   (installed) => installed.available && installed.artifactId === item.id
                 )
             )}
+            {@const retryState = retryStatusOf(attempt.id)}
             <button
               type="button"
-              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated disabled:opacity-40"
-              title="Retry transcription"
-              aria-label="Retry transcription"
-              disabled={!asr}
+              class="flex h-8 w-8 shrink-0 items-center justify-center text-muted hover:bg-elevated disabled:opacity-40"
+              title={retryState === 'running'
+                ? 'Transcribing'
+                : retryState === 'done'
+                  ? 'Transcription complete'
+                  : 'Retry transcription'}
+              aria-label={retryState === 'running'
+                ? 'Transcribing'
+                : retryState === 'done'
+                  ? 'Transcription complete'
+                  : 'Retry transcription'}
+              disabled={!asr || retryState !== undefined}
               onclick={() => asr && void speech.retry(attempt.id, asr.runtime, asr.id)}
-              ><RefreshCw size={13} aria-hidden="true" /></button
+              >{#if retryState === 'running'}<RefreshCw
+                  size={13}
+                  class="animate-spin"
+                  aria-hidden="true"
+                />{:else if retryState === 'done'}<Check
+                  size={13}
+                  class="text-success"
+                  aria-hidden="true"
+                />{:else}<RefreshCw size={13} aria-hidden="true" />{/if}</button
             >
           {/if}
+          <HistoryTranscriptCopyMenu {attempt} highlighted={retryStatusOf(attempt.id) === 'done'} />
           <button
             type="button"
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+            class="flex h-8 w-8 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
             title="Delete recording attempt"
             aria-label="Delete recording attempt"
             onclick={() =>

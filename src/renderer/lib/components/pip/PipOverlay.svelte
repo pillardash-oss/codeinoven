@@ -430,7 +430,7 @@
 {#if visible}
   <div
     {@attach anchorOverlay}
-    class="fixed z-50 touch-none select-none rounded-xl border bg-surface shadow-2xl"
+    class="fixed z-50 touch-none select-none border bg-surface shadow-2xl"
     style="left: {displayPosition.x}px; top: {displayPosition.y}px;"
     role="group"
     aria-label="Computer-use preview for {pipState.appName}"
@@ -438,7 +438,7 @@
     {#each RESIZE_HANDLES as handle (handle.edge)}
       <button
         type="button"
-        class="absolute z-10 rounded-sm bg-transparent transition-colors hover:bg-accent/25 focus-visible:bg-accent/25 focus-visible:outline-none {handle.classes}"
+        class="absolute z-10 bg-transparent transition-colors hover:bg-accent/25 focus-visible:bg-accent/25 focus-visible:outline-none {handle.classes}"
         title="Drag to resize the computer-use preview (up to twice its default size). Arrow keys also resize."
         aria-label="Resize computer-use preview from the {handle.label}"
         onpointerdown={(event) => onResizePointerDown(event, handle.edge)}
@@ -465,7 +465,7 @@
       </span>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Close computer-use preview"
         aria-label="Close computer-use preview"
         onclick={() => void pipState.dismiss()}
@@ -482,7 +482,7 @@
       onclick={() => void pipState.bringToFront()}
     >
       <div
-        class="relative overflow-hidden rounded-md border border-border bg-app"
+        class="relative overflow-hidden border border-border bg-app"
         style="width: {previewWidth}px; height: {previewHeight}px;"
       >
         <img

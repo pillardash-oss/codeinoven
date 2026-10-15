@@ -1,16 +1,15 @@
 <script lang="ts">
   import {
-    AudioLines,
+    Clapperboard,
     Clock,
     FileText,
     HardDrive,
-    Image as ImageIcon,
     MessageSquare,
+    PenLine,
     SquareDashedMousePointer,
-    Video,
     X
   } from '@lucide/svelte'
-  import { attachmentPreviewKind } from '$lib/mime'
+  import AttachmentPill from './AttachmentPill.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
   import type { StartAfterSelection } from './chat-composer-attachments'
@@ -86,7 +85,7 @@
         <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
           {#if fileSystemMode}
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.625rem] text-info"
+              class="flex shrink-0 items-center gap-1 border border-info/30 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-info uppercase"
             >
               <HardDrive size={9} class="shrink-0" />
               <span>File System</span>
@@ -112,11 +111,11 @@
           onmouseleave={onScheduleStartAfterPopoverClose}
         >
           <div
-            class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
+            class="flex items-center border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
           >
             <button
               type="button"
-              class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
+              class="flex items-center gap-1.5 px-2 py-1"
               title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}   hover to manage`}
               aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
               aria-expanded={startAfterPopoverOpen}
@@ -134,7 +133,7 @@
             </button>
             <button
               type="button"
-              class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
+              class="flex h-full items-center pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
               title="Remove all Start after threads"
               aria-label="Remove all Start after threads"
               onclick={onClearStartAfterThreads}
@@ -144,7 +143,7 @@
           </div>
           {#if startAfterPopoverOpen}
             <div
-              class="absolute bottom-full left-0 z-50 mb-1.5 w-72 rounded-xl border border-border bg-surface p-2 shadow-lg"
+              class="absolute bottom-full left-0 z-50 mb-1.5 w-72 border border-border bg-surface p-2 shadow-lg"
               role="dialog"
               aria-label="Start after details"
               tabindex="0"
@@ -160,7 +159,7 @@
                 <div class="flex items-center gap-1">
                   <button
                     type="button"
-                    class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                    class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
                     title={'Open ' + selectedStartAfterThread.title}
                     aria-label={'Open ' + selectedStartAfterThread.title}
                     onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
@@ -172,7 +171,7 @@
                   </button>
                   <button
                     type="button"
-                    class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                    class="flex h-6 shrink-0 items-center px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
                     title={`Remove ${selectedStartAfterThread.title} from Start after`}
                     aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
                     onclick={() => onRemoveStartAfterThread(selectedStartAfterThread.id)}
@@ -195,20 +194,24 @@
         onmouseleave={onScheduleSelectionPopoverClose}
       >
         <div
-          class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
+          class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
         >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
+            class="flex items-center gap-1.5 px-2 py-1"
             title={`${referenceSummary.aria}   hover to manage`}
             aria-label={referenceSummary.aria}
             aria-expanded={selectionPopoverOpen}
             onclick={onToggleSelectionPopover}
           >
-            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0 && referenceSummary.annotations === 0}
+            {#if referenceSummary.noun === 'element'}
               <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.annotations > 0 && referenceSummary.elements === 0 && referenceSummary.selections === 0}
+            {:else if referenceSummary.noun === 'annotation'}
               <FileText size={11} class="shrink-0 text-accent" />
+            {:else if referenceSummary.noun === 'note'}
+              <Clapperboard size={11} class="shrink-0 text-accent" />
+            {:else if referenceSummary.noun === 'mark'}
+              <PenLine size={11} class="shrink-0 text-accent" />
             {:else}
               <MessageSquare size={11} class="shrink-0 text-accent" />
             {/if}
@@ -219,13 +222,13 @@
           {#if onRemoveAllReferences}
             <button
               type="button"
-              class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-              title={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
-              aria-label={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
+              class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
+              title={referenceSummary.noun === 'selection'
+                ? 'Delete all selections'
+                : 'Delete all attached references'}
+              aria-label={referenceSummary.noun === 'selection'
+                ? 'Delete all selections'
+                : 'Delete all attached references'}
               onclick={onRemoveAllReferences}
             >
               <X size={11} />
@@ -252,53 +255,12 @@
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
         {#each attachments as file, i (file.url)}
-          {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
-          <div
-            class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
-          >
-            {#if previewKind}
-              <button
-                type="button"
-                class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
-                title="Click to preview"
-                aria-label="Preview {file.filename ?? 'file'}"
-                onclick={() => onPreviewAttachment(file)}
-              >
-                {#if previewKind === 'image'}
-                  {#if previewUrls[file.url]}
-                    <img
-                      src={previewUrls[file.url]}
-                      alt={file.filename ?? 'file'}
-                      class="h-5 w-5 shrink-0 rounded object-cover"
-                    />
-                  {:else}
-                    <ImageIcon size={11} class="shrink-0" />
-                  {/if}
-                {:else if previewKind === 'video'}
-                  <Video size={11} class="shrink-0" />
-                {:else if previewKind === 'audio'}
-                  <AudioLines size={11} class="shrink-0" />
-                {:else}
-                  <FileText size={11} class="shrink-0" />
-                {/if}
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </button>
-            {:else}
-              <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </span>
-            {/if}
-            <button
-              type="button"
-              class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-              title="Remove attachment"
-              aria-label="Remove attachment"
-              onclick={() => onRemoveAttachment(i)}
-            >
-              <X size={11} />
-            </button>
-          </div>
+          <AttachmentPill
+            attachment={file}
+            previewUrl={previewUrls[file.url]}
+            onPreview={onPreviewAttachment}
+            onRemove={() => onRemoveAttachment(i)}
+          />
         {/each}
       </div>
     {/if}

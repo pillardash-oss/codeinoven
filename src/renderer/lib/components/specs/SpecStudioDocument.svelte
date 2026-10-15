@@ -53,7 +53,7 @@
     <section id="spec-section-tldr" class="scroll-mt-5">
       <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.resolutionSummary}
         ariaLabel="Specification TL;DR"
         onChange={(value) => edits.setString('resolutionSummary', value)}
@@ -73,7 +73,7 @@
         />
       </button>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.problem}
         ariaLabel="Problem statement"
         onChange={(value) => edits.setString('problem', value)}
@@ -117,7 +117,7 @@
         />
       </button>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.testStrategy}
         ariaLabel="Test strategy"
         onChange={(value) => edits.setString('testStrategy', value)}
@@ -158,7 +158,7 @@
           />
         </button>
         <EditableMarkdown
-          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+          class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
           text={draft.content.additionalInfo}
           ariaLabel="Additional info"
           onChange={(value) => edits.setString('additionalInfo', value)}
@@ -188,7 +188,7 @@
         />
       </button>
       <EditableMarkdown
-        class="mt-3 block rounded-lg bg-surface px-3 py-2 font-mono text-xs outline-none"
+        class="mt-3 block border border-border bg-surface px-3 py-2 font-mono text-xs outline-none"
         text={draft.content.commitPattern}
         ariaLabel="Commit pattern"
         onChange={(value) => edits.setString('commitPattern', value)}

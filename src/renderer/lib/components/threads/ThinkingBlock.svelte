@@ -1,11 +1,13 @@
 <script lang="ts">
   import { Brain, ChevronRight } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
-  import { reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
+  import { reasoningBlockTitle, reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
+  import { formatDurationMs } from '$lib/format/duration'
 
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
@@ -29,7 +31,7 @@
    * the Codex channels were separated still carry it. Render it once: the
    * summary formatting is the clean one (the body copy has the streamed line
    * separators collapsed into literal `****`), so it becomes the body and the
-   * separate "Thinking summary" section is dropped.
+   * separate "Reasoning summary" section is dropped.
    */
   let repeatsSummary = $derived(reasoningSummaryRepeatsBody(part.text, part.summary ?? ''))
   let body = $derived(repeatsSummary ? (part.summary ?? '') : part.text)
@@ -48,49 +50,80 @@
 
   const elapsed = $derived(clock.seconds(start, end))
 
-  $effect(() => {
-    if (active) open = true
-  })
+  /**
+   * The folded row's one-line title. Providers that ship thinking summaries
+   * label each block (Codex: `**Evaluating build output**`), and providers that
+   * ship only a reasoning body get their first line, so a reader can pick the
+   * block they want without opening every one in turn.
+   */
+  const title = $derived(reasoningBlockTitle(part.text, part.summary ?? ''))
+
+  /** The row's label, with the run's duration when the part reported one, so the
+   *  line reads `Reasoning (47s): <summary>`. */
+  const label = $derived(
+    start === undefined ? 'Reasoning:' : `Reasoning (${formatDurationMs(elapsed * 1000)}):`
+  )
 </script>
 
 {#if body.trim() || summary.trim()}
-  <details class="overflow-hidden rounded-lg border border-border/60 bg-elevated/30" bind:open>
-    <summary
-      class="flex cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs font-medium text-dimmed transition-colors hover:bg-elevated"
+  <div class="min-w-0">
+    <button
+      type="button"
+      class="group/think flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+      aria-expanded={open}
+      title={open ? 'Hide reasoning' : 'Show reasoning'}
+      onclick={() => (open = !open)}
     >
-      <Brain size={13} class="shrink-0 text-info/70" />
-      <span class="shrink-0">Thinking</span>
-      <span class="tabular-nums text-[0.625rem] text-dimmed">
-        {formatDurationSeconds(elapsed)}
-      </span>
-      {#if active}
-        <span class="h-1.5 w-1.5 rounded-full bg-info animate-pulse"></span>
+      <Brain
+        size={13}
+        class="shrink-0 text-dimmed transition-colors group-hover/think:text-muted"
+      />
+      <!-- Bold label with the run's duration, then the muted summary: the
+           weight is what separates the label from the content it introduces.
+           The row keeps its summary whether the block is open or folded. -->
+      <span
+        class="shrink-0 font-semibold text-muted transition-colors group-hover/think:text-foreground"
+        >{label}</span
+      >
+      {#if title}
+        <span
+          class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed transition-colors group-hover/think:text-muted"
+          >{title}</span
+        >
+      {:else}
+        <span class="flex-1"></span>
       {/if}
-      <span class="flex-1"></span>
+      {#if active}
+        <span class="h-1.5 w-1.5 shrink-0 bg-info animate-pulse"></span>
+      {/if}
       <ChevronRight
         size={12}
-        class="shrink-0 text-muted transition-transform {open ? 'rotate-90' : ''}"
+        class="shrink-0 text-dimmed transition-transform group-hover/think:text-foreground {open
+          ? 'rotate-90'
+          : ''}"
       />
-    </summary>
-    <div class="border-t border-border/40 px-3 py-2">
-      <div class="max-h-80 overflow-y-auto">
-        {#if body.trim()}
-          <SmoothMarkdown
-            text={body}
-            streaming={active && live}
-            class="text-xs text-muted"
-            {onCiteFile}
-          />
-        {/if}
-        {#if summary.trim()}
-          <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
-            <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
-              Thinking summary
-            </p>
-            <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
-          </div>
-        {/if}
+    </button>
+    {#if open}
+      <div transition:slide={foldSlide()} class="border-l border-border/60 py-1 pr-3 pl-3">
+        <div class="max-h-80 overflow-y-auto">
+          {#if body.trim()}
+            <SmoothMarkdown
+              text={body}
+              streaming={active && live}
+              class="text-xs text-muted"
+              {onCiteFile}
+            />
+          {/if}
+          {#if summary.trim()}
+            <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
+              <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                Reasoning summary
+              </p>
+              <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
+            </div>
+          {/if}
+        </div>
       </div>
-    </div>
-  </details>
+    {/if}
+  </div>
 {/if}

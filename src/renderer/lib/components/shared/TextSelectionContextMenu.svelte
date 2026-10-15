@@ -68,7 +68,7 @@
   const browsingInApp = $derived(rendererRecovery.activeView === 'browser')
 
   const itemClass =
-    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus-visible:bg-elevated disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
+    'flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus-visible:bg-elevated disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
 
   const positionStyle = $derived.by(() => {
     if (!target) return ''
@@ -435,7 +435,7 @@
     {@attach captureMenu}
     bind:clientWidth={menuWidth}
     bind:clientHeight={menuHeight}
-    class="fixed z-50 min-w-44 rounded-lg border border-border bg-surface p-1 shadow-xl"
+    class="fixed z-50 min-w-44 border border-border bg-surface p-1 shadow-xl"
     style={positionStyle}
     role="menu"
   >

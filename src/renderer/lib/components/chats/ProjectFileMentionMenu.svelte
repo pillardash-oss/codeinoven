@@ -44,7 +44,7 @@
 
 <div
   bind:this={listboxElement}
-  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col border border-border-strong bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
 >
@@ -87,8 +87,10 @@
         <button
           type="button"
           class={[
-            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
-            index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
+            'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs outline-none',
+            index === activeIndex
+              ? 'bg-overlay text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground',
             mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
           ]}
           role="option"

@@ -967,7 +967,6 @@ html.cio-canvas-ready body {
   margin-left: auto;
   padding: 3px 8px;
   border: 1px solid var(--cio-canvas-border);
-  border-radius: 6px;
   color: var(--cio-canvas-muted);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -987,7 +986,6 @@ html.cio-canvas-ready body {
   flex: 0 0 auto;
   margin-left: auto;
   padding: 2px 8px;
-  border-radius: 999px;
   background: var(--cio-canvas-badge-bg);
   color: var(--cio-canvas-accent);
   font-size: 0.625rem;
@@ -1021,7 +1019,6 @@ html.cio-canvas-ready body {
   padding: 4px;
   box-sizing: border-box;
   border: 1px solid var(--cio-canvas-border);
-  border-radius: 10px;
   background: var(--cio-canvas-toolbar);
   box-shadow: var(--cio-canvas-shadow);
   -webkit-backdrop-filter: blur(8px);
@@ -1035,7 +1032,6 @@ html.cio-canvas-ready body {
   height: 28px;
   padding: 0 6px;
   border: 0;
-  border-radius: 7px;
   background: transparent;
   color: var(--cio-canvas-muted);
   font: inherit;

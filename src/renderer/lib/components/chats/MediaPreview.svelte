@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X, Download, FolderOpen } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -7,6 +8,7 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
 
   interface Props {
     src: string
@@ -31,9 +33,21 @@
      * even though `revealUrl` is not a real file path.
      */
     onReveal?: () => void
+    /**
+     * An annotatable surface to draw in place of the plain media element.
+     *
+     * An artifact picture is the material a user answers by pointing at, and
+     * the lightbox is where it is big enough to point at, so the caller that
+     * owns the marks supplies the picture and its layer instead of the plain
+     * element. It owns the whole media area, and the lightbox drops the zoom
+     * toolbar it would otherwise offer, because a pan gesture and a stroke
+     * cannot share the same pointer.
+     */
+    annotate?: Snippet
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal }: Props = $props()
+  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
+    $props()
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
@@ -92,6 +106,48 @@
     return true
   }}
 >
+  <!-- A media lightbox is chrome-less, so nothing would otherwise keep its
+       content out of the window controls drawn over the top-left corner. The
+       band doubles as the lightbox header: it reserves the same inset the app
+       header occupies, stays draggable like every other full screen surface,
+       and names the file with its actions here instead of below the content. -->
+  <div
+    class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-white/10 pr-3"
+    style={trafficLightInsetStyle()}
+  >
+    <span class="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">
+      {filename}
+    </span>
+    {#if revealable}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+        aria-label={`Reveal path of ${filename}`}
+        title="Reveal path"
+        onclick={revealFromButton}
+      >
+        <FolderOpen size={14} />
+      </button>
+    {/if}
+    <a
+      href={src}
+      download={filename}
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      aria-label={downloadLabel}
+      title={downloadLabel}
+    >
+      <Download size={14} />
+    </a>
+    <button
+      type="button"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      aria-label="Close preview"
+      title="Close (Esc)"
+      onclick={onClose}
+    >
+      <X size={14} />
+    </button>
+  </div>
   <div
     role="presentation"
     class="relative flex min-h-0 flex-1 items-center justify-center"
@@ -105,7 +161,9 @@
       class="relative flex h-full min-h-0 w-full flex-col items-center"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
-      {#if kind === 'video'}
+      {#if annotate}
+        {@render annotate()}
+      {:else if kind === 'video'}
         <video
           {src}
           controls
@@ -120,7 +178,7 @@
           {src}
           controls
           preload="metadata"
-          class="w-full max-w-xl rounded-lg shadow-2xl"
+          class="w-full max-w-xl shadow-2xl"
           onerror={mediaError}
         ></audio>
       {:else}
@@ -149,51 +207,16 @@
           />
         </div>
       {/if}
-      <div class="mt-3 flex shrink-0 items-center gap-3">
-        <span class="text-xs text-white/70">{filename}</span>
-      </div>
     </div>
-    {#if kind === 'image' || pager}
+    {#if pager || (kind === 'image' && !annotate)}
       <div class="absolute right-4 bottom-4 flex items-center gap-2">
         {#if pager}
           <PreviewPager {pager} />
         {/if}
-        {#if kind === 'image'}
+        {#if kind === 'image' && !annotate}
           <PanZoomToolbar {panZoom} viewport={imageViewport} />
         {/if}
       </div>
     {/if}
-    <div class="absolute right-4 top-4 flex flex-col gap-2">
-      <button
-        type="button"
-        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-        aria-label="Close preview"
-        title="Close (Esc)"
-        onclick={onClose}
-      >
-        <X size={18} />
-      </button>
-      {#if revealable}
-        <button
-          type="button"
-          class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-          aria-label={`Reveal path of ${filename}`}
-          title="Reveal path"
-          onclick={revealFromButton}
-        >
-          <FolderOpen size={16} />
-        </button>
-      {/if}
-      <a
-        href={src}
-        download={filename}
-        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-        aria-label={downloadLabel}
-        title={downloadLabel}
-        onclick={(e: MouseEvent) => e.stopPropagation()}
-      >
-        <Download size={16} />
-      </a>
-    </div>
   </div>
 </Modal>

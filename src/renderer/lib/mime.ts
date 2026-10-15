@@ -30,16 +30,24 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   yml: 'application/x-yaml',
   // Videos
   mp4: 'video/mp4',
+  m4v: 'video/x-m4v',
   webm: 'video/webm',
   mov: 'video/quicktime',
+  mpeg: 'video/mpeg',
+  mpg: 'video/mpeg',
+  ogv: 'video/ogg',
   avi: 'video/x-msvideo',
   mkv: 'video/x-matroska',
   // Audio
   mp3: 'audio/mpeg',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
+  oga: 'audio/ogg',
   m4a: 'audio/mp4',
   flac: 'audio/flac',
+  aac: 'audio/aac',
+  opus: 'audio/opus',
+  weba: 'audio/webm',
   // Archives
   zip: 'application/zip',
   tar: 'application/x-tar',
@@ -134,7 +142,7 @@ export function isPlainTextMime(mime: string): boolean {
 }
 
 const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|m4v|webm|mov|avi|mkv|mpeg|mpg|ogv)$/iu
-const AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|flac|aac|opus)$/iu
+const AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|flac|aac|opus|weba)$/iu
 
 /** Filename extensions treated as readable text/raw attachments. Mirrors the
  *  extensions the harness drivers inline as text so the preview and the model

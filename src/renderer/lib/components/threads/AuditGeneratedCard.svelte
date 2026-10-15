@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { CircleAlert, FileCheck2, Loader2 } from '@lucide/svelte'
+  import { CircleAlert, ExternalLink, Eye, FileCheck2 } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
@@ -77,6 +82,80 @@
       : null
   )
 
+  // A running audit owns a live clock: it counts only while the audit is
+  // genuinely working, and freezes on the recorded end once it settles.
+  const clock = new ElapsedTimer()
+  const counting = $derived(
+    (busy || auditState === 'running' || reworking) &&
+      startedAt !== undefined &&
+      finishedAt === undefined
+  )
+  $effect(() => {
+    if (counting) clock.start()
+    else {
+      clock.stop()
+      if (startedAt !== undefined && finishedAt === undefined) clock.snapshot()
+    }
+    return () => clock.stop()
+  })
+  const runSeconds = $derived(clock.seconds(startedAt, finishedAt))
+
+  function formatClock(seconds: number): string {
+    const minutes = Math.floor(seconds / 60)
+    const remainder = seconds % 60
+    return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+  }
+
+  const headTitle = $derived(
+    failed
+      ? invalidShapeRecovery
+        ? 'Auditor model needs recovery'
+        : 'Audit failed'
+      : interrupted
+        ? 'Audit interrupted'
+        : partial
+          ? 'Report generated, evidence incomplete'
+          : reworking
+            ? 'Review sent to Sr. Engineer'
+            : version === undefined
+              ? reworkCycle
+                ? `Rework ${reworkCycle} complete   audit running again`
+                : 'Audit in progress'
+              : `Report generated   Version ${version}`
+  )
+
+  const bodyText = $derived(
+    failed
+      ? invalidShapeRecovery
+        ? 'The auditor model returned an invalid audit shape multiple times. Change the model and retry, or retry once more with the same model.'
+        : error || 'The auditor failed without returning a usable error.'
+      : interrupted
+        ? error ||
+          'The auditor could not finish. Choose another harness or model, then retry the audit.'
+        : partial
+          ? 'The auditor generated a report, but some verification facts could not be matched to executed commands in its transcript. View the report, ask the auditor to validate its facts, or change the model.'
+          : reworking
+            ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
+            : version === undefined
+              ? reworkCycle
+                ? 'The existing auditor is independently verifying the completed rework.'
+                : 'This dedicated auditor task is locked while the report is being prepared.'
+              : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'
+  )
+
+  const headIcon = $derived(failed || interrupted || partial ? CircleAlert : FileCheck2)
+  const headTone = $derived(failed || interrupted || partial ? 'warn' : 'default')
+
+  const chip = $derived.by<CardChipData>(() => {
+    if (failed || interrupted) return { text: 'Stopped', tone: 'urgent' }
+    if (partial) return { text: 'Waiting', tone: 'paused' }
+    if (version !== undefined && !reworking) return { text: 'Ready' }
+    if (startedAt !== undefined) {
+      return { text: `Running ${formatClock(runSeconds)}`, title: 'Auditor runtime' }
+    }
+    return { text: 'Running', title: 'The auditor is working' }
+  })
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -101,169 +180,126 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="rounded-xl border bg-surface p-4 {failed
-    ? 'border-danger/40'
-    : partial
-      ? 'border-warning/40'
-      : 'border-border'}"
-  aria-label="Audit status"
->
-  <div class="flex items-start gap-3">
-    <div
-      class="rounded-lg p-2 {failed
-        ? 'bg-danger/10 text-danger'
-        : partial || interrupted
-          ? 'bg-warning/10 text-warning'
-          : 'bg-primary/10 text-primary'}"
-    >
-      {#if busy || auditState === 'running'}
-        <Loader2 size={18} class="animate-spin" />
-      {:else if failed || interrupted || partial}
-        <CircleAlert size={18} />
-      {:else}
-        <FileCheck2 size={18} />
-      {/if}
-    </div>
-    <div class="min-w-0 flex-1">
-      <h3 class="text-sm font-semibold text-foreground">
-        {failed
-          ? invalidShapeRecovery
-            ? 'Auditor model needs recovery'
-            : 'Audit failed'
-          : interrupted
-            ? 'Audit interrupted'
-            : partial
-              ? 'Report generated, evidence incomplete'
-              : reworking
-                ? 'Review sent to Sr. Engineer'
-                : version === undefined
-                  ? reworkCycle
-                    ? `Rework ${reworkCycle} complete   audit running again`
-                    : 'Audit in progress'
-                  : `Report generated   Version ${version}`}
-      </h3>
-      {#if !folded}
-        <p
-          class="mt-1 text-xs leading-relaxed {failed
-            ? 'text-danger'
-            : partial
-              ? 'text-warning'
-              : 'text-muted'}"
-          role={failed || partial ? 'alert' : undefined}
-        >
-          {failed
-            ? invalidShapeRecovery
-              ? 'The auditor model returned an invalid audit shape multiple times. Change the model and retry, or retry once more with the same model.'
-              : error || 'The auditor failed without returning a usable error.'
-            : interrupted
-              ? error ||
-                'The auditor could not finish. Choose another harness or model, then retry the audit.'
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Audit status">
+    <CardHead
+      icon={headIcon}
+      title={headTitle}
+      {chip}
+      tone={headTone}
+      bind:folded
+      foldLabel="audit status"
+    />
+
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-2 px-3 py-2.5">
+          <p
+            class="text-xs leading-relaxed {failed
+              ? 'text-danger'
               : partial
-                ? 'The auditor generated a report, but some verification facts could not be matched to executed commands in its transcript. View the report, ask the auditor to validate its facts, or change the model.'
-                : reworking
-                  ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
-                  : version === undefined
-                    ? reworkCycle
-                      ? 'The existing auditor is independently verifying the completed rework.'
-                      : 'This dedicated auditor task is locked while the report is being prepared.'
-                    : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
-        </p>
-        {#if partial && validationIssues.length > 0}
-          <details class="mt-3 text-xs text-muted">
-            <summary class="cursor-pointer font-medium text-foreground">
-              Unvalidated verification facts
-            </summary>
-            <ul class="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
-              {#each validationIssues as issue (issue)}
-                <li>{issue}</li>
-              {/each}
-            </ul>
-          </details>
-        {/if}
-        {#if failed && elapsed}
-          <p class="mt-2 text-[0.6875rem] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
-        {/if}
-        {#if invalidShapeRecovery && error}
-          <details class="mt-3 text-xs text-muted">
-            <summary class="cursor-pointer font-medium text-foreground">Validation details</summary>
-            <pre
-              class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-muted">{error}</pre>
-          </details>
-        {/if}
-      {/if}
-    </div>
-    <CardFoldToggle bind:folded label="audit status" />
-  </div>
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
-        <ModelPicker
-          {providers}
-          {projectId}
-          harnessId={settings.harnessId}
-          providerId={settings.providerId}
-          modelId={settings.modelId}
-          accountId={settings.accountId}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          side="top"
-          variant="action"
-          disabled={busy || auditState === 'running'}
-          onSelect={chooseModel}
-          thinkingLevel={settings.thinkingLevel}
-          runtimeSettings={settings}
-          onSelectThinking={chooseThinking}
-          onSelectRuntime={chooseRuntime}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-        {#if failed || interrupted}
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={busy}
-            onclick={() => onRetry(settings)}
+                ? 'text-warning'
+                : 'text-muted'}"
+            role={failed || partial ? 'alert' : undefined}
           >
-            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-            {retryLabel}
-          </button>
-        {:else if partial}
-          <button
-            class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:opacity-50"
-            disabled={busy}
-            title="Ask the auditor to re-run the unvalidated verification facts and update the report"
-            onclick={() => onRetry(settings)}
-          >
-            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-            {retryLabel}
-          </button>
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-            title="Open this report in Audit Studio"
-            onclick={onViewReport}
-          >
-            View report
-          </button>
-        {:else if auditState === 'running' && onViewTrace}
-          <button
-            class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-            title="Open the durable auditor thread and its live working trace"
-            onclick={onViewTrace}
-          >
-            View trace
-          </button>
-        {:else if version !== undefined}
-          <button
-            class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-            title={reworking ? 'Open the source audit report' : 'Open this report in Audit Studio'}
-            onclick={onViewReport}
-          >
-            {reworking ? 'View source report' : 'View report'}
-          </button>
-        {/if}
+            {bodyText}
+          </p>
+          {#if partial && validationIssues.length > 0}
+            <details class="text-xs text-muted">
+              <summary class="cursor-pointer font-medium text-foreground">
+                Unvalidated verification facts
+              </summary>
+              <ul class="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
+                {#each validationIssues as issue (issue)}
+                  <li>{issue}</li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+          {#if failed && elapsed}
+            <p class="text-[0.6875rem] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
+          {/if}
+          {#if invalidShapeRecovery && error}
+            <details class="text-xs text-muted">
+              <summary class="cursor-pointer font-medium text-foreground"
+                >Validation details</summary
+              >
+              <pre
+                class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-muted">{error}</pre>
+            </details>
+          {/if}
+        </div>
+
+        <CardFoot>
+          {#snippet right()}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={settings.harnessId}
+              providerId={settings.providerId}
+              modelId={settings.modelId}
+              accountId={settings.accountId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              side="top"
+              variant="action"
+              disabled={busy || auditState === 'running'}
+              onSelect={chooseModel}
+              thinkingLevel={settings.thinkingLevel}
+              runtimeSettings={settings}
+              onSelectThinking={chooseThinking}
+              onSelectRuntime={chooseRuntime}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+            {#if failed || interrupted}
+              <CardButton
+                label={retryLabel}
+                title="Retry the audit"
+                variant="primary"
+                disabled={busy}
+                loading={busy}
+                onclick={() => onRetry(settings)}
+              />
+            {:else if partial}
+              <CardButton
+                label={retryLabel}
+                title="Ask the auditor to re-run the unvalidated verification facts and update the report"
+                variant="secondary"
+                disabled={busy}
+                loading={busy}
+                onclick={() => onRetry(settings)}
+              />
+              <CardButton
+                label="View report"
+                title="Open this report in Audit Studio"
+                icon={ExternalLink}
+                variant="primary"
+                onclick={onViewReport}
+              />
+            {:else if auditState === 'running' && onViewTrace}
+              <CardButton
+                label="View trace"
+                title="Open the durable auditor thread and its live working trace"
+                icon={Eye}
+                variant="secondary"
+                onclick={onViewTrace}
+              />
+            {:else if version !== undefined}
+              <CardButton
+                label={reworking ? 'View source report' : 'View report'}
+                title={reworking
+                  ? 'Open the source audit report'
+                  : 'Open this report in Audit Studio'}
+                icon={ExternalLink}
+                variant="primary"
+                onclick={onViewReport}
+              />
+            {/if}
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

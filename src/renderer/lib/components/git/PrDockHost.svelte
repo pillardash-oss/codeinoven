@@ -83,7 +83,7 @@
 {#if store.drafts.some((draft) => draft.minimized)}
   <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked pull request drafts">
     <div
-      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto border bg-surface p-1.5 shadow-xl"
       role="group"
       aria-label="Docked pull request drafts"
     >
@@ -97,13 +97,13 @@
             .filter((part) => part.length > 0)
             .join('   ')}
           <button
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
             title={chipLabel}
             aria-label={`Expand ${chipLabel}`}
             onclick={() => store.expand(draft.id)}
           >
             {#if dock.iconUrl}
-              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0" />
             {:else}
               <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
             {/if}

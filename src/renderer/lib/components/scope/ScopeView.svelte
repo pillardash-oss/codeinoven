@@ -230,10 +230,16 @@
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
           navigateToScopedThreads?.()
-          if (activeThread) {
-            await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+          // Adopt the inherited row: it carries the Engineering marker the
+          // opened view reads to keep its Toolbox filled.
+          let opened = thread
+          if (activeThread && activeThread.projectId === activeProject.id) {
+            opened =
+              (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
+              thread
+            scopeState.updateThread(opened)
           }
-          workspaceState.openThread(thread, activeProject)
+          workspaceState.openThread(opened, activeProject)
         } catch (error) {
           actionError = errorMessage(error, 'The thread could not be opened.')
         }
@@ -255,12 +261,18 @@
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToScopedThreads?.()
-      if (activeThread) {
-        await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+      // Adopt the inherited row: it carries the Engineering marker the opened
+      // view reads to keep its Toolbox filled.
+      let opened = thread
+      if (activeThread && activeThread.projectId === activeProject.id) {
+        opened =
+          (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
+          thread
+        scopeState.updateThread(opened)
       }
-      workspaceState.openThread(thread, activeProject)
+      workspaceState.openThread(opened, activeProject)
       if (activeThread?.settings) {
-        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+        void persistInheritedThreadSettings(opened, inheritedSettings).catch((error) => {
           actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
         })
       }
@@ -300,7 +312,7 @@
       >
         <span>{actionError ?? scopeActions.error ?? scopeState.error}</span>
         <button
-          class="ml-auto rounded-md px-2 py-1 hover:bg-danger/10"
+          class="ml-auto px-2 py-1 hover:bg-danger/10"
           aria-label="Dismiss error"
           onclick={() => {
             actionError = null

@@ -24,6 +24,14 @@ export const MEMORY_AUDIENCES: readonly MemoryAudience[] = [
   'browser'
 ]
 
+/**
+ * Scope values that name one place rather than an audience.
+ *
+ * `routine` is the stored spelling of "one specific assistant" and keeps it:
+ * every memory file already on disk writes that token, and `assistant` is taken
+ * by the audience that means every assistant at once. The product calls the
+ * place an assistant; the stored value stays as it was written.
+ */
 export const MEMORY_LOCATION_SCOPES = ['project', 'thread', 'routine', 'task'] as const
 
 export type MemoryLocationScope = (typeof MEMORY_LOCATION_SCOPES)[number]
@@ -32,7 +40,7 @@ export type MemoryLocationScope = (typeof MEMORY_LOCATION_SCOPES)[number]
 export interface MemoryScopeLocation {
   projectId?: string
   threadId?: string
-  routineId?: string
+  assistantId?: string
 }
 
 /** What a memory is being loaded for. */
@@ -78,7 +86,7 @@ export function memoryAudienceForContainer(projectId?: string): MemoryAudience {
  * own thread level.
  */
 export function memoryScopesMatchContext(
-  entry: Pick<MemoryEntry, 'scopes' | 'projectId' | 'threadId' | 'routineId'>,
+  entry: Pick<MemoryEntry, 'scopes' | 'projectId' | 'threadId' | 'assistantId'>,
   context: MemoryContext
 ): boolean {
   const scopes = entry.scopes
@@ -101,8 +109,8 @@ export function memoryScopesMatchContext(
     case 'routine':
       return (
         context.audience === 'assistant' &&
-        Boolean(context.routineId) &&
-        entry.routineId === context.routineId
+        Boolean(context.assistantId) &&
+        entry.assistantId === context.assistantId
       )
     case 'task':
       return context.audience === 'assistant' && entry.threadId === context.threadId
@@ -151,8 +159,8 @@ export function memoryLocationForScopes(
       return { projectId: context.projectId, threadId: context.threadId }
     }
     case 'routine': {
-      if (!context.routineId) throw new Error('This memory needs a routine to live in.')
-      return { projectId: ASSISTANT_SPACE_ID, routineId: context.routineId }
+      if (!context.assistantId) throw new Error('This memory needs a routine to live in.')
+      return { projectId: ASSISTANT_SPACE_ID, assistantId: context.assistantId }
     }
     case 'task': {
       if (!context.threadId) throw new Error('This memory needs a task to live in.')
@@ -233,7 +241,7 @@ export function memoryScopeSummary(scopes: readonly MemoryScope[]): string {
       case 'thread':
         return 'Thread'
       case 'routine':
-        return 'Routine'
+        return 'Assistant'
       case 'task':
         return 'Task'
     }

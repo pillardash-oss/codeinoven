@@ -13,7 +13,7 @@ import {
  * instead of each fetching their own copy.
  *
  * A record is read relative to the conversation on screen, not globally: the
- * rail item only exists while the open thread (or its task, or its routine) has
+ * rail item only exists while the open thread (or its task, or its assistant) has
  * an undismissed decision, so a decision made in one thread never lights the
  * rail in another.
  */

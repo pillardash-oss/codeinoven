@@ -52,7 +52,7 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     aria-label={ariaLabel}
     {title}
     oncontextmenu={(e: MouseEvent) => {
@@ -74,7 +74,7 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-40 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+      class="z-50 w-40 overflow-hidden border bg-surface p-1 shadow-lg"
     >
       {#each items as item (item.label)}
         {#if item.divider}
@@ -89,7 +89,7 @@
           <DropdownMenu.Item
             disabled={item.disabled}
             class={[
-              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors max-md:py-2.5',
+              'flex w-full items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors max-md:py-2.5',
               item.danger
                 ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
                 : 'text-foreground hover:bg-elevated focus:bg-elevated',

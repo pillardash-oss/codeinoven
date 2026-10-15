@@ -36,11 +36,11 @@
 
 <div
   {@attach menuField}
-  class="w-72 overflow-hidden rounded-xl border bg-surface p-1.5 shadow-lg"
+  class="w-72 overflow-hidden border bg-surface p-1.5 shadow-lg"
   role="menu"
   aria-label={label}
 >
-  <div class="flex items-center gap-2 rounded-lg border bg-elevated px-2.5 py-1.5">
+  <div class="flex items-center gap-2 border bg-elevated px-2.5 py-1.5">
     <Search size={13} class="shrink-0 text-dimmed" />
     <input
       {@attach searchField}

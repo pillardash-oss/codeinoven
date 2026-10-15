@@ -5,7 +5,6 @@
     Clock3,
     Code2,
     Copy,
-    Loader2,
     LogIn,
     RotateCcw,
     Square,
@@ -13,6 +12,14 @@
     X
   } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
+  import { slide } from 'svelte/transition'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardTag from '../shared/CardTag.svelte'
+  import type { CardChipData } from '../shared/CardTimer.svelte'
+  import { foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentSessionStatus,
@@ -82,6 +89,7 @@
     retrying = false,
     autoRetryEnabled = true
   }: Props = $props()
+  let folded = $state(false)
   let showRawError = $state(false)
   let copiedRawError = $state(false)
   let signInOpen = $state(false)
@@ -99,13 +107,6 @@
     return Date.now()
   })
   const resumeAt = $derived(issue.autoResumeAt)
-  const settling = $derived(
-    autoRetryEnabled &&
-      issue.retryAt !== undefined &&
-      issue.autoResumeAt !== undefined &&
-      now >= issue.retryAt &&
-      now < issue.autoResumeAt
-  )
   const queued = $derived(
     autoRetryEnabled && issue.autoResumeAt !== undefined && now >= issue.autoResumeAt
   )
@@ -184,6 +185,27 @@
   }
 
   /**
+   * The head's reading is the state the card is honestly in. A scheduled resume
+   * shows the real deadline the card already computes; otherwise the state gets
+   * its own word, urgent when it is a failure the user has to act on.
+   */
+  const chip = $derived.by<CardChipData>(() => {
+    if (queued) return { text: 'Queued', tone: 'paused' }
+    if (waiting) {
+      return autoRetryEnabled && resumeAt !== undefined
+        ? { text: `Retry in ${relativeRetryTime(resumeAt)}` }
+        : { text: 'Waiting', tone: 'paused' }
+    }
+    if (issue.kind === 'authentication') return { text: 'Authentication', tone: 'urgent' }
+    if (issue.kind === 'network') return { text: 'Network', tone: 'urgent' }
+    if (issue.retryAt !== undefined) {
+      const at = autoRetryEnabled && resumeAt !== undefined ? resumeAt : issue.retryAt
+      if (now < at) return { text: `Retry in ${relativeRetryTime(at)}`, tone: 'urgent' }
+    }
+    return { text: 'Stopped', tone: 'urgent' }
+  })
+
+  /**
    * Open the shared sign-in panel for this thread's account.
    *
    * The account binding is explicit: this card is about the account the thread
@@ -245,188 +267,182 @@
     if (!settings || !onModelChange) return
     onModelChange({ ...settings, ...runtime })
   }
-
 </script>
 
-<div
-  class={[
-    'rounded-xl border px-4 py-3',
-    settling || queued
-      ? 'border-info/25 bg-info/5'
-      : waiting || autoResume
-        ? 'border-warning/25 bg-warning/5'
-        : 'border-danger/20 bg-danger/5'
-  ]}
-  role={waiting ? 'status' : 'alert'}
-  aria-live="polite"
->
-  <div class="flex items-start gap-3">
-    {#if waiting || autoResume}
-      <Clock3
-        size={16}
-        class={['mt-0.5 shrink-0', settling || queued ? 'text-info' : 'text-warning']}
-      />
-    {:else}
-      <AlertTriangle size={16} class="mt-0.5 shrink-0 text-danger" />
-    {/if}
-
-    <div class="min-w-0 flex-1">
-      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <p class="text-sm font-semibold text-foreground">
-          {sourceLabel ? 'Worker output error' : title}
-        </p>
-        <span class="rounded-full bg-raised px-2 py-0.5 text-[0.625rem] font-semibold text-muted">
-          {providerName}
-        </span>
+<!-- The live region wraps the frame so a status change still announces the whole
+card, the way it did before the head moved onto the shared primitives. -->
+<div role={waiting ? 'status' : 'alert'} aria-live="polite">
+  <CardFrame placement="top" label="Provider status">
+    <CardHead
+      icon={waiting || autoResume ? Clock3 : AlertTriangle}
+      title={sourceLabel ? 'Worker output error' : title}
+      {chip}
+      bind:folded
+      foldLabel="provider status"
+    >
+      {#snippet meta()}
+        <CardTag text={providerName} />
         {#if sourceLabel}
-          <span
-            class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger"
-          >
-            Worker · {sourceLabel}
-          </span>
+          <CardTag text={`Worker · ${sourceLabel}`} tone="err" />
         {/if}
-      </div>
+      {/snippet}
+    </CardHead>
 
-      {#if sourceDetail}
-        <p class="mt-1 text-xs font-medium text-foreground">Task · {sourceDetail}</p>
-      {/if}
-
-      <p class="mt-1 text-sm leading-relaxed text-muted select-text">
-        {#each messageParts(displayMessage) as part, index (index)}
-          {#if part.isLink}
-            <a
-              href={part.text}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
-              >{part.text}</a
-            >
-          {:else}
-            {part.text}
-          {/if}
-        {/each}
-      </p>
-
-      {#if waiting && issue.kind === 'network'}
-        <p class="mt-2 text-xs font-medium text-foreground">
-          Waiting for connection. Will resume automatically when the device reconnects.
-        </p>
-      {:else if autoRetryEnabled && resumeAt !== undefined}
-        <p class="mt-2 flex items-center gap-1.5 text-xs font-medium text-info tabular-nums">
-          <TimerReset size={13} class="shrink-0" aria-hidden="true" />
-          {#if queued}
-            Queued for auto-resume
-          {:else}
-            Auto-resume {formatDateTimeWithWeekday(resumeAt)} · in {relativeRetryTime(resumeAt)}
-          {/if}
-          {#if issue.attempt}
-            · attempt {issue.attempt}
-          {/if}
-        </p>
-      {:else if issue.retryAt}
-        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Available again {formatDateTimeWithWeekday(issue.retryAt)}
-        </p>
-      {:else if waiting}
-        <p class="mt-2 text-xs font-medium text-foreground">
-          Automatic retry is not scheduled. Retry now when the provider is ready.
-        </p>
-      {/if}
-
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        {#if issue.kind === 'authentication'}
-          <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-            onclick={beginSignIn}
-          >
-            <LogIn size={13} />
-            Sign in
-          </button>
-        {/if}
-        {#if waiting && issue.kind !== 'authentication' && onRetry}
-          <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={retrying}
-            aria-busy={retrying}
-            onclick={() => void onRetry?.()}
-          >
-            {#if retrying}
-              <Loader2 size={13} class="animate-spin" />
-            {:else}
-              <RotateCcw size={13} />
-            {/if}
-            {retrying ? 'Retrying…' : 'Retry now'}
-          </button>
-        {/if}
-        {#if waiting && onStop}
-          <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-            disabled={retrying}
-            onclick={onStop}
-          >
-            <Square size={12} />
-            Stop request
-          </button>
-        {:else if !waiting && onRetry}
-          <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-            disabled={retrying}
-            onclick={onRetry}
-          >
-            {#if retrying}
-              <Loader2 size={13} class="animate-spin" />
-            {:else}
-              <RotateCcw size={13} />
-            {/if}
-            {retrying ? 'Retrying…' : retryLabel}
-          </button>
-        {/if}
-        {#if settings && providers.length > 0 && onModelChange}
-          <ModelPicker
-            {providers}
-            {projectId}
-            harnessId={settings.harnessId}
-            providerId={settings.providerId}
-            modelId={settings.modelId}
-            accountId={settings.accountId}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            side="top"
-            label="Change"
-            variant="action"
-            onSelect={chooseModel}
-            thinkingLevel={settings.thinkingLevel}
-            runtimeSettings={settings}
-            onSelectThinking={chooseThinking}
-            onSelectRuntime={chooseRuntime}
-            {onToggleFavorite}
-            {onReorderFavorite}
-          />
-        {/if}
-        {#if !waiting && rawError}
-          <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-            onclick={() => (showRawError = true)}
-          >
-            <Code2 size={13} />
-            Raw Error
-          </button>
-        {/if}
-      </div>
-    </div>
-
-    {#if !waiting && onDismiss}
-      <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Dismiss provider error"
-        title="Dismiss"
-        onclick={onDismiss}
+    {#if !folded}
+      <div
+        transition:slide={foldSlide()}
+        class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
       >
-        <X size={14} />
-      </button>
+        {#if sourceDetail}
+          <p class="font-medium text-foreground">Task · {sourceDetail}</p>
+        {/if}
+
+        <p class="select-text">
+          {#each messageParts(displayMessage) as part, index (index)}
+            {#if part.isLink}
+              <a
+                href={part.text}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
+                >{part.text}</a
+              >
+            {:else}
+              {part.text}
+            {/if}
+          {/each}
+        </p>
+
+        {#if waiting && issue.kind === 'network'}
+          <p class="font-medium text-foreground">
+            Waiting for connection. Will resume automatically when the device reconnects.
+          </p>
+        {:else if autoRetryEnabled && resumeAt !== undefined}
+          <p class="flex items-center gap-1.5 font-medium text-info tabular-nums">
+            <TimerReset size={13} class="shrink-0" aria-hidden="true" />
+            {#if queued}
+              Queued for auto-resume
+            {:else}
+              Auto-resume {formatDateTimeWithWeekday(resumeAt)} · in {relativeRetryTime(resumeAt)}
+            {/if}
+            {#if issue.attempt}
+              · attempt {issue.attempt}
+            {/if}
+          </p>
+        {:else if issue.retryAt}
+          <p class="font-medium text-foreground tabular-nums">
+            Available again {formatDateTimeWithWeekday(issue.retryAt)}
+          </p>
+        {:else if waiting}
+          <p class="font-medium text-foreground">
+            Automatic retry is not scheduled. Retry now when the provider is ready.
+          </p>
+        {/if}
+      </div>
     {/if}
-  </div>
+
+    {#if !folded}
+      <CardFoot>
+        {#snippet left()}
+          {#if !waiting && onDismiss}
+            <CardButton
+              label="Dismiss"
+              title="Dismiss provider error"
+              icon={X}
+              variant="ghost"
+              onclick={onDismiss}
+            />
+          {/if}
+          {#if waiting && onStop}
+            <CardButton
+              label="Stop request"
+              title="Stop the waiting request"
+              icon={Square}
+              variant="ghost-danger"
+              disabled={retrying}
+              onclick={onStop}
+            />
+          {/if}
+          {#if !waiting && rawError}
+            <CardButton
+              label="Raw Error"
+              title="Show the raw provider error"
+              icon={Code2}
+              variant="ghost"
+              onclick={() => (showRawError = true)}
+            />
+          {/if}
+        {/snippet}
+
+        {#snippet right()}
+          {#if settings && providers.length > 0 && onModelChange}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={settings.harnessId}
+              providerId={settings.providerId}
+              modelId={settings.modelId}
+              accountId={settings.accountId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              side="top"
+              label="Change"
+              variant="action"
+              onSelect={chooseModel}
+              thinkingLevel={settings.thinkingLevel}
+              runtimeSettings={settings}
+              onSelectThinking={chooseThinking}
+              onSelectRuntime={chooseRuntime}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+          {/if}
+
+          {#if issue.kind === 'authentication'}
+            {#if !waiting && onRetry}
+              <CardButton
+                label={retryLabel}
+                title={retryLabel}
+                icon={retrying ? undefined : RotateCcw}
+                variant="secondary"
+                loading={retrying}
+                disabled={retrying}
+                onclick={() => void onRetry?.()}
+              />
+            {/if}
+            <CardButton
+              label="Sign in"
+              title="Sign in to the AI account"
+              icon={LogIn}
+              variant="primary"
+              onclick={beginSignIn}
+            />
+          {:else if waiting && onRetry}
+            <CardButton
+              label="Retry now"
+              title="Retry the request now"
+              icon={retrying ? undefined : RotateCcw}
+              variant="primary"
+              loading={retrying}
+              disabled={retrying}
+              onclick={() => void onRetry?.()}
+            />
+          {:else if !waiting && onRetry}
+            <CardButton
+              label={retryLabel}
+              title={retryLabel}
+              icon={retrying ? undefined : RotateCcw}
+              variant="primary"
+              loading={retrying}
+              disabled={retrying}
+              onclick={() => void onRetry?.()}
+            />
+          {/if}
+        {/snippet}
+      </CardFoot>
+    {/if}
+  </CardFrame>
 </div>
 
 {#if rawError}
@@ -436,7 +452,7 @@
     onClose={() => (showRawError = false)}
   >
     <button
-      class="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="mb-2 inline-flex h-8 items-center gap-1.5 border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       aria-label={copiedRawError ? 'Raw error copied' : 'Copy raw error to clipboard'}
       title={copiedRawError ? 'Copied' : 'Copy raw error'}
       onclick={() => void copyRawError()}
@@ -450,7 +466,7 @@
       {/if}
     </button>
     <pre
-      class="max-h-96 overflow-auto rounded-lg border border-border bg-raised p-3 text-xs leading-relaxed text-foreground"><code
+      class="max-h-96 overflow-auto border border-border bg-raised p-3 text-xs leading-relaxed text-foreground"><code
         >{rawError}</code
       ></pre>
   </Modal>

@@ -241,7 +241,7 @@
                    not on the remote now; the badge is what says it was there
                    once, and the row's tooltip names the movement and its time. -->
               <span
-                class="shrink-0 rounded-sm bg-warning/10 px-1 py-px text-[0.5rem] font-medium text-warning"
+                class="shrink-0 bg-warning/10 px-1 py-px text-[0.5rem] font-medium text-warning"
               >
                 rewritten
               </span>
@@ -249,7 +249,7 @@
             {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
               <span
                 class={[
-                  'shrink-0 rounded-sm px-1 py-px text-[0.5rem] font-medium',
+                  'shrink-0 px-1 py-px text-[0.5rem] font-medium',
                   ref.head
                     ? 'bg-primary text-on-primary'
                     : ref.kind === 'tag'
@@ -271,7 +271,7 @@
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
-          class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+          class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
           side="bottom"
           align="start"
           sideOffset={4}

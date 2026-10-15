@@ -69,7 +69,7 @@
 {#if rerunnable}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 {className}"
+      class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 {className}"
       title="Re-run jobs for this workflow run"
       aria-label="Re-run jobs for this workflow run"
       disabled={busy}
@@ -89,7 +89,7 @@
         side="bottom"
         align="end"
         sideOffset={6}
-        class="z-90 w-44 overflow-hidden rounded-lg border-border bg-surface p-1 shadow-lg"
+        class="z-90 w-44 overflow-hidden border-border bg-surface p-1 shadow-lg"
       >
         <p
           class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
@@ -97,14 +97,14 @@
           Re-run
         </p>
         <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+          class="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
           onSelect={() => void rerun('all')}
         >
           <RefreshCw size={12} class="shrink-0 text-dimmed" />
           Re-run all jobs
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated data-[disabled]:cursor-default data-[disabled]:opacity-40"
+          class="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated data-[disabled]:cursor-default data-[disabled]:opacity-40"
           disabled={!hasFailedJobs}
           onSelect={() => void rerun('failed')}
         >

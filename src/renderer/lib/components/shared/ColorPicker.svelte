@@ -182,7 +182,7 @@
     <span class="text-xs font-medium text-muted">Custom colour</span>
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Close colour picker"
       title="Close"
       onclick={onclose}
@@ -194,7 +194,7 @@
   <div class="flex items-center gap-2">
     <input
       type="color"
-      class="h-8 w-8 shrink-0 cursor-pointer appearance-none rounded-lg border bg-transparent p-0"
+      class="h-8 w-8 shrink-0 cursor-pointer appearance-none border bg-transparent p-0"
       style="background-color: {current}"
       value={current}
       aria-label="System colour picker"
@@ -207,7 +207,7 @@
       maxlength={7}
       spellcheck="false"
       autocomplete="off"
-      class="w-full rounded-md border bg-elevated px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-foreground"
+      class="w-full border bg-elevated px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-foreground"
       aria-label="Hex colour"
       title="Hex colour"
       onfocus={() => (hexDraft = current.toUpperCase())}
@@ -237,7 +237,7 @@
     {#each PROJECT_COLORS as option (option.value)}
       <button
         type="button"
-        class="h-5 w-5 rounded-full border-2 transition-transform hover:scale-110 {option.value ===
+        class="h-5 w-5 border-2 transition-transform hover:scale-110 {option.value ===
         current
           ? 'border-foreground'
           : 'border-transparent'}"

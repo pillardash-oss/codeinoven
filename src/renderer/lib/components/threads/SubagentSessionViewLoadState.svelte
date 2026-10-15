@@ -21,7 +21,7 @@
     Loading sub-agent session…
   </div>
 {:else if loadError && !busy && !liveStreamed}
-  <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
+  <div class="border border-danger/30 bg-danger/5 px-3 py-2.5">
     <p class="text-xs font-medium text-danger">Could not load the sub-agent session</p>
     <p class="mt-1 text-[0.6875rem] text-muted">{loadError}</p>
     <button

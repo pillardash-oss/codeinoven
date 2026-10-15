@@ -112,6 +112,10 @@ jobs:
           arch: ${{ matrix.arch }}
           artifact: ${{ matrix.artifact }}
           app-dir: ${{ matrix.app_dir }}
+          # The Microsoft Store package is opt-in: it needs the package identity
+          # Partner Center assigns, which cannot exist before the app name is
+          # reserved. See packaging/msix/README.md.
+          msix: ${{ vars.CODEINOVEN_MSIX_BUILD }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}

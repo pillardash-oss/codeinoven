@@ -111,7 +111,7 @@ export function isBrowserBoxId(value: unknown): value is string {
 
 /**
  * The appearance vocabulary a browser tab, group, box and bookmark share, copied
- * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
+ * from the project/assistant model: a hex colour, a `PROJECT_SVG_ICONS` key, a
  * sanitized custom SVG, and a picked image file. One shape means one editor and
  * one icon resolver for every browser surface that carries an identity. A
  * bookmark takes the icon half of it only: it has no accent to tint.
@@ -239,7 +239,7 @@ function optionalInteger(value: unknown): number | null {
 
 /** One identity that can be addressed as a tab, synthesised only when the stored
  *  one is unusable. A tab id keys its note and its agent chat, so a repaired id
- *  is a last resort, never a routine path. */
+ *  is a last resort, never an assistant path. */
 function browserTabId(value: unknown): string {
   return isBrowserTabId(value) ? value : `browser:${crypto.randomUUID()}`
 }

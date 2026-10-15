@@ -79,15 +79,15 @@ class ContextSidebarState {
    * thread rows, and the workspace owns the only list of them, so the workspace
    * registers this one resolver: it maps a thread to the conversation that owns
    * its browser tabs (see `conversationScopeId`), which is what makes a
-   * routine's threads keep one browser across a thread switch. Until it is
+   * assistant's threads keep one browser across a thread switch. Until it is
    * registered, a conversation is scoped by its own thread, which is the
-   * pre-routine behaviour.
+   * pre-assistant behaviour.
    */
   private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
     null
   /**
    * How the sidebar names a conversation scope's own box. The workspace owns the
-   * only list of projects, routines and threads, so it registers this one
+   * only list of projects, assistants and threads, so it registers this one
    * resolver; until then a scope's box is named generically.
    */
   private threadBrowserScopeLabelResolver = $state<
@@ -639,7 +639,7 @@ class ContextSidebarState {
   }
 
   /** The label of a conversation scope's own box, for the thread browser's box
-   *  control: a project's name, a routine's name, or a chat's title. */
+   *  control: a project's name, an assistant's name, or a chat's title. */
   browserScopeBoxLabel(projectId: string, threadId: string): string {
     return this.threadBrowserScopeLabel(projectId, threadId)
   }
@@ -783,23 +783,23 @@ class ContextSidebarState {
     this.tabContexts.closeCoordinator(projectId, threadId)
   }
 
-  /** Dock the assistant how-to panel for a routine (one panel per routine). */
-  openAssistantHowTo(
+  /** Dock the assistant knowledge panel for an assistant (one panel per assistant). */
+  openAssistantKnowledge(
     projectId: string,
     threadId: string,
-    routineId: string | null,
+    assistantId: string | null,
     title: string
   ): void {
-    this.tabContexts.openAssistantHowTo(projectId, threadId, routineId, title)
+    this.tabContexts.openAssistantKnowledge(projectId, threadId, assistantId, title)
   }
 
   openMemory(
     projectId: string,
     threadId: string,
     section?: MemorySection,
-    routineId?: string
+    assistantId?: string
   ): void {
-    this.tabContexts.openMemory(projectId, threadId, section, routineId)
+    this.tabContexts.openMemory(projectId, threadId, section, assistantId)
   }
 
   toggleNotifications(): void {

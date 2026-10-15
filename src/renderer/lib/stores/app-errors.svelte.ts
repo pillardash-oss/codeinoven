@@ -48,9 +48,16 @@ function serializeError(error: unknown): string | undefined {
 }
 
 function currentThreadRef(): AppErrorThreadRef | undefined {
-  const thread = workspaceState.selectedThread
-  if (!thread) return undefined
-  return { projectId: thread.projectId, threadId: thread.id }
+  // The uncaught-error capture runs during startup module evaluation, when the
+  // workspace store may still be initializing. Error reporting must never throw,
+  // so a thread ref that cannot be read yet is simply left off the entry.
+  try {
+    const thread = workspaceState.selectedThread
+    if (!thread) return undefined
+    return { projectId: thread.projectId, threadId: thread.id }
+  } catch {
+    return undefined
+  }
 }
 
 class AppErrorState {

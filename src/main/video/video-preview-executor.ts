@@ -15,6 +15,7 @@ import { openVideoPreview } from './video-preview-session'
  * one, so a missing browser degrades to a URL rather than a failure.
  */
 export interface VideoPreviewExecutorOptions {
+  studio?: VideoCapabilityExecutor
   previews: DirectoryPreviewService
   database: Database
   checkpoint: (
@@ -52,6 +53,8 @@ export function createVideoPreviewExecutor(
   options: VideoPreviewExecutorOptions
 ): VideoCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation !== 'preview' && operation !== 'checkpoint' && options.studio)
+      return options.studio(operation, input, context)
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
     if (operation !== 'preview') {

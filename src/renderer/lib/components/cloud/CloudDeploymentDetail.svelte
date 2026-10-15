@@ -343,7 +343,7 @@
       {#if selectedDeployment}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to deployments"
           aria-label="Back to deployments"
           onclick={() => {
@@ -356,7 +356,7 @@
       {:else}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to cloud deployments"
           aria-label="Back to cloud deployments"
           onclick={onBack}
@@ -384,7 +384,7 @@
       {#if selectedDeployment?.status === 'failed'}
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Diagnose this failed deployment with an agent"
           aria-label="Diagnose this failed deployment with an agent"
           onclick={() => onRemediate(readableLog)}
@@ -395,7 +395,7 @@
       {/if}
       <button
         type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Refresh deployment log"
         aria-label="Refresh deployment log"
         onclick={() => void refresh()}
@@ -405,7 +405,7 @@
       {#if selectedDeployment}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Jump to the latest log lines"
           aria-label="Jump to the latest log lines"
           onclick={toggleTail}
@@ -458,7 +458,7 @@
         {#if log}
           <button
             type="button"
-            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Search log (Ctrl/Cmd+F)"
             aria-label="Search log"
             onclick={openSearch}
@@ -468,7 +468,7 @@
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy build log"
             aria-label="Copy build log"
             onclick={() => void copyLog()}
@@ -478,7 +478,7 @@
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy raw log JSON"
             aria-label="Copy raw log JSON"
             onclick={() => void copyRawLog()}
@@ -495,7 +495,7 @@
             bind:this={searchInputEl}
             bind:value={searchQuery}
             type="text"
-            class="h-6 min-w-0 flex-1 rounded border border-border bg-elevated px-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed"
+            class="h-6 min-w-0 flex-1 border border-border bg-elevated px-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search in log…"
             aria-label="Search in deployment log"
             oninput={() => {
@@ -508,7 +508,7 @@
           </span>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Previous match"
             aria-label="Previous match"
             onclick={() => goToMatch(-1)}
@@ -517,7 +517,7 @@
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Next match"
             aria-label="Next match"
             onclick={() => goToMatch(1)}
@@ -526,7 +526,7 @@
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Close search"
             aria-label="Close search"
             onclick={closeSearch}
@@ -548,7 +548,7 @@
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
               <div
                 data-log-line={index}
-                class="rounded px-2 py-0.5 whitespace-pre-wrap break-words {line.isError
+                class="px-2 py-0.5 whitespace-pre-wrap break-words {line.isError
                   ? 'bg-danger/10 text-danger'
                   : 'text-muted'}{matchIndex !== -1
                   ? ' bg-accent/20 ring-1 ring-inset ring-accent/40'
@@ -565,7 +565,7 @@
           <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{logError}</p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void selectDeployment(selectedDeployment)}
           >
             Try again
@@ -602,7 +602,7 @@
           </p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void loadDeployments(true)}
           >
             Try again

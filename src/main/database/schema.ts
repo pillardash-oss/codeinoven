@@ -130,9 +130,10 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   achievement_role     TEXT CHECK(achievement_role IN ('coordinator','auditor')),
   auditor_thread_id    TEXT,
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
+  engineering          INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
-  routine_id           TEXT,
+  assistant_id           TEXT,
   assistant_icon_type  TEXT,
   assistant_icon       TEXT,
   schedule_override    TEXT,
@@ -692,6 +693,26 @@ CREATE TABLE IF NOT EXISTS workflow_owners (
   PRIMARY KEY (project_id, coordinator_thread_id)
 );
 
+-- ─── Thread Transfer Locks ───────────────────────────────────────────
+-- Moving a run between instances is a two-sided hand-off, and a thread may
+-- only have one in flight. Each side takes the row it needs   the receiving
+-- instance holds the adopt claim for the whole transfer, the sending
+-- instance holds the release claim while it stops and settles   and the
+-- primary key makes the write the lock, because a second claimant's INSERT is
+-- refused. A row is a lease, not a permanent record: it is ignored once
+-- expires_at passes or its holder process is gone, so a crash never strands a
+-- thread.
+CREATE TABLE IF NOT EXISTS thread_transfer_locks (
+  project_id  TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  role        TEXT NOT NULL CHECK(role IN ('release','adopt')),
+  holder_pid  INTEGER NOT NULL,
+  token       TEXT NOT NULL,
+  acquired_at INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, thread_id, role)
+);
+
 -- ─── Assignment Plans ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assignment_versions (
   assignment_id        TEXT NOT NULL,
@@ -988,25 +1009,28 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
 
 /**
- * Assistant routines: the top-level grouping for assistant tasks. A routine
- * owns the agent-authored how-to, a default schedule, and its connection picks;
- * tasks are threads in the assistant space that reference `routines.id`.
+ * Assistants: the top-level grouping for assistant tasks. An assistant owns the
+ * personality its owner gave it, the knowledge the agent wrote with them, a
+ * default schedule, and its connection picks; tasks are threads in the assistant
+ * space that reference `assistants.id`.
  */
-export const ROUTINES_SQL = `
--- ─── Assistant routines ─────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS routines (
+export const ASSISTANTS_SQL = `
+-- ─── Assistants ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS assistants (
   id                  TEXT PRIMARY KEY NOT NULL,
   name                TEXT NOT NULL,
   description         TEXT,
+  personality         TEXT,
   scheduled           INTEGER NOT NULL DEFAULT 1,
+  schedule_name       TEXT,
   color               TEXT,
   icon                TEXT,
   icon_type           TEXT,
   custom_svg          TEXT,
   schedule            TEXT,
   schedule_updated_at INTEGER,
-  how_to              TEXT NOT NULL DEFAULT '',
-  how_to_updated_at   INTEGER,
+  knowledge           TEXT NOT NULL DEFAULT '',
+  knowledge_updated_at INTEGER,
   connections         TEXT NOT NULL DEFAULT '[]',
   delivery            TEXT,
   priority            TEXT,
@@ -1020,7 +1044,7 @@ CREATE TABLE IF NOT EXISTS routines (
   updated_at          INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
+CREATE INDEX IF NOT EXISTS idx_assistants_listing ON assistants(pinned DESC, sort_order, updated_at DESC);`
 
 /**
  * Which folder of authored work a thread is working on, and which kind it holds.
@@ -1211,5 +1235,5 @@ export const DATABASE_SCHEMA_SQL = [
   THREAD_EXPERTS_SQL,
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,
-  ROUTINES_SQL
+  ASSISTANTS_SQL
 ].join('\n')

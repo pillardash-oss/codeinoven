@@ -87,7 +87,7 @@
   }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   const single = $derived(targets.length === 1)
   /**
@@ -110,7 +110,7 @@
       collisionPadding={12}
       sticky="always"
       updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-52 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-52 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
     >
       <p class="px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
         {#if single}

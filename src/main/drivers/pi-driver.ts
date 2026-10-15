@@ -4,16 +4,11 @@ import { existsSync, createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { join } from 'path'
 import type {
-  AgentEvent,
   AgentMessage,
   AgentPart,
   AgentRateLimitWindow,
   AgentUsageCredits,
   AgentToolStatus,
-  NativeMcpPublicationResult,
-  NativeMcpServerFailure,
-  NativeMcpUtilityBinding,
-  NativeUtilityInvocation,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent
@@ -49,15 +44,6 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import {
-  PI_MCP_SERVERS_FILE_NAME,
-  buildPiMcpRegistrations,
-  parsePiMcpFailureReport,
-  piMcpToolAttribution,
-  piMcpServersDocument
-} from './pi/pi-mcp-registration'
-import type { PiNativeToolAttribution } from './pi/pi-mcp-registration'
-import { PI_MCP_FAILURE_STATUS_KEY } from './pi-mcp-servers-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import { apiKeyEnvVarFor } from '../providers/base-url-provider-service'
 import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
@@ -70,7 +56,7 @@ import {
 } from './pi-status-extension'
 import { PI_USAGE_EXTENSION_KEY } from './pi-usage-extension'
 import { fetchPiProviderUsage } from './pi-provider-usage'
-import { PiRpcClient } from './pi-rpc-client'
+import { PiRpcClient, type PiRpcImage } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
   resolveHarnessRuntime,
@@ -256,6 +242,21 @@ function isPiModelNotFoundError(error: unknown): boolean {
   return error instanceof Error && /^Model not found: /u.test(error.message)
 }
 
+/**
+ * Whether a rejected `prompt` is pi refusing the input rather than failing to
+ * take it: its streaming guard (`agent-session.js`), or the manual-compaction
+ * guard that runs before it. Only a refusal means "this session is alive and the
+ * message needs another channel"; every other failure of a `prompt` is a real
+ * delivery error and must keep its own outcome.
+ */
+function isPiInputRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return (
+    error.message.includes('Agent is already processing') ||
+    error.message.includes('Cannot submit a prompt while compaction is in progress')
+  )
+}
+
 /** Materialized provider-only extension overlay used for model discovery. */
 interface ProviderOverlay {
   args: string[]
@@ -301,6 +302,10 @@ export class PiDriver extends PersistentCliDriver {
     compaction: true,
     subagents: true,
     scheduledRetry: true,
+    // The core-tools extension reconciles the task list on `agent_settled`
+    // (src/main/drivers/pi/tools/core-tools-events.ts), so the chat engine's
+    // generic guard must not nudge the same turn again.
+    handlesTaskReconcile: true,
     nativeUtilities: []
   }
 
@@ -442,31 +447,6 @@ export class PiDriver extends PersistentCliDriver {
   /** Storage-relative allowed-tools handoff file per session, rewritten per turn
    *  so the extension's tool gate reflects the current File-System setting. */
   private cioAllowedToolsPaths = new Map<string, string>()
-  /** Storage-relative MCP server documents per session. Each one names the MCP
-   *  utilities this thread has activated, so the extension can register them
-   *  with pi's own MCP host; the document is rewritten whenever that set or a
-   *  credential changes. */
-  private cioMcpServersPaths = new Map<string, string>()
-  /**
-   * Server name to the utility it belongs to, for the MCP servers this app
-   * registered on pi's own host.
-   *
-   * A script's call arrives as `mcp__<server>__<tool>`, which names no
-   * utility, and it never passes the app gateway, which is where a utility
-   * call is normally recorded. This map is what lets the trace and the audit
-   * name the utility the user actually enabled. Keyed by server name rather
-   * than by session because a sub-agent's call arrives on its own session id.
-   */
-  private nativeServerOwners = new Map<string, { utilityId: string; utilityName: string }>()
-  /** Terminal native calls already reported, per session, keyed by call id. */
-  private reportedNativeCalls = new Map<string, Set<string>>()
-  /** Refusals already told to the app, so a reconcile retry is one notice. */
-  private reportedMcpFailures = new Set<string>()
-  private nativeUtilityCallHandler: ((invocation: NativeUtilityInvocation) => void) | null = null
-  private nativeMcpFailureHandler: ((failure: NativeMcpServerFailure) => void) | null = null
-  /** The fold's resolver, so a part names the utility behind an `mcp__` call. */
-  private readonly nativeToolOwner = (toolName: string): PiNativeToolAttribution | null =>
-    piMcpToolAttribution(this.nativeServerOwners, toolName)
   /** Storage-relative arm/disarm flag files for oversized-request recovery. */
   private cioOversizedFlagPaths = new Map<string, string>()
   /** Storage-relative stop-flag files the user's Stop writes for the core-tools
@@ -772,7 +752,7 @@ export class PiDriver extends PersistentCliDriver {
     this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
     try {
-      await client.prompt(commandText)
+      await this.promptIntoSession(client, projectPath, session.id, commandText, undefined)
     } catch (error) {
       this.activeTurns.delete(session.id)
       const message = error instanceof Error ? error.message : 'Pi command failed to start'
@@ -868,9 +848,6 @@ export class PiDriver extends PersistentCliDriver {
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    // Each turn reports its own native calls; a call id never repeats across
-    // turns, so the per-session record is reset at the turn that starts fresh.
-    this.reportedNativeCalls.delete(session.id)
     const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
@@ -960,8 +937,10 @@ export class PiDriver extends PersistentCliDriver {
     await this.publishCioAllowedTools(session.id, options.allowedTools)
     const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
+    // The user's input is the thing that must survive: a session that turns out
+    // to be mid-run takes the prompt into that run instead of refusing it.
     try {
-      await turnClient.prompt(prompt, images)
+      await this.promptIntoSession(turnClient, projectPath, session.id, prompt, images)
     } catch (error) {
       this.activeTurns.delete(session.id)
       const message = error instanceof Error ? error.message : 'Pi turn failed to start'
@@ -1074,7 +1053,7 @@ export class PiDriver extends PersistentCliDriver {
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
     try {
-      await activeClient.prompt(message, images)
+      await this.promptIntoSession(activeClient, projectPath, options.sessionId, message, images)
     } catch (error) {
       this.activeTurns.delete(options.sessionId)
       const failure = error instanceof Error ? error.message : 'Pi turn failed to start'
@@ -1250,12 +1229,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
-    this.reportedNativeCalls.delete(sessionId)
-    for (const key of Array.from(this.reportedMcpFailures)) {
-      if (key.startsWith(`${sessionId}:`)) this.reportedMcpFailures.delete(key)
-    }
     await this.removeGatewayHandoff(sessionId)
-    await this.removeMcpServersDocument(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1390,70 +1364,6 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
-   * Publish the MCP servers this thread has activated, so the app-owned
-   * extension can register them with pi's own MCP host.
-   *
-   * A pi session process outlives the turn that spawned it, so this document  
-   * not the launch arguments   is how a utility activated in a later turn
-   * reaches the running process, and how a rotated credential is re-read
-   * without a restart. An empty list is a real instruction, because pi then
-   * drops the servers the app no longer publishes; a failed write is not, and
-   * leaves the previous document in force until the next publication.
-   *
-   * Answers with the server name each utility took, which the gateway hands the
-   * model on activation so it knows which namespace to reach for.
-   */
-  /**
-   * Register the callback for one call a script made to a server this app
-   * registered. Fires once per call, at its terminal status.
-   */
-  onNativeUtilityCall(callback: (invocation: NativeUtilityInvocation) => void): void {
-    this.nativeUtilityCallHandler = callback
-  }
-
-  /**
-   * Register the callback for a server pi's own MCP host would not run, so the
-   * user hears about it while the session that tried is still alive.
-   */
-  onNativeMcpFailure(callback: (failure: NativeMcpServerFailure) => void): void {
-    this.nativeMcpFailureHandler = callback
-  }
-
-  async publishUtilityMcpServers(
-    _projectPath: string,
-    sessionId: string,
-    utilities: readonly NativeMcpUtilityBinding[]
-  ): Promise<NativeMcpPublicationResult> {
-    void _projectPath
-    const relative =
-      this.cioMcpServersPaths.get(sessionId) ??
-      join(cioCoreToolsDirectory(sessionId), PI_MCP_SERVERS_FILE_NAME)
-    this.cioMcpServersPaths.set(sessionId, relative)
-    // One broken utility never costs the thread the others: the adapter reports
-    // it, and the app gateway is still a path to that one.
-    const { registrations, failures } = buildPiMcpRegistrations(utilities)
-    for (const failure of failures) {
-      Logger.dev('Pi MCP server skipped:', failure.utilityName, failure.reason)
-    }
-    for (const registration of registrations) {
-      this.nativeServerOwners.set(registration.name, {
-        utilityId: registration.utilityId,
-        utilityName: registration.utilityName
-      })
-    }
-    try {
-      await this.storage.writeRaw(relative, JSON.stringify(piMcpServersDocument(registrations)))
-    } catch (error) {
-      Logger.dev('Pi MCP server document update failed:', error)
-      return { servers: [], failures }
-    }
-    return {
-      servers: registrations.map(({ utilityId, name }) => ({ utilityId, server: name })),
-      failures
-    }
-  }
-
-  /**
    * Publish the plan and progress the owning thread is executing, so the
    * compaction extension can rebuild a checkpoint from them when a transcript
    * cannot be summarized. Session-keyed and best-effort: a thread with no plan
@@ -1489,7 +1399,7 @@ export class PiDriver extends PersistentCliDriver {
       turnIndex: 0
     }
     this.turnStates.set(context.sessionId, state)
-    return mapPiRecord(value, { ...context, nativeToolOwner: this.nativeToolOwner }, state)
+    return mapPiRecord(value, context, state)
   }
 
   dispose(): void {
@@ -1506,9 +1416,6 @@ export class PiDriver extends PersistentCliDriver {
     }
     this.gatewayHandoffPaths.clear()
     this.pendingGatewayEndpoints.clear()
-    for (const sessionId of this.cioMcpServersPaths.keys()) {
-      void this.removeMcpServersDocument(sessionId)
-    }
     this.cioCoreToolsExtensionPaths.clear()
     this.cioSystemPromptPaths.clear()
     this.cioHistoryRecapPaths.clear()
@@ -1528,15 +1435,83 @@ export class PiDriver extends PersistentCliDriver {
     return this.activeTurns.has(sessionId)
   }
 
-  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+  /**
+   * The run this pi session has in flight right now, read from pi's own state
+   * (`get_state` → `isStreaming` / `isCompacting`) plus the one gap pi does not
+   * report there: its own provider retry.
+   *
+   * Pi keeps running across the windows where the app's view of the turn has
+   * already settled   an auto-compaction, a provider retry, a run adopted after
+   * a restart   so this is the only authority on whether the session will accept
+   * a bare `prompt`. `null` means no live run is visible: the session is idle,
+   * or its process is gone, and each caller decides what that means.
+   *
+   * Pi's own provider retry is a gap in the stream, not in the turn: the run is
+   * alive and resumes when the retry lands, so the session is busy. A retry gap
+   * reported as idle let the engine take one failed request for the turn's
+   * outcome   it finalized the live turn and cleared the utility gateway
+   * handoff the resumed run was still calling `cio_util_*` through, which is how
+   * a design turn lost its gateway mid-flight. The retry flag is only read off a
+   * state probe that answered, so a dead or wedged process still reports idle
+   * instead of busy forever.
+   */
+  private async readLiveRun(
+    projectPath: string,
+    sessionId: string
+  ): Promise<'streaming' | 'compacting' | 'retrying' | null> {
     const client = this.rpcClients.get(sessionId)
-    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return false
+    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return null
     try {
       const state = record(await client.getState())
-      return state?.['isStreaming'] === true || state?.['isCompacting'] === true
+      if (state === null) return null
+      if (state['isStreaming'] === true) return 'streaming'
+      if (state['isCompacting'] === true) return 'compacting'
     } catch (error) {
-      Logger.dev('Pi session busy probe failed:', error)
-      return false
+      Logger.dev('Pi live-run probe failed:', error)
+      return null
+    }
+    return this.turnStates.get(sessionId)?.providerRetry === true ? 'retrying' : null
+  }
+
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    return (await this.readLiveRun(projectPath, sessionId)) !== null
+  }
+
+  /**
+   * Deliver a composed prompt to the session, continuing into the run that is
+   * already in flight when the app's snapshot of the turn went stale.
+   *
+   * Pi refuses a bare `prompt` while the agent streams ("Agent is already
+   * processing. Specify streamingBehavior ('steer' or 'followUp') to queue the
+   * message."). Taking that refusal for the turn's outcome ended a run that was
+   * still producing output and put pi's protocol prose in front of the user in
+   * place of their message, so the prompt asks pi to steer when a run is live
+   * (`streamingBehavior`, decided on pi's own state) and, if it is still refused
+   *   an older pi that does not know the field, or a manual compaction, the one
+   * state pi does not arbitrate   a re-probe picks the channel that run accepts:
+   * a steer while it streams, a follow-up while it compacts or retries.
+   *
+   * A refusal with no live run behind it stays the caller's error to report.
+   */
+  private async promptIntoSession(
+    client: PiRpcClient,
+    projectPath: string,
+    sessionId: string,
+    prompt: string,
+    images: PiRpcImage[] | undefined
+  ): Promise<void> {
+    try {
+      await client.prompt(prompt, images, 'steer')
+    } catch (error) {
+      if (!isPiInputRefusal(error)) throw error
+      const liveRun = await this.readLiveRun(projectPath, sessionId)
+      if (!liveRun) throw error
+      if (liveRun === 'streaming') {
+        await client.steer(prompt, images)
+      } else {
+        await client.followUp(prompt, images)
+      }
+      Logger.dev('Pi prompt joined the run already in flight:', { sessionId, liveRun })
     }
   }
 
@@ -1735,8 +1710,8 @@ export class PiDriver extends PersistentCliDriver {
       const session = await this.requireSession(projectPath, sessionId)
       const nativeId = session.nativeSessionId
       if (!nativeId) return
-      if (!existsSync(nativePiSessionDir(projectPath))) return
-      const file = await findNativePiSessionFile(projectPath, nativeId)
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return
+      const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
       if (!file) return
       await client.switchSession(file)
       this.resumedNativeSessions.add(sessionId)
@@ -1788,6 +1763,15 @@ export class PiDriver extends PersistentCliDriver {
     return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
   }
 
+  async holdsNativeHistory(projectPath: string, sessionId: string): Promise<boolean> {
+    if (this.rpcClients.has(sessionId)) return true
+    const record = await this.readSessionRecord(projectPath, sessionId)
+    const nativeId = record?.nativeSessionId
+    if (!nativeId) return false
+    const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
+    return file !== null
+  }
+
   private async loadMessagesInternal(
     projectPath: string,
     sessionId: string,
@@ -1809,7 +1793,12 @@ export class PiDriver extends PersistentCliDriver {
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
+      const native = await loadNativeSubagentMessages(
+        projectPath,
+        sessionId,
+        waitForFlush,
+        this.agentDirectory
+      )
       if (native) return native
       // Throwing stays correct whenever a record genuinely exists   including
       // a hash-mismatched one (moved project), where the engine must retire
@@ -1870,8 +1859,8 @@ export class PiDriver extends PersistentCliDriver {
       if (!previous || previous.id === sessionId) return false
       const nativeId = previous.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory))) return false
       replacement.nativeSessionId = nativeId
       Logger.info('Restored native Pi transcript binding after harness switch', {
         sessionId,
@@ -1904,7 +1893,7 @@ export class PiDriver extends PersistentCliDriver {
       if (session.nativeSessionId) return true
       const entries = prefillTranscriptEntries(projectPath, messages)
       if (entries.length === 0) return false
-      const dir = nativePiSessionDir(projectPath)
+      const dir = nativePiSessionDir(projectPath, this.agentDirectory)
       await mkdir(dir, { recursive: true })
       const nativeId = randomUUID()
       const file = join(dir, `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`)
@@ -1940,8 +1929,8 @@ export class PiDriver extends PersistentCliDriver {
       const previous = await this.readSessionRecord(projectPath, fromSessionId)
       const nativeId = previous?.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory))) return false
       const replacement = await this.requireSession(projectPath, toSessionId)
       if (replacement.nativeSessionId) return true
       replacement.nativeSessionId = nativeId
@@ -1969,8 +1958,8 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<AgentMessage[] | null> {
     const nativeId = sessionRecord.nativeSessionId
     if (!nativeId) return null
-    if (!existsSync(nativePiSessionDir(projectPath))) return null
-    const file = await findNativePiSessionFile(projectPath, nativeId)
+    if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return null
+    const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
     if (!file) return null
     try {
       const messages = await parseNativePiSession(file, sessionId)
@@ -2031,7 +2020,11 @@ export class PiDriver extends PersistentCliDriver {
           session.nativeSessionId
         ) {
           try {
-            const file = await findNativePiSessionFile(projectPath, session.nativeSessionId)
+            const file = await findNativePiSessionFile(
+              projectPath,
+              session.nativeSessionId,
+              this.agentDirectory
+            )
             if (file) {
               const input = createReadStream(file)
               const lines = createInterface({ input, crlfDelay: Infinity })
@@ -2346,19 +2339,6 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /** Remove a session's MCP server document, which names the utilities and
-   *  carries the credential values a deleted session must not leave behind. */
-  private async removeMcpServersDocument(sessionId: string): Promise<void> {
-    const relative = this.cioMcpServersPaths.get(sessionId)
-    if (!relative) return
-    this.cioMcpServersPaths.delete(sessionId)
-    try {
-      await this.storage.removeRaw(relative)
-    } catch (error) {
-      Logger.dev('Pi MCP server document removal failed:', error)
-    }
-  }
-
   /** Remove a session's gateway handoff file and forget its path. */
   private async removeGatewayHandoff(sessionId: string): Promise<void> {
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
@@ -2501,95 +2481,8 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /**
-   * Report one call a script made to an app-registered server, once, at its
-   * terminal status.
-   *
-   * The fold already named the utility on the part (it holds the resolver and
-   * the tool name together); this funnel is where that identity becomes a
-   * record, because a native call never passes the app gateway, which is the
-   * only other place a utility call is written down.
-   */
-  protected override emit(event: AgentEvent): void {
-    if (event.type === 'message.part.updated') {
-      const part = event.part
-      if (part.type === 'tool') {
-        const metadata = part.state.metadata
-        const status = part.state.status
-        const utilityId = stringValue(metadata?.['utilityId'])
-        const utilityName = stringValue(metadata?.['utilityName'])
-        const server = stringValue(metadata?.['server'])
-        const tool = stringValue(metadata?.['tool'])
-        if (
-          utilityId &&
-          utilityName &&
-          server &&
-          tool &&
-          (status === 'completed' || status === 'error' || status === 'aborted')
-        ) {
-          this.reportNativeCall(event.sessionId, part.callID, {
-            sessionId: event.sessionId,
-            utilityId,
-            utilityName,
-            server,
-            tool,
-            status: status === 'completed' ? 'completed' : 'error'
-          })
-        }
-      }
-    }
-    super.emit(event)
-  }
-
-  private reportNativeCall(
-    sessionId: string,
-    callId: string,
-    invocation: NativeUtilityInvocation
-  ): void {
-    const handler = this.nativeUtilityCallHandler
-    if (!handler) return
-    const reported = this.reportedNativeCalls.get(sessionId) ?? new Set<string>()
-    this.reportedNativeCalls.set(sessionId, reported)
-    if (reported.has(callId)) return
-    reported.add(callId)
-    handler(invocation)
-  }
-
-  /**
-   * A server the app published was refused by pi's own MCP host. Pi reports it
-   * as a status record carrying the server name and pi's reason; the driver
-   * resolves the utility and hands it to the app, once per distinct refusal.
-   */
-  private handleNativeMcpFailureReport(
-    statusRecord: Record<string, unknown>,
-    sessionId: string
-  ): void {
-    for (const failure of parsePiMcpFailureReport(statusRecord['statusText'])) {
-      const owner = this.nativeServerOwners.get(failure.name)
-      this.reportNativeMcpFailure({
-        sessionId,
-        server: failure.name,
-        ...(owner ? { utilityId: owner.utilityId, utilityName: owner.utilityName } : {}),
-        reason: failure.reason
-      })
-    }
-  }
-
-  private reportNativeMcpFailure(failure: NativeMcpServerFailure): void {
-    const handler = this.nativeMcpFailureHandler
-    if (!handler) return
-    const key = `${failure.sessionId}:${failure.server ?? failure.utilityId ?? ''}:${failure.reason}`
-    if (this.reportedMcpFailures.has(key)) return
-    this.reportedMcpFailures.add(key)
-    handler(failure)
-  }
-
   /** Route app-owned extension status records and compaction requests. */
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
-    if (stringValue(record['statusKey']) === PI_MCP_FAILURE_STATUS_KEY) {
-      this.handleNativeMcpFailureReport(record, sessionId)
-      return
-    }
     if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
       const request = parseRecord(record['statusText'])
       if (request?.['type'] === 'ready') this.compactionReadySessions.add(sessionId)
@@ -3138,13 +3031,24 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
+    // A turn that ends without its own `auto_retry_end` (a watchdog kill, an
+    // abort, a crashed process) must not leave the session reading as retrying:
+    // the flag answers every liveness question, so a stale one would keep the
+    // next turn permanently busy.
+    const endedTurn = this.turnStates.get(session.id)
+    if (endedTurn?.providerRetry === true) {
+      this.turnStates.set(session.id, { ...endedTurn, providerRetry: false })
+    }
     // Reconcile compactions against pi's durable session transcript before
     // persisting: the live RPC event stream loses compaction records on
     // process exit, watchdog finalization, and between-turn compactions, but
     // pi itself always wrote them durably to the session JSONL.
     try {
-      await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
-        this.mergeMessages(session, messages)
+      await reconcileNativeCompactions(
+        session,
+        this.sessionProjects.get(session.id),
+        (messages) => this.mergeMessages(session, messages),
+        this.agentDirectory
       )
     } catch (error) {
       Logger.dev('Pi compaction reconciliation failed:', error)
@@ -3169,8 +3073,11 @@ export class PiDriver extends PersistentCliDriver {
    */
   async reconcileSession(projectPath: string, sessionId: string): Promise<void> {
     const session = await this.requireSession(projectPath, sessionId)
-    await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
-      this.mergeMessages(session, messages)
+    await reconcileNativeCompactions(
+      session,
+      this.sessionProjects.get(session.id),
+      (messages) => this.mergeMessages(session, messages),
+      this.agentDirectory
     )
     await this.persistSession(session)
   }
@@ -3228,7 +3135,6 @@ export class PiDriver extends PersistentCliDriver {
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const historyRecapRelative = join(directory, 'history-recap.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
-      const mcpServersRelative = join(directory, PI_MCP_SERVERS_FILE_NAME)
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const watchFlagRelative = join(directory, 'watched-subagents.json')
@@ -3256,7 +3162,6 @@ export class PiDriver extends PersistentCliDriver {
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           historyRecapPath: this.storage.resolve(historyRecapRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
-          mcpServersPath: this.storage.resolve(mcpServersRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
           subagentWatchPath: this.storage.resolve(watchFlagRelative),
@@ -3275,7 +3180,6 @@ export class PiDriver extends PersistentCliDriver {
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioHistoryRecapPaths.set(sessionId, historyRecapRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
-      this.cioMcpServersPaths.set(sessionId, mcpServersRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
       this.cioWatchFlagPaths.set(sessionId, watchFlagRelative)

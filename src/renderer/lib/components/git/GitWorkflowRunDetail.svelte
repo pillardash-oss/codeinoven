@@ -167,7 +167,7 @@
       <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{error}</p>
       <button
         type="button"
-        class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+        class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
         onclick={() => void loadDetail(true)}
       >
         Try again
@@ -185,7 +185,7 @@
           {#if failedJob}
             <button
               type="button"
-              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
               title={`Review failed job ${failedJob.name} with an agent`}
               disabled={preparingAgent || loading}
               onclick={() => void reviewWithAgent(failedJob)}
@@ -275,7 +275,7 @@
                   <div class="mt-2">
                     {#if job.status !== 'completed'}
                       <div
-                        class="rounded-md bg-elevated px-2 py-2 text-[0.625rem] leading-relaxed text-dimmed"
+                        class="bg-elevated px-2 py-2 text-[0.625rem] leading-relaxed text-dimmed"
                       >
                         <p>Logs become available here after this job finishes.</p>
                         {#if job.url}
@@ -297,7 +297,7 @@
                         loading={loadingLog[job.id] === true}
                         error={logErrors[job.id] ?? ''}
                         failedSteps={failedJobStepNames(job)}
-                        class="rounded-md bg-black/5 p-2 dark:bg-black/30"
+                        class="bg-black/5 p-2 dark:bg-black/30"
                       />
                     {/if}
                   </div>

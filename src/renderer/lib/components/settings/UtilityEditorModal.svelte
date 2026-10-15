@@ -20,21 +20,24 @@
     NativeMcpContent,
     Project,
     Thread,
-    ThreadSettings,
     UtilityBundleInstallRequest,
     UtilityCredentialMetadata,
     UtilityDefinition,
     UtilityDefinitionInput,
-    UtilityDefinitionPatch,
-    UtilitySetupReport
+    UtilityDefinitionPatch
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID, isOrchestrationChildThread } from '$shared/types'
-  import UtilityEditorModalAgentSetup from './UtilityEditorModalAgentSetup.svelte'
+  import {
+    openChatUtilitySetupThread,
+    openProjectUtilitySetupThread,
+    resolveUtilitySetupProject
+  } from '$lib/utility-setup-thread'
   import UtilityEditorModalConfigFields from './UtilityEditorModalConfigFields.svelte'
   import UtilityEditorModalCreateStep from './UtilityEditorModalCreateStep.svelte'
   import UtilityEditorModalCredentialFields from './UtilityEditorModalCredentialFields.svelte'
   import UtilityEditorModalFooter from './UtilityEditorModalFooter.svelte'
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
+  import UtilityEditorModalMcpAuth from './UtilityEditorModalMcpAuth.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
   import { utilityInstallFolderNameFor } from '$shared/utility-scope-paths'
@@ -75,11 +78,17 @@
     /** Fired after any successful mutation so the caller can reload. */
     onChanged?: () => void
     /**
-     * Prefills the agent-assisted setup request. A connection the authoring
-     * agent could not install carries the prompt it recorded, so the user only
-     * has to pick a model and run the setup.
+     * The setup request the assisted path starts from. A connection the
+     * authoring agent could not install carries the prompt it recorded, so the
+     * thread opens with that request already written instead of an empty one.
      */
-    agentRequestSeed?: string
+    setupRequestSeed?: string
+    /**
+     * Runs the assisted path for the caller instead of the app's own project
+     * thread. An assistant's connection setup belongs to that assistant, so the
+     * panel that owns it opens the thread itself.
+     */
+    onOpenSetupThread?: (request: string) => void
     /**
      * Every native skill the app discovered, so the editor can name the
      * harnesses that already load the one it is showing. Callers that do not
@@ -94,7 +103,8 @@
     onClose,
     onSaved,
     onChanged,
-    agentRequestSeed = '',
+    setupRequestSeed = '',
+    onOpenSetupThread,
     skillCatalog = []
   }: Props = $props()
 
@@ -123,15 +133,6 @@
   let secureStorageAvailable = $state(true)
   let loadingNative = $state(false)
   let utilities = $state<UtilityDefinition[]>([])
-  let agentRequest = $state('')
-  let agentReport = $state<UtilitySetupReport | null>(null)
-  let agentProjectId = $state('')
-  let agentSettings = $state<ThreadSettings | null>(null)
-  let agentProviders = $derived(
-    agentProjectId
-      ? (providerCatalog.cached(agentProjectId) ?? providerCatalog.allCached())
-      : providerCatalog.allCached()
-  )
 
   /** How long the editor's project/thread/icon context stays reusable across opens. */
   const EDITOR_CONTEXT_TTL_MS = 15_000
@@ -216,6 +217,16 @@
   /** Secrets the utility being edited already declares, in registry order. */
   let editedCredentials = $derived(
     (draft.id ? utilities.find((utility) => utility.id === draft.id)?.credentials : undefined) ?? []
+  )
+  /**
+   * The saved definition behind the draft, which carries the MCP OAuth block.
+   * The auth section writes through `utilities:update` and hands the result
+   * back, so this stays the single copy the modal and the list agree on.
+   */
+  let savedUtility = $derived(
+    draft.id
+      ? (utilities.find((utility) => utility.id === draft.id) ?? editingRegistry ?? null)
+      : null
   )
   let credentialTarget = $derived(
     editedCredentials.find((credential) => credential.id === credentialTargetId) ?? null
@@ -323,7 +334,6 @@
   let title = $derived.by(() => {
     if (isNative) return `Edit ${nativeEntry?.name ?? 'capability'}`
     if (draft.id) return 'Edit utility'
-    if (setupPreset === 'agent') return 'Agent-assisted Utility Setup'
     if (setupPreset) return 'Configure capability'
     return 'Add capability'
   })
@@ -471,10 +481,6 @@
       resetCredential()
       setupPreset = null
       pluginManifest = ''
-      agentRequest = ''
-      agentReport = null
-      agentProjectId = ''
-      agentSettings = null
       editorError = ''
       movingFromShared = false
       if (target.utility) openRegistryEdit(target.utility)
@@ -680,6 +686,12 @@
     if (credential) credentialDeleteTarget = { utilityId, credential }
   }
 
+  /** Keep the editor's own list in step after the auth section rewrites a server. */
+  function handleMcpAuthChanged(updated: UtilityDefinition): void {
+    utilities = utilities.map((utility) => (utility.id === updated.id ? updated : utility))
+    onChanged?.()
+  }
+
   async function removeCredential(): Promise<void> {
     const target = credentialDeleteTarget
     if (!target) return
@@ -727,77 +739,33 @@
     }
   }
 
-  function setupAgentThread(): Thread | null {
-    const selected = workspaceState.selectedThread
-    if (selected?.settings && projects.some((project) => project.id === selected.projectId)) {
-      return selected
-    }
-    return (
-      threads
-        .filter(
-          (thread) => thread.settings && projects.some((project) => project.id === thread.projectId)
-        )
-        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
-    )
-  }
-
-  function beginAgentSetup(): void {
-    const thread = setupAgentThread()
-    setupPreset = 'agent'
-    editorError = ''
-    agentProjectId = thread?.projectId ?? ''
-    agentSettings = thread?.settings ? { ...thread.settings } : null
-    // Seed the request from the connection the user is setting up, so the agent
-    // already knows what to install. A request the user typed wins.
-    if (agentRequestSeed && !agentRequest.trim()) agentRequest = agentRequestSeed
-    if (!agentSettings) {
-      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
-    }
-  }
-
-  function selectAgentModel(
-    providerId: string,
-    modelId: string,
-    harnessId: string,
-    accountId?: string
-  ): void {
-    if (!agentSettings) return
-    agentSettings = { ...agentSettings, harnessId, accountId, providerId, modelId }
-  }
-
-  function selectAgentThinking(thinkingLevel: ThreadSettings['thinkingLevel']): void {
-    if (!agentSettings) return
-    agentSettings = { ...agentSettings, thinkingLevel }
-  }
-
-  async function runAgentSetup(): Promise<void> {
-    const thread = setupAgentThread()
-    const settings = agentSettings
-    if (!thread || !settings) {
-      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
+  /**
+   * Hand the assisted path to a thread instead of running it here.
+   *
+   * The caller that owns the context opens it: an assistant's connection setup
+   * belongs to that assistant's own new thread, while every other entry lands in
+   * the project the user was last on, or in a chat when they have no project,
+   * since a capability installs into the app's own library and needs no
+   * repository. Every route ends in a real conversation with the request
+   * already written, which is what makes the work watchable, steerable, and
+   * able to ask for a credential through the app's secret card.
+   */
+  async function startSetupThread(): Promise<void> {
+    if (onOpenSetupThread) {
+      onOpenSetupThread(setupRequestSeed)
+      onClose()
       return
     }
+    const project = resolveUtilitySetupProject(projects, threads)
     saving = true
     editorError = ''
-    agentReport = null
     try {
-      const harnesses = availableHarnesses.map((harness) => harness.id).join(', ')
-      agentReport = await invoke(
-        'utilities:setupWithAgent',
-        thread.projectId,
-        crypto.randomUUID(),
-        settings,
-        [
-          agentRequest.trim(),
-          `CodeInOven setup context: current projectId=${thread.projectId}; installed harnesses=${harnesses || settings.harnessId}.`
-        ].join('\n\n')
-      )
-      onChanged?.()
+      if (project) await openProjectUtilitySetupThread(project, setupRequestSeed)
+      else await openChatUtilitySetupThread(setupRequestSeed)
+      onClose()
     } catch (setupError) {
       editorError =
-        setupError instanceof Error
-          ? setupError.message
-          : 'The utility setup agent could not finish.'
+        setupError instanceof Error ? setupError.message : 'The setup thread could not be opened.'
     } finally {
       saving = false
     }
@@ -807,10 +775,6 @@
     setupPreset = null
     draft = emptyDraft()
     pluginManifest = ''
-    agentRequest = ''
-    agentReport = null
-    agentProjectId = ''
-    agentSettings = null
     editorError = ''
   }
 
@@ -821,25 +785,18 @@
 </script>
 
 {#if open}
-  <Modal
-    open
-    {title}
-    size="xl"
-    {onClose}
-    fill={setupPreset === 'agent'}
-    contentClass={setupPreset === 'agent' ? 'overflow-hidden p-0' : undefined}
-  >
+  <Modal open {title} size="xl" {onClose}>
     {#if loadingNative}
       <div class="flex items-center justify-center p-10">
         <Loader2 size={18} class="animate-spin text-dimmed" />
       </div>
     {:else if !isNative && draft.id === null && setupPreset === null}
       <UtilityEditorModalCreateStep
+        error={editorError}
+        busy={saving}
         onChooseCreate={chooseCreate}
-        onBeginAgentSetup={beginAgentSetup}
+        onStartSetupThread={() => void startSetupThread()}
       />
-    {:else if !isNative && draft.id === null && setupPreset === 'agent'}
-      <UtilityEditorModalAgentSetup {editorError} {agentReport} bind:agentRequest {saving} />
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}
       <UtilityEditorModalPluginBundle
         {editorError}
@@ -849,20 +806,20 @@
     {:else}
       <form id="utility-editor-form" class="space-y-4" onsubmit={saveUtility}>
         {#if editorError}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {editorError}
           </p>
         {/if}
 
         {#if isNative && nativeEntry?.kind === 'skill'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
+          <p class="border bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the skill file at <span class="font-mono"
               >{nativeEntry.source.kind === 'skill' ? nativeEntry.source.path : ''}</span
             >.
           </p>
         {/if}
         {#if isNative && nativeEntry?.kind === 'mcp'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
+          <p class="border bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the MCP server in
             <span class="font-mono">
               {nativeEntry.source.kind === 'mcp' ? nativeEntry.source.configPath : ''}
@@ -870,9 +827,7 @@
           </p>
         {/if}
         {#if isAppOwned}
-          <p
-            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
-          >
+          <p class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary">
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
               : 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'}
@@ -906,7 +861,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Name</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 required
                 disabled={isAppOwned}
                 bind:value={draft.name}
@@ -915,7 +870,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Description</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 disabled={isAppOwned}
                 bind:value={draft.description}
               />
@@ -933,7 +888,7 @@
               <label class="space-y-1 text-xs font-medium">
                 <span>Activation</span>
                 <select
-                  class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
+                  class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
                   bind:value={draft.activation}
                 >
                   <option value="on_demand">On demand</option>
@@ -944,7 +899,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Scope</span>
               <select
-                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                 value={draft.scopeLevel}
                 onchange={(event: Event) =>
                   chooseScopeLevel((event.currentTarget as HTMLSelectElement).value as ScopeLevel)}
@@ -1002,6 +957,10 @@
 
         <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
 
+        {#if !isNative && draft.kind === 'mcp' && draft.transport !== 'stdio'}
+          <UtilityEditorModalMcpAuth utility={savedUtility} onChanged={handleMcpAuthChanged} />
+        {/if}
+
         {#if draft.kind === 'mcp' && !computerUseConnection}
           <McpConnectionTester
             variant="panel"
@@ -1038,22 +997,11 @@
         hasDraftId={draft.id !== null}
         {isAppOwned}
         {saving}
-        {agentReport}
-        {agentSettings}
-        {agentProviders}
-        {agentProjectId}
-        canRunAgentSetup={agentRequest.trim() !== ''}
         canImportPlugin={pluginManifest.trim() !== ''}
         onBack={resetSetup}
         {onClose}
-        onRunAgentSetup={() => void runAgentSetup()}
         onImportPlugin={() => void importPluginBundle()}
         onRequestDelete={requestDelete}
-        onSelectAgentModel={selectAgentModel}
-        onSelectAgentThinking={selectAgentThinking}
-        onSelectAgentRuntime={(runtime) => {
-          if (agentSettings) agentSettings = { ...agentSettings, ...runtime }
-        }}
       />
     {/snippet}
   </Modal>

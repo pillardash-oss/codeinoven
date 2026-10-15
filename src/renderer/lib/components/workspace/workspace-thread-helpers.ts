@@ -1,5 +1,6 @@
 import { isThreadLiveWorking } from '$lib/thread-status-badge'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { settledThreadReadsUnread } from '$shared/thread-status-policy'
 import {
   coordinatorHasActiveDelegates,
   coordinatorHasUnreadWorkers,
@@ -38,6 +39,9 @@ export function groupThreadsByStatus(
   }
   for (const thread of threads) {
     let group: ThreadGroup
+    // A failure is an Error whether or not the user has opened it, exactly as
+    // the row's own mark reports it: unread is reserved for a completed run
+    // nobody has opened (see `settledThreadReadsUnread`).
     if (thread.status === 'failed') group = 'Errors'
     else if (thread.status === 'awaiting_approval') group = 'Attention'
     else if (thread.status === 'spec') group = 'Spec'
@@ -52,7 +56,8 @@ export function groupThreadsByStatus(
       group = 'Working'
     else if (
       (!isOrchestrationChildThread(thread) &&
-        (!thread.read || coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))) ||
+        (settledThreadReadsUnread(thread, thread.read) ||
+          coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))) ||
       temporaryChatUnread.hasUnread(thread.projectId, thread.id)
     )
       group = 'Unread'

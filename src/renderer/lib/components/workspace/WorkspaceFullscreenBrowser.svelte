@@ -109,7 +109,7 @@
           <img
             src={favicon}
             alt=""
-            class="h-3 w-3 shrink-0 rounded-sm object-contain"
+            class="h-3 w-3 shrink-0 object-contain"
             aria-hidden="true"
           />
         {:else}

@@ -1,28 +1,27 @@
 <script lang="ts">
   import { Bot } from '@lucide/svelte'
   import { onDestroy, tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
-  import { latestWorkingTraceParts } from '$lib/working-trace-parts'
   import {
-    newestTraceStartId,
-    olderTraceStartId,
-    traceWindowAnchorExpired,
-    traceWindowStartIndex
-  } from '$lib/working-trace-window'
+    groupTraceIntoChains,
+    latestWorkingTraceParts,
+    tracePartsSpan
+  } from '$lib/working-trace-parts'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import {
     subagentIsRunning,
     subagentStatusLabel,
     subagentTaskLabel
   } from '$lib/subagent-presentation'
-  import WorkingTraceRow from './WorkingTraceRow.svelte'
+  import WorkingTraceChain from './WorkingTraceChain.svelte'
   import WorkingTraceStatus from './WorkingTraceStatus.svelte'
   import WorkingTraceSummary from './WorkingTraceSummary.svelte'
   import { subagentBadgeLabel, subagentBadgeTitle } from './working-trace-subagents'
@@ -32,7 +31,6 @@
     parts: AgentPart[]
     open?: boolean
     busy?: boolean
-    latest?: boolean
     /** True once this trace's turn produced a completed assistant message   the
      *  only condition under which the trace may fold itself. */
     done?: boolean
@@ -48,19 +46,29 @@
     note?: string | null
     initialOpen?: boolean
     initialUserOpened?: boolean
+    /** True when the user explicitly folded this turn's trace. A folded trace
+     *  stays folded   it is never force-opened by the busy state or a remount
+     *  until a new turn begins. */
+    initiallyFolded?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /** True while this trace is on screen. A hidden trace   the workspace keeps
-     *  a thread mounted behind Settings/Scope and other views   re-bounds its
-     *  mounted window, so coming back never mounts whatever streamed while the
-     *  reader was away. */
+     *  a thread mounted behind Settings/Scope and other views   does not pull
+     *  its older durable pages, so coming back mounts what the reader is
+     *  looking at instead of streaming in a turn nobody is reading. */
     active?: boolean
+    /** Total thinking and tool steps the whole turn holds, from the durable
+     *  fold. The header shows this even when only the newest window of steps is
+     *  mounted, so the count states the turn's real size instead of climbing as
+     *  older pages load. Zero when the turn's total is not known. */
+    totalSteps?: number
     /** True when the durable stream holds entries older than the oldest this
-     *  trace holds, so paging past the window needs another read. */
+     *  trace holds, so the top of the trace can pull another page. */
     olderPartsAvailable?: boolean
-    /** Pull the next older durable page into this trace's parts. */
+    /** Pull the next older durable page into this trace's parts. Called once per
+     *  gesture at the trace's top, and to fill a trace whose content fits. */
     onLoadOlderParts?: () => void | Promise<void>
     /** Thinking level used for this trace's turn, when the model reasons. */
     thinkingLevel?: ThinkingLevel | null
@@ -78,7 +86,7 @@
     threadId?: string
     checkpointId?: string | null
     checkpointPaths?: string[]
-    onToggle?: (open: boolean, userOpened: boolean) => void
+    onToggle?: (open: boolean, userOpened: boolean, userFolded: boolean) => void
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     onCiteFile?: (path: string, line?: number) => void
   }
@@ -87,15 +95,16 @@
     parts,
     open = false,
     busy = false,
-    latest = false,
     done = false,
     rehydrated = false,
     foreignRun = false,
     note = null,
     initialOpen = false,
     initialUserOpened = false,
+    initiallyFolded = false,
     startTime,
     active = true,
+    totalSteps = 0,
     olderPartsAvailable = false,
     onLoadOlderParts,
     modelLabel = null,
@@ -105,7 +114,6 @@
     harnessId,
     harnessName,
     accountLabel,
-    accountId,
     ovenLabel,
     ovenIsLocal,
     ovenAppearance,
@@ -120,104 +128,154 @@
   }: Props = $props()
 
   // Intentional initial-value capture   props are only used to seed local state.
+  // A settled turn opens folded (its answer lives outside the trace), and a
+  // trace the user opened themselves stays open.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(open || initialOpen)
+  let isOpen = $state(initialUserOpened || (!done && !initiallyFolded && (open || initialOpen)))
   // svelte-ignore state_referenced_locally
   let userOpened = $state(initialUserOpened)
   // svelte-ignore state_referenced_locally
-  let wasLatest = $state(latest)
-  let closeTimer: ReturnType<typeof setTimeout> | null = null
+  let userFolded = $state(initiallyFolded)
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
-  const TRACE_SCROLL_THRESHOLD = 32
-  let traceScrollEl = $state<HTMLDivElement>()
-  let traceAtBottom = $state(true)
-  /** How close to the trace scroller's top counts as "paging older entries". */
-  const TRACE_TOP_THRESHOLD = 32
-  /** Pinned start of the mounted window. `null` means "the newest page"   the
-   *  state a trace opens in, the state it re-bounds to whenever it is not being
-   *  watched, and the state the reader's own paging moves back from. A pinned
-   *  entry never moves on its own: entries that stream in append at the tail,
-   *  so nothing the reader is looking at is ever evicted while they are on the
-   *  thread. The header count reports the entries this trace holds   its newest
-   *  page plus everything appended since, growing as the reader pages older
-   *  entries in   never a number the mounted window happens to disagree with. */
-  let windowStartId = $state<string | null>(null)
-  const windowStartIndex = $derived(traceWindowStartIndex(visibleParts, windowStartId))
-  const pagedParts = $derived(visibleParts.slice(windowStartIndex))
-  /** True while an older durable page is in flight, so one gesture cannot queue
-   *  the same page twice. */
-  let loadingOlderParts = $state(false)
+  /** The trace's root. It exists only to find the transcript scroller the trace
+   *  lives in, because the trace no longer owns a scroller of its own. */
+  let traceRootEl = $state<HTMLDivElement>()
+  /** The trace body. Its oldest mounted child is the sentinel that older pages
+   *  load above once the reader reaches the top of the mounted work. */
+  let traceBodyEl = $state<HTMLDivElement>()
+  /** The transcript scroller that now drives the trace's own scrolling. */
+  const scrollRoot = $derived(traceRootEl?.closest('.conversation-scroll') ?? null)
+  /** The sticky header's measured height, published as a custom property so a
+   *  chain's fold header pins directly beneath it instead of under it. */
+  let traceHeaderHeight = $state(0)
+  /** The turn's trace as chains of thought, grouped from the mounted steps.
+   *  A chain that produced an output is keyed by that output, which is the
+   *  boundary that defines it, so paging older steps in above never remounts a
+   *  chain or replays its fold. */
+  const chains = $derived(groupTraceIntoChains(visibleParts))
+  /** Thinking and tool steps currently mounted. */
+  const mountedStepCount = $derived(visibleParts.filter((part) => part.type !== 'text').length)
+  /** The header count: the whole turn's step total when the durable fold reports
+   *  it, so a trace showing only its newest window still states the real size
+   *  and the figure never climbs as older pages load. */
+  const stepCount = $derived(Math.max(mountedStepCount, totalSteps))
+  /** The trace's whole wall-clock span, from its earliest entry to its latest. */
+  const traceSpan = $derived(tracePartsSpan(visibleParts))
+  /** True while an older page is in flight, so one arrival loads exactly one
+   *  page. Plain, not reactive: only the scroll handler reads it and nothing
+   *  renders from it. */
+  let loadingOlderParts = false
+  /** Latched while the oldest mounted step sits in the top zone, so standing
+   *  there does not load a page per scroll event. */
+  let atTraceTop = false
+  /** How close to the header the oldest mounted step counts as the top. */
+  const TRACE_TOP_REACH = 48
 
-  /** Pin the window while the trace is genuinely being watched. A collapsed or
-   *  hidden trace keeps the plain newest-page window: nothing mounts while it
-   *  is away, and re-showing it must not mount whatever streamed meanwhile. A
-   *  pinned entry that left the list (turn boundary, fold reset, replaced cache
-   *  page) re-pins to the page being shown so nothing below the reader is
-   *  evicted. */
-  $effect(() => {
-    if (!isOpen || !active) return
-    if (windowStartId !== null && !traceWindowAnchorExpired(visibleParts, windowStartId)) {
-      return
-    }
-    windowStartId = newestTraceStartId(visibleParts)
-  })
-
-  /** Leaving the trace   another thread, another top-level view   re-bounds it
-   *  to the newest page off the reader's critical path, so returning mounts a
-   *  bounded window instead of the whole turn. The turn keeps streaming into the
-   *  log while away; the trace simply never keeps it mounted for nobody. The
-   *  same rule applies while the trace is collapsed: nothing is mounted, so
-   *  re-showing it opens on the newest page. */
-  $effect(() => {
-    if (active && isOpen) return
-    windowStartId = null
-    loadingOlderParts = false
-  })
-
-  /** Move the pinned window start one page older, keeping the reader's viewport
-   *  stable across the mount (same compensation the conversation list uses). */
-  function moveWindowOlderPage(): void {
-    const el = traceScrollEl
-    const nextId = olderTraceStartId(visibleParts, windowStartIndex)
-    if (nextId === null) return
-    const previousHeight = el?.scrollHeight ?? 0
-    const previousTop = el?.scrollTop ?? 0
-    windowStartId = nextId
-    void tick().then(() => {
-      if (!el) return
-      const grown = el.scrollHeight - previousHeight
-      if (grown > 0) el.scrollTop = previousTop + grown
-    })
-  }
-
-  /** Page in older entries. Entries already loaded come from the message cache
-   *  at no IPC cost; once the window reaches the oldest entry the trace holds,
-   *  the durable stream is asked for the next older page   a live turn's work
-   *  lives there long before the mirror records it. */
-  function expandTracePage(): void {
-    if (windowStartIndex > 0) {
-      moveWindowOlderPage()
-      return
-    }
-    if (!olderPartsAvailable || loadingOlderParts) return
+  /** Pull the next older page and hold the reader's place across the prepend.
+   *  The added rows land above what is on screen, so the transcript scroller is
+   *  moved down by exactly the height they added. The transcript turns native
+   *  scroll anchoring off, so this is the only correction applied. */
+  async function pullOlderPage(): Promise<void> {
+    const root = scrollRoot
+    if (!root || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
     loadingOlderParts = true
-    void Promise.resolve(onLoadOlderParts?.())
-      .catch(() => {})
-      .finally(() => {
-        loadingOlderParts = false
-        void tick().then(() => moveWindowOlderPage())
-      })
+    const previousHeight = root.scrollHeight
+    try {
+      await onLoadOlderParts()
+    } catch {
+      // A failed page read leaves the reader where they are; the next gesture
+      // tries again.
+    } finally {
+      loadingOlderParts = false
+    }
+    await tick()
+    const scroller = scrollRoot
+    if (!scroller) return
+    scroller.scrollTop += scroller.scrollHeight - previousHeight
   }
 
-  /** Page older entries in once the reader reaches the top of a scrollable
-   *  trace. A trace whose content fits needs no paging, and a reader parked at
-   *  the bottom must never pull pages in behind a live stream. */
-  function maybePageOlderEntries(element: HTMLDivElement): void {
-    if (element.scrollHeight - element.clientHeight <= TRACE_SCROLL_THRESHOLD) return
-    if (element.scrollTop > TRACE_TOP_THRESHOLD) return
-    expandTracePage()
+  /** True while the oldest mounted step sits just under the trace header, where
+   *  the reader has reached the top of the loaded work. The body's current first
+   *  child is the sentinel: once a page lands above it the sentinel is pushed
+   *  out of the zone, which is what stops one arrival loading page after page. */
+  function traceTopReached(): boolean {
+    const root = scrollRoot
+    const body = traceBodyEl
+    if (!root || !body) return false
+    const oldest = body.firstElementChild
+    if (!oldest) return false
+    const offset = oldest.getBoundingClientRect().top - root.getBoundingClientRect().top
+    return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
   }
+
+  /** Fold the trace so its header keeps the screen position it already had.
+   *  While the body is mounted and the reader is inside it the header is pinned
+   *  to the top of the transcript, so collapsing the body without touching the
+   *  scroller would throw the header off the top and drop the reader wherever
+   *  that scroll offset now lands. Moving the scroller to the header's own
+   *  content offset leaves the header exactly where the eye last saw it and
+   *  slides the work below up to meet it. A reader parked below the trace on the
+   *  answer, or already above the header, keeps their place. */
+  function foldToHeader(): void {
+    const root = scrollRoot
+    const trace = traceRootEl
+    if (!root || !trace) return
+    const rootRect = root.getBoundingClientRect()
+    const headerOffset = trace.getBoundingClientRect().top - rootRect.top + root.scrollTop
+    const body = traceBodyEl
+    if (body) {
+      const bodyBottom = body.getBoundingClientRect().bottom - rootRect.top + root.scrollTop
+      if (root.scrollTop > bodyBottom) return
+    }
+    if (root.scrollTop <= headerOffset) return
+    root.scrollTop = headerOffset
+  }
+
+  // The transcript scroller drives this trace now. Reaching the top of the
+  // mounted work on a scroll-up loads one older page; following the live tail
+  // and keeping the reader's place across content growth stay the transcript's
+  // job, so nothing scrolls this trace by hand any more.
+  $effect(() => {
+    const root = scrollRoot
+    if (!root || !isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
+    let previousTop = root.scrollTop
+    const onScroll = (): void => {
+      const top = root.scrollTop
+      const scrolledUp = top < previousTop
+      previousTop = top
+      if (!scrolledUp) return
+      if (!isOpen) return
+      if (!traceTopReached()) {
+        atTraceTop = false
+        return
+      }
+      if (atTraceTop) return
+      atTraceTop = true
+      void pullOlderPage()
+    }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  })
+
+  // A trace whose work fits the transcript leaves older steps behind no scroll
+  // at all, so fill the visible height one page at a time until the transcript
+  // scrolls or the turn's older entries run out. Bounded by the viewport, never
+  // the turn, so a long turn still opens on a fraction of its steps.
+  $effect(() => {
+    void visibleParts.length
+    void isOpen
+    void olderPartsAvailable
+    if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
+    const root = scrollRoot
+    const body = traceBodyEl
+    if (!root || !body) return
+    if (root.scrollHeight - root.clientHeight > 1) return
+    // A trace scrolled out of view above the reader is not filled: nobody is
+    // reading it, and it would pull pages for a turn that is not on screen.
+    if (body.getBoundingClientRect().top >= root.getBoundingClientRect().bottom) return
+    void pullOlderPage()
+  })
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
@@ -246,6 +304,16 @@
   })
 
   const elapsed = $derived(busy && effectiveStartTime ? agentClock.seconds(effectiveStartTime) : 0)
+  /** The trace's total duration in seconds: the live clock while it works, the
+   *  frozen span once it settles. Null when no entry reported a timestamp. */
+  const totalDurationSeconds = $derived.by((): number | null => {
+    if (busy && effectiveStartTime) return elapsed
+    if (traceSpan && effectiveStartTime) {
+      return Math.max(0, (traceSpan.end - effectiveStartTime) / 1000)
+    }
+    if (traceSpan) return (traceSpan.end - traceSpan.start) / 1000
+    return null
+  })
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.
   $effect(() => {
@@ -260,102 +328,36 @@
   onDestroy(() => imageUrls.destroy())
 
   function notify(): void {
-    onToggle?.(isOpen, userOpened)
+    onToggle?.(isOpen, userOpened, userFolded)
   }
 
   $effect(() => {
+    // A live turn keeps its work on screen; a trace the user explicitly folded
+    // stays folded while it works, so a harness busy blip never re-opens it.
     if (busy && visibleParts.length > 0) {
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
-      if (!isOpen) {
+      if (!isOpen && !userFolded) {
         isOpen = true
         notify()
       }
-    } else if (done && !busy && wasLatest && !latest && isOpen && !userOpened) {
-      // Turn finished and a newer turn superseded it   fold immediately.
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
-      isOpen = false
-      notify()
-    } else if (done && !busy && !latest && isOpen && !userOpened) {
-      // Older completed turns fold after a short grace. The latest turn stays
-      // open so a refreshed thread never hides its only context by default.
-      if (closeTimer) {
-        clearTimeout(closeTimer)
-        closeTimer = null
-      }
-      closeTimer = setTimeout(() => {
-        isOpen = false
-        closeTimer = null
-        notify()
-      }, 2000)
-    }
-    // A turn still in progress (done === false) never folds itself: a transient
-    // busy=false from a harness activity blip must never hide the live trace.
-    wasLatest = latest
-  })
-
-  function onTraceScroll(): void {
-    const element = traceScrollEl
-    if (!element) return
-    traceAtBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
-    maybePageOlderEntries(element)
-  }
-
-  /** A short trace can have older entries available without overflowing its
-   *  inner scroller. In that case there is no scroll offset to reach the top,
-   *  so a wheel-up gesture on the trace itself is the paging signal. */
-  function onTraceWheel(event: WheelEvent): void {
-    const element = traceScrollEl
-    if (
-      !element ||
-      event.deltaY >= 0 ||
-      element.scrollHeight - element.clientHeight > TRACE_SCROLL_THRESHOLD ||
-      (windowStartIndex === 0 && !olderPartsAvailable) ||
-      loadingOlderParts
-    ) {
       return
     }
-    event.stopPropagation()
-    expandTracePage()
-  }
-
-  // New live parts follow the trace only while the user remains at its bottom.
-  // A user scroll-up is preserved. Scroll chaining is left enabled: reaching the
-  // top of a finished trace's inner scroller hands the gesture to the outer
-  // conversation so it can lazy-load older messages (compaction boundaries do
-  // not stop it). The tail-follow effect below keeps live output pinned while
-  // the trace is busy, which is where containment actually mattered.
-  $effect(() => {
-    void visibleParts.length
-    void isOpen
-    void busy
-    if (!isOpen || !traceScrollEl || !traceAtBottom) return
-    void tick().then(() => {
-      if (!traceScrollEl || !traceAtBottom) return
-      traceScrollEl.scrollTop = traceScrollEl.scrollHeight
-    })
-  })
-
-  $effect(() => {
-    return () => {
-      if (closeTimer) clearTimeout(closeTimer)
+    // The moment the turn settles, its answer is already outside the trace, so
+    // the log folds itself by default and the reader opens it for the detail.
+    // A trace the user opened is left exactly as they left it. A turn still in
+    // progress (done === false) never folds.
+    if (done && !busy && isOpen && !userOpened) {
+      foldToHeader()
+      isOpen = false
+      notify()
     }
   })
 
   function onSummaryClick(event: MouseEvent): void {
     event.preventDefault()
+    if (isOpen) foldToHeader()
     isOpen = !isOpen
     userOpened = isOpen
-    if (closeTimer) {
-      clearTimeout(closeTimer)
-      closeTimer = null
-    }
+    userFolded = !isOpen
     notify()
   }
 
@@ -386,15 +388,6 @@
   )
   const hasCompaction = $derived(
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
-  )
-
-  // Code mode is per-part and harness-independent: the driver marks a script
-  // call and every call it made, and the shared predicate covers harnesses
-  // that report their script runner by name alone.
-  const hasCodeMode = $derived(
-    visibleParts.some(
-      (part) => part.type === 'tool' && (part.codeMode === true || isCodeModeToolName(part.tool))
-    )
   )
 
   // One clock for the whole dropdown list: it ticks only while a worker is
@@ -429,34 +422,51 @@
   }
 </script>
 
-<details class="rounded-xl border border-border bg-surface" open={isOpen}>
-  <WorkingTraceSummary
-    open={isOpen}
-    {busy}
-    count={visibleParts.length}
-    {hasCompaction}
-    {hasCodeMode}
-    {subagentCount}
-    {activeSubagentCount}
-    {subagentParts}
-    {coarsePointer}
-    title={subagentBadgeTitleText}
-    label={subagentBadgeLabelText}
-    elapsedFor={subagentElapsed}
-    onOpen={(part) => onOpenSubagent?.(part)}
-    onOpenSheet={() => (subagentSheetOpen = true)}
-    onToggle={onSummaryClick}
-  />
+<div class="min-w-0" bind:this={traceRootEl} style="--cio-trace-header-h: {traceHeaderHeight}px">
+  <!-- The header pins to the transcript's top while the reader scrolls through
+       this trace's work, so folding it is always one click away without a
+       scroll back. The body is the transcript's now: one scroller, not two. -->
+  <div class="sticky top-0 z-20 bg-app" bind:clientHeight={traceHeaderHeight}>
+    <WorkingTraceSummary
+      open={isOpen}
+      live={liveActivity}
+      count={stepCount}
+      durationSeconds={totalDurationSeconds}
+      {hasCompaction}
+      {subagentCount}
+      {activeSubagentCount}
+      {subagentParts}
+      {coarsePointer}
+      title={subagentBadgeTitleText}
+      label={subagentBadgeLabelText}
+      elapsedFor={subagentElapsed}
+      {modelLabel}
+      {isFast}
+      {thinkingLevel}
+      {providerName}
+      {providerId}
+      {harnessId}
+      {harnessName}
+      {accountLabel}
+      {ovenLabel}
+      {ovenIsLocal}
+      {ovenAppearance}
+      onOpen={(part) => onOpenSubagent?.(part)}
+      onOpenSheet={() => (subagentSheetOpen = true)}
+      onToggle={onSummaryClick}
+    />
+  </div>
   {#if isOpen}
     <div
-      bind:this={traceScrollEl}
-      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
-      onscroll={onTraceScroll}
-      onwheel={onTraceWheel}
+      bind:this={traceBodyEl}
+      transition:slide={foldSlide()}
+      class="flex min-w-0 flex-col gap-2 pb-2"
     >
-      {#each pagedParts as part (part.id)}
-        <WorkingTraceRow
-          {part}
+      {#each chains as chain, index (chain.id)}
+        <WorkingTraceChain
+          {chain}
+          active={liveActivity && index === chains.length - 1}
+          showHeader={chains.length > 1 || chain.output !== null}
           {busy}
           live={liveActivity}
           {lastReasoningId}
@@ -469,30 +479,12 @@
           {onOpenSubagent}
         />
       {/each}
-      {#if busy}
-        <WorkingTraceStatus
-          {rehydrated}
-          {foreignRun}
-          {note}
-          startTime={effectiveStartTime}
-          {elapsed}
-          {modelLabel}
-          {isFast}
-          {thinkingLevel}
-          {providerName}
-          {providerId}
-          {harnessId}
-          {harnessName}
-          {accountLabel}
-          {accountId}
-          {ovenLabel}
-          {ovenIsLocal}
-          {ovenAppearance}
-        />
+      {#if busy && (foreignRun || rehydrated || note)}
+        <WorkingTraceStatus {rehydrated} {foreignRun} {note} />
       {/if}
     </div>
   {/if}
-</details>
+</div>
 
 {#if coarsePointer}
   <ActionSheet

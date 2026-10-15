@@ -16,7 +16,7 @@ material way, and the difference is deliberate.
 - **One persistent Electron session per project**, `persist:codeinoven-browser:<projectId>`
   (`src/main/browser/browser-service.ts`). A project's conversations therefore share
   cookies, web storage and logins, which is what keeps the user signed in across
-  threads, routines and agent runs. A tab that names a box is the exception to that
+  threads, assistants and agent runs. A tab that names a box is the exception to that
   partition, because a box is one jar for the whole profile (see the box bullet
   below). Splitting the session per agent would be the only way to give each agent
   its own cookie jar, and it would break that single sign-on, so it is not done.
@@ -41,7 +41,7 @@ material way, and the difference is deliberate.
   - The agent's target tab is addressed per `(projectId, threadId)` (`agentTabIds`), so
     two threads never drive the same page.
   - For hidden conversation containers (the inbox and the assistant space) the sidebar
-    tab list is scoped to the open conversation, so a background routine's tabs never
+    tab list is scoped to the open conversation, so a background assistant's tabs never
     surface in another conversation and cannot be closed from there.
   - Closing a thread destroys exactly that thread's tabs (`browser:destroyThread`).
 - **Popup windows are a global-browser feature.** The personal browser hosts a page's
@@ -131,6 +131,22 @@ material way, and the difference is deliberate.
   extension document (`WebContents` of type `remote` on a `chrome-extension://`
   URL) on every load. The document is never shown, so the window the user is
   working in keeps the keyboard, and it stays focused for the document's life.
+- **An extension's own window is hosted by the app, and a jump to the web becomes a
+  tab.** Electron has no `chrome.windows` at all, so an extension that opens its
+  settings, a dialog or a report with `chrome.windows.create({ type: 'popup', url })`
+  (uBlock Origin Lite's matched-rules window, for example) got nothing. The
+  compatibility preamble resolves the URL against the extension root, admits only a
+  page on that extension's own origin, and routes it over the bridge: the app hosts
+  that page as an extension popup (`BrowserPopupWindows.hostExtension`), and
+  `remove`, `update`, `get` and the hosted tab's `chrome.tabs.query` entry are
+  answered for it. The acceptance rule lives once, in
+  `browser-extension-page-url.ts`, so the worker's shim and `browser-service.ts`
+  cannot disagree about the boundary. A **normal** window (or a window on a **web**
+  address, which has no second window to open in because the browser window here is
+  the app's own) is routed as an `open-tab` request instead and becomes a new tab of
+  the browser that asked, beside the page the extension is acting on, validated by
+  the same rule a link click goes through. Only a `type: 'popup'` window on the
+  extension's own page is the popout the rail hosts.
 - **An extension's own popup is told which tab it is acting on.** The app hosts an
   action's popup in a rail popup and gives it the keyboard on first show, so the
   runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's

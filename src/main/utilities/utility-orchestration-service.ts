@@ -7,9 +7,8 @@ import type {
   McpUtilityConfig,
   UtilityKind,
   PermissionLevel,
-  NativeMcpPublicationResult,
-  NativeMcpUtilityBinding,
-  AgentUtilitySuggestionEntry
+  AgentUtilitySuggestionEntry,
+  UtilityDefinitionInput
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -51,6 +50,15 @@ import {
   APP_CONTROL_CATALOG_TOOL_NAME,
   isAppControlTool
 } from '../../lib/app-control-tools'
+import {
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME,
+  ENGINEERING_TOOL_NAMES,
+  isEngineeringTool,
+  type EngineeringToolOperation
+} from '../../lib/engineering-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
@@ -101,11 +109,11 @@ import {
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
 import {
-  ROUTINE_AUTHORING_UTILITY_ID,
-  ROUTINE_AUTHORING_OPERATIONS,
-  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
-  routineAuthoringUtility
-} from '../../lib/routine-authoring'
+  ASSISTANT_AUTHORING_UTILITY_ID,
+  ASSISTANT_AUTHORING_OPERATIONS,
+  ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
+  assistantAuthoringUtility
+} from '../../lib/assistant-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -146,13 +154,17 @@ import {
   normalizeBundleDefinitions,
   normalizeBundleName
 } from './utility-orchestration/utility-bundle-input'
-import type { UtilitySuggestionDecision } from '../../lib/utility-suggestion'
+import {
+  utilityInstallSource,
+  type UtilitySuggestionResolution
+} from '../../lib/utility-suggestion'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 import {
   connectMcpServer,
-  credentialEnvironment as resolveCredentialEnvironment
+  credentialEnvironment as resolveCredentialEnvironment,
+  mcpOAuthChallengeHeader
 } from './mcp-connection'
-import { notifyNativeMcpFailure } from './native-mcp-notice'
+import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -179,18 +191,6 @@ export interface UtilityTurnRequest {
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /**
-   * Hand the harness's own MCP host the utilities this thread has activated, so
-   * it runs them instead of the app gateway (which is what lets a codemode
-   * script receive a tool's whole `CallToolResult`, structured payload
-   * included). Absent for every harness without an MCP host of its own, which
-   * keeps the gateway as the one transport there. Returns the server name each
-   * utility took, so activation can tell the model which namespace to reach for,
-   * and the utilities no server could be made for, so the user can be told.
-   */
-  publishNativeMcpServers?: (
-    utilities: readonly NativeMcpUtilityBinding[]
-  ) => Promise<NativeMcpPublicationResult>
-  /**
    * Whether this turn belongs to a design session the user opened with
    * `@cio-design`. A session promotes the app-owned design capability to an
    * active capability for the turn, so the playbook is already in context and
@@ -211,13 +211,20 @@ export interface UtilityTurnRequest {
    * operations, so an ordinary chat can never start a run on a machine.
    */
   orchestrationSession?: OrchestrationSessionMode
+  /**
+   * Whether this turn may create the thread's engineering artifacts (Brainstorm,
+   * PRD, specification, Assignment) through the app-owned artifact tools. Set
+   * for a real project thread's user turn, and never for a chat, an assistant
+   * task or an Assignment worker, so those turns are offered none of the routes.
+   */
+  artifactTools?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
-   * Present only for a routine's Getting started interview; the callback owns
+   * Present only for an assistant's Getting started interview; the callback owns
    * the checkpoint path and replaces its content.
    */
-  saveRoutineCheckpoint?: (markdown: string) => Promise<{ path: string }>
+  saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -294,51 +301,7 @@ export interface UtilityTurnGateway {
    * whether the live gateway can serve the request or must be rebuilt.
    */
   managementEnabled: boolean
-  /**
-   * Record one call a script made to a server the harness's own MCP host runs.
-   *
-   * That call never passes the app gateway, so without this the audit log would
-   * show an activation and then nothing, as if the utility were never used.
-   */
-  recordNativeInvocation?(invocation: {
-    utilityId: string
-    server: string
-    tool: string
-    status: 'completed' | 'error'
-  }): Promise<void>
   cleanup(): Promise<void>
-}
-
-/**
- * What the model is told when a harness's own MCP host runs the server.
- *
- * The gateway can still reach the same server, which is why this says so
- * plainly, but a script is the path that receives a tool's whole
- * `CallToolResult`: an image or a structured payload that the gateway's JSON
- * hop flattens (a computer-use snapshot, for one) arrives intact.
- *
- * Two mistakes have cost a thread whole turns, so this note names them: the
- * discovery helpers return promises (an un-awaited `searchTools` serialises as
- * `{}`, which a model reads as "no such tool"), and a large file handed to a
- * parser from a capped read arrives truncated, so the parser reports the cut
- * point as a syntax error that is not in the file.
- */
-function nativeMcpHostHint(server: string): { namespace: string; note: string } {
-  return {
-    namespace: `mcp__${server}`,
-    note:
-      `This server also runs on your own MCP host as \`mcp__${server}\`: its tools are named ` +
-      `\`mcp__${server}__<tool>\`, they are not declared to you, and you call them from the body of a ` +
-      'codemode script. Reach them by intent with `await searchTools(query)`, or by name with ' +
-      `\`await describeTool(name)\` and \`await describeNamespace("mcp__${server}")\`; each of those helpers ` +
-      'returns a promise, and an un-awaited one serialises as `{}`, which means the `await` is missing, not the ' +
-      'tool. `ALL_TOOLS` lists every callable tool, so check it before concluding a tool does not exist. Prefer ' +
-      'this path whenever a tool returns an image or a structured payload, because a script receives the complete ' +
-      'result and can filter a large one before it reaches you. When a tool takes file content, such as a parser ' +
-      'or an autofixer, pass the path to the file whenever the tool accepts one rather than the source read out of ' +
-      'it: a file read past its cap arrives truncated, and the cut point surfaces as a phantom syntax error. The ' +
-      'gateway operations in this payload remain a fallback for the same server.'
-  }
 }
 
 export type BrowserUtilityExecutor = (
@@ -422,7 +385,7 @@ export interface SecretRequestContext {
 export type UtilitySuggestionExecutor = (
   entry: AgentUtilitySuggestionEntry,
   context: UtilitySuggestionContext
-) => Promise<UtilitySuggestionDecision>
+) => Promise<UtilitySuggestionResolution>
 
 /** Which turn is proposing, so the card is bound to the right thread and session. */
 export interface UtilitySuggestionContext {
@@ -462,6 +425,28 @@ export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
 /** The two app-control operations, mirrored from the tool catalog. */
 export type AppControlOperation = 'catalog' | 'call'
 
+/**
+ * Runs one engineering artifact tool for the turn that asked for it: it creates
+ * the thread's Brainstorm, PRD, specification or Assignment draft through the
+ * machinery the Studio buttons use. The chat engine supplies it because it owns
+ * the engines, the isolated generation sessions and the review surfaces those
+ * artifacts land on.
+ */
+export type EngineeringToolExecutor = (
+  operation: EngineeringToolOperation,
+  input: Record<string, unknown>,
+  context: EngineeringToolContext
+) => Promise<unknown>
+
+/** The turn an engineering artifact call came from. */
+export interface EngineeringToolContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
 /** The turn an app-control call came from. */
 export interface AppControlContext {
   projectId: string
@@ -486,8 +471,6 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
-  /** Server name each utility took on the harness's own MCP host this turn. */
-  nativeMcpServers: Map<string, string>
   /**
    * Connections being established right now, keyed like `clients`.
    *
@@ -517,7 +500,7 @@ interface TurnState {
   cuaViews: Map<string, CuaSnapshotView>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
-  /** Lazily created read-only diagnostics provider for explicit @cio-utility turns. */
+  /** Lazily created read-only diagnostics provider, shared by every turn. */
   diagnostics: CioDiagnosticsService | null
   /** Lazily derived once because a turn may issue several refined searches. */
   projectSearchTerms: Promise<Set<string>> | null
@@ -586,12 +569,19 @@ export class UtilityOrchestrationService {
   private utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   private orchestrationExecutor: OrchestrationExecutor | null = null
   private appControlExecutor: AppControlExecutor | null = null
+  private engineeringExecutor: EngineeringToolExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
     private readonly storage: StorageEngine,
     private readonly database?: import('../database/database').Database,
-    private readonly cuaBridge = new CuaBridgeService(storage)
+    private readonly cuaBridge = new CuaBridgeService(storage),
+    /**
+     * The one OAuth authorization service, shared with the Utilities page, so a
+     * token a turn uses is a token the user authorized there. Absent in a
+     * session that has no utility surface of its own.
+     */
+    private readonly mcpOAuth: McpOAuthService | null = null
   ) {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
@@ -681,6 +671,14 @@ export class UtilityOrchestrationService {
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'call')
+      case CREATE_BRAINSTORM_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'brainstorm')
+      case CREATE_PRD_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'prd')
+      case CREATE_SPEC_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'spec')
+      case CREATE_ASSIGNMENT_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'assignment')
       default:
         return null
     }
@@ -831,6 +829,40 @@ export class UtilityOrchestrationService {
   }
 
   /**
+   * Register the executor behind the engineering artifact tools. Creating the
+   * thread's Brainstorm, PRD, specification or Assignment is an app capability:
+   * the executor owns the engines, the isolated generation sessions and the
+   * review surfaces. The chat engine supplies it because it owns all of them.
+   */
+  setEngineeringExecutor(executor: EngineeringToolExecutor | null): void {
+    this.engineeringExecutor = executor
+  }
+
+  /**
+   * Run one engineering artifact operation for the turn that asked for it.
+   *
+   * The executor owns the engines and the review gates, so this handler only
+   * forwards the operation with the turn it belongs to. A missing executor means
+   * the app was built without them, reported plainly rather than as an empty
+   * result.
+   */
+  private async engineering(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: EngineeringToolOperation
+  ): Promise<unknown> {
+    const executor = this.engineeringExecutor
+    if (!executor) throw new Error('Engineering artifact tools are unavailable in this deployment')
+    return executor(operation, input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+  }
+
+  /**
    * Run one app-control operation for the turn that asked for it.
    *
    * The executor owns the channel list and the guardrails, so this handler only
@@ -928,15 +960,17 @@ export class UtilityOrchestrationService {
     eligible = eligible.filter(
       ({ utility }) =>
         utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
-        utility.id !== ROUTINE_AUTHORING_UTILITY_ID
+        utility.id !== ASSISTANT_AUTHORING_UTILITY_ID
     )
     if (request.saveBrainstormNotes) {
       eligible.push(
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
     }
-    if (request.saveRoutineCheckpoint) {
-      eligible.push(routineAuthoringUtility(request.harnessId, request.projectId, request.threadId))
+    if (request.saveAssistantCheckpoint) {
+      eligible.push(
+        assistantAuthoringUtility(request.harnessId, request.projectId, request.threadId)
+      )
     }
     if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
@@ -1038,9 +1072,14 @@ export class UtilityOrchestrationService {
     // making a video learns it exists without carrying the edit pass.
     const hasVideoCapability = eligible.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
-      if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
-        return request.allowManagement === true
-      }
+      // Installing is a state change, so it stays behind the explicit setup grant.
+      if (name === UTILITY_MANAGE_TOOL_NAME) return request.allowManagement === true
+      // Reading the app's own evidence trail is not a state change, and it is an
+      // app capability rather than a utility operation: an agent asked to look
+      // into a reported problem must be able to read the thread and the log
+      // itself, instead of sending the user back to re-send the same message
+      // with @cio-utility.
+      if (name === UTILITY_DIAGNOSTICS_TOOL_NAME) return true
       // Asking for a secret is an app capability rather than a utility
       // operation, and it never needs a secret to be installed: it is offered on
       // every turn that carries the gateway at all, plus every explicit setup
@@ -1051,17 +1090,32 @@ export class UtilityOrchestrationService {
       // does not have must be able to offer it instead of dead-ending on a
       // harness-native suggestion the app cannot render.
       if (name === UTILITY_SUGGEST_TOOL_NAME) return hasOnDemand || request.allowManagement === true
-      // The workstation tools are granted by the session tag alone: they exist
-      // to start real work on a machine, so an ordinary turn is offered none of
-      // them, and the gateway refuses a route the turn never received.
+      // The workstation tools start real work on a machine. A thread running in
+      // full access reaches them with no tag, exactly like the app-control tools
+      // below; every other thread reaches them only after the user opens an
+      // @cio-hey session. The gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
-        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+        return (
+          request.permissionLevel === 'full_access' ||
+          (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
+        )
       }
-      // The app-control tools are granted by the same session tag: they let a
-      // `@cio-hey` turn drive the app itself, so an ordinary turn is offered
-      // none of them and the gateway refuses a route it never received.
+      // The engineering artifact tools are granted by the turn's own flag: they
+      // create a real Brainstorm, PRD, spec or Assignment for the thread, so a
+      // chat, an assistant task and a worker thread are offered none of them.
+      if (isEngineeringTool(name)) {
+        return request.artifactTools === true
+      }
+      // The app-control tools let a turn drive the app itself. A thread running
+      // in full access reaches them with no tag, which is the starting block for
+      // the per-channel permission gates to come; every other thread reaches
+      // them only after the user opens an @cio-hey session. The gateway refuses
+      // a route the turn never received.
       if (isAppControlTool(name)) {
-        return request.orchestrationSession !== undefined && request.orchestrationSession !== 'off'
+        return (
+          request.permissionLevel === 'full_access' ||
+          (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
+        )
       }
       return hasOnDemand
     })
@@ -1082,7 +1136,6 @@ export class UtilityOrchestrationService {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
-      nativeMcpServers: new Map(),
       connecting: new Map(),
       attributionSequence: 0,
       searched: false,
@@ -1101,10 +1154,6 @@ export class UtilityOrchestrationService {
     for (const entry of bankEntries) {
       if (state.eligible.has(entry.id)) state.bank.set(entry.id, entry)
     }
-    // Register the thread's activated MCP servers with the harness's own MCP
-    // host before the model runs: a script call then reaches them without a
-    // gateway round trip, while a utility nobody activated costs nothing.
-    await this.publishNativeMcpServers(state)
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
@@ -1113,11 +1162,36 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
+    // A real project thread (the same turns that may create the thread's own
+    // engineering artifacts) that is neither in full access nor in an @cio-hey
+    // session does not receive the app-control or workstation tools. It is still
+    // told they exist, so it asks the user to tag it instead of working around
+    // them.
+    const sessionToolsAskRequired =
+      request.artifactTools === true &&
+      request.permissionLevel !== 'full_access' &&
+      (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     const toolInstructions = [
       BACKGROUND_AGENT_CONTROL_INSTRUCTION,
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
+      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
+        ? [
+            `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
+          ]
+        : []),
+      ...(sessionToolsAskRequired
+        ? [
+            `You can read and drive the app itself (its panels, settings, git and cloud deployments) with ${APP_CONTROL_CATALOG_TOOL_NAME} and ${APP_CONTROL_CALL_TOOL_NAME}. This thread is not running in full access and no @cio-hey session is open, so those tools are not in your tool list. When the task needs them, say so and ask the user to tag their next message with @cio-hey, or to switch the thread to full access. Do not try to reach the app's channels another way.`
+          ]
+        : []),
+      ...(sessionToolsAskRequired
+        ? [
+            `You can read the workstation and dispatch real work onto a chosen machine with ${ORCHESTRATION_TARGETS_TOOL_NAME}, ${ORCHESTRATION_DISPATCH_TOOL_NAME} and ${ORCHESTRATION_STATUS_TOOL_NAME}. This thread is not running in full access and no @cio-hey session is open, so those tools are not in your tool list. When the task needs them, say so and ask the user to tag their next message with @cio-hey, or to switch the thread to full access. Do not dispatch work another way.`
+          ]
+        : []),
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
@@ -1133,14 +1207,19 @@ export class UtilityOrchestrationService {
             `The app-owned cio-artifact skill (utility ${APP_ARTIFACT_UTILITY_ID}) handles explicitly requested inline artifacts. Only when the user asks to create or edit an artifact inside this thread, activate it with ${UTILITY_ACTIVATE_TOOL_NAME} before producing the output. It covers image, audio, video, HTML and SVG delivery and prefers available direct generators. For ordinary design or media work use the task-specific capability. Inline artifact requests take this route before the design/video guidance below.`
           ]
         : []),
+      ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
+        ? [
+            `The app-owned in-app browser (utility \`${APP_BROWSER_UTILITY_ID}\`) exists in this session and is your browser for anything that has to be rendered: a design, a prototype, a video composition, a served page. When you author or change something a browser renders, get its served URL from the capability that owns that folder, activate \`${APP_BROWSER_UTILITY_ID}\` with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME} if it is not in your tool list yet, and look at the page with \`screenshot\`, \`viewport\`, \`snapshot\` and \`console\`. Never render your own work with a browser of your own, such as a cached headless Chrome or Chromium binary, \`npx playwright\`, \`puppeteer\` or \`curl\`: the tab the app served is the page the user is watching.`
+          ]
+        : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus app operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus app operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. \`preview\` returns the URL the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`) opens, and looking at the render there is how the work is checked, never with a browser of your own. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasVideoCapability
         ? [
-            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed edit step, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
+            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed edit step, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. The preview tab also belongs to the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`), which is how the work is checked when a still is not enough, and never a browser of your own. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1173,8 +1252,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`,
-            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`
           ]
         : [])
     ].join('\n')
@@ -1199,20 +1277,7 @@ export class UtilityOrchestrationService {
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
-      cleanup,
-      /**
-       * One call a script made to a server pi's own MCP host runs. The gateway
-       * never sees that call, so this is the only place its record can be
-       * written, and the turn is what supplies the thread the line belongs to.
-       */
-      recordNativeInvocation: (invocation) =>
-        this.audit(state, 'utility.invoked', {
-          utilityId: invocation.utilityId,
-          operation: invocation.tool,
-          transport: 'native',
-          server: invocation.server,
-          success: invocation.status === 'completed'
-        })
+      cleanup
     }
   }
 
@@ -1312,7 +1377,7 @@ export class UtilityOrchestrationService {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
       utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
-      utility.id === ROUTINE_AUTHORING_UTILITY_ID
+      utility.id === ASSISTANT_AUTHORING_UTILITY_ID
     ) {
       return
     }
@@ -1525,6 +1590,12 @@ export class UtilityOrchestrationService {
    * user chose. Installing software is never automatic, so a declined, expired
    * or abandoned card leaves the registry untouched, and the bundle is always
    * secret-free   a credential is collected afterwards with `cio_ask_secret`.
+   *
+   * The bundle is validated against the registry's own rules before the card is
+   * ever shown, and the card lists the utilities it would install. The user is
+   * therefore never asked to approve a bundle that cannot install (which is what
+   * produced an "accepted" decision followed by `MCP transport is invalid`), and
+   * every card names the real tools rather than a bundle title.
    */
   private async suggestUtility(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const executor = this.utilitySuggestionExecutor
@@ -1532,28 +1603,78 @@ export class UtilityOrchestrationService {
     const reason = requiredString(input['reason'], 'reason', 1_000)
     const name = normalizeBundleName(input['bundle'])
     const definitions = normalizeBundleDefinitions(input['bundle'])
+    // Pre-flight with the registry's install rules: a proposal the registry would
+    // reject is answered as invalid here, and the user is never shown a card for
+    // it. The message is the registry's own, so the fix is unambiguous.
+    let installable: UtilityDefinitionInput[]
+    try {
+      installable = this.registry.validateMany(definitions)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        status: 'invalid',
+        error: detail,
+        message:
+          'This bundle cannot be installed, so the user was not asked. Fix the definition and call this tool again: ' +
+          detail
+      }
+    }
     const entry: AgentUtilitySuggestionEntry = {
       id: randomUUID().replace(/-/gu, '').slice(0, 8).toUpperCase(),
       name,
-      kinds: [...new Set(definitions.map((definition) => definition.kind))],
-      reason
+      kinds: [...new Set(installable.map((definition) => definition.kind))],
+      reason,
+      utilities: installable.map((definition) => ({
+        name: definition.name,
+        kind: definition.kind,
+        source: utilityInstallSource(definition),
+        ...(definition.description ? { description: definition.description } : {})
+      }))
     }
-    const decision = await executor(entry, {
+    const resolution = await executor(entry, {
       projectId: state.request.projectId,
       threadId: state.request.threadId,
       projectPath: state.request.projectPath,
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
-    await this.audit(state, 'utility.suggested', { name, kinds: entry.kinds, decision })
-    if (decision !== 'accepted') {
+    await this.audit(state, 'utility.suggested', {
+      name,
+      kinds: entry.kinds,
+      decision: resolution.decision
+    })
+    if (resolution.decision === 'alternative') {
+      return {
+        status: 'alternative',
+        userAnswer: resolution.answer ?? '',
+        message:
+          'The user answered with their own instruction instead of installing or declining. Nothing was installed. Follow what they wrote, and only call this tool again if the capability is still the right answer.'
+      }
+    }
+    if (resolution.decision !== 'accepted') {
       return {
         status: 'declined',
         message:
           'The user declined the proposed capability. Do not install it, and never claim it is available. Continue without it, or say plainly what is missing.'
       }
     }
-    const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    let outcomes: Awaited<ReturnType<UtilityRegistryService['installMany']>>
+    try {
+      outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    } catch (error) {
+      // The card is already answered, so the failure has to come back as data the
+      // agent can act on   never as an unlabelled tool error the agent paraphrases
+      // to the user as "the app rejected it".
+      const detail = error instanceof Error ? error.message : String(error)
+      Logger.error('Accepted capability suggestion failed to install:', error)
+      return {
+        status: 'failed',
+        error: detail,
+        message:
+          'The user accepted, but the install failed, so nothing was added. Tell them plainly that the install did not happen and why, then fix the definition and call this tool again: ' +
+          detail
+      }
+    }
     await this.footprint()
       ?.reconcile(await this.registry.list())
       .catch((error: unknown) =>
@@ -1579,13 +1700,8 @@ export class UtilityOrchestrationService {
     }
   }
 
-  /** Read-only app diagnostics, available only on explicit @cio-utility turns. */
+  /** Read-only app diagnostics, granted on every turn that carries the gateway. */
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    if (state.request.allowManagement !== true) {
-      throw new Error(
-        'App diagnostics require an explicit @cio-utility turn   tell the user to re-send their request starting with @cio-utility.'
-      )
-    }
     state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
       this.projectNames()
     )
@@ -1915,10 +2031,6 @@ export class UtilityOrchestrationService {
       }
     }
     state.activated.set(utilityId, resolved)
-    // A harness-owned MCP host must learn about the server before the model's
-    // next script, or an activation in this turn would only take effect in the
-    // next one.
-    if (resolved.utility.kind === 'mcp') await this.publishNativeMcpServers(state)
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
@@ -1986,8 +2098,8 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
-    if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
-      return { tools: ROUTINE_AUTHORING_OPERATIONS }
+    if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
+      return { tools: ASSISTANT_AUTHORING_OPERATIONS }
     }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
@@ -2034,14 +2146,6 @@ export class UtilityOrchestrationService {
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
-      const nativeServer = state.nativeMcpServers.get(resolved.utility.id)
-      if (nativeServer) {
-        // The harness's own MCP host runs this server, so connecting the app's
-        // client too would spawn a second copy of the same process for nothing.
-        // The model reaches the tools from a script, where they are discoverable
-        // by name and by intent.
-        return { nativeHost: nativeMcpHostHint(nativeServer) }
-      }
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
     }
@@ -2228,18 +2332,18 @@ export class UtilityOrchestrationService {
         BRAINSTORM_ALIGNMENT_NOTE_LIMIT
       )
       result = await state.request.saveBrainstormNotes(markdown)
-    } else if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
-      if (operation !== 'save_checkpoint' || !state.request.saveRoutineCheckpoint) {
+    } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
+      if (operation !== 'save_checkpoint' || !state.request.saveAssistantCheckpoint) {
         throw new Error(
-          'The getting-started checkpoint is only available while a routine\u2019s how-to is being written'
+          'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
         )
       }
       const markdown = requiredString(
         operationInput['markdown'],
         'markdown',
-        ROUTINE_AUTHORING_CHECKPOINT_LIMIT
+        ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
       )
-      result = await state.request.saveRoutineCheckpoint(markdown)
+      result = await state.request.saveAssistantCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
@@ -2292,6 +2396,24 @@ export class UtilityOrchestrationService {
         ['preview', this.videoPreviewExecutor],
         ['checkpoint', this.videoPreviewExecutor],
         ['generate', this.mediaGenerationExecutor],
+        ...[
+          'probe',
+          'filmstrip',
+          'waveform',
+          'listen',
+          'transcribe',
+          'cut',
+          'export',
+          'jobs',
+          'studio',
+          'runtime',
+          'captions',
+          'track',
+          'remove-background'
+        ].map((name): [string, VideoCapabilityExecutor | null] => [
+          name,
+          this.videoPreviewExecutor
+        ]),
         ['capture', this.videoCaptureExecutor]
       ])
       const executor = executors.get(operation)
@@ -2876,10 +2998,33 @@ export class UtilityOrchestrationService {
       config: utility.config,
       environment: await this.credentialEnvironment(utility),
       credentials: utility.credentials,
+      // Resolved here, where the vault lives: an authorized server is connected
+      // with the bearer its grant issued, and an expired one is renewed from its
+      // refresh token before the request leaves.
+      authorization: (await this.mcpOAuth?.accessToken(utility)) ?? null,
       owner: { name: utility.name, credentials: utility.credentials },
       // Attribute the running server to the turn that started it, so the task
       // manager can say which thread an MCP belongs to.
       context: { projectId: state.request.projectId, threadId: state.request.threadId }
+    }).catch(async (error: unknown) => {
+      await this.noteMcpOAuthChallenge(utility, error)
+      throw error
+    })
+  }
+
+  /**
+   * Remember that a server refused for lack of authorization, so the Utilities
+   * page offers the browser flow instead of the user reading a bare 401 in a
+   * turn's trace.
+   */
+  private async noteMcpOAuthChallenge(
+    utility: UtilityDefinitionFor<'mcp'>,
+    error: unknown
+  ): Promise<void> {
+    const challenge = mcpOAuthChallengeHeader(error)
+    if (!challenge) return
+    await this.mcpOAuth?.noteChallenge(utility.id, challenge).catch((cause: unknown) => {
+      Logger.dev('MCP OAuth challenge could not be recorded:', cause)
     })
   }
 
@@ -2887,74 +3032,6 @@ export class UtilityOrchestrationService {
     return resolveCredentialEnvironment(utility.credentials, (secretRef) =>
       this.vault.resolve(secretRef)
     )
-  }
-
-  /**
-   * The MCP utilities a harness-owned MCP host should run for this thread: the
-   * ones this thread already activated (its durable bank), plus the one
-   * activated earlier in this turn. Everything else waits for the app gateway
-   * and its activation step, so a session that never reaches an MCP server never
-   * pays for one.
-   *
-   * Computer use is deliberately absent. Its snapshot pairing, grounding and
-   * per-window lease live on the gateway path, and moving the server without
-   * moving that logic would undo the fix that made it work.
-   */
-  private nativeMcpUtilities(state: TurnState): ResolvedUtility[] {
-    const native: ResolvedUtility[] = []
-    for (const resolved of state.eligible.values()) {
-      if (resolved.utility.kind !== 'mcp') continue
-      if (this.isComputerUseUtility(resolved)) continue
-      if (!state.bank.has(resolved.utility.id) && !state.activated.has(resolved.utility.id)) {
-        continue
-      }
-      native.push(resolved)
-    }
-    return native
-  }
-
-  /**
-   * Publish that set to the harness's own MCP host, with every credential
-   * resolved here, where the vault lives.
-   *
-   * Publication is an optimization over the gateway and never a reason to fail a
-   * turn: a harness that refuses the document, or a server whose config the
-   * harness rejects, leaves the gateway as the path to that utility.
-   */
-  private async publishNativeMcpServers(state: TurnState): Promise<void> {
-    const publish = state.request.publishNativeMcpServers
-    if (!publish) return
-    const bindings: NativeMcpUtilityBinding[] = []
-    for (const resolved of this.nativeMcpUtilities(state)) {
-      if (resolved.utility.kind !== 'mcp') continue
-      bindings.push({
-        utility: resolved.utility,
-        environment: await this.credentialEnvironment(resolved.utility)
-      })
-    }
-    try {
-      const published = await publish(bindings)
-      state.nativeMcpServers.clear()
-      for (const publication of published.servers) {
-        state.nativeMcpServers.set(publication.utilityId, publication.server)
-      }
-      // A utility the adapter could not turn into a server keeps working through
-      // the gateway, so nothing is broken; the user still hears it, because a
-      // silently skipped server is a capability they enabled and did not get.
-      for (const failure of published.failures) {
-        notifyNativeMcpFailure(
-          {
-            sessionId: state.request.sessionId,
-            utilityId: failure.utilityId,
-            utilityName: failure.utilityName,
-            reason: failure.reason
-          },
-          { projectId: state.request.projectId, threadId: state.request.threadId }
-        )
-      }
-    } catch (error) {
-      Logger.dev('Native MCP server publication failed:', error)
-    }
   }
 
   private async audit(

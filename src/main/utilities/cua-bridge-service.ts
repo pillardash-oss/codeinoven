@@ -45,6 +45,10 @@ const CUA_UTILITY_ID = 'cio:cua-driver'
 const PERMISSION_CACHE_TTL_MS = 20_000
 const DAEMON_START_TIMEOUT_MS = 8_000
 const DAEMON_WAIT_STEP_MS = 300
+/** How long a stop is given to take effect before the daemon's pid is signalled. */
+const DAEMON_STOP_TIMEOUT_MS = 6_000
+/** How long each escalating signal is given before the next, and before a failed stop is reported. */
+const DAEMON_STOP_SIGNAL_TIMEOUT_MS = 3_000
 const UPDATE_CHECK_TIMEOUT_MS = 30_000
 /** The updater downloads roughly 70 MB and then swaps a signed app bundle in. */
 const UPDATE_APPLY_TIMEOUT_MS = 20 * 60_000
@@ -73,6 +77,22 @@ const UPDATER_TERMINATION_SIGNAL_HINT =
   "Cua's installer stopped the driver while it swapped the binary. Check the installed version and try again if it did not change."
 
 let permissionCache: { status: CuaPermissionStatus; at: number } | null = null
+
+/**
+ * Every daemon claim in this process, keyed by the run that took it.
+ *
+ * The driver's daemon is one process per machine, so its claims have to be one
+ * set per process. Three services each hold a `CuaBridgeService` (the utility
+ * surface, the computer-use preview and the turn orchestrator), and a
+ * per-instance map meant a release in one of them could not see a claim taken in
+ * another: it could stop a daemon a live run was still using, and it could leave
+ * one up because its own map looked empty.
+ *
+ * The driver's authorization mode is decided when the daemon starts and is
+ * immutable for the daemon's lifetime, and restarting it ends every live
+ * session, so the first run to claim a mode owns it until that run ends.
+ */
+const daemonClaims = new Map<string, CuaDaemonClaim>()
 
 /**
  * The driver's daemon-wide authorization modes. `bounded` needs an immutable
@@ -166,15 +186,6 @@ export class CuaBridgeService {
    * button again while the download is still running.
    */
   private updateState: CuaUpdateProgress | null = null
-
-  /**
-   * Live computer-use runs, keyed by their owner, with the mode each one needs.
-   *
-   * The driver's authorization mode is decided when the daemon starts and is
-   * immutable for the daemon's lifetime, and restarting it ends every live
-   * session, so the first run to claim a mode owns it until that run ends.
-   */
-  private readonly daemonClaims = new Map<string, CuaDaemonClaim>()
 
   async getStatus(): Promise<CuaBridgeStatus> {
     const config = await this.loadConfig()
@@ -577,7 +588,7 @@ export class CuaBridgeService {
    * own relaunch), so this probe no longer owns what is running either way.
    */
   private async stopUnownedDaemon(binaryPath: string, probe: CuaDaemonReport): Promise<void> {
-    if (this.daemonClaims.size > 0) return
+    if (daemonClaims.size > 0) return
     const live = await this.readDaemonReport(binaryPath)
     if (!live || live.pid === null || live.pid !== probe.pid) return
     await this.stopDaemon(binaryPath)
@@ -629,11 +640,58 @@ export class CuaBridgeService {
     return null
   }
 
+  /**
+   * Stop the shared daemon, and see that it is gone.
+   *
+   * `cua-driver stop` can return with the daemon still up and a client still
+   * attached, so the read-back is the only proof that the mode this app asked for
+   * has stopped being enforced. What survives the read-back is terminated by pid,
+   * and only while the daemon still reports that same pid, so the signal cannot
+   * land on a process the system has since handed the number to.
+   */
   private async stopDaemon(binaryPath: string): Promise<void> {
+    const before = await this.readDaemonReport(binaryPath)
     try {
       await execFileAsync(binaryPath, ['stop'], { timeout: 8_000, maxBuffer: 128_000 })
     } catch {
-      // The transient daemon may already be gone.
+      // A daemon that is already gone makes this a no-op.
+    }
+    const pid = before?.pid ?? null
+    if (pid === null) return
+    if (!(await this.daemonStillReports(binaryPath, pid, DAEMON_STOP_TIMEOUT_MS))) return
+    // A `stop` that did not take is information, not a failure to push through:
+    // the driver refuses while a client is attached, and signalling the daemon
+    // then ends that client's control session (the PiP reports it as "daemon
+    // control session closed"). Only a daemon with nothing attached at all is
+    // signalled, and anything else is reported for the next attempt.
+    const sessions = await this.readDaemonSessions(binaryPath)
+    if (sessions === null || sessions.total > 0) {
+      Logger.info('The Cua Driver daemon was left running, with a client still attached', { pid })
+      return
+    }
+    for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+      try {
+        process.kill(pid, signal)
+      } catch {
+        return
+      }
+      if (!(await this.daemonStillReports(binaryPath, pid, DAEMON_STOP_SIGNAL_TIMEOUT_MS))) return
+    }
+    Logger.info('The Cua Driver daemon would not stop', { pid, binaryPath })
+  }
+
+  /** Whether the daemon still reports that pid once the window has passed. */
+  private async daemonStillReports(
+    binaryPath: string,
+    pid: number,
+    milliseconds: number
+  ): Promise<boolean> {
+    const deadline = Date.now() + milliseconds
+    for (;;) {
+      const live = await this.readDaemonReport(binaryPath)
+      if (!live || live.pid === null || live.pid !== pid) return false
+      if (Date.now() >= deadline) return true
+      await sleep(DAEMON_WAIT_STEP_MS)
     }
   }
 
@@ -681,7 +739,7 @@ export class CuaBridgeService {
    */
   async claimDaemonMode(permissionLevel: PermissionLevel, ownerKey: string): Promise<void> {
     const required = daemonModeForPermission(permissionLevel)
-    const conflicting = [...this.daemonClaims.entries()].find(
+    const conflicting = [...daemonClaims.entries()].find(
       ([owner, claim]) => owner !== ownerKey && claim.mode !== required
     )
     if (conflicting) {
@@ -693,10 +751,24 @@ export class CuaBridgeService {
     const { selected } = await this.selectedInstallation()
     if (!selected) throw new Error('Cua Driver was not found in a supported install location')
     const binaryPath = selected.realPath
-    this.daemonClaims.set(ownerKey, { mode: required, binaryPath })
+    daemonClaims.set(ownerKey, { mode: required, binaryPath })
+    Logger.dev('Cua Driver daemon claim taken', {
+      owner: ownerKey,
+      mode: required,
+      claims: daemonClaims.size
+    })
     try {
       const live = await this.readDaemonMode(binaryPath)
       if (live?.mode === required) return
+      // `status` answering without a readable mode means a daemon is up that this
+      // app cannot read, not that none is running. Spawning a second one leaves
+      // the unreadable daemon behind as a stray nothing owns.
+      if (!live && (await this.daemonRunning(binaryPath))) {
+        throw new Error(
+          'A Cua Driver daemon is running, but its permission mode could not be read. ' +
+            'Run `cua-driver stop` and try again.'
+        )
+      }
       // Only macOS has an app bundle to launch the daemon in, and on Windows and
       // Linux the daemon belongs to the interactive desktop session rather than
       // to this app, so a wrong mode there is reported instead of replaced.
@@ -717,7 +789,7 @@ export class CuaBridgeService {
       // A start that failed after the daemon actually came up must not leave it
       // running: with the claim gone, nothing would ever stop it.
       await this.abandonDaemon(binaryPath, required)
-      this.daemonClaims.delete(ownerKey)
+      daemonClaims.delete(ownerKey)
       throw error
     }
   }
@@ -731,13 +803,73 @@ export class CuaBridgeService {
    * disables every runtime approval prompt for as long as it lives.
    */
   async releaseDaemonClaim(ownerKey: string): Promise<void> {
-    const claim = this.daemonClaims.get(ownerKey)
+    const claim = daemonClaims.get(ownerKey)
     if (!claim) return
-    this.daemonClaims.delete(ownerKey)
-    if (this.daemonClaims.size > 0 || claim.mode === 'standard') return
+    daemonClaims.delete(ownerKey)
+    Logger.dev('Cua Driver daemon claim released', {
+      owner: ownerKey,
+      mode: claim.mode,
+      claims: daemonClaims.size
+    })
+    if (daemonClaims.size > 0 || claim.mode === 'standard') return
     const live = await this.readDaemonMode(claim.binaryPath)
     if (!live || live.mode === 'standard') return
     await this.stopDaemon(claim.binaryPath)
+  }
+
+  /**
+   * Stop an unrestricted daemon that outlived the process which asked for its
+   * tier.
+   *
+   * Claims live in memory, so a quit, a crash or a `kill -9` abandons them and the
+   * daemon stays up in the one mode that disables every approval prompt. Startup
+   * is the moment to correct that: no claim of this process can exist yet, so an
+   * unrestricted daemon with no live session is one nobody asked for. A standard
+   * daemon is the driver's own default and is left alone, exactly as
+   * `releaseDaemonClaim` leaves it.
+   */
+  async reapAbandonedDaemon(): Promise<void> {
+    if (platformName() !== 'macos') return
+    if (daemonClaims.size > 0) return
+    const { selected } = await this.selectedInstallation()
+    if (!selected) return
+    const binaryPath = selected.realPath
+    const live = await this.readDaemonReport(binaryPath)
+    // Only a daemon whose mode was actually read as unrestricted is reaped: a
+    // standard, bounded or unreadable one may belong to someone else.
+    if (!live || live.pid === null || live.mode?.mode !== 'unrestricted') return
+    // Another CodeInOven instance may be mid-run against this daemon, and its
+    // sessions are the only evidence either process has. This read's own session
+    // is discounted, or the reap could never fire.
+    const sessions = await this.readDaemonSessions(binaryPath)
+    if (sessions === null || sessions.attributed > 0) return
+    // A run that claimed the daemon while this was reading owns it now, and that
+    // claim has to win over anything decided above.
+    if (daemonClaims.size > 0) return
+    Logger.info('Stopping a Cua Driver daemon left over from an earlier run', {
+      pid: live.pid,
+      mode: live.mode.mode,
+      source: live.mode.source
+    })
+    await this.stopDaemon(binaryPath)
+  }
+
+  /**
+   * The daemon's own session list, or null when the answer could not be read.
+   * Every caller treats null as "someone is using it".
+   */
+  private async readDaemonSessions(
+    binaryPath: string
+  ): Promise<{ total: number; attributed: number } | null> {
+    try {
+      const { stdout } = await execFileAsync(binaryPath, ['sessions', '--json'], {
+        timeout: 8_000,
+        maxBuffer: 256_000
+      })
+      return parseDaemonSessions(stdout)
+    } catch {
+      return null
+    }
   }
 
   /**
@@ -992,6 +1124,42 @@ function parseVersion(value: string): string | undefined {
  */
 function isCompatibleVersion(value: string): boolean {
   return compareVersions(value, CUA_MINIMUM_VERSION) >= 0
+}
+
+/**
+ * The daemon's session list, as two counts, or null when it could not be read.
+ *
+ * `total` counts every session still in `active`. `attributed` excludes the session
+ * a CLI invocation creates for itself, which is what every read of this kind is,
+ * so it is not another actor using the daemon.
+ *
+ * Both are needed because the two callers are asking different questions. A reap
+ * deciding whether anything else wants the daemon discounts its own read, or it
+ * could never fire at all. A signal deciding whether the process can be killed has
+ * to count everything, including this read.
+ */
+function parseDaemonSessions(output: string): { total: number; attributed: number } | null {
+  const start = output.indexOf('{')
+  if (start < 0) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output.slice(start))
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const sessions = (parsed as { sessions?: unknown }).sessions
+  if (!Array.isArray(sessions)) return null
+  let total = 0
+  let attributed = 0
+  for (const entry of sessions) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const session = entry as { state?: unknown; implicit?: unknown }
+    if (session.state !== 'active') continue
+    total += 1
+    if (session.implicit !== true) attributed += 1
+  }
+  return { total, attributed }
 }
 
 function platformName(): CuaBridgeStatus['platform'] {

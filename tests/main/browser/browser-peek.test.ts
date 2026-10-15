@@ -1,13 +1,54 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import {
   parsePeekProbeAnswer,
   peekPointInFrame,
   peekProbePoint,
   peekProbeScript,
-  resolvePeekOrigin
+  resolvePeekOrigin,
+  type BrowserPeekMediaTarget,
+  type BrowserPeekRect
 } from '../../../src/main/browser/browser-service/browser-peek'
 
 const FRAME = { x: 100, y: 50, width: 1_000, height: 700 }
+
+/** A media element a menu named, with an address of the kind it belongs to. */
+function media(kind: BrowserPeekMediaTarget['kind']): BrowserPeekMediaTarget {
+  return { url: `https://media.example/thing.${kind}`, kind }
+}
+
+/**
+ * A page showing `html`, with a click point that answers nothing.
+ *
+ * A media probe that reached the point has already failed to find its own
+ * element, so a rectangle it reports can only have come from the media match.
+ */
+function pageWith(html: string): Document {
+  document.body.innerHTML = html
+  document.elementFromPoint = (): Element | null => null
+  return document
+}
+
+/** Give one element of the page the rectangle a browser would lay it out at. */
+function stubRect(page: Document, selector: string, rect: BrowserPeekRect): void {
+  const element = page.querySelector(selector)
+  if (!element) throw new Error(`The page has no ${selector}`)
+  element.getBoundingClientRect = (): DOMRect => ({
+    ...rect,
+    left: rect.x,
+    top: rect.y,
+    right: rect.x + rect.width,
+    bottom: rect.y + rect.height,
+    toJSON: () => ({})
+  })
+}
+
+/** Run one generated probe in the page, the way the browser does. */
+function runProbe(page: Document, target: BrowserPeekMediaTarget | null = null): unknown {
+  const script = peekProbeScript({ x: 10, y: 10 }, target)
+  const run = new Function('document', `return ${script}`) as (page: Document) => unknown
+  return run(page)
+}
 
 describe('peek origin resolution', () => {
   it('starts a flight on the link the probe found, moved to where the page is on screen', () => {
@@ -111,10 +152,40 @@ describe('peek probe answers', () => {
     expect(parsePeekProbeAnswer({ x: 1, y: 2, width: 3, height: -4 })).toBeNull()
   })
 
-  it('asks the page for the anchor under the point and nothing else', () => {
+  it('asks the page for the anchor under the point and searches for no media when none was named', () => {
     const script = peekProbeScript({ x: 12, y: 34 })
     expect(script).toContain('elementFromPoint(12, 34)')
     expect(script).toContain("closest('a[href]')")
+    expect(script).not.toContain('querySelectorAll')
+  })
+
+  it('scopes the search for the media the menu named to the reported kind', () => {
+    expect(peekProbeScript({ x: 1, y: 1 }, media('image'))).toContain('querySelectorAll("img")')
+    expect(peekProbeScript({ x: 1, y: 1 }, media('video'))).toContain('querySelectorAll("video")')
+    expect(peekProbeScript({ x: 1, y: 1 }, media('audio'))).toContain('querySelectorAll("audio")')
+  })
+
+  it('answers with the rectangle of the picture the menu named, before the click point answers', () => {
+    const page = pageWith('<img src="https://images.example/cat.png">')
+    stubRect(page, 'img', { x: 40, y: 20, width: 180, height: 120 })
+    expect(runProbe(page, { url: 'https://images.example/cat.png', kind: 'image' })).toEqual({
+      x: 40,
+      y: 20,
+      width: 180,
+      height: 120
+    })
+  })
+
+  it('matches a player on the source it carries, and answers nothing for media that is not there', () => {
+    const page = pageWith('<video><source src="https://media.example/clip.mp4"></video>')
+    stubRect(page, 'video', { x: 10, y: 12, width: 320, height: 180 })
+    expect(runProbe(page, { url: 'https://media.example/clip.mp4', kind: 'video' })).toEqual({
+      x: 10,
+      y: 12,
+      width: 320,
+      height: 180
+    })
+    expect(runProbe(page, { url: 'https://media.example/other.mp4', kind: 'video' })).toBeNull()
   })
 })
 

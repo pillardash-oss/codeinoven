@@ -1,3 +1,5 @@
+import { previewExtensionsForKind } from './preview-types'
+
 /** Shared generation and delivery contract for requested media and inline output. */
 export const ARTIFACT_CAPABILITY_NAME = 'cio-artifact'
 export const ARTIFACT_CAPABILITY_SUMMARY =
@@ -25,7 +27,7 @@ A request to build a website, implement a project feature or design a prototype 
 
 ## File formats
 
-Images: PNG, JPEG, WebP, GIF, AVIF. Audio: MP3, WAV, OGG, M4A, FLAC. Video: MP4, WebM, MOV. Playback depends on the runtime's codec support; prefer MP4/WebM and MP3/WAV. HTML: .html or .htm. SVG: .svg. An extension must match the actual generated format.
+Images: ${previewExtensionsForKind('image')}. Audio: ${previewExtensionsForKind('audio')}. Video: ${previewExtensionsForKind('video')}. The list comes from src/lib/preview-types.ts, the table the serving and publishing gates read, so it cannot fall out of step with what the app accepts. Playback depends on the runtime's codec support; prefer MP4/WebM and MP3/WAV. HTML: .html or .htm. SVG: .svg. An extension must match the actual generated format.
 
 ## HTML and SVG authoring
 

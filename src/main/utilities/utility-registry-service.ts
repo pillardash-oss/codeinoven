@@ -43,6 +43,7 @@ import {
   ARTIFACT_CAPABILITY_SUMMARY
 } from '../../lib/artifact-skill'
 import type { StorageEngine } from '../storage/storage-engine'
+import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
@@ -176,7 +177,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },
@@ -478,6 +479,26 @@ export class UtilityRegistryService {
       registry.utilities.push(...utilities)
       return structuredClone(utilities)
     })
+  }
+
+  /**
+   * Validate a bundle without installing it, returning the definitions exactly as
+   * an install would store them.
+   *
+   * The registry owns the install rules, so a surface that has to decide whether a
+   * proposal is installable asks here instead of guessing: an MCP entry with no
+   * usable transport, an unknown kind or a credential smuggled into the bundle is
+   * rejected with the same message `installMany` would raise. That is what keeps an
+   * approval card from ever asking the user to bless an install that cannot happen.
+   * Nothing is written and no app default is seeded.
+   */
+  validateMany(inputs: UtilityDefinitionInput[]): UtilityDefinitionInput[] {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('Utility bundle must contain at least one utility')
+    }
+    return inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
   }
 
   /**
@@ -871,7 +892,8 @@ function parseConfig(kind: UtilityKind, value: unknown): UtilityConfigMap[Utilit
           : { environment: stringRecord(value['environment'], 'MCP environment') }),
         ...(value['headers'] === undefined
           ? {}
-          : { headers: stringRecord(value['headers'], 'MCP headers') })
+          : { headers: stringRecord(value['headers'], 'MCP headers') }),
+        ...(value['oauth'] === undefined ? {} : { oauth: parseMcpOAuthConfig(value['oauth']) })
       }
     }
     case 'skill':

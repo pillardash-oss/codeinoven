@@ -98,10 +98,10 @@
 >
   <DropdownMenu.Trigger
     class={children
-      ? `flex items-center justify-center rounded transition-colors hover:bg-elevated focus:outline-none ${className}`
+      ? `flex items-center justify-center transition-colors hover:bg-elevated focus:outline-none ${className}`
       : compact
-        ? `flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
-        : `flex w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${selectedProjectHasCollision ? 'min-h-11 py-1.5' : 'h-9'} ${className}`}
+        ? `flex h-7 items-center gap-1.5 border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
+        : `flex w-full items-center gap-2 border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${selectedProjectHasCollision ? 'min-h-11 py-1.5' : 'h-9'} ${className}`}
     aria-label={ariaLabel}
     title={ariaLabel}
     {disabled}
@@ -112,7 +112,7 @@
       <span class="flex -space-x-1.5" aria-hidden="true">
         {#each selectedMultiProjects.slice(0, 3) as project (project.id)}
           <span
-            class="flex h-5 w-5 items-center justify-center overflow-hidden rounded border bg-raised text-dimmed"
+            class="flex h-5 w-5 items-center justify-center overflow-hidden border bg-raised text-dimmed"
             style:border-color={project.color}
           >
             {#if project.iconUrl}
@@ -129,7 +129,7 @@
         {/each}
         {#if selectedMultiProjects.length === 0}
           <span
-            class="flex h-5 w-5 items-center justify-center rounded border bg-raised text-dimmed"
+            class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed"
           >
             <FolderKanban size={11} />
           </span>
@@ -143,7 +143,7 @@
       <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
     {:else}
       <span
-        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised text-dimmed"
+        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden border bg-raised text-dimmed"
         style:border-color={selectedProject?.color}
         aria-hidden="true"
       >
@@ -176,14 +176,14 @@
       {side}
       {align}
       {sideOffset}
-      class="z-60 min-w-64 rounded-xl border border-border bg-surface p-1 shadow-lg"
+      class="z-60 min-w-64 border border-border bg-surface p-1 shadow-lg"
     >
       <div class="relative mx-1 mb-1 mt-0.5">
         <input
           type="text"
           placeholder={searchPlaceholder}
           bind:value={projectSearch}
-          class="w-full rounded-md border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
+          class="w-full border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
           onclick={(event: MouseEvent) => event.stopPropagation()}
           onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
         />
@@ -195,7 +195,7 @@
 
       {#if multiSelect}
         <DropdownMenu.Item
-          class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+          class="flex items-center gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
           textValue={allLabel}
           onSelect={(event) => {
             event.preventDefault()
@@ -212,7 +212,7 @@
 
       {#each filteredProjects as project (project.id)}
         <DropdownMenu.Item
-          class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+          class="flex items-center gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
           textValue={project.name}
           title={projectIdentityTitle(project)}
           onSelect={(event) => {
@@ -226,7 +226,7 @@
         >
           {#if project.color}
             <span
-              class="w-0.5 shrink-0 self-stretch rounded-full"
+              class="w-0.5 shrink-0 self-stretch"
               style:background-color={project.color}
             ></span>
           {/if}
@@ -234,7 +234,7 @@
             <img
               src={project.iconUrl}
               alt=""
-              class="h-4 w-4 shrink-0 rounded object-contain"
+              class="h-4 w-4 shrink-0 object-contain"
               onerror={projectIconOnError(project)}
             />
           {/if}
@@ -243,9 +243,7 @@
             class="min-w-0 flex-1"
             showLocation={hasProjectNameCollision(project, availableProjects)}
           />
-          {#if multiSelect
-            ? selectedIds.includes(project.id)
-            : activeProjectId === project.id}
+          {#if multiSelect ? selectedIds.includes(project.id) : activeProjectId === project.id}
             <Check size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>

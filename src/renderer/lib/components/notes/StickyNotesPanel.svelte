@@ -134,7 +134,7 @@
   {#if activeNote && activeIsEditing}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="View sticky note"
       aria-label="View sticky note"
       aria-pressed={!activeIsEditing}
@@ -145,7 +145,7 @@
   {:else if activeNote}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Edit sticky note"
       aria-label="Edit sticky note"
       aria-pressed={activeIsEditing}
@@ -170,7 +170,7 @@
   {#if activeNote?.loaded && activeIsEditing && canUndo}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Undo"
       aria-label="Undo sticky note edit"
       onclick={() => historyController?.undo()}
@@ -184,7 +184,7 @@
   {#if activeNote?.loaded && activeIsEditing && canRedo}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Redo"
       aria-label="Redo sticky note edit"
       onclick={() => historyController?.redo()}
@@ -214,7 +214,7 @@
         <p class="text-sm text-muted">{note.saveError ?? 'Could not load this sticky note.'}</p>
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
           title="Retry loading this note"
           aria-label="Retry loading this note"
           onclick={() => selectNote(note.id)}
@@ -276,7 +276,7 @@
         <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
           title="Retry loading sticky notes"
           aria-label="Retry loading sticky notes"
           onclick={() => void stickyNotes.load().catch(() => {})}
@@ -293,7 +293,7 @@
         </div>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+          class="flex items-center gap-1.5 border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
           title="Create a sticky note"
           aria-label="Create a sticky note"
           disabled={!stickyNotes.isLoaded}

@@ -117,10 +117,7 @@
         shows up in that checkout's next build or start), a plain note otherwise.
       -->
       <div
-        class={[
-          'rounded-lg border px-3 py-2',
-          attention ? 'border-warning/25 bg-warning/10' : 'bg-overlay'
-        ]}
+        class={['border px-3 py-2', attention ? 'border-warning/25 bg-warning/10' : 'bg-overlay']}
       >
         {#each notes as note, index (index)}
           <p
@@ -142,7 +139,7 @@
     {/if}
 
     {#if job.result}
-      <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-xs text-muted">
+      <div class="space-y-1 border bg-overlay px-3 py-2 text-xs text-muted">
         <p class="flex min-w-0 items-start gap-1.5">
           <span class="shrink-0 text-dimmed">Other end</span>
           <span class="min-w-0 truncate text-foreground">{peerLine(job)}</span>

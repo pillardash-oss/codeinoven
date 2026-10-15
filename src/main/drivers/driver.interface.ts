@@ -9,12 +9,8 @@ import type {
   ThreadSettings,
   ProviderCatalog,
   HarnessCommand,
-  NativeMcpPublicationResult,
-  NativeMcpServerFailure,
-  NativeUtilityInvocation,
   PermissionReply,
   ResolvedUtility,
-  NativeMcpUtilityBinding,
   UtilityKind
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -108,6 +104,13 @@ export interface HarnessCapabilities {
   compaction: boolean
   /** Emits provider-normalized child-agent lifecycle activity. */
   subagents: boolean
+  /**
+   * The driver itself reconciles a settled turn's task list from inside the
+   * harness (pi's core-tools extension wakes the agent on `agent_settled`).
+   * The chat engine's task-list guard skips such drivers so a stale list is
+   * never nudged twice for the same turn.
+   */
+  handlesTaskReconcile?: boolean
   /** Can force a model response through a validated JSON-schema output tool. */
   structuredOutput?: boolean
   /** Utility capabilities already supplied natively by this harness. */
@@ -498,6 +501,22 @@ export interface HarnessDriver {
     sessionId: string
   ): Promise<IdleNativeSessionReleaseResult>
 
+  /**
+   * Whether {@link releaseIdleSessionForTransfer} would succeed once this
+   * thread's own turn has stopped, answered without stopping anything.
+   *
+   * A transfer stops the run before it releases the writer, because a harness
+   * that holds a native writer can only hand it over while no turn is running.
+   * A driver that can answer this read-only question lets the caller refuse
+   * while the run is still alive, instead of stopping it and then discovering
+   * the hand-off is impossible. The thread's own in-flight turn is not a
+   * blocker: the caller is about to stop it.
+   */
+  canHandOffIdleSession?(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionHandOffProbe>
+
   /** Send a prompt; responses stream back via the event callback. Non-blocking. */
   sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void>
 
@@ -548,6 +567,18 @@ export interface HarnessDriver {
       waitForFlush?: boolean
     }
   ): Promise<AgentMessage[]>
+
+  /**
+   * Whether the harness itself holds this session's conversation, probed
+   * cheaply and without parsing a transcript. The engine's replay decision
+   * cannot use `loadMessages` for this, because a driver may serve its own
+   * durable mirror for a session the harness will boot cold, and reading that
+   * as harness-held history suppresses the replay the rebuilt session needs.
+   * A driver that omits this keeps the previous behavior (`loadMessages`
+   * returning messages counts as native history). Best-effort; callers treat a
+   * throw as unknown rather than as "no history".
+   */
+  holdsNativeHistory?(projectPath: string, sessionId: string): Promise<boolean>
 
   /**
    * Carry a replaced session's native conversation binding over to its
@@ -710,20 +741,6 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
-   * Publish the MCP utilities this thread has activated to a harness that runs
-   * MCP servers itself (pi's own MCP host). Absent for every harness that only
-   * reaches MCP servers through the app gateway, which is what keeps the gateway
-   * the one transport there. Answers with the server name each utility took, so
-   * the gateway can tell the model which namespace to call from a script, plus
-   * the utilities the harness would not run, so the user can be told.
-   */
-  publishUtilityMcpServers?(
-    projectPath: string,
-    sessionId: string,
-    utilities: readonly NativeMcpUtilityBinding[]
-  ): Promise<NativeMcpPublicationResult>
-
-  /**
    * Publish the owning thread's plan and progress for checkpoint rebuilds.
    * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
    * session-keyed file; every other harness ignores the call. `null` clears it,
@@ -838,20 +855,6 @@ export interface HarnessDriver {
   /** Register the callback that receives streaming AgentEvents. */
   onEvent(callback: AgentEventCallback): void
 
-  /**
-   * Register the callback that receives one call a script made to a server the
-   * harness's own MCP host runs (pi's `mcp__<server>__<tool>`). A harness with
-   * no MCP host of its own never calls it.
-   */
-  onNativeUtilityCall?(callback: (invocation: NativeUtilityInvocation) => void): void
-
-  /**
-   * Register the callback that receives a server the harness's own MCP host
-   * would not run, so the app can tell the user instead of leaving it on the
-   * harness's stderr.
-   */
-  onNativeMcpFailure?(callback: (failure: NativeMcpServerFailure) => void): void
-
   /** Mark owned subprocesses as intentionally stopping before the process registry kills them. */
   prepareForProcessCleanup?(): void
 
@@ -864,6 +867,16 @@ export type IdleNativeSessionReleaseResult =
   | { owner: false; released: false }
   | { owner: true; released: true }
   | { owner: true; released: false; reason: string }
+
+/**
+ * Verdict of the read-only hand-off probe, taken before any run is stopped.
+ *
+ * `blocked` is a promise about this process only: it means the writer cannot be
+ * released here right now, so a transfer must be refused while the run is still
+ * alive. A driver that holds no writer at all reports `blocked: false`, because
+ * there is nothing here for a hand-off to wait on.
+ */
+export type IdleNativeSessionHandOffProbe = { blocked: false } | { blocked: true; reason: string }
 
 /** Main-process observer used by drivers to attribute process trees to sessions. */
 export interface AgentProcessObserver {

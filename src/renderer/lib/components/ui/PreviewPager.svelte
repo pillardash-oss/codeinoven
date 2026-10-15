@@ -40,13 +40,13 @@
   role="group"
   aria-label="Attachment navigation"
   class={[
-    'titlebar-no-drag flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
+    'titlebar-no-drag flex items-center gap-0.5 border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
     className
   ]}
 >
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Previous attachment"
     title="Previous attachment"
     disabled={atStart}
@@ -57,7 +57,7 @@
   <span class="min-w-11 text-center font-mono text-[0.625rem] text-dimmed">{position}</span>
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Next attachment"
     title="Next attachment"
     disabled={atEnd}

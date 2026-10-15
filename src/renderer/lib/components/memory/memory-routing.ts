@@ -9,7 +9,7 @@ import {
 
 /** The file-based home of a memory entry: the root file, a project file, or a
  *  thread file. Routine memory shares the assistant container's file and is
- *  filtered by `routineId` on the entry itself, so a save never needs a routine
+ *  filtered by `assistantId` on the entry itself, so a save never needs a routine
  *  as a storage coordinate. */
 export interface MemoryLocation {
   projectId?: string
@@ -93,14 +93,14 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
   'sidebar-assistant': [
     {
       value: 'assistant',
-      label: 'All routines',
+      label: 'All assistants',
       located: false,
       needsProject: false,
       needsThread: false
     },
     {
       value: 'routine',
-      label: 'Specific routine',
+      label: 'One assistant',
       located: true,
       needsProject: false,
       needsThread: false
@@ -115,7 +115,7 @@ export interface MemorySurfaceContext {
   surface: MemoryPanelSurface
   projectId?: string
   threadId?: string
-  routineId?: string
+  assistantId?: string
 }
 
 /** The audience-only set a newly created memory starts in on each surface.
@@ -152,7 +152,7 @@ export function entryVisibleOnSurface(entry: MemoryEntry, context: MemorySurface
     audience: surfaceContextAudience(context.surface),
     projectId: context.projectId,
     threadId: context.threadId,
-    routineId: context.routineId
+    assistantId: context.assistantId
   })
 }
 
@@ -168,7 +168,7 @@ export function proposalVisibleOnSurface(
     audience: surfaceContextAudience(context.surface),
     projectId: context.projectId,
     threadId: context.threadId,
-    routineId: context.routineId
+    assistantId: context.assistantId
   })
 }
 
@@ -197,7 +197,7 @@ export function locationForScopeChange(
     case 'routine':
       return {
         projectId: ASSISTANT_SPACE_ID,
-        routineId: current.routineId ?? context.routineId
+        assistantId: current.assistantId ?? context.assistantId
       }
     case 'task':
       return { projectId: ASSISTANT_SPACE_ID, threadId: current.threadId ?? context.threadId }
@@ -222,7 +222,7 @@ export function memoryDestinationFor(
   const context: MemoryScopeLocation = {
     projectId: entry.projectId ?? fallback.projectId,
     threadId: entry.threadId ?? fallback.threadId,
-    routineId: entry.routineId ?? fallback.routineId
+    assistantId: entry.assistantId ?? fallback.assistantId
   }
   if (location === 'project' && !context.projectId) {
     throw new Error(
@@ -234,9 +234,9 @@ export function memoryDestinationFor(
       `"${entry.label}" needs a thread. Use Global, Projects, or Chats scope, or add this memory inside a thread.`
     )
   }
-  if (location === 'routine' && !context.routineId) {
+  if (location === 'routine' && !context.assistantId) {
     throw new Error(
-      `"${entry.label}" needs a routine. Use Assistant scope, or add this memory inside a routine.`
+      `"${entry.label}" needs an assistant. Use Assistant scope, or add this memory inside the assistant it belongs to.`
     )
   }
   if (location === 'task' && !context.threadId) {
@@ -259,7 +259,7 @@ export function normalizeMemoryEntryForLocation(
     ...entry,
     projectId: resolved.projectId,
     threadId: resolved.threadId,
-    routineId: resolved.routineId
+    assistantId: resolved.assistantId
   }
 }
 
@@ -312,7 +312,7 @@ export function planMemorySaveGroups(
       normalizeMemoryEntryForLocation(entry, {
         projectId: location.projectId,
         threadId: location.threadId,
-        routineId: entry.routineId
+        assistantId: entry.assistantId
       })
     )
   }
@@ -337,7 +337,7 @@ export function memoryEntriesHaveChanges(
       entry.priority !== original.priority ||
       entry.projectId !== original.projectId ||
       entry.threadId !== original.threadId ||
-      entry.routineId !== original.routineId ||
+      entry.assistantId !== original.assistantId ||
       entry.scopes.join(',') !== original.scopes.join(',') ||
       (entry.modelKeys ?? []).join('\0') !== (original.modelKeys ?? []).join('\0')
     )

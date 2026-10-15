@@ -143,7 +143,7 @@
     <div class="relative">
       <Search size={12} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
       <input
-        class="h-8 w-full rounded-lg border border-border bg-elevated pl-7 pr-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="h-8 w-full border border-border bg-elevated pl-7 pr-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder={`Search ${owner}/${repo} issues`}
         aria-label="Search issues"
         value={text}
@@ -151,7 +151,7 @@
       />
     </div>
 
-    <div class="max-h-72 min-h-24 overflow-y-auto rounded-lg border border-border">
+    <div class="max-h-72 min-h-24 overflow-y-auto border border-border">
       {#if busy && !searched}
         <div class="flex items-center justify-center gap-2 py-8 text-[0.6875rem] text-dimmed">
           <Loader2 size={12} class="animate-spin" />
@@ -191,7 +191,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       data-modal-dismiss
       onclick={onClose}
     >

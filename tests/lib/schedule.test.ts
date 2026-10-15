@@ -7,7 +7,7 @@ import {
   parseTimeOfDay,
   previousDueAt,
   scheduleIsActive,
-  type RoutineSchedule
+  type AssistantSchedule
 } from '../../src/lib/types/schedule'
 
 /** Build a local-time Date at a fixed wall clock so tests never depend on TZ. */
@@ -15,8 +15,8 @@ function at(year: number, month: number, day: number, hour: number, minute = 0):
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
 }
 
-const daily = (times: string[]): RoutineSchedule => ({ cadence: 'daily', times })
-const weekly = (weekdays: number[], times: string[]): RoutineSchedule => ({
+const daily = (times: string[]): AssistantSchedule => ({ cadence: 'daily', times })
+const weekly = (weekdays: number[], times: string[]): AssistantSchedule => ({
   cadence: 'weekly',
   times,
   weekdays
@@ -55,7 +55,7 @@ describe('nextRunAt', () => {
     expect(nextRunAt(daily(['09:00', '17:00']), from)).toBe(at(2026, 3, 10, 9, 0))
   })
 
-  it('rolls to the next day once all of today\'s times have passed', () => {
+  it("rolls to the next day once all of today's times have passed", () => {
     const from = at(2026, 3, 10, 18, 0)
     expect(nextRunAt(daily(['09:00', '17:00']), from)).toBe(at(2026, 3, 11, 9, 0))
   })
@@ -68,9 +68,7 @@ describe('nextRunAt', () => {
   it('skips weekends for weekdays', () => {
     // Friday 2026-03-13 18:00 -> Monday 2026-03-16 09:00
     const from = at(2026, 3, 13, 18, 0)
-    expect(nextRunAt({ cadence: 'weekdays', times: ['09:00'] }, from)).toBe(
-      at(2026, 3, 16, 9, 0)
-    )
+    expect(nextRunAt({ cadence: 'weekdays', times: ['09:00'] }, from)).toBe(at(2026, 3, 16, 9, 0))
   })
 
   it('honours the selected weekdays for weekly', () => {
@@ -110,7 +108,9 @@ describe('previousDueAt', () => {
   it('returns null before a once schedule has ever come due', () => {
     const onceAt = at(2026, 3, 10, 9, 0)
     expect(previousDueAt({ cadence: 'once', times: [], onceAt }, at(2026, 3, 10, 8, 0))).toBeNull()
-    expect(previousDueAt({ cadence: 'once', times: [], onceAt }, at(2026, 3, 10, 10, 0))).toBe(onceAt)
+    expect(previousDueAt({ cadence: 'once', times: [], onceAt }, at(2026, 3, 10, 10, 0))).toBe(
+      onceAt
+    )
   })
 })
 

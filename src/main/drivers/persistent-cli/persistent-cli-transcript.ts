@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentMessage, SessionAgentEvent, ThinkingLevel } from '../../../lib/types'
 import { appendPartDelta, mergeStreamedPart } from '../../../lib/agent-part-merge'
-import { estimateTokenCostUsd } from '../../providers/pricing'
+import { estimateModelCost } from '../../providers/pricing'
 import {
   isPermissionToolName,
   isQuestionToolName,
@@ -76,17 +76,32 @@ export function mergeSessionMessages(
  * When a harness reports tokens but no dollar cost, fill in an estimate from
  * the local model-catalog pricing so usage reports aren't zero. Only applies
  * when cost is genuinely missing; a provider-reported cost is never replaced.
+ *
+ * The estimate carries the rates, the price-snapshot version and the
+ * time-of-day window it used, so a stored dollar can be reproduced after the
+ * feed moves on instead of only being readable.
  */
 export function estimateMissingCost(message: AgentMessage): void {
   if (typeof message.cost === 'number') return
-  const estimated = estimateTokenCostUsd(message.modelId, message.providerId, message.tokens)
-  if (estimated === null) return
-  message.cost = estimated
+  const completedAt = message.completedAt ?? message.createdAt ?? Date.now()
+  const estimate = estimateModelCost(
+    // A harness records the id it was handed, which may be an alias (`haiku`,
+    // `default`); the id it reports on the stream is what prices.
+    message.pricingModelId ?? message.modelId,
+    message.providerId,
+    message.tokens,
+    new Date(completedAt)
+  )
+  if (!estimate) return
+  message.cost = estimate.costUsd
   message.costProvenance = {
     source: 'model_catalog',
-    sourceId: message.modelId,
+    sourceId: estimate.entryId,
     currency: 'USD',
-    capturedAt: message.completedAt ?? message.createdAt ?? Date.now()
+    capturedAt: completedAt,
+    rates: estimate.rates,
+    ...(estimate.priceVersion === null ? {} : { priceVersion: estimate.priceVersion }),
+    ...(estimate.window ? { priceWindow: estimate.window } : {})
   }
 }
 

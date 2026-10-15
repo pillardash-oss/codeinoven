@@ -9,16 +9,17 @@
  * pure merge rules in `thread-messages-merge.ts`, and streaming/event
  * application in `thread-messages-events.svelte.ts`.
  */
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
+import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
-  containsNewestTurnPrompt,
   EMPTY_MESSAGES,
+  pageOpensNewestTurn,
   threadKey,
   THREAD_MESSAGE_PRELOAD_WINDOW,
   type ThreadMessagesEntry
@@ -39,9 +40,39 @@ import type {
 
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
 
-/** Extra older pages a bounded load may fetch to reach the newest turn's
- *  prompt. A long working trace spans many rows, so the raw tail window can
- *  start mid-trace; the user's message must never be cut off by the cache. */
+/**
+ * Add the annotated pictures a message's media marks need.
+ *
+ * A mark is stored as coordinates over a picture the agent published, which the
+ * model cannot see. The picture is rebuilt with the marks drawn on it exactly
+ * once, here, so every path into a send   the composer, a queued message, a
+ * headless delivery   carries the same annotated attachment without each caller
+ * having to remember to build it. A mark on a video frame composes that second's
+ * frame, so a frame annotation costs the caller nothing extra either.
+ */
+async function withMarkAttachments(
+  projectId: string,
+  threadId: string,
+  attachments: PromptAttachment[],
+  references: readonly PromptReference[] | undefined
+): Promise<PromptAttachment[]> {
+  if (!references?.some((reference) => reference.kind === 'image')) return attachments
+  const composed = await composeMarkAttachments({
+    projectId,
+    scope: { kind: 'project', projectId, threadId },
+    references
+  })
+  return composed.length > 0 ? [...attachments, ...composed] : attachments
+}
+
+/** One older page fetched to reach the newest turn's opening prompt. A long
+ *  working trace spans dozens of rows (one row per step), so this is sized to
+ *  cover a whole turn in one or two round trips instead of walking it twelve
+ *  rows at a time from the raw tail window. */
+const TURN_ALIGNMENT_PAGE_SIZE = 100
+/** How many older pages a bounded load may add to reach that prompt. A turn
+ *  longer than this is left to the reader's own paging rather than turning a
+ *  navigation into an unbounded read. */
 const MAX_TURN_ALIGNMENT_PAGES = 4
 
 class ThreadMessagesStore {
@@ -58,6 +89,16 @@ class ThreadMessagesStore {
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as AgentEvent | undefined
       if (event) this.events.handle(event)
+    })
+    // A sibling instance writes into the very mirror this cache holds, and this
+    // process receives none of those writes, so main names the threads that
+    // changed. A thread this window already cached is re-read from its tail
+    // (additive, so a live turn keeps what it has); a thread it never cached
+    // needs nothing here, because opening it takes the cold-load path that reads
+    // the truth anyway.
+    subscribeGuarded('thread:messagesChanged', (projectId: string, threadId: string) => {
+      if (!this.loaded(projectId, threadId)) return
+      void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
     })
   }
 
@@ -240,13 +281,6 @@ class ThreadMessagesStore {
         serverMessages = await invoke('agent:loadMessages', projectId, threadId)
         entry.hasOlder = false
       } else {
-        const page = await invoke(
-          'thread:loadMessages',
-          projectId,
-          threadId,
-          undefined,
-          recentLimit
-        )
         // Bounded loads are used by thread switching and hover preloads. They
         // must remain mirror-only: a new thread, or a thread whose latest
         // mirror page contains only a user message, is a valid bounded result.
@@ -254,38 +288,9 @@ class ThreadMessagesStore {
         // an unbounded provider transcript read and can freeze the renderer on
         // long sessions. Callers that explicitly need the provider transcript
         // must use load() without a limit.
-        serverMessages = page.messages
-        entry.hasOlder = page.hasOlder
-        // Turn-aligned tail: a bounded tail window that starts mid-turn cuts
-        // the user's message out of the cached page, the view would begin at
-        // the working trace with the prompt missing until "Load earlier
-        // messages" was clicked. Extend the fetch just far enough to include
-        // the newest turn's prompt, bounded so a pathological mega-turn cannot
-        // turn navigation into an unbounded read.
-        let alignmentPages = 0
-        while (
-          serverMessages.length > 0 &&
-          entry.hasOlder &&
-          !containsNewestTurnPrompt(serverMessages) &&
-          alignmentPages < MAX_TURN_ALIGNMENT_PAGES
-        ) {
-          const oldest = serverMessages[0]
-          if (!oldest) break
-          const older = await invoke(
-            'thread:loadMessages',
-            projectId,
-            threadId,
-            { createdAt: oldest.createdAt, id: oldest.id },
-            recentLimit
-          )
-          if (older.messages.length === 0) {
-            entry.hasOlder = false
-            break
-          }
-          serverMessages = [...older.messages, ...serverMessages]
-          entry.hasOlder = older.hasOlder
-          alignmentPages++
-        }
+        const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
+        serverMessages = aligned.messages
+        entry.hasOlder = aligned.hasOlder
       }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
@@ -295,6 +300,83 @@ class ThreadMessagesStore {
       entry.loading = false
       this.cache.notify(projectId, threadId)
     }
+  }
+
+  /**
+   * Read a bounded tail page, then keep reading older pages until the set holds
+   * the prompt that opens the newest turn.
+   *
+   * A raw page lands wherever the row boundary falls, and on a long turn that
+   * is deep inside the turn. The transcript then mounts a window beginning at a
+   * working trace with the prompt that produced it still unloaded, so the user
+   * message, its trace and the answer cannot be read together   the whole point
+   * of one turn rendering as one block. Bounded by `MAX_TURN_ALIGNMENT_PAGES`,
+   * so a pathological mega-turn cannot turn a navigation into an unbounded
+   * read. Every caller that only needs the newest window goes through here.
+   */
+  async #fetchTurnAlignedTail(
+    projectId: string,
+    threadId: string,
+    recentLimit: number
+  ): Promise<{ messages: AgentMessage[]; hasOlder: boolean }> {
+    const page = await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit)
+    let messages = page.messages
+    let hasOlder = page.hasOlder
+    let alignmentPages = 0
+    while (
+      messages.length > 0 &&
+      hasOlder &&
+      !pageOpensNewestTurn(messages) &&
+      alignmentPages < MAX_TURN_ALIGNMENT_PAGES
+    ) {
+      const oldest = messages[0]
+      if (!oldest) break
+      const older = await invoke(
+        'thread:loadMessages',
+        projectId,
+        threadId,
+        { createdAt: oldest.createdAt, id: oldest.id },
+        Math.max(recentLimit, TURN_ALIGNMENT_PAGE_SIZE)
+      )
+      if (older.messages.length === 0) {
+        hasOlder = false
+        break
+      }
+      messages = [...older.messages, ...messages]
+      hasOlder = older.hasOlder
+      alignmentPages++
+    }
+    return { messages, hasOlder }
+  }
+
+  /**
+   * Merge a bounded tail page into the cache, extended backwards until the
+   * cache holds the prompt that opens the newest turn.
+   *
+   * This is the mirror-only refresh path (`thread:updated`, a resumed session,
+   * a completed fork). It has to be turn-aligned for the same reason the cold
+   * load is: a raw page merge marked the thread loaded with a window that began
+   * mid-turn, and the next visit then skipped the aligned cold load because the
+   * thread already read as loaded, leaving the newest turn rendered as a working
+   * trace with no user message above it until "Load earlier messages" was
+   * clicked. Additive (`mergePage`, never `reconcile`), so pages the cache
+   * already holds stay held. Returns whether older history remains.
+   */
+  async mergeTurnAlignedTail(projectId: string, threadId: string, limit: number): Promise<boolean> {
+    const entry = this.cache.entry(projectId, threadId)
+    const cached = this.cache.messages(projectId, threadId)
+    // A cache that already reaches the newest turn's prompt needs no older
+    // page: the refresh only has to pick up rows that landed at the tail.
+    if (cached.length > 0 && pageOpensNewestTurn(cached)) {
+      const page = await invoke('thread:loadMessages', projectId, threadId, undefined, limit)
+      entry.hasOlder = page.hasOlder
+      this.cache.mergePage(projectId, threadId, page.messages)
+      return page.hasOlder
+    }
+    const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, limit)
+    entry.hasOlder = aligned.hasOlder
+    this.cache.mergePage(projectId, threadId, aligned.messages)
+    return aligned.hasOlder
   }
 
   /** Bounded warmup for the message cache so opening the thread (sidebar
@@ -488,11 +570,14 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
+    // The annotated picture is built before the optimistic message, so the
+    // message the user sees is carrying exactly what the agent receives.
+    const outgoing = await withMarkAttachments(projectId, threadId, attachments, promptReferences)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
       text,
-      attachments,
+      outgoing,
       userMessageId,
       promptReferences,
       projectReferences,
@@ -507,7 +592,7 @@ class ThreadMessagesStore {
         threadId,
         settings,
         text,
-        attachments,
+        outgoing,
         specAction,
         messageId,
         promptContext,
@@ -538,30 +623,32 @@ class ThreadMessagesStore {
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
     this.cache.setRunIssue(projectId, threadId, null)
+    const outgoing = await withMarkAttachments(projectId, threadId, attachments, promptReferences)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
       text,
-      attachments,
+      outgoing,
       userMessageId,
       promptReferences,
       projectReferences,
       presentation
     )
-    // Point the busy run at the steered message immediately. Without this the
-    // run keeps the original turn's user message id until the first post-steer
-    // part event arrives, so the steered message dangles under a still-live
-    // working trace instead of opening its own fresh trace shell right away.
-    // This mirrors the regular send path, where the harness 'started' update
-    // rebinds the run to the new user message as soon as the turn opens.
-    agentRuns.setBusy(projectId, threadId, true, messageId)
+    // Hold the steered message optimistically: while the engine waits for the
+    // turn's in-flight tool to end, the run stays anchored to the prompt it is
+    // steering, so the held message renders under that turn's live working
+    // trace instead of above it. An immediately-delivered steer is un-held by
+    // its own result and opens its own trace shell; a failed steer drops the
+    // hold with the optimistic message.
+    entry.heldSteerIds.add(messageId)
+    this.cache.notify(projectId, threadId)
     try {
-      const confirmed = await invoke(
+      const result = await invoke(
         'agent:steerPrompt',
         projectId,
         threadId,
         text,
-        attachments,
+        outgoing,
         messageId,
         promptContext,
         promptReferences,
@@ -569,8 +656,13 @@ class ThreadMessagesStore {
         presentation,
         taskReferences
       )
-      this.confirmOptimistic(projectId, threadId, entry, messageId, confirmed)
+      if (!result.held) {
+        entry.heldSteerIds.delete(messageId)
+        agentRuns.setBusy(projectId, threadId, true, messageId)
+      }
+      this.confirmOptimistic(projectId, threadId, entry, messageId, result.message)
     } catch (error) {
+      entry.heldSteerIds.delete(messageId)
       this.rejectOptimistic(projectId, threadId, entry, messageId, error)
       throw error
     }

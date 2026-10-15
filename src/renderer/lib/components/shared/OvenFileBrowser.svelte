@@ -198,7 +198,7 @@
   <form class="flex items-center gap-2" onsubmit={submitTypedPath}>
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-8 w-8 shrink-0 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Go to the Oven home directory"
       aria-label="Go to the Oven home directory"
       disabled={disabled || !root}
@@ -208,7 +208,7 @@
     </button>
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-8 w-8 shrink-0 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Go up one folder"
       aria-label="Go up one folder"
       disabled={disabled || !canGoUp}
@@ -221,7 +221,7 @@
     </button>
     <input
       type="text"
-      class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
+      class="min-w-0 flex-1 border bg-elevated px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
       placeholder="/absolute/path/on/the/oven"
       title="Folder on the Oven"
       aria-label="Folder on the Oven"
@@ -230,7 +230,7 @@
     />
     <button
       type="submit"
-      class="shrink-0 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="shrink-0 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Open this folder"
       {disabled}
     >
@@ -242,7 +242,7 @@
     <form class="flex items-center gap-2" onsubmit={submitNewFolder}>
       <input
         type="text"
-        class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
+        class="min-w-0 flex-1 border bg-elevated px-3 py-1.5 text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
         placeholder="Folder name"
         title={`Create a folder in ${current}`}
         aria-label="New folder name"
@@ -252,7 +252,7 @@
       />
       <button
         type="submit"
-        class="shrink-0 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="shrink-0 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Create this folder"
         disabled={disabled || creatingBusy || !newFolderName.trim()}
       >
@@ -260,7 +260,7 @@
       </button>
       <button
         type="button"
-        class="shrink-0 rounded-lg px-2 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="shrink-0 px-2 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Cancel"
         disabled={creatingBusy}
         onclick={cancelCreate}
@@ -281,7 +281,7 @@
             {/if}
             <button
               type="button"
-              class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
+              class="max-w-32 truncate px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
               crumbs.length - 1
                 ? 'font-medium text-foreground'
                 : 'text-muted'}"
@@ -298,7 +298,7 @@
       {/if}
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Create a folder in this directory"
         aria-label="Create a folder in this directory"
         disabled={disabled || loading || !current}
@@ -315,7 +315,7 @@
   {/if}
 
   <div
-    class="max-h-56 overflow-y-auto rounded-lg border bg-elevated/40"
+    class="max-h-56 overflow-y-auto border bg-elevated/40"
     role="group"
     aria-label="Folders on the Oven"
   >

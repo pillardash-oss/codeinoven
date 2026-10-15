@@ -16,9 +16,7 @@
 <div class="flex h-full items-center justify-center px-8 text-center">
   <div class="max-w-64">
     {#if icon}
-      <span
-        class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-raised text-dimmed"
-      >
+      <span class="mx-auto flex h-10 w-10 items-center justify-center bg-raised text-dimmed">
         {@render icon()}
       </span>
     {/if}

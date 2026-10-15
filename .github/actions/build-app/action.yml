@@ -33,6 +33,13 @@ inputs:
       this because the prerelease tag sorts differently from the branch version.
     required: false
     default: ''
+  msix:
+    description: >-
+      Also build the Microsoft Store (MSIX) package. Only meaningful for the
+      `win` target, and only switched on once Partner Center has assigned the
+      package identity `scripts/msix.ts` requires.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -135,4 +142,29 @@ runs:
           dist/*.blockmap
           dist/*.yml
           .cio/tmp/startup-smoke-*.json
+        if-no-files-found: error
+
+    # The Store package is built from the app directory the packaging step above
+    # already produced (`--prepackaged`), so the native launcher, the fuses and
+    # the extra resources are not built a second time. It is uploaded as its own
+    # artifact rather than joining `codeinoven-<platform>` on purpose: an MSIX is
+    # a Store submission, not a user-facing download, so it is deliberately kept
+    # out of the release's checksum manifest, the GitHub release assets and the
+    # download mirror.
+    #
+    # gated on a repository variable because the identity Partner Center assigns
+    # cannot exist before the app name is reserved; `scripts/msix.ts` refuses to
+    # build against a placeholder, so flipping it on too early fails the release
+    # rather than shipping a package with an invented identity.
+    - name: Build the Microsoft Store package
+      if: inputs.target == 'win' && inputs.msix == 'true'
+      shell: bash
+      run: bun scripts/msix.ts --prepackaged dist/win-unpacked --arch "${{ inputs.arch }}"
+
+    - name: Upload the Microsoft Store package
+      if: inputs.target == 'win' && inputs.msix == 'true'
+      uses: actions/upload-artifact@v6
+      with:
+        name: codeinoven-msix
+        path: dist/*.msix
         if-no-files-found: error

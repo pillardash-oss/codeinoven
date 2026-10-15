@@ -1,20 +1,23 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    KeyRound,
-    Loader2,
-    ShieldCheck,
-    X
-  } from '@lucide/svelte'
+  import { KeyRound, ShieldCheck } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
-  import { slide } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardCloseButton from '../shared/CardCloseButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardStepper from '../shared/CardStepper.svelte'
+  import { cardFrameClass } from '../shared/card-frame'
+  import {
+    dismissSlide,
+    foldSlide,
+    playEntryStep,
+    rowArrive,
+    type StepDirection
+  } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -64,6 +67,9 @@
   let actionError = $state('')
   let folded = $state(false)
   let alternativeEditor = $state<RichMarkdownEditor>()
+  /** The body every secret shares, so a step moves the card's own content
+   *  instead of swapping it out. */
+  let entryBody = $state<HTMLElement | undefined>(undefined)
 
   let total = $derived(request.questions.length)
   let question = $derived(request.questions[currentIndex])
@@ -79,8 +85,10 @@
   let filledCount = $derived(request.questions.filter((_, index) => entryAnswered(index)).length)
   let allFilled = $derived(filledCount === total)
   let currentAnswered = $derived(entryAnswered(currentIndex))
-  // The send key resolved through the user's keymap overrides, so the Next and
-  // Submit buttons advertise whichever combination actually advances the card.
+  // The close in the head ends the whole request, never the entry on screen.
+  let dismissTitle = $derived(total > 1 ? 'Dismiss all secrets' : 'Dismiss this request')
+  // The send key resolved through the user's keymap overrides, so the stepper's
+  // forward arrow advertises whichever combination advances the card.
   let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
   // The request carries its own deadline, so the countdown is the same one the
   // main process is running: the card closes when it reaches zero. Time is an
@@ -102,6 +110,18 @@
     if (remainingMs !== null) return formatRemaining(remainingMs)
     return timerPaused ? 'Paused' : 'No deadline'
   })
+  // The chip only claims urgency while the clock is running and the window is
+  // nearly gone; "No deadline" is a state, not a warning.
+  let timerTone = $derived<'default' | 'paused' | 'urgent'>(
+    remainingMs === null ? 'paused' : remainingMs <= 60_000 ? 'urgent' : 'default'
+  )
+  let timerTitle = $derived(
+    remainingMs === null
+      ? timerPaused
+        ? 'The countdown is paused while you fill this card in'
+        : 'This request has no deadline'
+      : 'The card closes when the time runs out; ask the agent again for a new one'
+  )
   /** Id of the current entry's alternative editor, unique per entry. */
   const alternativeTargetId = $derived(`secret-alternative-${request.requestId}-${currentIndex}`)
   /**
@@ -163,6 +183,17 @@
   }
 
   /**
+   * Show another secret. Both arrows and the send key go through here, so the
+   * step motion plays once, in the direction the card actually moved.
+   */
+  function showEntry(index: number): void {
+    if (index === currentIndex) return
+    const direction: StepDirection = index > currentIndex ? 1 : -1
+    if (entryBody) playEntryStep(entryBody, direction)
+    currentIndex = index
+  }
+
+  /**
    * Move to the next entry, or submit when the current one is the last. Used by
    * the footer button, by Cmd/Ctrl+Enter in the alternative editor, and by the
    * same combination in the value field.
@@ -170,7 +201,7 @@
   function advance(): void {
     if (working || !currentAnswered) return
     if (currentIndex < total - 1) {
-      currentIndex += 1
+      showEntry(currentIndex + 1)
       return
     }
     void handleSubmit()
@@ -194,11 +225,7 @@
   }
 
   function goPrev(): void {
-    if (currentIndex > 0) currentIndex -= 1
-  }
-
-  function goNext(): void {
-    if (currentIndex < total - 1) currentIndex += 1
+    if (currentIndex > 0) showEntry(currentIndex - 1)
   }
 
   async function handleSubmit(): Promise<void> {
@@ -242,68 +269,45 @@
 
 <section
   out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border bg-surface shadow-sm"
+  class={cardFrameClass('replace', 'overflow-hidden')}
   aria-label="Agent secret request"
 >
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-    <div class="min-w-0">
-      <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        {question.header ?? 'Secret'}
-      </p>
-      {#if total > 1}
-        <p class="mt-0.5 text-xs tabular-nums text-dimmed">
-          Secret {currentIndex + 1} of {total}
-        </p>
-      {/if}
-    </div>
-
-    <div class="flex shrink-0 items-center gap-1">
-      <span
-        class="mr-1 flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted"
-        aria-label={timerPaused ? 'The countdown is paused' : `Time remaining: ${remainingLabel}`}
-        title={timerPaused
-          ? 'The countdown is paused while you fill this card in'
-          : 'The card closes when the time runs out; ask the agent again for a new one'}
-      >
-        <Clock size={12} />
-        {remainingLabel}
-      </span>
-      {#if total > 1}
-        <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          disabled={currentIndex === 0 || working}
-          onclick={goPrev}
-          title="Previous secret"
-          aria-label="Previous secret"
-        >
-          <ChevronLeft size={15} />
-        </button>
-        <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          disabled={currentIndex === total - 1 || working}
-          onclick={goNext}
-          title="Next secret"
-          aria-label="Next secret"
-        >
-          <ChevronRight size={15} />
-        </button>
-      {/if}
-      <button
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-30"
+  <!-- The card that takes the composer's place while the agent waits for a
+     credential: what it needs, the field, and the two actions that end it. -->
+  <CardHead
+    icon={KeyRound}
+    title={question.header ?? 'Secret'}
+    chip={{
+      text: remainingLabel,
+      tone: timerTone,
+      title: timerTitle,
+      label: timerPaused ? 'The countdown is paused' : `Time remaining: ${remainingLabel}`
+    }}
+    foldLabel="secret request"
+    bind:folded
+  >
+    {#snippet actions()}
+      <AgentCardChatActions
+        onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
+        onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
+        subject="secret request"
+        disabled={working}
+      />
+    {/snippet}
+    {#snippet controls()}
+      <CardCloseButton
+        title={dismissTitle}
         disabled={working}
         onclick={() => void handleDismiss()}
-        title="Discard this secret request"
-        aria-label="Discard this secret request"
-      >
-        <X size={15} />
-      </button>
-      <CardFoldToggle bind:folded label="secret request" />
-    </div>
-  </div>
+      />
+    {/snippet}
+  </CardHead>
 
   {#if !folded}
     <div transition:slide={foldSlide()}>
-      <div class="space-y-3 p-4">
+      <!-- Every secret renders into this one body, so stepping moves the body's
+         content (see `showEntry`) instead of the body animating in again. -->
+      <div bind:this={entryBody} class="space-y-3 p-4">
         <div class="space-y-1">
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
@@ -332,7 +336,7 @@
                   disabled={working}
                   placeholder="Say what the agent should use instead, or name the variable you already provided…"
                   onValueChange={pauseCountdown}
-                  class="min-h-20 w-full resize-y overflow-y-auto rounded-lg border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                  class="min-h-20 w-full resize-y overflow-y-auto  border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   containerClass="min-w-0 flex-1"
                   ariaLabel="Alternative instruction"
                   onSubmit={advance}
@@ -374,7 +378,7 @@
                 </span>
                 <input
                   id={`secret-value-${request.requestId}-${currentIndex}`}
-                  class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                  class="h-10 w-full border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   type={currentRevealed ? 'text' : 'password'}
                   autocomplete="off"
                   autocapitalize="off"
@@ -408,7 +412,11 @@
         {/key}
 
         {#if actionError}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p
+            class="bg-danger/10 px-3 py-2 text-xs text-danger"
+            role="alert"
+            transition:fly={rowArrive()}
+          >
             {actionError}
           </p>
         {/if}
@@ -416,15 +424,16 @@
     </div>
   {/if}
 
-  <div
-    class="secret-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
-  >
-    <div class="flex min-w-0 items-center gap-2">
-      <AgentCardChatActions
-        onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
-        onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
-        subject="secret request"
+  <CardFoot class="secret-card-footer">
+    {#snippet left()}
+      <CardStepper
+        subject="secret"
+        index={currentIndex}
+        {total}
+        advanceHint={advanceShortcutLabel}
         disabled={working}
+        onPrev={goPrev}
+        onNext={advance}
       />
       <p
         class="flex min-w-0 items-center gap-1.5 text-xs text-muted"
@@ -434,55 +443,37 @@
         <ShieldCheck size={13} class="shrink-0 text-primary" />
         <span class="agent-card-footer-note-text min-w-0 truncate">Secrets are safe</span>
       </p>
-    </div>
-    <div class="flex min-w-0 shrink items-center justify-end gap-2">
-      {#if total > 1}
-        <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
-      {/if}
-      <button
-        class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+    {/snippet}
+    {#snippet right()}
+      <!-- Answering with an instruction is still an answer, so it sits on the
+           truthy side attached to Submit, never beside Reject-shaped company. -->
+      <CardButton
+        label={showingAlternative ? 'Use a value instead' : 'Provide alternative'}
+        title={showingAlternative
+          ? 'Answer with a value instead of an instruction'
+          : 'Provide an alternative instead'}
+        variant="secondary"
         disabled={working}
         onclick={toggleAlternativeMode}
-      >
-        {showingAlternative ? 'Use a value instead' : 'Provide alternative'}
-      </button>
-      {#if currentIndex < total - 1}
-        <button
-          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working || !currentAnswered}
-          onclick={advance}
-          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
-        >
-          Next
-          <ChevronRight size={13} />
-        </button>
-      {:else}
-        <button
-          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working || !allFilled}
-          onclick={() => void handleSubmit()}
-          title={advanceShortcutLabel
-            ? `Store the secret and answer the agent (${advanceShortcutLabel})`
-            : 'Store the secret and answer the agent'}
-        >
-          {#if working}
-            <Loader2 size={13} class="animate-spin" />
-            Storing…
-          {:else}
-            <ShieldCheck size={13} />
-            Submit
-          {/if}
-        </button>
-      {/if}
-    </div>
-  </div>
+      />
+      <CardButton
+        label={working ? 'Storing…' : 'Submit'}
+        title="Store the secret and answer the agent"
+        icon={ShieldCheck}
+        variant="primary"
+        loading={working}
+        disabled={working || !allFilled}
+        onclick={() => void handleSubmit()}
+      />
+    {/snippet}
+  </CardFoot>
 </section>
 
 <style>
   /*
     Same footer contract as the question card: the row is the query container so
-    the shared chat actions (and the security note here) give way before the
-    card's own controls. The shield keeps its tooltip when the note text hides.
+    the note gives way before the card's own controls. The shield keeps its
+    tooltip when the note text hides.
   */
   .secret-card-footer {
     container: agent-card-footer / inline-size;

@@ -13,11 +13,11 @@
   let { title, items, onEdit, onAdd, onRemove }: Props = $props()
 </script>
 
-<div class="rounded-xl border bg-surface p-4">
-  <div class="flex items-center justify-between">
-    <h3 class="font-semibold">{title}</h3>
+<div class="border border-border bg-surface p-4">
+  <div class="flex items-center justify-between border-b border-border pb-1.5">
+    <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">{title}</h3>
     <button
-      class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
+      class="p-1 text-dimmed hover:bg-elevated hover:text-foreground"
       aria-label={`Add ${title.toLowerCase()}`}
       title={`Add ${title.toLowerCase()}`}
       onclick={onAdd}><Plus size={12} /></button
@@ -34,7 +34,7 @@
           onChange={(value) => onEdit(index, value)}
         />
         <button
-          class="rounded p-1 text-dimmed opacity-0 hover:text-danger group-hover:opacity-100"
+          class="p-1 text-dimmed opacity-0 hover:text-danger group-hover:opacity-100"
           aria-label={`Remove ${title} item ${index + 1}`}
           title="Remove item"
           onclick={() => onRemove(index)}><X size={10} /></button

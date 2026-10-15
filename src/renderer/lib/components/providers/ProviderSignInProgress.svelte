@@ -22,7 +22,7 @@
       {oauth.status || 'Waiting for the provider…'}
     </p>
     <button
-      class="shrink-0 rounded-lg border bg-elevated px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-overlay"
+      class="shrink-0 border bg-elevated px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-overlay"
       type="button"
       title="Cancel the sign-in"
       onclick={() => void oauth.cancel()}
@@ -31,7 +31,7 @@
     </button>
   </div>
   {#if oauth.deviceCode}
-    <div class="rounded-lg border bg-surface p-2.5 text-center">
+    <div class="border bg-surface p-2.5 text-center">
       <p class="text-[0.625rem] text-dimmed">
         Enter this code at
         <button
@@ -58,7 +58,7 @@
         <div class="space-y-1">
           {#each oauth.prompt.options as option (option.id)}
             <button
-              class="w-full rounded-lg border bg-elevated px-3 py-2 text-left text-xs text-foreground hover:bg-overlay"
+              class="w-full border bg-elevated px-3 py-2 text-left text-xs text-foreground hover:bg-overlay"
               type="button"
               title="Choose {option.label}"
               onclick={() => void oauth.answerSelect(option.id)}
@@ -77,7 +77,7 @@
           type={oauth.prompt.type === 'secret' ? 'password' : 'text'}
           autocomplete="off"
           spellcheck="false"
-          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+          class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
           placeholder={oauth.prompt.placeholder ??
             (oauth.prompt.type === 'secret' ? 'Enter the value' : 'Paste the code')}
           bind:value={oauth.promptAnswer}
@@ -90,7 +90,7 @@
           }}
         />
         <button
-          class="flex h-8 w-full items-center justify-center rounded-lg bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-8 w-full items-center justify-center bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
           title="Continue the sign-in"
           disabled={oauth.promptAnswer.trim() === ''}

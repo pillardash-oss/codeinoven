@@ -152,7 +152,7 @@
   }
 </script>
 
-<div class="overflow-x-auto rounded-xl border bg-surface">
+<div class="overflow-x-auto border bg-surface">
   <table class="w-full text-left text-xs" aria-label={label}>
     <thead>
       <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">

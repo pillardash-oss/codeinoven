@@ -36,8 +36,9 @@
     countBadge?: string
     countBadgeTone?: 'working'
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
-     *  info for ephemeral tools that match their in-panel icon colour. */
-    tone?: 'warning' | 'info'
+     *  and nothing else   blue on the rail means work in progress, never the
+     *  kind of tool an icon stands for. */
+    tone?: 'warning'
     /**
      * A floating flyout (e.g. a dropdown) docked to this specific item. Rendered
      * as a sibling of the trigger button inside a shared `position: relative`
@@ -73,14 +74,12 @@
       .join('|')
   )
 
-  /** Toned tools keep their colour in every state so the rail icon reads as the
-   *  same tool as its panel icon; the shared highlight behind the current item
-   *  paints the active background for every tool. */
+  /** A toned tool   an attention-worthy entry such as a written thread note   keeps
+   *  its colour in every state; the shared highlight behind the current item
+   *  paints the active background for every tool, so an untinted icon reads as
+   *  one more tool and never as a second class of thing. */
   function toneClass(item: ContextDockItem): string {
     if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
-    if (item.tone === 'info') {
-      return item.active ? 'text-info' : 'text-info/80 hover:bg-elevated hover:text-info'
-    }
     return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
   }
 </script>
@@ -107,7 +106,7 @@
       <div class="relative">
         <button
           type="button"
-          class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {toneClass(
+          class="relative flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {toneClass(
             item
           )}"
           aria-label={item.label}
@@ -120,10 +119,10 @@
             <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
           {:else if item.appearance}
             {#if item.appearance.iconUrl}
-              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
             {:else}
               <span
-                class="h-3.5 w-3.5 rounded-full"
+                class="h-3.5 w-3.5"
                 style="background-color: {item.appearance.color}"
               ></span>
             {/if}
@@ -136,7 +135,6 @@
                 <StatusBadge
                   tone={item.badge}
                   variant="spinner"
-                  animated
                   title={item.badgeTitle ?? item.label}
                 />
               {:else}
@@ -146,7 +144,7 @@
           {/if}
           {#if item.countBadge !== undefined}
             <span
-              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
+              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
               'working'
                 ? 'bg-thread-working text-on-primary ring-thread-working'
                 : 'bg-raised text-muted ring-border'}"

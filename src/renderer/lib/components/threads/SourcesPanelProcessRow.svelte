@@ -29,7 +29,7 @@
 >
   <div class="flex items-start gap-3">
     <span
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised {isAppWide
+      class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised {isAppWide
         ? 'text-muted'
         : 'text-primary'}"
     >
@@ -46,12 +46,14 @@
         </p>
         {#if isAppWide}
           <span
-            class="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-500"
+            class="shrink-0 border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-amber-500 uppercase"
           >
             App
           </span>
         {/if}
-        <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
+        <span
+          class="shrink-0 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
+        >
           Running
         </span>
       </div>
@@ -67,7 +69,7 @@
     </div>
     <button
       type="button"
-      class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[0.6875rem] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+      class="flex h-7 shrink-0 items-center gap-1.5 border border-danger/30 bg-danger/10 px-2 text-[0.6875rem] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
       disabled={stopping}
       aria-label={`Stop ${name} process ${runningProcess.pid}`}
       title={stopTitle}

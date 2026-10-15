@@ -66,6 +66,12 @@ interface UsageAggregateRow {
   duration_ms: number
 }
 
+/** A `harness_usage` row joined with its ledger cost-status rollup. */
+interface HarnessUsageWithCostStatusRow extends HarnessUsageRow {
+  priced_cost_events: number
+  unavailable_cost_events: number
+}
+
 interface LocalUsageAggregateRow extends UsageAggregateRow {
   harness_id: string | null
   provider_id: string | null
@@ -172,7 +178,10 @@ function accountedTokenTotal(event: UsageEvent): number | null {
   return reported.length > 0 ? reported.reduce((sum, value) => sum + value, 0) : null
 }
 
-function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
+function rowToHarnessUsage(
+  row: HarnessUsageRow,
+  costStatus?: Pick<HarnessUsage, 'pricedCostEvents' | 'unavailableCostEvents'>
+): HarnessUsage {
   return {
     projectId: row.project_id,
     threadId: row.thread_id,
@@ -182,6 +191,8 @@ function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
     ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
+    pricedCostEvents: costStatus?.pricedCostEvents ?? 0,
+    unavailableCostEvents: costStatus?.unavailableCostEvents ?? 0,
     tokens: tokensFromRow(row),
     durationMs: row.duration_ms,
     firstUsedAt: row.first_used_at,
@@ -583,16 +594,43 @@ export class HarnessUsageRepo {
     return rows.map((row) => row.harness_id)
   }
 
-  /** All cumulative usage rows for one thread, newest activity first. */
+  /**
+   * All cumulative usage rows for one thread, newest activity first.
+   *
+   * The cost-status rollup rides along in the same statement as a grouped
+   * `usage_events` subquery, so this stays a single synchronous read on the
+   * thread's indexed ledger rows rather than a second main-thread scan. The
+   * subquery groups by provider as well as harness so each row's share is
+   * exact and the renderer's per-harness sum over provider rows stays correct.
+   */
   listByThread(projectId: string, threadId: string): HarnessUsage[] {
-    const rows = this.db.all<HarnessUsageRow>(
-      `SELECT * FROM harness_usage
-       WHERE project_id = ? AND thread_id = ?
-       ORDER BY last_used_at DESC`,
+    const rows = this.db.all<HarnessUsageWithCostStatusRow>(
+      `SELECT hu.*,
+              COALESCE(status.priced_cost_events, 0) AS priced_cost_events,
+              COALESCE(status.unavailable_cost_events, 0) AS unavailable_cost_events
+       FROM harness_usage hu
+       LEFT JOIN (
+         SELECT harness_id,
+                COALESCE(provider_id, '') AS provider_id,
+                SUM(CASE WHEN cost_status <> 'unavailable' THEN 1 ELSE 0 END) AS priced_cost_events,
+                SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_cost_events
+         FROM usage_events
+         WHERE thread_id = ?
+         GROUP BY harness_id, COALESCE(provider_id, '')
+       ) status
+         ON status.harness_id = hu.harness_id AND status.provider_id = hu.provider_id
+       WHERE hu.project_id = ? AND hu.thread_id = ?
+       ORDER BY hu.last_used_at DESC`,
+      threadId,
       projectId,
       threadId
     )
-    const usages = rows.map(rowToHarnessUsage)
+    const usages = rows.map((row) =>
+      rowToHarnessUsage(row, {
+        pricedCostEvents: row.priced_cost_events,
+        unavailableCostEvents: row.unavailable_cost_events
+      })
+    )
     const models = this.modelsFor(threadId)
     if (models.length > 0) {
       const byKey = new Map<string, HarnessModelUsage[]>()
@@ -627,7 +665,7 @@ export class HarnessUsageRepo {
     const rows = this.db.all<HarnessUsageRow>(
       'SELECT * FROM harness_usage ORDER BY last_used_at DESC'
     )
-    return rows.map(rowToHarnessUsage)
+    return rows.map((row) => rowToHarnessUsage(row))
   }
 
   /** Range-aware local Profile analytics derived only from usage snapshots. */

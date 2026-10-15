@@ -12,7 +12,7 @@
 <div class="flex flex-wrap items-center gap-1" aria-label="Selection quick chat actions">
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+    class="flex h-8 items-center gap-1.5 px-2 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
     title="Explain this selection in a temporary read-only chat"
     onclick={onExplain}
   >
@@ -21,7 +21,7 @@
   </button>
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+    class="flex h-8 items-center gap-1.5 px-2 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
     title="Start a temporary read-only quick chat with this selection"
     onclick={onQuickChat}
   >

@@ -15,6 +15,23 @@ import { getConfigRoot } from '../../lib/utils'
 const HEARTBEAT_MS = 30_000
 const CHECKPOINT_EVENT_STALE_MS = 120_000
 /**
+ * How long a batch of shared-thread invalidations waits for more before it is
+ * published.
+ *
+ * A turn touches thread state many times per second (status ticks, mirrored
+ * messages), and every announcement costs each sibling one re-read of the truth,
+ * so the batch is what keeps this channel off the per-token path. It is short
+ * enough that a sibling feels live.
+ */
+const THREAD_CHANGE_COALESCE_MS = 250
+/** An invalidation older than this describes state a sibling has re-read since. */
+const THREAD_CHANGE_STALE_MS = CHECKPOINT_EVENT_STALE_MS
+/**
+ * Thread ids one published batch may carry, so a pathological burst stays
+ * bounded. A remainder is published as the next batch instead of being dropped.
+ */
+const THREAD_CHANGE_BATCH_LIMIT = 64
+/**
  * An entry whose heartbeat is older than this is dead regardless of what
  * `process.kill(pid, 0)` says. PIDs get reused by unrelated processes, so a
  * stale file must never make a fresh instance believe a phantom instance is
@@ -30,6 +47,41 @@ interface CrossInstanceCheckpointEvent {
   event: CheckpointUpdatedEvent
 }
 
+/** One thread whose shared state changed, named by both ids the renderer keys on. */
+export interface CrossInstanceThreadChange {
+  projectId: string
+  threadId: string
+}
+
+/** Which part of a thread's shared state a writer changed. */
+export type ThreadChangeKind =
+  /** The persisted thread row: status, read flag, title, pin, archive, and the like. */
+  | 'row'
+  /** The mirrored conversation: a message row was written or rewritten. */
+  | 'messages'
+  /** The thread itself: its row and mirror are gone. */
+  | 'deleted'
+
+/**
+ * A batch of shared-thread invalidations one process published for its siblings.
+ *
+ * The batch is an invalidation, never the data: a sibling that receives it
+ * re-reads the thread's row and mirror from the shared database, except for a
+ * deletion, which nothing can be re-read for. Losing an intermediate batch is
+ * therefore harmless, because what matters is the state, not the history of
+ * changes that produced it.
+ */
+export interface CrossInstanceThreadEvent {
+  id: string
+  emittedAt: number
+  /** Threads whose persisted row changed. */
+  rows: CrossInstanceThreadChange[]
+  /** Threads whose mirrored conversation changed. */
+  messages: CrossInstanceThreadChange[]
+  /** Threads that were deleted, row and mirror together. */
+  deleted: CrossInstanceThreadChange[]
+}
+
 interface InstanceEntry {
   pid: number
   startedAt: number
@@ -42,6 +94,8 @@ interface InstanceEntry {
   instanceKey?: string
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
+  /** Latest batch of shared-thread invalidations emitted by this process. */
+  threadEvent?: CrossInstanceThreadEvent
 }
 
 /**
@@ -86,19 +140,30 @@ function oldestEntry(entries: InstanceEntry[]): InstanceEntry | undefined {
  * lock. This powers the multi-instance close behaviour: when another live
  * instance exists it can keep a project's thread running, so the closing
  * instance skips destroying harness connections and just lets its window go.
+ *
+ * Each entry also carries the latest invalidations the process published (a
+ * settled checkpoint, changed thread rows and mirror), so a sibling re-reads the
+ * shared state it cannot see being written.
  */
 export class InstanceRegistry {
-  private readonly dir: string
   private readonly selfEntry: InstanceEntry
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private watcher: FSWatcher | null = null
   private checkpointEventSequence = 0
   private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
+  private readonly threadChangeListeners = new Set<(event: CrossInstanceThreadEvent) => void>()
   private readonly liveInstanceListeners = new Set<() => void>()
   private readonly liveSetListeners = new Set<() => void>()
   /** Local consumers of this process's turn-activity announcements. */
   private readonly turnActivityListeners = new Set<() => void>()
   private readonly seenCheckpointEvents = new Set<string>()
+  private readonly seenThreadEvents = new Set<string>()
+  private threadEventSequence = 0
+  private threadChangeTimer: ReturnType<typeof setTimeout> | null = null
+  /** Row, mirror and deletion changes waiting to be published as one batch. */
+  private readonly pendingRowChanges = new Map<string, CrossInstanceThreadChange>()
+  private readonly pendingMessageChanges = new Map<string, CrossInstanceThreadChange>()
+  private readonly pendingDeletedChanges = new Map<string, CrossInstanceThreadChange>()
   /** Live process ids as of the last membership check, to filter heartbeat noise. */
   private liveSetSignature = ''
   private readonly ownerFilePath: string
@@ -106,11 +171,20 @@ export class InstanceRegistry {
   /** Last effective owner announced, so only a real hand-off notifies. */
   private ownerSignature = ''
 
-  constructor() {
-    this.dir = join(getConfigRoot(), 'instances')
+  /**
+   * The registry directory and the pid this registry speaks for are seams so a
+   * test can stand two peers up on one scratch directory without touching the
+   * config root a user's app is using (the same seam `InstanceHandoffBus`
+   * carries). Production always takes the shared `instances` directory under that
+   * root and the process's own pid.
+   */
+  constructor(
+    private readonly dir: string = join(getConfigRoot(), 'instances'),
+    pid: number = process.pid
+  ) {
     this.ownerFilePath = join(this.dir, 'owner.json')
     this.selfEntry = {
-      pid: process.pid,
+      pid,
       startedAt: Date.now(),
       lastHeartbeat: Date.now(),
       instanceKey: instanceIdentityKey()
@@ -179,6 +253,122 @@ export class InstanceRegistry {
   onCheckpointUpdated(listener: (event: CheckpointUpdatedEvent) => void): () => void {
     this.checkpointListeners.add(listener)
     return () => this.checkpointListeners.delete(listener)
+  }
+
+  /**
+   * Announce that this process changed a thread's shared state.
+   *
+   * Two instances share one thread table and one mirrored conversation, while a
+   * window only ever sees the writes its own process makes. A sibling therefore
+   * holds a row or a transcript that this process has since moved on from, and
+   * this is how it finds out: the announcement names the threads, and the
+   * sibling re-reads them from the shared database. The batch rides on this
+   * process's registry entry, so delivery is event-driven with no port, no
+   * second file and no polling, and a burst of writes costs one write.
+   */
+  publishThreadChanged(projectId: string, threadId: string, kind: ThreadChangeKind): void {
+    if (!projectId || !threadId) return
+    this.pendingFor(kind).set(`${projectId}:${threadId}`, { projectId, threadId })
+    this.armThreadChangeFlush()
+  }
+
+  /** Where one kind of change waits for the next published batch. */
+  private pendingFor(kind: ThreadChangeKind): Map<string, CrossInstanceThreadChange> {
+    if (kind === 'messages') return this.pendingMessageChanges
+    if (kind === 'deleted') return this.pendingDeletedChanges
+    return this.pendingRowChanges
+  }
+
+  /** Arm the coalescing timer, so a burst of writes costs one published batch. */
+  private armThreadChangeFlush(): void {
+    if (this.threadChangeTimer) return
+    this.threadChangeTimer = setTimeout(() => {
+      this.threadChangeTimer = null
+      this.flushThreadChanged()
+    }, THREAD_CHANGE_COALESCE_MS)
+    this.threadChangeTimer.unref?.()
+  }
+
+  /** Subscribe to shared-thread invalidations emitted by another app process. */
+  onThreadChanged(listener: (event: CrossInstanceThreadEvent) => void): () => void {
+    this.threadChangeListeners.add(listener)
+    return () => this.threadChangeListeners.delete(listener)
+  }
+
+  /**
+   * Publish the pending batch, then re-arm for whatever did not fit in it.
+   *
+   * A failure to write is not fatal: the local renderers were already told, and
+   * the next announced change carries the same threads again.
+   */
+  private flushThreadChanged(): void {
+    const rows = takeChanges(this.pendingRowChanges, THREAD_CHANGE_BATCH_LIMIT)
+    const messages = takeChanges(this.pendingMessageChanges, THREAD_CHANGE_BATCH_LIMIT)
+    const deleted = takeChanges(this.pendingDeletedChanges, THREAD_CHANGE_BATCH_LIMIT)
+    if (rows.length === 0 && messages.length === 0 && deleted.length === 0) return
+    this.threadEventSequence += 1
+    this.selfEntry.threadEvent = {
+      id: `${this.selfEntry.pid}:${this.selfEntry.startedAt}:${this.threadEventSequence}`,
+      emittedAt: Date.now(),
+      rows,
+      messages,
+      deleted
+    }
+    try {
+      this.writeEntry()
+    } catch {
+      // Cross-instance delivery is best effort; a later change re-announces it.
+    }
+    if (
+      this.pendingRowChanges.size > 0 ||
+      this.pendingMessageChanges.size > 0 ||
+      this.pendingDeletedChanges.size > 0
+    ) {
+      this.armThreadChangeFlush()
+    }
+  }
+
+  /**
+   * Deliver one sibling's batch, once.
+   *
+   * A repeat of an event id is the same batch seen again (the entry carries the
+   * latest batch until the next one replaces it, and every heartbeat write
+   * re-reads it), so ids are remembered and a stale batch is dropped.
+   */
+  private consumeThreadEvent(entry: InstanceEntry): void {
+    const batch = entry.threadEvent
+    if (
+      !batch ||
+      typeof batch.id !== 'string' ||
+      typeof batch.emittedAt !== 'number' ||
+      this.seenThreadEvents.has(batch.id)
+    ) {
+      return
+    }
+    if (Date.now() - batch.emittedAt > THREAD_CHANGE_STALE_MS) return
+    this.seenThreadEvents.add(batch.id)
+    if (this.seenThreadEvents.size > 1_024) {
+      const oldest = this.seenThreadEvents.values().next().value
+      if (oldest) this.seenThreadEvents.delete(oldest)
+    }
+    const rows = threadChanges(batch.rows)
+    const messages = threadChanges(batch.messages)
+    const deleted = threadChanges(batch.deleted)
+    if (rows.length === 0 && messages.length === 0 && deleted.length === 0) return
+    const event: CrossInstanceThreadEvent = {
+      id: batch.id,
+      emittedAt: batch.emittedAt,
+      rows,
+      messages,
+      deleted
+    }
+    for (const listener of this.threadChangeListeners) {
+      try {
+        listener(event)
+      } catch {
+        // One consumer failing must not prevent the others.
+      }
+    }
   }
 
   /** Wake services that may need to take over after another process exits. */
@@ -558,6 +748,7 @@ export class InstanceRegistry {
             if (!candidate.endsWith('.json') || candidate === `${this.selfEntry.pid}.json`) continue
             const entry = this.readEntry(candidate)
             if (entry) this.consumeCheckpointEvent(entry)
+            if (entry) this.consumeThreadEvent(entry)
           }
           for (const listener of this.liveInstanceListeners) {
             try {
@@ -643,6 +834,34 @@ export class InstanceRegistry {
 
 /** Singleton shared by the main process lifecycle. */
 export const instanceRegistry = new InstanceRegistry()
+
+/** Remove and return up to `limit` changes, in the order they were announced. */
+function takeChanges(
+  pending: Map<string, CrossInstanceThreadChange>,
+  limit: number
+): CrossInstanceThreadChange[] {
+  const taken: CrossInstanceThreadChange[] = []
+  for (const [key, change] of pending) {
+    if (taken.length >= limit) break
+    taken.push(change)
+    pending.delete(key)
+  }
+  return taken
+}
+
+/** The well-formed changes of one received list, dropping anything malformed. */
+function threadChanges(value: unknown): CrossInstanceThreadChange[] {
+  if (!Array.isArray(value)) return []
+  const changes: CrossInstanceThreadChange[] = []
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const entry = candidate as Partial<CrossInstanceThreadChange>
+    if (typeof entry.projectId !== 'string' || typeof entry.threadId !== 'string') continue
+    if (!entry.projectId || !entry.threadId) continue
+    changes.push({ projectId: entry.projectId, threadId: entry.threadId })
+  }
+  return changes
+}
 
 function isCheckpointUpdatedEvent(value: unknown): value is CheckpointUpdatedEvent {
   if (!value || typeof value !== 'object') return false

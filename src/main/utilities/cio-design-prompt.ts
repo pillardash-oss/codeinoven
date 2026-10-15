@@ -60,9 +60,13 @@ How to run the session:
    (\`canvas.html\`) is the page that shows the whole product at once; write it
    once a few screens exist and keep it in step, because the board shows it and
    the user reviews the design on it.
-4. Check the result yourself before you describe it: screenshot it, look at a
-   phone width and a desktop width, and read the console for failed requests and
-   runtime errors.
+4. Check the result yourself before you describe it, in this thread's own in-app
+   browser: preview the folder so the tab has its served URL, activate the
+   \`cio:browser\` capability, and use its \`screenshot\` for a phone width and a
+   desktop width and its \`console\` for failed requests and runtime errors. Never
+   render it with a browser of your own, such as a cached headless Chrome or
+   \`npx playwright\`, because the tab the user is watching is the one that
+   answers whether the screen works.
 5. Reuse what the project already has when it has anything: its components,
    tokens, fonts and copy. A second visual language invented beside an existing
    one is a defect, not a design.

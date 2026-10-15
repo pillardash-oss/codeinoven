@@ -164,8 +164,8 @@
   open={expanded}
   title="Table"
   onClose={() => (expanded = false)}
-  size="full"
-  fill
+  placement="fullscreen"
+  panelClass="bg-surface"
   contentClass="flex min-h-0 flex-col overflow-hidden p-0"
 >
   <div class="markdown-body md-table-fullscreen">

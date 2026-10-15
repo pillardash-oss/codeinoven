@@ -9,6 +9,8 @@ import type {
   BaseUrlProviderCreateRequest,
   BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderUpdateRequest,
+  BaseUrlProviderUsagePreview,
+  BaseUrlProviderUsagePreviewRequest,
   ComputerUseActivity,
   ComputerUsePipState,
   CuaBridgeStatus,
@@ -24,6 +26,8 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   McpConnectionTestResult,
+  McpOAuthAuthorizeRequest,
+  McpOAuthStatus,
   McpProbeTarget,
   NativeMcpContent,
   NativeSkillContent,
@@ -45,7 +49,6 @@ import type {
   SkillRelocationRequest,
   SkillUninstallReport,
   SkillUpdateStatus,
-  ThreadSettings,
   UtilityBundleInstallRequest,
   UtilityCatalog,
   UtilityCredentialInput,
@@ -54,7 +57,6 @@ import type {
   UtilityDefinitionPatch,
   UtilityResolutionContext,
   UtilitySearchOptions,
-  UtilitySetupReport,
   VisionModelRecord
 } from '../types'
 import type { WorkerNameSettings } from '../assignment/worker-names'
@@ -208,6 +210,10 @@ export const invokeProviderContract = {
     [harnessId: string, id: string],
     import('../types').CustomProviderUsage | null
   >,
+  'baseUrlProviders:previewUsage': {} as Contract<
+    [input: BaseUrlProviderUsagePreviewRequest],
+    BaseUrlProviderUsagePreview
+  >,
   'gateway:list': {} as Contract<[], import('../gateway-types').GatewayStatus[]>,
   'gateway:setEnabled': {} as Contract<
     [pluginId: string, enabled: boolean],
@@ -228,10 +234,6 @@ export const invokeProviderContract = {
   'utilities:installBundle': {} as Contract<
     [request: UtilityBundleInstallRequest],
     UtilityDefinition[]
-  >,
-  'utilities:setupWithAgent': {} as Contract<
-    [projectId: string, taskId: string, settings: ThreadSettings, request: string],
-    UtilitySetupReport
   >,
   'utilities:searchSkillMarket': {} as Contract<[query: string], SkillMarketSearchResult>,
   'utilities:listSkillMarket': {} as Contract<[view: SkillMarketView], SkillMarketLeaderboard>,
@@ -256,6 +258,18 @@ export const invokeProviderContract = {
   >,
   'utilities:resolve': {} as Contract<[context: UtilityResolutionContext], ResolvedUtility[]>,
   'utilities:testMcp': {} as Contract<[target: McpProbeTarget], McpConnectionTestResult>,
+  /**
+   * OAuth 2.1 authorization for a remote MCP server that refuses anonymous and
+   * API-key access: where it stands, the interactive browser flow, its cancel,
+   * and forgetting the grant.
+   */
+  'utilities:mcpOAuthStatus': {} as Contract<[utilityId: string], McpOAuthStatus>,
+  'utilities:authorizeMcpOAuth': {} as Contract<
+    [utilityId: string, request?: McpOAuthAuthorizeRequest],
+    McpOAuthStatus
+  >,
+  'utilities:cancelMcpOAuth': {} as Contract<[utilityId: string], McpOAuthStatus>,
+  'utilities:disconnectMcpOAuth': {} as Contract<[utilityId: string], McpOAuthStatus>,
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   /**

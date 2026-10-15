@@ -97,22 +97,30 @@ export class BrowserOverlayWindow {
    */
   private awaitingDocument = false
   /**
-   * Kept loaded between uses while the browser view is on screen.
+   * Kept loaded by whatever asked for it, instead of being rebuilt per use.
    *
-   * A modal is opened and closed repeatedly in one browsing session, and a fresh
-   * document costs a few hundred milliseconds to load. Paying that on every open
-   * is what the user watches as a blank frame before the panel arrives.
+   * A modal is opened and closed repeatedly, and a fresh document costs a few
+   * hundred milliseconds to load. Paying that on every open is what the user
+   * watches as a blank frame before the panel arrives, so two callers hold this
+   * window open: the browser view while it is on screen, because the surfaces
+   * drawn here are its floating chrome, and the app renderer from the session's
+   * first gesture onwards (`renderer/lib/overlay-host-warm.ts`), because that is
+   * the session drawing modals into it. A session nobody has touched holds no
+   * renderer for it (`setWarm`).
+   *
+   * A first frame that lands while the document is still loading is not at risk
+   * either way: the renderer waits on an unconfirmed host for
+   * `OVERLAY_ACK_TIMEOUT_MS`, and a dock drawn into this window only appears over
+   * a page that is already on screen.
    */
   private warm = false
   /**
-   * Loaded for the whole session, from the moment the window is up.
+   * Held open for the rest of the session by the app renderer's first gesture.
    *
-   * A modal, the switcher or a toast is opened and closed throughout a session,
-   * and a document that has to load on the gesture that asks for it is what the
-   * user watches as a blank frame    or, past the acknowledgement deadline, as
-   * a fall back to the app window's DOM, which hides the browser behind it.
-   * Loading once at boot costs one renderer and removes that wait from every
-   * later open.
+   * Independent of `warm`, which the browser view releases the moment it leaves:
+   * a session that visited the browser and came back still draws its modals
+   * here, and must still meet a host that is already loaded. See
+   * `warmForSession` and `renderer/lib/overlay-host-warm.ts`.
    */
   private sessionWarm = false
   /** The pending idle teardown, armed while nothing is drawing in the window. */
@@ -151,12 +159,24 @@ export class BrowserOverlayWindow {
     })
   }
 
-  /** Bring the empty warm window back when the application becomes active. */
+  /** Bring the warm window back when the application becomes active. */
   private showWhileWarm(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    if (!this.sessionWarm && !this.hasContent()) return
+    if (!this.wantsWindow && !this.hasContent()) return
     this.reveal(popup)
+  }
+
+  /**
+   * Whether anything is holding this window loaded.
+   *
+   * The browser view holds it while it is on screen, and the app renderer holds
+   * it from the session's first gesture onwards. Empty is not the same as
+   * unwanted: a held window stays mapped and click-through so the next drawer
+   * does not pay the window server for the map.
+   */
+  private get wantsWindow(): boolean {
+    return this.warm || this.sessionWarm
   }
 
   /** Hide the overlay because another application is now in front. */
@@ -187,6 +207,9 @@ export class BrowserOverlayWindow {
     }
     this.stack = request
     this.settle()
+    // Nothing is drawing, so the idle reclaim applies unless the browser view
+    // still wants the window loaded.
+    this.retire()
     return true
   }
 
@@ -208,6 +231,7 @@ export class BrowserOverlayWindow {
     }
     this.strip = null
     this.settle()
+    this.retire()
     return true
   }
 
@@ -230,6 +254,7 @@ export class BrowserOverlayWindow {
     }
     this.status = null
     this.settle()
+    this.retire()
     return true
   }
 
@@ -248,52 +273,71 @@ export class BrowserOverlayWindow {
   }
 
   /**
-   * Keep the window loaded between uses, or release it.
+   * Keep the window loaded while the browser view is on screen, or release it.
    *
-   * The browser view calls this while it is on screen: the surfaces this window
-   * draws are its floating chrome, and a surface that has to load its renderer on
-   * the gesture that asks for it arrives late. Releasing it leaves it to the idle
-   * reclaim it would get once nothing is drawing.
+   * The browser view calls this with `true` while it is on screen: the surfaces
+   * this window draws are its floating chrome, and a surface that has to load its
+   * renderer on the gesture that asks for it arrives late. Calling it with `false`
+   * once that view is gone leaves the window to the idle reclaim it would get
+   * anyway, so a session that is not browsing holds no renderer for it.
    */
   setWarm(warm: boolean): boolean {
     this.warm = warm
-    if (warm) return this.ensure() !== null
+    if (warm) {
+      // A release that was already pending is spent: the surface that wants this
+      // window is here, so the timer must not dispose it from under that.
+      clearTimeout(this.idleTimer)
+      this.idleTimer = undefined
+      return this.ensure() !== null
+    }
     this.retire()
     return true
   }
 
   /**
-   * Load the document now and keep it for the session.
+   * Keep the window loaded for the rest of the session.
    *
-   * Called once the primary window is up, so the first surface this window draws
-   * has something already loaded to draw into.
+   * The app renderer calls this on the session's first gesture
+   * (`renderer/lib/overlay-host-warm.ts`). From that moment the session draws
+   * modals, tooltips and the switcher here, and a document reload between two of
+   * them is a blank frame the user watches. The window is mapped now, empty and
+   * click-through, rather than on the gesture that opens the first dialog,
+   * because the window server's map is part of that gesture's cost.
+   *
+   * Answers false when the window could not be created, which leaves the first
+   * projection to fall back to the app window's own panel and lets the next
+   * gesture try again.
    */
   warmForSession(): boolean {
     this.sessionWarm = true
     const popup = this.ensure()
-    if (!popup) return false
-    // Show it now, so the window server has it mapped before the first modal.
-    // Nothing is drawn and every pixel is click-through, so this is invisible.
+    if (!popup) {
+      this.sessionWarm = false
+      return false
+    }
     this.reveal(popup)
     return true
   }
 
   /**
-   * Tear the window down, unless it is still wanted.
+   * Tear the window down once nothing is drawing in it and nothing wants it.
    *
-   * A browsing session keeps it loaded outright. Everywhere else it outlives its
-   * last content by a short idle window, because the surfaces that draw here are
-   * opened and closed in bursts   cycling the switcher, reopening an editor   and
-   * reloading the document for each one is what the user watches as a blank frame
-   * before the panel arrives. The window is still only hidden meanwhile, so a
-   * session that stops using it releases the renderer.
+   * Everywhere except an open browser view it outlives its last content by a
+   * short idle window, because the surfaces that draw here are opened and closed
+   * in bursts   cycling the switcher, reopening an editor   and reloading the
+   * document for each one is what the user watches as a blank frame before the
+   * panel arrives. The window is still only hidden meanwhile, so a session that
+   * stops using it releases the renderer.
    */
   private retire(): void {
-    if (this.warm || this.sessionWarm) return
+    if (this.wantsWindow) return
     clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined
-      if (!this.hasContent()) this.dispose()
+      // Holding it again while this was pending spends it, and so does content
+      // that arrived after it was armed.
+      if (this.wantsWindow || this.hasContent()) return
+      this.dispose()
     }, IDLE_DISPOSE_MS)
     this.idleTimer.unref?.()
   }
@@ -513,6 +557,7 @@ export class BrowserOverlayWindow {
    * the keyboard to a card.
    */
   private reveal(popup: BrowserWindow): void {
+    if (popup.isDestroyed()) return
     this.position(popup)
     if (popup.isVisible()) return
     this.pointerOverContent = false
@@ -547,9 +592,9 @@ export class BrowserOverlayWindow {
     if (this.hasContent()) return
     this.pointerOverContent = false
     this.applyClickThrough()
-    // A warm window stays mapped, empty and click-through, so the next modal
+    // A held window stays mapped, empty and click-through, so the next modal
     // paints into a window that is already on screen.
-    if (!this.sessionWarm && popup.isVisible()) popup.hide()
+    if (!this.wantsWindow && popup.isVisible()) popup.hide()
   }
 
   /**
@@ -599,7 +644,9 @@ export class BrowserOverlayWindow {
 
   /** The regions the overlay would draw right now, for the document's pull. */
   private publish(popup: BrowserWindow): void {
-    if (!this.ready) return
+    // A queued webContents event can still fire after the window was torn down,
+    // and reading `popup.webContents` on a destroyed window throws.
+    if (!this.ready || popup.isDestroyed() || popup.webContents.isDestroyed()) return
     sendToRenderer(popup.webContents, 'browser:overlay:stack', this.stack)
     sendToRenderer(popup.webContents, 'browser:overlay:strip', this.strip)
     sendToRenderer(popup.webContents, 'browser:overlay:status', this.status)
@@ -670,6 +717,13 @@ export class BrowserOverlayWindow {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
+        // This window is non-key by design (`focusable: false` above), which is
+        // the state Chromium throttles: its timers and frames would be slowed
+        // while a modal or the switcher is drawing, stalling hover and cursor
+        // reporting and the renderer's acknowledgement deadline. That is the
+        // input reliability this must keep. The cost is bounded by lifecycle
+        // instead: the window only exists while a browser view is on screen and
+        // is disposed once nothing draws in it.
         backgroundThrottling: false,
         devTools: false
       }
@@ -684,6 +738,7 @@ export class BrowserOverlayWindow {
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
     popup.webContents.on('before-input-event', (event, input) => {
+      if (popup.isDestroyed()) return
       const modal = [...this.docks.values()].findLast((dock) => dock.modal)
       if (!modal && this.hoverKeyboardOwner && input.type === 'keyDown') {
         const contents = this.hoverKeyboardOwner.contents
@@ -718,6 +773,7 @@ export class BrowserOverlayWindow {
       })
     })
     popup.on('blur', () => {
+      if (popup.isDestroyed()) return
       // A real focus departure invalidates the borrowed owner. It must not be
       // restored later by a delayed cursor response after another app activates.
       if (!this.hasModalDock()) this.releaseDockHoverFocus()
@@ -791,7 +847,7 @@ export class BrowserOverlayWindow {
         return
       }
       this.position(popup)
-      if ((this.sessionWarm || (this.ready && this.hasContent())) && !popup.isVisible())
+      if ((this.wantsWindow || (this.ready && this.hasContent())) && !popup.isVisible())
         popup.showInactive()
     }
     this.parent.on('move', reposition)
@@ -806,7 +862,7 @@ export class BrowserOverlayWindow {
   }
 
   private position(popup: BrowserWindow): void {
-    if (this.parent.isDestroyed()) return
+    if (popup.isDestroyed() || this.parent.isDestroyed()) return
     popup.setBounds(browserOverlayWindowBounds(this.parent.getContentBounds()))
   }
 }

@@ -149,7 +149,7 @@
 <div
   data-find-exclude
   class={[
-    'flex shrink-0 flex-col gap-1 rounded-xl border border-border bg-surface p-1 shadow-xl',
+    'flex shrink-0 flex-col gap-1 border border-border bg-surface p-1 shadow-xl',
     floating ? 'absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]' : 'w-full'
   ]}
   role="search"
@@ -159,7 +159,7 @@
   {#if enableReplace}
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={replaceOpen ? 'Hide replace' : 'Show replace'}
       title={replaceOpen ? 'Hide replace' : 'Show replace'}
       onclick={toggleReplace}
@@ -174,7 +174,7 @@
   <input
     bind:this={inputEl}
     type="search"
-    class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+    class="h-7 min-w-0 flex-1 border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
     {placeholder}
     aria-label={label}
     value={draft}
@@ -186,7 +186,7 @@
     <button
       type="button"
       class={[
-        'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors',
+        'flex h-7 w-7 shrink-0 items-center justify-center transition-colors',
         matchCase
           ? 'bg-elevated text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -207,7 +207,7 @@
     </span>
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
       aria-label="Previous match"
       title="Previous match (Shift+Enter)"
       disabled={matches === 0}
@@ -217,7 +217,7 @@
     </button>
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
       aria-label="Next match"
       title="Next match (Enter)"
       disabled={matches === 0}
@@ -228,7 +228,7 @@
   {/if}
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Close find"
     title="Close find (Escape)"
     onclick={handleClose}
@@ -241,7 +241,7 @@
       <input
         bind:this={replaceInputEl}
         type="text"
-        class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="h-7 min-w-0 flex-1 border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Replace…"
         aria-label="Replace"
         value={replaceValue}
@@ -251,7 +251,7 @@
       />
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
         aria-label="Replace match"
         title="Replace"
         disabled={matches === 0 || !onReplaceOne}
@@ -261,7 +261,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
         aria-label="Replace all matches"
         title="Replace All"
         disabled={matches === 0 || !onReplaceAll}

@@ -34,6 +34,7 @@ import {
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
+  AuthoredWorkKind,
   CloseConfirmationPayload,
   ThreadClickedPayload
 } from '$shared/ipc-contract'
@@ -49,7 +50,7 @@ export interface AppIpcSubscriptionDeps {
   /** Park the window (destroy it, keep the backend alive) instead of quitting. */
   parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
-  /** Raise the one-time start-at-login offer (raised after a routine's first how-to). */
+  /** Raise the one-time start-at-login offer (raised after an assistant's first knowledge). */
   showStartAtLoginOffer: () => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
@@ -139,11 +140,11 @@ function showAgentNotification(
     }
   }
 
-  // A temporary (side) chat completion wears the side chat's own indicator
-  // colour, not the chat teal: `chat-completed` is raised only by a side chat,
-  // and the branded toast stylesheet derives its border, wash, title and icon
-  // from `--status`, so overriding it here recolours the whole card.
-  const temporaryChatToastStyle = '--status: var(--color-temporary-chat);'
+  // A temporary (side) chat completion is a chat response that landed, so its
+  // toast wears the chat-completion tone: `chat-completed` is raised only by a
+  // side chat, and the branded toast stylesheet derives its border, wash, title
+  // and icon from `--status`, so overriding it here recolours the whole card.
+  const chatCompletedToastStyle = '--status: var(--color-chat-success);'
   // The assistant surface carries its own accent colour (the assistant space's
   // colour, on every assistant payload), so a completed run brands its toast
   // with that colour instead of reading as a generic success. The branded toast
@@ -156,7 +157,7 @@ function showAgentNotification(
   } else if (payload.kind === 'completed') {
     toast.success(payload.title, options)
   } else if (payload.kind === 'chat-completed') {
-    toast.success(payload.title, { ...options, style: temporaryChatToastStyle })
+    toast.success(payload.title, { ...options, style: chatCompletedToastStyle })
   } else if (payload.kind === 'attention') {
     // A thread waiting for input is a status notice owned by the panel's
     // Attention tab, never an app error/warning entry.
@@ -210,7 +211,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     deps.setInstanceRole(role)
   })
   // The one-time start-at-login offer. Main raises it once in an install's life,
-  // right after a routine gets its first how-to, and only while
+  // right after an assistant gets its first knowledge, and only while
   // `launchAtLoginPrompted` is unanswered, so this only ever asks once.
   const unsubscribeStartAtLoginOffer = subscribeGuarded('app:startAtLoginPrompt', () => {
     deps.showStartAtLoginOffer()
@@ -233,6 +234,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
+  // The authored-work marker is pushed on its own light event (see
+  // `broadcastThreadAuthoredWorkUpdated`) so the design-capability path can open
+  // a session without the full `thread:updated` reconcile. Patch the one field in
+  // place on the scope threads and the open thread, exactly as the branch update
+  // does, so the row's marker appears the moment the agent enters a session.
+  const unsubscribeThreadAuthoredWorkUpdated = subscribeGuarded(
+    'thread:authoredWorkUpdated',
+    (...args: unknown[]) => {
+      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
+      scopeState.patchAuthoredWorkKind(projectId, threadId, kind)
+      const selected = workspaceState.selectedThread
+      if (selected?.projectId === projectId && selected.id === threadId) {
+        selected.authoredWorkKind = kind
+      }
+    }
+  )
   const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
@@ -301,6 +318,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeInstanceRole()
     unsubscribeStartAtLoginOffer()
     unsubscribeThreadUpdated()
+    unsubscribeThreadAuthoredWorkUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()
     unsubscribeScopeConfirmation()

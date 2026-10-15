@@ -160,7 +160,7 @@ export function importDestinationFor(
     return { projectId }
   }
   if (location === 'routine') {
-    if (!entry.routineId) return null
+    if (!entry.assistantId) return null
     return { projectId: ASSISTANT_SPACE_ID }
   }
   if (location === 'task') {

@@ -16,15 +16,33 @@ export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
 
 /**
  * Activity-only user messages (compaction notices, sub-agent envelopes) ride
- * mid-turn on the user role. They must stay invisible in the transcript but
- * also transparent to turn grouping: one prompt -> one working trace, with the
- * final output after it.
+ * mid-turn on the user role, and an app-issued continuation prompt (origin
+ * `orchestrator`, persisted hidden) re-prompts the same work. They must stay
+ * invisible in the transcript but also transparent to turn grouping: one prompt
+ * -> one working trace, with the final output after it.
+ *
+ * This mirrors the main process's `isTurnBoundaryPrompt`, which keeps the same
+ * messages from moving the working trace's durable boundary.
  */
 export function isActivityOnlyUserMessage(message: AgentMessage): boolean {
+  if (message.origin === 'orchestrator') return true
   return (
     message.parts.length > 0 &&
     message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
   )
+}
+
+/**
+ * Whether a user message is transparent to turn grouping: an activity notice
+ * (compaction or sub-agent envelope), or a steer the renderer marked while it
+ * waits for the harness. Neither opens or closes a turn, so the turn it rides
+ * keeps one trace instead of splitting into a new one under the message.
+ *
+ * Unlike `isActivityOnlyUserMessage`, a transparent steer still renders: it is
+ * the user's own message, it just does not move the turn boundary.
+ */
+export function isTurnTransparentUserMessage(message: AgentMessage): boolean {
+  return isActivityOnlyUserMessage(message) || message.turnTransparent === true
 }
 
 /**
@@ -115,7 +133,7 @@ function turnDurationAt(messages: readonly AgentMessage[], messageIndex: number)
   while (startIndex >= 0) {
     const message = messages[startIndex]
     if (!message) break
-    if (message.role === 'assistant' || isActivityOnlyUserMessage(message)) {
+    if (message.role === 'assistant' || isTurnTransparentUserMessage(message)) {
       startIndex--
       continue
     }
@@ -174,17 +192,32 @@ export function buildTranscriptIndex(
 }
 
 /**
+ * A predicate that reports a user message as transparent to turn grouping: an
+ * activity notice, or a steer still held for its undo window. The default is
+ * the persisted rule; callers that hold a live steer pass one that also checks
+ * the held ids, because that state is not on the message itself.
+ */
+export type TurnTransparency = (message: AgentMessage) => boolean
+
+const persistedTurnTransparency: TurnTransparency = (message) =>
+  isTurnTransparentUserMessage(message)
+
+/**
  * Index of the last message that belongs to the turn starting at
  * `startMsgIndex`. Activity-only user messages are transparent to the span.
  */
-export function turnSpanEndIndex(messages: readonly AgentMessage[], startMsgIndex: number): number {
+export function turnSpanEndIndex(
+  messages: readonly AgentMessage[],
+  startMsgIndex: number,
+  isTransparent: TurnTransparency = persistedTurnTransparency
+): number {
   let endIndex = startMsgIndex
   let cursor = startMsgIndex
   while (cursor + 1 < messages.length) {
     const next = messages[++cursor]
     if (next?.inlineArtifact) continue
     if (!next) break
-    if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+    if (next.role === 'assistant' || isTransparent(next)) {
       endIndex = cursor
       continue
     }
@@ -199,13 +232,14 @@ export function turnSpanEndIndex(messages: readonly AgentMessage[], startMsgInde
  */
 export function turnStartIndexForEnd(
   messages: readonly AgentMessage[],
-  endMsgIndex: number
+  endMsgIndex: number,
+  isTransparent: TurnTransparency = persistedTurnTransparency
 ): number {
   for (let index = endMsgIndex; index >= 0; index--) {
     const message = messages[index]
     if (!message) break
     if (message.role !== 'user') continue
-    if (isActivityOnlyUserMessage(message)) continue
+    if (isTransparent(message)) continue
     return index + 1
   }
   return endMsgIndex
@@ -226,9 +260,9 @@ export function turnStartPromptsBefore(
   for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
     const message = messages[index]
     if (!message) break
-    if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+    if (message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
     const previous = messages[index - 1]
-    if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
+    if (previous?.role === 'user' && !isTurnTransparentUserMessage(previous)) continue
     starts.push(index)
   }
   return starts
@@ -241,7 +275,7 @@ export function isTurnStartIndex(messages: readonly AgentMessage[], index: numbe
     if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'assistant') return false
-    if (!isActivityOnlyUserMessage(message)) return true
+    if (!isTurnTransparentUserMessage(message)) return true
   }
   return true
 }
@@ -253,7 +287,7 @@ export function isTurnEndIndex(messages: readonly AgentMessage[], index: number)
     if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'assistant') return false
-    if (!isActivityOnlyUserMessage(message)) return true
+    if (!isTurnTransparentUserMessage(message)) return true
   }
   return true
 }
@@ -281,7 +315,7 @@ export function lastTurnStartIndex(messages: readonly AgentMessage[]): number {
         start = j
         continue
       }
-      if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
+      if (previous?.role === 'user' && isTurnTransparentUserMessage(previous)) {
         j--
         start = j
         continue
@@ -309,7 +343,7 @@ export function lastTurnStartIndex(messages: readonly AgentMessage[]): number {
 export function pendingTurnAnchorIndex(messages: readonly AgentMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (!message || message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+    if (!message || message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
     const assistantMirrored = messages
       .slice(index + 1)
       .some((candidate) => candidate.role === 'assistant' && !candidate.inlineArtifact)
@@ -342,15 +376,16 @@ type TurnTextPart = Extract<AgentPart, { type: 'text' }>
  */
 export function getTurnFinalText(
   messages: readonly AgentMessage[],
-  endMsgIndex: number
+  endMsgIndex: number,
+  isTransparent: TurnTransparency = persistedTurnTransparency
 ): TurnTextPart | null {
-  const turnStart = turnStartIndexForEnd(messages, endMsgIndex)
+  const turnStart = turnStartIndexForEnd(messages, endMsgIndex, isTransparent)
   let closing: TurnTextPart | null = null
   for (let i = turnStart; i <= endMsgIndex; i++) {
     const message = messages[i]
     if (!message || message.inlineArtifact) continue
     if (message.role === 'user') {
-      if (isActivityOnlyUserMessage(message)) continue
+      if (isTransparent(message)) continue
       break
     }
     for (const part of message.parts) {
@@ -378,14 +413,15 @@ function isTurnBookkeepingPart(part: AgentPart): boolean {
  */
 export function turnEndsOnQuestion(
   messages: readonly AgentMessage[],
-  endMsgIndex: number
+  endMsgIndex: number,
+  isTransparent: TurnTransparency = persistedTurnTransparency
 ): boolean {
-  const turnStart = turnStartIndexForEnd(messages, endMsgIndex)
+  const turnStart = turnStartIndexForEnd(messages, endMsgIndex, isTransparent)
   for (let i = endMsgIndex; i >= turnStart; i--) {
     const message = messages[i]
     if (!message || message.inlineArtifact) continue
     if (message.role === 'user') {
-      if (isActivityOnlyUserMessage(message)) continue
+      if (isTransparent(message)) continue
       break
     }
     for (let j = message.parts.length - 1; j >= 0; j--) {
@@ -415,7 +451,8 @@ export function turnEndsOnQuestion(
 export function getTurnWorkingParts(
   messages: readonly AgentMessage[],
   startMsgIndex: number,
-  includeCurrentFinal: boolean
+  includeCurrentFinal: boolean,
+  isTransparent: TurnTransparency = persistedTurnTransparency
 ): { leading: AgentPart[]; body: AgentPart[] } {
   const leading: AgentPart[] = []
   for (let i = startMsgIndex - 1; i >= 0; i--) {
@@ -426,17 +463,17 @@ export function getTurnWorkingParts(
         appendWorkingPart(leading, part, messages)
       }
     }
-    if (!isActivityOnlyUserMessage(preceding)) break
+    if (!isTransparent(preceding)) break
   }
   const body: AgentPart[] = []
-  const turnEndIndex = turnSpanEndIndex(messages, startMsgIndex)
-  const finalText = getTurnFinalText(messages, turnEndIndex)
+  const turnEndIndex = turnSpanEndIndex(messages, startMsgIndex, isTransparent)
+  const finalText = getTurnFinalText(messages, turnEndIndex, isTransparent)
   for (let i = startMsgIndex; i <= turnEndIndex; i++) {
     const message = messages[i]
     if (message?.inlineArtifact) continue
     if (!message) break
     if (message.role === 'user') {
-      if (!isActivityOnlyUserMessage(message)) break
+      if (!isTransparent(message)) break
       for (const part of message.parts) {
         if (part.type === 'compaction' || part.type === 'subagent') {
           appendWorkingPart(body, part, messages)

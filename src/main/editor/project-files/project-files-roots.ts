@@ -40,10 +40,10 @@ export interface ProjectFilesChatWorkspaceRootLookup {
   resolve(threadId: string): Promise<string>
 }
 
-/** Resolves (and creates) one assistant task's `assistant-cwd/<routineId ??
+/** Resolves (and creates) one assistant task's `assistant-cwd/<assistantId ??
  *  threadId>` root. Assistant file trees mount here: the directory is the
  *  task's own working directory, app-owned and shared by every task in the
- *  same routine, so resolution must not depend on a project record either. */
+ *  same assistant, so resolution must not depend on a project record either. */
 export interface ProjectFilesAssistantRootLookup {
   resolve(threadId: string): Promise<string>
 }

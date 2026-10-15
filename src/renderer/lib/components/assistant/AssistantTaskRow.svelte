@@ -5,15 +5,12 @@
     ArrowRightLeft,
     CalendarClock,
     CalendarOff,
-    Clock1,
-    Hammer,
     Loader2,
-    Pin,
-    RotateCcw
+    Pin
   } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
-  import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -27,10 +24,9 @@
   import { createAssistantHandoff } from './assistant-handoff.svelte'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import { longPress } from '$lib/long-press.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -55,24 +51,24 @@
      * idle task while a run is actually in flight.
      */
     runWorking?: boolean
-    /** Routine accent colour, used for the icon fallback tint. */
+    /** Assistant accent colour, used for the icon fallback tint. */
     color?: string
     /** Pending missed fires on this task. */
     missed: boolean
     /** Next intended fire (epoch ms) when the task is scheduled, else null. */
     nextRunAt: number | null
-    /** Human-readable schedule label (schedule override or owning routine). */
+    /** Human-readable schedule label (schedule override or owning assistant). */
     scheduleLabel?: string | null
     /**
      * Whether this function runs on a clock. False renders "On demand" and
      * offers the toggle that turns its schedule back on.
      */
     scheduled?: boolean
-    /** Toggle this function's schedule independently of its routine. */
+    /** Toggle this function's schedule independently of its assistant. */
     onToggleScheduled?: (task: Thread) => void
     /**
      * The task a hoisted run belongs to, shown on the run's line. A run lifted to
-     * its routine's own level has no parent row above it, so without this its
+     * its assistant's own level has no parent row above it, so without this its
      * line would name only a time and no run would be tellable from another.
      */
     contextLabel?: string | null
@@ -85,8 +81,8 @@
     onOpenNotes: (task: Thread) => void
     /** Hand this task off to a project, forking it and seeding a summary. */
     onHandedOff: (forked: Thread) => void
-    /** Hide a routine's how-to thread (the only state its row can change). */
-    onHideHowTo: (task: Thread) => void
+    /** Hide an assistant's knowledge thread (the only state its row can change). */
+    onHideKnowledge: (task: Thread) => void
     /**
      * The thread another instance is running for this row: the task or run
      * itself when its own turn is foreign, or (for a task row) one of its runs
@@ -116,7 +112,7 @@
     onFork,
     onOpenNotes,
     onHandedOff,
-    onHideHowTo,
+    onHideKnowledge,
     foreignThread = null
   }: Props = $props()
 
@@ -138,7 +134,7 @@
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
   )
   const iconKey = $derived(taskRowIconKey(task))
-  const howToThread = $derived(isAssistantSetupThread(task))
+  const knowledgeThread = $derived(isAssistantSetupThread(task))
 
   /** Line 2: task schedule/activity, run activity, or the setup thread's role.
    *  A row whose thread is actually producing work says so instead of reporting
@@ -150,12 +146,15 @@
       const line = working ? 'Running now' : runRowLine(task, Date.now())
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (howToThread) return 'How-to conversation'
+    if (knowledgeThread) return 'How-to conversation'
     subscribeMinute()
     return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
+
+  /** The assistant marks tint with the assistant's accent, or the muted ink. */
+  const iconStyle = $derived(`color: ${color ?? 'var(--color-muted)'}`)
 
   /** Live-work flags, settled by the same run state the thread rows use so a
    *  stale persisted status cannot keep a spinner alive after the turn ended.
@@ -194,7 +193,6 @@
         kind: undefined,
         variant: 'dot' as const,
         icon: null,
-        animated: false,
         title: 'A scheduled run was missed'
       }
     if (isForeignRun)
@@ -204,7 +202,6 @@
         kind: undefined,
         variant: 'icon' as const,
         icon: AppWindow,
-        animated: false,
         title: 'Running in another instance'
       }
     return {
@@ -213,7 +210,6 @@
       kind: statusBadge.kind,
       variant: statusBadge.variant ?? ('dot' as const),
       icon: null,
-      animated: statusBadge.animated,
       title: statusBadge.label
     }
   })
@@ -269,57 +265,20 @@
     // Hand-off belongs to the task's own menu, never to the panel.
     onHandoff: () => handoff.open(),
     showHandoff: () => true,
-    // A how-to thread is pinned for life and cannot be deleted, so it offers
+    // A knowledge thread is pinned for life and cannot be deleted, so it offers
     // Hide instead of Pin/Unpin and carries no destructive item at all.
-    isHowToThread: () => howToThread,
-    onHideHowTo: (t) => onHideHowTo(t)
+    isKnowledgeThread: () => knowledgeThread,
+    onHideKnowledge: (t) => onHideKnowledge(t)
   })
 
   // ─── Hover popover ───────────────────────────────────────────────────────
-  let rowEl: HTMLElement | undefined = $state(undefined)
-  let popoverEl: HTMLElement | undefined = $state(undefined)
-  let hovered = $state(false)
-  let showPopover = $state(false)
   let showMenu = $state(false)
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
-  let popoverPos = $state({ x: 0, y: 0 })
-
-  async function revealPopover(): Promise<void> {
-    if (!rowEl || showMenu || !hovered) return
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-    if (!rowEl || !popoverEl || showMenu || !hovered) return
-    const rect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      rect.width,
-      rect.height
-    )
-  }
-
-  function onRowEnter(): void {
-    hovered = true
-    clearTimeout(popoverTimer)
-    popoverTimer = setTimeout(() => void revealPopover(), 550)
-  }
-
-  function onRowLeave(): void {
-    hovered = false
-    clearTimeout(popoverTimer)
-    showPopover = false
-  }
+  /** The task's info popover, shared with every surface that shows one. */
+  const popover = createThreadHoverPopover({ isBlocked: () => showMenu })
 
   /** Touch has no hover or right click, so a long press opens the same menu. */
   function openActionsByTouch(): void {
-    hovered = true
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
@@ -327,13 +286,18 @@
   function openContextMenu(event: MouseEvent): void {
     event.preventDefault()
     event.stopPropagation()
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
-  function capturePopoverElement(element: HTMLElement): void {
-    popoverEl = element
+  function captureRowElement(element: HTMLElement): () => void {
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
+  }
+
+  function capturePopoverElement(element: HTMLElement): () => void {
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 
   function handleDragStart(event: DragEvent): void {
@@ -344,27 +308,26 @@
     const ghost = document.createElement('div')
     ghost.textContent = task.title
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     event.dataTransfer.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
   }
 </script>
 
 <div
   class="relative"
   role="listitem"
-  bind:this={rowEl}
+  {@attach captureRowElement}
   {@attach longPress({ onLongPress: openActionsByTouch })}
-  onpointerenter={onRowEnter}
-  onpointerleave={onRowLeave}
+  onpointerenter={() => popover.enter()}
+  onpointerleave={() => popover.leave()}
 >
   <button
     type="button"
     data-thread-row={task.id}
-    class="group relative flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors {active
+    class="group relative flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors {active
       ? 'bg-selected'
       : 'hover:bg-elevated'}"
     {title}
@@ -372,8 +335,7 @@
     ondragstart={handleDragStart}
     aria-current={active ? 'true' : undefined}
     onclick={() => {
-      showPopover = false
-      clearTimeout(popoverTimer)
+      popover.hide()
       onSelect(task)
     }}
     oncontextmenu={openContextMenu}
@@ -381,27 +343,12 @@
     <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
       {#if taskIcon}
         <img src={taskIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-      {:else if iconKey === 'how-to'}
-        <Hammer
-          size={14}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
-          aria-hidden="true"
-        />
+      {:else if iconKey === 'knowledge'}
+        <AssistantIcon mark="knowledge" size={14} style={iconStyle} aria-hidden="true" />
       {:else if iconKey === 'run'}
-        <RotateCcw
-          size={13}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
-          aria-hidden="true"
-        />
+        <AssistantIcon mark="run" size={14} style={iconStyle} aria-hidden="true" />
       {:else}
-        <Clock1
-          size={14}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
-          aria-hidden="true"
-        />
+        <AssistantIcon mark="task" size={14} style={iconStyle} aria-hidden="true" />
       {/if}
     </span>
 
@@ -441,15 +388,16 @@
           kind={rowBadge.kind}
           variant={rowBadge.variant}
           icon={rowBadge.icon}
-          animated={rowBadge.animated}
           size="sm"
           title={rowBadge.title}
         />
         <span
-          class="min-w-0 flex-1 truncate text-[0.625rem] text-dimmed"
-          title={scheduleLabel ?? undefined}
+          class="min-w-0 flex-1 truncate text-[0.625rem] {foreignTransfer?.error
+            ? 'text-danger'
+            : 'text-dimmed'}"
+          title={foreignTransfer?.error ?? scheduleLabel ?? undefined}
         >
-          {runLine}
+          {foreignTransfer?.error ?? runLine}
         </span>
         {#if indicator}
           <ThreadIndicatorSlot {indicator} />
@@ -464,14 +412,14 @@
        They sit beside the row button, never inside it: a menu trigger nested in
        a button is not a valid control tree. -->
   <span
-    class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center rounded-md px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
+    class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
       ? 'bg-selected'
       : 'bg-elevated'}"
   >
     {#if isForeignRun}
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-md text-info transition-colors hover:bg-info/15 disabled:opacity-40"
+        class="flex size-6 shrink-0 items-center justify-center text-info transition-colors hover:bg-info/15 disabled:opacity-40"
         title="Transfer this run to this instance"
         aria-label="Transfer this run to this instance"
         disabled={foreignTransfer?.pending ?? false}
@@ -484,18 +432,18 @@
         {/if}
       </button>
     {/if}
-    {#if !isRun && task.routineId && onToggleScheduled}
+    {#if !isRun && task.assistantId && onToggleScheduled}
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-elevated {scheduled
+        class="flex size-6 shrink-0 items-center justify-center transition-colors hover:bg-elevated {scheduled
           ? 'text-muted'
           : 'text-dimmed'}"
         title={scheduled
           ? 'Stop running this function on a schedule'
-          : 'Run this function on its routine\u2019s schedule'}
+          : 'Run this function on its assistant\u2019s schedule'}
         aria-label={scheduled
           ? 'Stop running this function on a schedule'
-          : 'Run this function on its routine\u2019s schedule'}
+          : 'Run this function on its assistant\u2019s schedule'}
         onclick={() => onToggleScheduled?.(task)}
       >
         {#if scheduled}
@@ -512,19 +460,18 @@
       title="Task actions"
       ariaLabel="Actions for {task.title}"
       onOpen={() => {
-        showPopover = false
-        clearTimeout(popoverTimer)
+        popover.hide()
       }}
     />
   </span>
 </div>
 
-{#if showPopover}
+{#if popover.visible}
   <Portal>
     <div
       {@attach capturePopoverElement}
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-      style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+      style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
       <ThreadHoverPopover
         thread={task}
@@ -553,7 +500,7 @@
       <input
         id={renameInputId}
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         bind:value={actionsMenu.renameValue}
       />
     </div>
@@ -562,7 +509,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={actionsMenu.cancelRename}
     >
       Cancel
@@ -570,7 +517,7 @@
     <button
       type="submit"
       form={renameFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       disabled={!actionsMenu.renameValue.trim()}
     >
       Save

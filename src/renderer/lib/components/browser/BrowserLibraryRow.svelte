@@ -34,7 +34,7 @@
    */
 </script>
 
-<div class="group flex items-center gap-1 rounded-md transition-colors hover:bg-elevated">
+<div class="group flex items-center gap-1 transition-colors hover:bg-elevated">
   {#if icon}
     <span class="ml-1.5 flex h-4 w-4 shrink-0 items-center justify-center">
       {@render icon()}
@@ -42,7 +42,7 @@
   {/if}
   <button
     type="button"
-    class="flex min-w-0 flex-1 flex-col rounded-md px-2 py-1.5 text-left outline-none"
+    class="flex min-w-0 flex-1 flex-col px-2 py-1.5 text-left outline-none"
     title={url}
     aria-label={`Open ${title}`}
     onclick={onOpen}

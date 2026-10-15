@@ -70,7 +70,7 @@
   }}
 >
   <Popover.Trigger
-    class="flex w-full items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-left text-[0.75rem] text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+    class="flex w-full items-center gap-1.5 border border-dashed border-border px-2.5 py-1.5 text-left text-[0.75rem] text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
     {disabled}
     title={label}
     aria-label={label}
@@ -88,7 +88,7 @@
       align="start"
       sideOffset={4}
       collisionPadding={12}
-      class="z-90 flex w-[var(--bits-popover-anchor-width)] min-w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+      class="z-90 flex w-[var(--bits-popover-anchor-width)] min-w-64 flex-col overflow-hidden border bg-surface shadow-lg"
       role="dialog"
       aria-label="Choose a connection from the utility library"
       tabindex={-1}
@@ -110,7 +110,7 @@
         <div class="flex flex-wrap gap-1 border-b border-border px-2.5 py-1.5">
           <button
             type="button"
-            class="rounded-md px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === 'all'
+            class="px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === 'all'
               ? 'bg-elevated text-foreground'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
             aria-pressed={kindFilter === 'all'}
@@ -121,7 +121,7 @@
           {#each kindCounts as [kind, count] (kind)}
             <button
               type="button"
-              class="rounded-md px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === kind
+              class="px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === kind
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
               aria-pressed={kindFilter === kind}
@@ -149,7 +149,7 @@
             {@const KindIcon = utilityKindIcon(entry.kind)}
             <button
               type="button"
-              class="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors {connected
+              class="flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors {connected
                 ? 'cursor-default opacity-60'
                 : 'hover:bg-elevated'}"
               title={connected ? `${entry.name} is already connected` : entry.description}
@@ -158,7 +158,7 @@
               onclick={() => pick(entry)}
             >
               <span
-                class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
+                class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center bg-elevated text-muted"
               >
                 <KindIcon size={12} strokeWidth={1.8} />
               </span>
@@ -169,13 +169,13 @@
                   </span>
                   {#if !entry.enabled}
                     <span
-                      class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+                      class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
                     >
                       Off
                     </span>
                   {/if}
                   <span
-                    class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
+                    class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
                   >
                     {connectionSourceLabel(entry.source)}
                   </span>

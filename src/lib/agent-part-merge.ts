@@ -122,6 +122,38 @@ export function reasoningSummaryRepeatsBody(text: string, summary: string): bool
   return body === condensed
 }
 
+/** Longest title kept from a reasoning block, in characters. The row that shows
+ *  it truncates to the available width in CSS, so this only bounds the string
+ *  a pathological single-line summary can hand to the renderer. */
+const REASONING_TITLE_MAX_CHARS = 160
+
+/**
+ * The one-line title of a reasoning block, so a reader can tell one folded
+ * "Thinking" row from the next without opening each in turn.
+ *
+ * Providers that ship reasoning summaries write a bold heading as their first
+ * line (Codex: `**Evaluating build output**`); providers that ship only a
+ * reasoning body get their first line instead. Markdown heading and emphasis
+ * markers are stripped so the title reads as plain words, and the result is
+ * empty when the block carries nothing to show.
+ */
+export function reasoningBlockTitle(text: string, summary: string): string {
+  const source = summary.trim() === '' ? text : summary
+  const line = source
+    .split('\n')
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate !== '')
+  if (line === undefined) return ''
+  const title = line
+    .replace(/^#{1,6}\s*/u, '')
+    .replace(/^(\*\*|__)(.+?)(\*\*|__)(?=\s|$)/u, '$2')
+    .replace(/^(\*|_)(.+?)(\*|_)(?=\s|$)/u, '$2')
+    .trim()
+  return title.length > REASONING_TITLE_MAX_CHARS
+    ? `${title.slice(0, REASONING_TITLE_MAX_CHARS)}…`
+    : title
+}
+
 /** Strip the whitespace and Markdown emphasis markers that differ between a
  *  reasoning body and its summary without changing the words compared. Only
  *  `*` and whitespace are removed: they are exactly what separates the two

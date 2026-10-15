@@ -70,7 +70,7 @@
   {#if commands.length > 0}
     <ol class="space-y-1.5">
       {#each commands as command, index (command)}
-        <li class="flex items-center gap-2 rounded-lg border bg-elevated px-2 py-2">
+        <li class="flex items-center gap-2 border bg-elevated px-2 py-2">
           <span class="w-5 shrink-0 text-right text-xs tabular-nums text-dimmed">{index + 1}</span>
           <div class="grid min-w-0 flex-1 grid-cols-[minmax(7rem,0.7fr)_minmax(9rem,1.3fr)] gap-2">
             <label class="sr-only" for={`${componentId}-command-${index}-executable`}>
@@ -78,7 +78,7 @@
             </label>
             <input
               id={`${componentId}-command-${index}-executable`}
-              class="min-w-0 rounded-md border bg-surface px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary"
+              class="min-w-0 border bg-surface px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary"
               value={command.executable}
               placeholder="Executable"
               oninput={(event) => updateCommand(index, { executable: event.currentTarget.value })}
@@ -88,7 +88,7 @@
             </label>
             <input
               id={`${componentId}-command-${index}-args`}
-              class="min-w-0 rounded-md border bg-surface px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary"
+              class="min-w-0 border bg-surface px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary"
               value={command.args.join(' ')}
               placeholder="Arguments"
               oninput={(event) =>
@@ -98,7 +98,7 @@
           <div class="flex shrink-0 items-center">
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
               title={`Move command ${index + 1} up`}
               aria-label={`Move command ${index + 1} up`}
               disabled={index === 0}
@@ -108,7 +108,7 @@
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
               title={`Move command ${index + 1} down`}
               aria-label={`Move command ${index + 1} down`}
               disabled={index === commands.length - 1}
@@ -118,7 +118,7 @@
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+              class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-danger/10 hover:text-danger"
               title={`Remove command ${index + 1}`}
               aria-label={`Remove command ${index + 1}`}
               onclick={() => (removalIndex = index)}
@@ -130,7 +130,7 @@
       {/each}
     </ol>
   {:else}
-    <div class="rounded-lg border border-dashed bg-elevated px-3 py-2.5 text-xs text-dimmed">
+    <div class="border border-dashed bg-elevated px-3 py-2.5 text-xs text-dimmed">
       No setup commands yet. Add the executable and arguments below.
     </div>
   {/if}
@@ -139,7 +139,7 @@
     <label class="sr-only" for={`${componentId}-setup-command-executable`}>Setup executable</label>
     <input
       id={`${componentId}-setup-command-executable`}
-      class="w-36 rounded-lg border bg-elevated px-2.5 py-1.5 text-sm"
+      class="w-36 border bg-elevated px-2.5 py-1.5 text-sm"
       placeholder="bun"
       bind:value={pendingExecutable}
       title="Executable name or path"
@@ -147,7 +147,7 @@
     <label class="sr-only" for={`${componentId}-setup-command-args`}>Setup arguments</label>
     <input
       id={`${componentId}-setup-command-args`}
-      class="min-w-0 flex-1 rounded-lg border bg-elevated px-2.5 py-1.5 text-sm"
+      class="min-w-0 flex-1 border bg-elevated px-2.5 py-1.5 text-sm"
       placeholder="--verbose install"
       bind:value={pendingArgs}
       title="Arguments (space-separated)"
@@ -160,7 +160,7 @@
     />
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+      class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
       title="Add setup command"
       aria-label="Add setup command"
       disabled={!pendingExecutable.trim()}
@@ -184,14 +184,14 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={() => (removalIndex = null)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-danger/90"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-danger/90"
       onclick={removeCommand}
     >
       Remove

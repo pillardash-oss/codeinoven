@@ -651,6 +651,56 @@ export class SpeechService {
     return this.playground.discard(token)
   }
 
+  /** Reuse the selected ASR and its worker queue for a bounded, caller-owned media chunk. */
+  async transcribeVideoChunk(
+    audioPath: string,
+    artifactId: string,
+    language: string,
+    signal: AbortSignal
+  ): Promise<import('./speech-backend').SpeechTimedTranscript> {
+    signal.throwIfAborted()
+    const catalogArtifact = this.requireCatalog().artifacts.find((item) => item.id === artifactId)
+    const installedArtifact = this.installed.artifacts.find(
+      (item) => item.artifactId === artifactId
+    )
+    const runtime = catalogArtifact?.runtime ?? installedArtifact?.runtime
+    if (!runtime) throw new Error('Select an installed transcription model in Sounds first')
+    const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
+    const backend = this.requireBackend(runtime)
+    this.clearEvict('asr')
+    const job = this.queue.enqueue({
+      capability: 'asr',
+      runtime,
+      run: async (jobSignal) => {
+        const input = {
+          audioPath,
+          language,
+          artifact: {
+            id: artifact.id,
+            directory: this.artifactDirectory(artifact.id),
+            ...(artifact.familyId === 'whisper' || artifact.familyId === 'parakeet'
+              ? { modelFamily: artifact.familyId as 'whisper' | 'parakeet' }
+              : {})
+          }
+        }
+        return backend.transcribeTimed
+          ? backend.transcribeTimed(input, jobSignal)
+          : { text: await backend.transcribe(input, jobSignal) }
+      }
+    })
+    const cancel = (): void => {
+      this.queue.cancel(job.id)
+    }
+    signal.addEventListener('abort', cancel, { once: true })
+    if (signal.aborted) cancel()
+    try {
+      return await job.result
+    } finally {
+      signal.removeEventListener('abort', cancel)
+      this.touch('asr', runtime)
+    }
+  }
+
   async history(cursor?: string, limit?: number): Promise<SpeechHistoryPage> {
     return this.storage.listHistory(cursor, limit)
   }

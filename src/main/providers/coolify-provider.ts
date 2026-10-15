@@ -479,11 +479,26 @@ const FAILED_DEPLOYMENT_STATUSES = new Set([
  * refines the deployment outcome separately from the latest deployment record.
  */
 function mapApplicationStatus(raw: string | null): CloudDeploymentStatus {
-  const value = (raw ?? '').toLowerCase()
+  const value = applicationRuntimeState(raw)
   if (BUILDING_APPLICATION_STATUSES.has(value)) return 'building'
   if (SUCCESS_APPLICATION_STATUSES.has(value)) return 'success'
   if (FAILED_APPLICATION_STATUSES.has(value)) return 'failed'
   return 'unknown'
+}
+
+/**
+ * Extract the runtime state segment from a Coolify application `status`.
+ *
+ * Coolify always renders an application's runtime state as a compound string
+ * that appends the container health, for example `running:healthy`,
+ * `exited:unhealthy`, or the older `running (healthy)` form. Only the segment
+ * before the separator says whether the container is up, so that is the part
+ * this adapter maps; the health suffix stays Coolify's own presentation and is
+ * deliberately not folded into the normalized runtime model.
+ */
+function applicationRuntimeState(raw: string | null): string {
+  const value = (raw ?? '').trim().toLowerCase()
+  return (value.split(/[:(]/u, 1)[0] ?? '').trim()
 }
 
 /** Map a Coolify deployment-queue status to the normalized model. */

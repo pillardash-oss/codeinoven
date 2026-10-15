@@ -93,6 +93,21 @@ export const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 
 /**
+ * Prompt for the app-issued reconcile turn that fires when a turn settles but
+ * the task list it published still shows unfinished work. The app renders that
+ * list as live task progress, so an abandoned list reads as work still running.
+ * The instruction only asks the agent to make the list truthful; it never asks
+ * it to invent work it did not do.
+ */
+export function taskReconcilePrompt(labels: readonly string[]): string {
+  return (
+    'Your turn ended, but the task list you published still shows unfinished work: ' +
+    labels.join('; ') +
+    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. Then give your final response. Do not start new work just to satisfy the list.'
+  )
+}
+
+/**
  * Checkpoint note for a turn whose finalization a newer turn superseded. The
  * transcript is already durable; the live turn owns everything after it.
  */

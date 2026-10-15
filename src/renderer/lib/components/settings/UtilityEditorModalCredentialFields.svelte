@@ -47,14 +47,14 @@
   )
 </script>
 
-<fieldset class="space-y-3 rounded-xl border p-3">
+<fieldset class="space-y-3 border p-3">
   <legend class="px-1 text-xs font-semibold">
     {draft.kind === 'mcp' ? 'MCP secrets' : 'API key'}
   </legend>
   {#each credentials as credential (credential.id)}
     {@const selected = credential.id === targetId}
     <div
-      class="flex items-center justify-between gap-2 rounded-lg bg-elevated px-2 py-1.5 {selected
+      class="flex items-center justify-between gap-2 bg-elevated px-2 py-1.5 {selected
         ? 'ring-1 ring-primary/40'
         : ''}"
     >
@@ -66,7 +66,7 @@
       </div>
       <div class="flex shrink-0 items-center gap-1">
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           type="button"
           disabled={selected}
           aria-label={selected
@@ -78,7 +78,7 @@
           <KeyRound size={13} />
         </button>
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
           type="button"
           aria-label="Remove {credential.label}"
           title="Remove {credential.label}"
@@ -99,7 +99,7 @@
     </p>
     {#if target}
       <button
-        class="flex h-7 items-center gap-1 rounded-lg border px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+        class="flex h-7 items-center gap-1 border px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
         type="button"
         title="Add another secret to this capability"
         onclick={onAddCredential}
@@ -113,7 +113,7 @@
     <label class="space-y-1 text-xs font-medium">
       <span>Environment variable</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
         placeholder="API_TOKEN"
         bind:value={environmentVariable}
       />
@@ -121,7 +121,7 @@
     <label class="space-y-1 text-xs font-medium">
       <span>Secret value</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         type="password"
         autocomplete="off"
         placeholder={target ? 'Leave blank to keep stored secret' : 'Paste secret'}

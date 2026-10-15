@@ -4,6 +4,7 @@
     Check,
     ChevronDown,
     Copy,
+    Download,
     Ellipsis,
     Film,
     Frame,
@@ -24,7 +25,12 @@
   } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
+  import CompositionStage from '$lib/components/design/CompositionStage.svelte'
+  import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
+  import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
@@ -32,12 +38,16 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
+  import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
+  import { videoPackagesStore } from '$lib/stores/video-packages.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { openInBrowser } from '$lib/open-in-browser'
   import { designContractRequest } from '$shared/design/design-contract'
+  import type { VideoJob } from '$shared/video/studio'
   import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
@@ -144,6 +154,35 @@
   let historyOpen = $state(false)
 
   /**
+   * The composition's jobs, read by the board.
+   *
+   * The board draws the export above the controls and the controls report progress
+   * below, so the board holds the one list and hands it down: two readers could
+   * disagree about whether an export is running. A design has no jobs, so this
+   * stays empty for it.
+   */
+  let videoJobs = $state.raw<VideoJob[]>([])
+  /** Whether the studio controls hold unsaved edits, which a reload would discard. */
+  let studioDirty = $state(false)
+  /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
+  let boardRevision = $state(0)
+  /** Whether the user asked to reload over unsaved video controls. */
+  let reloadRequested = $state(false)
+  /**
+   * Undo and Redo for the folder in front, published by the history pane.
+   *
+   * The pane owns the history read; the board only shows the two steps, so the
+   * checkpoint is one click away without opening the pane. A design and a
+   * composition share this, which is the point: the same control, the same place.
+   */
+  let historyActions = $state<{
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  } | null>(null)
+
+  /**
    * The folder the user is looking at, when it is not the thread's own.
    *
    * A design tab is a view change, not a preview: picking another design shows its
@@ -176,6 +215,14 @@
    *  rail opened carries its kind instead of reading it from the thread. */
   let requestedKind = $derived<AuthoredWorkKind>(forcedKind ?? designState?.kind ?? 'design')
   let video = $derived(requestedKind === 'video')
+  /** The newest finished export, played in the board above the timeline. */
+  let exportPath = $derived.by(() => {
+    if (!video) return null
+    const files = videoJobs.flatMap((job) =>
+      job.operation === 'export' && job.state === 'completed' ? job.files : []
+    )
+    return files.at(-1) ?? null
+  })
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
@@ -254,6 +301,54 @@
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
+  /**
+   * The view this board plays its composition in, named by main when it opened it.
+   *
+   * The board owns its view rather than borrowing the thread's browser tab, so
+   * the view's id is the only way to be sure which page is being placed in the
+   * stage. Empty until the first open settles.
+   */
+  let boardTabId = $state('')
+  /**
+   * Whether the optional video pack is installed, which is what enables the
+   * live editor.
+   *
+   * The pack is the app's one on-demand video dependency, so it is the signal
+   * for whether the board offers direct editing at all: with it the board plays
+   * the composition, scrubs it and edits its controls, and without it the board
+   * stays a reader and the user edits by prompting the agent.
+   */
+  let liveEditing = $derived(video && videoPackagesStore.state?.installed === true)
+  /**
+   * The composition the board is playing, when its own view is on screen.
+   *
+   * The view arrives on `browser:state`, and it is addressed by the id main
+   * returned rather than by the thread: a browser tab on the same folder must not
+   * be mistaken for the board's own page. While it is here the board is a player
+   * and an editor at once, and while it is not the stage falls back to the last
+   * export or the captured frame.
+   */
+  let liveTab = $derived(boardTabId !== '' ? videoTimelineState.compositionByTab(boardTabId) : null)
+  /**
+   * Whether the folder in front has an entry page, which is what makes it playable.
+   *
+   * A composition folder with no `index.html` yet is a folder of assets rather than
+   * a composition: there is nothing to serve, so the board says so instead of
+   * opening a tab on a directory listing.
+   */
+  let playable = $derived(video && selectedItem?.hasEntry === true)
+  /** The folder whose composition the board is opening right now, or an empty string. */
+  let composing = $state('')
+  /** Why the last open failed, in the user's terms, or an empty string. */
+  let compositionError = $state('')
+  /**
+   * The folder this board has already asked main to open.
+   *
+   * Deliberately not reactive state: it guards the effect below against asking
+   * twice for one folder, and nothing renders it. A failure is reported and not
+   * retried, so a folder that cannot be served never spins.
+   */
+  let compositionAsked = ''
   /**
    * The thread that created the design in front, or an empty string when none is
    * recorded.
@@ -412,6 +507,9 @@
    *
    * A composition has no screens, so its single picture keeps coming from the one
    * thumbnail call, which is also what reports the tab the mute button drives.
+   * Once the board is playing the composition in its own view, that call is
+   * skipped: the live view is on screen, and a poster would reload it to a still
+   * under the playhead. The mute then drives the view the user is watching.
    */
   async function loadGallery(force = false): Promise<void> {
     if (selected.directory === '') {
@@ -420,7 +518,10 @@
     }
     galleryBusy = true
     try {
-      if (video) {
+      if (video && liveEditing && boardTabId !== '') {
+        gallery = []
+        tabId = boardTabId
+      } else if (video) {
         const shot = await invoke(
           'design:thumbnail',
           projectId,
@@ -503,6 +604,41 @@
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work could not be opened.'
+    }
+  }
+
+  /**
+   * Open the composition in the background, so the board can play it itself.
+   *
+   * The same call the Live preview action makes, minus the reveal. The board owns
+   * its own composition view rather than borrowing the thread's browser tab, so
+   * nothing the user has to find or open takes part: the view is served, marked as
+   * a composition and reported on `browser:state`, which is what mounts the stage.
+   * The browser is left exactly where it was, because the browser is not where this
+   * board plays.
+   */
+  async function ensureComposition(directory: string, force = false): Promise<void> {
+    if (!video || directory === '') return
+    if (!force && compositionAsked === directory) return
+    compositionAsked = directory
+    composing = directory
+    try {
+      const opened = await invoke(
+        'design:open',
+        projectId,
+        threadId,
+        directory,
+        null,
+        false,
+        forcedKind
+      )
+      boardTabId = opened.tabId
+      compositionError = ''
+    } catch (failure) {
+      compositionError =
+        failure instanceof Error ? failure.message : `The ${noun} could not be opened.`
+    } finally {
+      if (composing === directory) composing = ''
     }
   }
 
@@ -637,9 +773,9 @@
   function startExport(entry: string | null, format: DesignExportFormat): void {
     const directory = selected.directory
     const exportProjectId = projectId
-    void import('$lib/stores/design-export.svelte')
-      .then(({ designExportState }) =>
-        designExportState.start(exportProjectId, directory, entry, format)
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startDesign(exportProjectId, directory, entry, format)
       )
       .catch((failure: unknown) => {
         error = failure instanceof Error ? failure.message : 'Could not start export.'
@@ -656,10 +792,88 @@
     if (appeared || rewritten) await loadGallery()
   }
 
-  /** Refresh the board's own reading of the work: the screens and the canvas. */
+  /**
+   * Refresh the board's own reading of the work.
+   *
+   * A design re-pictures its screens and its canvas. A composition also re-reads
+   * its jobs and remounts its timeline and controls, so the one Refresh in the
+   * header is the whole board's reload and the controls do not need their own. The
+   * remount discards unsaved control edits, so those are confirmed first.
+   */
   function refreshBoard(): void {
+    if (video) {
+      if (studioDirty) {
+        reloadRequested = true
+        return
+      }
+      reloadVideoBoard()
+      return
+    }
     void loadGallery(true)
     void loadCanvas()
+  }
+
+  /** Re-read a composition after a refresh: picture, jobs, timeline and controls. */
+  function reloadVideoBoard(): void {
+    boardRevision += 1
+    void loadGallery(true)
+    void readVideoJobs()
+    // A view that was closed under the board has nothing to mount, so the one
+    // Refresh asks for it again rather than leaving the stage on a still.
+    if (liveEditing) void ensureComposition(selected.directory, true)
+  }
+
+  /** Read the composition's jobs, the list the board's export stands on. */
+  async function readVideoJobs(): Promise<void> {
+    try {
+      videoJobs = await invoke('video:jobs', projectId, threadId)
+    } catch (failure) {
+      logRendererError('The video jobs could not be read.', failure)
+    }
+  }
+
+  /** Cancel a running job, which the controls ask for rather than doing themselves. */
+  async function cancelVideoJob(id: string): Promise<void> {
+    try {
+      await invoke('video:cancel', projectId, threadId, id)
+      await readVideoJobs()
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The job could not be cancelled.'
+    }
+  }
+
+  /**
+   * Start an export from the board's own menu or the controls' primary action.
+   *
+   * The export reports in the shared dockable export panel, so the board only
+   * hands the folder over; its own job poll picks the running export up again for
+   * the readout above the controls.
+   */
+  function exportVideo(): void {
+    if (selected.directory === '') return
+    const directory = selected.directory
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startVideo(projectId, threadId, directory)
+      )
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : 'The export could not be started.'
+      })
+  }
+
+  /** The controls' unsaved state, so a refresh can ask before discarding it. */
+  function setStudioDirty(value: boolean): void {
+    studioDirty = value
+  }
+
+  /** The history pane's Undo and Redo, mirrored into the board header. */
+  function handleHistoryActions(state: {
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  }): void {
+    historyActions = state
   }
 
   /**
@@ -709,14 +923,51 @@
   })
 
   onMount(() => {
-    // A rail-opened board lists the project's folders itself, so the project's
-    // work is read here as well as by the dock; the store coalesces the two.
     void projectWorkState.ensure(projectId)
+    // The board is one of the surfaces that watches the optional video pack, so
+    // installing it from Settings turns on live editing here without a reload.
+    void videoPackagesStore.load()
     void loadState().then(async () => {
       await loadGallery()
       await loadCanvas()
     })
     void loadWorkRoots()
+    return () => videoPackagesStore.dispose()
+  })
+
+  // Play the composition in the board rather than in the browser.
+  //
+  // The folder in front changes, a rail panel comes back on screen, or a tab was
+  // closed under the board: every one of those leaves the stage with nothing to
+  // mount, and this is what asks for the tab again. Only the folder, the live tab
+  // and whether the folder is playable are read here, so a report from
+  // `browser:state` is what settles it rather than a poll.
+  $effect(() => {
+    const directory = selected.directory
+    const live = liveTab
+    const canPlay = playable
+    const busyFolder = composing
+    const enhanced = liveEditing
+    if (
+      !video ||
+      !enhanced ||
+      !canPlay ||
+      live !== null ||
+      directory === '' ||
+      busyFolder === directory
+    )
+      return
+    void ensureComposition(directory)
+  })
+
+  // The board owns the composition job poll, because it draws the export above the
+  // controls and both must read the same list. A design has no jobs, so nothing
+  // polls for one.
+  $effect(() => {
+    if (!video) return
+    void readVideoJobs()
+    const timer = setInterval(() => void readVideoJobs(), 1500)
+    return () => clearInterval(timer)
   })
 
   /** A design's age, in the same compact form a thread row uses. */
@@ -735,6 +986,125 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
+  {#snippet videoStage()}
+    {#if video && selected.directory !== '' && !liveEditing}
+      <!--
+        Live editing is off because the optional video pack is not installed.
+
+        The board stays a reader: it shows the last export or the captured still
+        and the timeline below still places notes, so a user edits by prompting
+        the agent. The pack is what turns the board into a player and a direct
+        editor, so the one thing this asks for is the pack, in one click, rather
+        than explaining a setting the user would have to go and find.
+      -->
+      <div class="mb-2 shrink-0 border border-border bg-surface p-3">
+        <div class="flex items-center gap-1.5">
+          <Download size={13} class="text-accent" aria-hidden="true" />
+          <span class="text-xs font-semibold text-foreground">
+            Install the video pack to edit here
+          </span>
+        </div>
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+          {exportPath
+            ? 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent and watch the last export here.'
+            : 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent.'}
+        </p>
+        <button
+          type="button"
+          class="mt-2 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
+          title="Open Design and video settings to install the optional video pack"
+          aria-label="Open Design and video settings to install the optional video pack"
+          onclick={() => workspaceState.navigateToSettings?.('design')}
+        >
+          Open Settings
+        </button>
+      </div>
+    {/if}
+    {#if liveTab}
+      <!--
+        The live composition, played in the board.
+
+        The stage owns the tab's native view while it is on screen, so the
+        transport above the picture and the timeline below both drive the
+        composition the user is watching rather than a still of it. The stage fits
+        the composition's own aspect ratio inside this pane, so the frame is whole
+        at every panel size.
+      -->
+      <CompositionStage tab={liveTab} />
+    {:else if !playable}
+      <div
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+      >
+        <ImageOff size={16} />
+        <span class="px-4 text-center text-[0.6875rem]">
+          {`This ${noun} has no entry page yet, so there is nothing to play. The agent writes one when it starts the ${noun}.`}
+        </span>
+      </div>
+    {:else}
+      <!--
+        Nothing to play yet: the tab is being served, or the folder holds no
+        composition to serve. The last export stands in while that settles, in the
+        same frame the live stage uses, so the board does not jump when the page
+        lands. The action here is a retry in the panel rather than a hand-off to
+        the browser, because the browser is not where this board plays.
+      -->
+      <div
+        class="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-app"
+        aria-label={`${nounTitle} preview`}
+      >
+        {#if exportPath}
+          <video
+            class="min-h-0 flex-1 object-contain"
+            src={`appfile://project/${projectId}/${exportPath}`}
+            controls
+            playsinline
+            preload="metadata"
+            aria-label={`Exported ${noun} ${selectedName}`}
+          >
+            <track kind="captions" />
+          </video>
+        {:else if gallery[0]?.dataUrl}
+          <img
+            src={gallery[0].dataUrl}
+            alt={`Preview of the ${noun} ${selectedName}`}
+            class="min-h-0 flex-1 object-contain"
+          />
+        {:else}
+          <div class="flex min-h-0 flex-1 items-center justify-center gap-1.5 text-dimmed">
+            {#if galleryBusy}
+              <LoaderCircle size={14} class="animate-spin" />
+              <span class="text-[0.625rem]">Capturing…</span>
+            {:else}
+              <ImageOff size={14} />
+              <span class="text-[0.625rem]">No frame captured yet.</span>
+            {/if}
+          </div>
+        {/if}
+        <div
+          class="flex shrink-0 items-center justify-between gap-2 border-t border-border px-2 py-1.5"
+        >
+          <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
+            {composing === selected.directory
+              ? `Opening the ${noun}…`
+              : exportPath
+                ? `Latest export · ${exportPath.split('/').at(-1)}`
+                : `Waiting for the ${noun} preview`}
+          </span>
+          <button
+            type="button"
+            class="shrink-0 border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title={`Open the ${noun} preview again`}
+            aria-label={`Open the ${noun} preview again`}
+            disabled={composing !== ''}
+            onclick={() => void ensureComposition(selected.directory, true)}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    {/if}
+  {/snippet}
+
   {#snippet screenCard(screen: DesignScreenShot, full: boolean)}
     {@const cardLabel = video
       ? `Open the ${noun} in the in-app browser`
@@ -747,7 +1117,7 @@
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
         <button
           type="button"
-          class="group relative block w-full overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {onScreen
+          class="group relative block w-full overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
             ? 'border-accent/60'
             : 'border-border'}"
           title={cardLabel}
@@ -788,11 +1158,9 @@
         </button>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content
-          class="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-        >
+        <ContextMenu.Content class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg">
           <ContextMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
             onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
           >
             <Copy size={13} class="shrink-0 text-muted" />
@@ -801,7 +1169,7 @@
           {#if !video}
             {#each DESIGN_EXPORT_FORMATS as format (format)}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => startExport(screen.entry, format)}
                 >Export screen as {format.toUpperCase()}</ContextMenu.Item
               >
@@ -825,7 +1193,7 @@
     {@const Icon = input.icon}
     <button
       type="button"
-      class="group relative block overflow-hidden rounded-md border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
+      class="group relative block overflow-hidden border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
       title={input.label}
       aria-label={input.label}
       disabled={!input.ready || input.busy}
@@ -876,7 +1244,7 @@
         -->
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
             title="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
             aria-label="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
           >
@@ -889,7 +1257,7 @@
             </span>
             {#if !video && designScreens.length > 0}
               <span
-                class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+                class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
               >
                 {designScreens.length}
               </span>
@@ -907,7 +1275,7 @@
               align="start"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 max-h-72 w-64 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
               aria-label={listLabel}
             >
               <DropdownMenu.RadioGroup
@@ -923,17 +1291,17 @@
                       : updated === '' || created === updated
                         ? created
                         : `${created} · ${updated}`}
-                  <div class="flex items-center gap-0.5 rounded-lg pr-0.5">
+                  <div class="flex items-center gap-0.5 pr-0.5">
                     <DropdownMenu.RadioItem
                       value={item.directory}
-                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                       title={designTooltip(item)}
                     >
                       <WorkIcon size={12} class="shrink-0 text-dimmed" />
                       <span class="min-w-0 flex-1 truncate">{item.name}</span>
                       {#if item.creatorThreadId === threadId}
                         <span
-                          class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                          class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
                         >
                           Current
                         </span>
@@ -954,7 +1322,7 @@
                     </DropdownMenu.RadioItem>
                     <button
                       type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       title={`Copy the path of ${item.name}`}
                       aria-label={`Copy the path of ${item.name}`}
                       onclick={(event) => {
@@ -981,7 +1349,7 @@
         </span>
         {#if !video && designScreens.length > 0}
           <span
-            class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+            class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
           >
             {designScreens.length}
           </span>
@@ -992,7 +1360,7 @@
         {#if video && tabId !== ''}
           <button
             type="button"
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
               ? 'text-accent'
               : ''}"
             aria-pressed={tabRuntime.muted}
@@ -1009,7 +1377,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={!canRevealCreator}
           title={revealLabel}
           aria-label={revealLabel}
@@ -1017,9 +1385,19 @@
         >
           <Target size={12} />
         </button>
+        {#if historyActions && selected.directory !== ''}
+          <DesignHistoryActions
+            canUndo={historyActions.canUndo}
+            canRedo={historyActions.canRedo}
+            undoTitle={`Undo the last change to this ${noun}`}
+            redoTitle={`Redo the change to this ${noun}`}
+            onUndo={historyActions.undo}
+            onRedo={historyActions.redo}
+          />
+        {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
+          class="flex h-6 w-6 items-center justify-center transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
             ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:text-foreground'}"
           disabled={selected.directory === ''}
@@ -1032,7 +1410,7 @@
         </button>
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={galleryBusy || selected.directory === ''}
           title={refreshLabel}
           aria-label={refreshLabel}
@@ -1046,7 +1424,7 @@
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title={`${nounTitle} options`}
             aria-label={`${nounTitle} options`}
           >
@@ -1058,26 +1436,37 @@
               align="end"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
             >
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={refreshBoard}
               >
                 <RefreshCw size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={selected.directory === ''}
                 onSelect={() => void copyDesignPath(selected.directory)}
               >
                 <Copy size={13} class="shrink-0 text-muted" />
                 Copy path
               </DropdownMenu.Item>
+              {#if video}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={selected.directory === '' ||
+                    videoJobs.some((job) => job.state === 'running')}
+                  onSelect={() => void exportVideo()}
+                >
+                  <Download size={13} class="shrink-0 text-muted" />
+                  Export MP4
+                </DropdownMenu.Item>
+              {/if}
               {#if !video}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('contract')}
                 >
@@ -1085,25 +1474,25 @@
                   Generate DESIGN.md
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('critique')}
                   >Review design quality</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('reference')}
                   >Extract brand from reference</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('tweaks')}
                   >Add live controls</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
                   onSelect={() =>
                     void openInBrowser(
@@ -1112,7 +1501,7 @@
                 >
                 {#each DESIGN_EXPORT_FORMATS as format (format)}
                   <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                     disabled={selected.directory === ''}
                     onSelect={() => startExport(null, format)}
                     >Export design as {format.toUpperCase()}</DropdownMenu.Item
@@ -1121,7 +1510,7 @@
               {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('create')}
                 >
@@ -1131,7 +1520,7 @@
               {/if}
               {#if !video && canvasRead && !liveReady}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('live')}
                 >
@@ -1141,7 +1530,7 @@
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={selected.directory === ''}
                 onSelect={() => (historyOpen = !historyOpen)}
               >
@@ -1149,14 +1538,14 @@
                 {historyOpen ? 'Hide history' : 'Show history'}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={beginEditRoot}
               >
                 <Pencil size={13} class="shrink-0 text-muted" />
                 Change save path
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={rootIsDefault || rootBusy}
                 onSelect={() => void applyRoot(defaultRoot)}
               >
@@ -1168,7 +1557,7 @@
         </DropdownMenu.Root>
         <button
           type="button"
-          class="ml-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+          class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={opening || selected.directory === ''}
           title={`Show this ${noun} in the in-app browser`}
           aria-label={`Show this ${noun} in the in-app browser`}
@@ -1186,7 +1575,7 @@
     {#if editingRoot}
       <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
         <input
-          class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
+          class="h-6 min-w-0 flex-1 border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
           bind:value={rootDraft}
           placeholder={defaultRoot}
           aria-label={`Folder new ${noun}s are saved in, relative to the project`}
@@ -1203,7 +1592,7 @@
         />
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-accent transition-colors hover:bg-elevated disabled:opacity-40"
           disabled={rootBusy || rootDraft.trim() === ''}
           title={`Save this ${noun} folder`}
           aria-label={`Save this ${noun} folder`}
@@ -1217,7 +1606,7 @@
         </button>
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Cancel"
           aria-label="Cancel changing the save path"
           onclick={cancelEditRoot}
@@ -1248,7 +1637,7 @@
       {#snippet action()}
         <button
           type="button"
-          class="ml-auto flex shrink-0 items-center gap-1 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+          class="ml-auto flex shrink-0 items-center gap-1 border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
           disabled={canvasBusy !== ''}
           title="Ask the agent to bring the Screen Canvas up to date with the screens"
           aria-label="Ask the agent to sync the Screen Canvas"
@@ -1266,84 +1655,141 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-      {#if error !== ''}
-        <p
-          class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-          role="alert"
-        >
-          {error}
-        </p>
-      {/if}
+    {#if error !== '' || compositionError !== ''}
+      <p
+        class="mx-2.5 mt-2 shrink-0 border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        role="alert"
+      >
+        {error !== '' ? error : compositionError}
+      </p>
+    {/if}
 
-      {#if video && gallery.length === 0}
-        <div
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
-        >
-          {#if galleryBusy}
-            <LoaderCircle size={16} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-          {:else}
+    {#if video && selected.directory !== ''}
+      <!--
+        The composition above, the tools below.
+
+        The picture takes the space the panel has, and the timeline and controls
+        sit under it in their own scroller. That is what keeps the frame whole: a
+        native page cannot be clipped by `overflow`, so a picture sharing a
+        scrolling column with the controls would be drawn past the panel at the
+        sizes where the column is taller than the panel.
+      -->
+      <div class="flex min-h-0 flex-1 flex-col px-2.5 pt-2">
+        {@render videoStage()}
+      </div>
+      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto px-2.5 py-2">
+        {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
+          <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
+          {#if liveEditing}
+            <VideoStudioControls
+              {projectId}
+              directory={selected.directory}
+              jobs={videoJobs}
+              onCancelJob={cancelVideoJob}
+              onExport={exportVideo}
+              onDirtyChange={setStudioDirty}
+            />
+          {/if}
+        {/key}
+      </div>
+    {:else}
+      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+        {#if video}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+          >
             <ImageOff size={16} />
             <span class="px-4 text-center text-[0.6875rem]">
-              {items.length === 0
-                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-                : 'No preview captured yet.'}
-            </span>
-          {/if}
-        </div>
-      {:else}
-        <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-          {#if !video}
-            {@render entryCard({
-              icon: Presentation,
-              name: 'Screen Canvas',
-              shot: canvasShot,
-              label: 'Open the Screen Canvas in the in-app browser',
-              empty: canvasEntryNote,
-              busy: !canvasRead || openingCanvas,
-              ready: canvasState !== null,
-              onOpen: () => void openCanvas()
-            })}
-            {@render entryCard({
-              icon: PlayingCardsFan,
-              name: 'Live preview',
-              shot: liveShot,
-              label: `Open the live preview of this ${noun} in the in-app browser`,
-              empty: liveEntryNote,
-              busy: opening,
-              ready: liveReady,
-              onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
-            })}
-          {/if}
-          {#each designScreens as screen (screen.entry)}
-            {@render screenCard(screen, video)}
-          {/each}
-        </div>
-        {#if !video && designScreens.length === 0}
-          {#if galleryBusy}
-            <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-              <LoaderCircle size={12} class="animate-spin" />
-              Capturing the {noun}…
-            </p>
-          {:else}
-            <p class="mt-2 text-center text-[0.6875rem] text-muted">
               {`The agent has not written a ${noun} yet. It will appear here when it does.`}
-            </p>
+            </span>
+          </div>
+        {:else if gallery.length === 0}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+          >
+            {#if galleryBusy}
+              <LoaderCircle size={16} class="animate-spin" />
+              <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+            {:else}
+              <ImageOff size={16} />
+              <span class="px-4 text-center text-[0.6875rem]">
+                {items.length === 0
+                  ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+                  : 'No preview captured yet.'}
+              </span>
+            {/if}
+          </div>
+        {:else}
+          <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+            {#if !video}
+              {@render entryCard({
+                icon: Presentation,
+                name: 'Screen Canvas',
+                shot: canvasShot,
+                label: 'Open the Screen Canvas in the in-app browser',
+                empty: canvasEntryNote,
+                busy: !canvasRead || openingCanvas,
+                ready: canvasState !== null,
+                onOpen: () => void openCanvas()
+              })}
+              {@render entryCard({
+                icon: PlayingCardsFan,
+                name: 'Live preview',
+                shot: liveShot,
+                label: `Open the live preview of this ${noun} in the in-app browser`,
+                empty: liveEntryNote,
+                busy: opening,
+                ready: liveReady,
+                onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+              })}
+            {/if}
+            {#each designScreens as screen (screen.entry)}
+              {@render screenCard(screen, video)}
+            {/each}
+          </div>
+          {#if !video && designScreens.length === 0}
+            {#if galleryBusy}
+              <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+                <LoaderCircle size={12} class="animate-spin" />
+                Capturing the {noun}…
+              </p>
+            {:else}
+              <p class="mt-2 text-center text-[0.6875rem] text-muted">
+                {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+              </p>
+            {/if}
           {/if}
         {/if}
-      {/if}
-    </div>
+      </div>
+    {/if}
     {#key `${projectId}:${threadId}:${selected.directory}`}
       <DesignHistoryPanel
         {projectId}
         {threadId}
         directory={selected.directory}
         {noun}
+        unit={video ? 'file' : 'screen'}
         open={historyOpen}
         onRestored={restoreBoard}
         onClose={() => (historyOpen = false)}
+        onActions={handleHistoryActions}
       />
     {/key}
   </div>
 </div>
+
+<ConfirmDialog
+  open={reloadRequested}
+  title="Discard unsaved video controls?"
+  confirmLabel="Discard and reload"
+  cancelLabel="Keep editing"
+  onCancel={() => {
+    reloadRequested = false
+  }}
+  onConfirm={() => {
+    reloadRequested = false
+    reloadVideoBoard()
+  }}
+>
+  <p>Your unsaved control and caption edits will be replaced with the saved version.</p>
+</ConfirmDialog>

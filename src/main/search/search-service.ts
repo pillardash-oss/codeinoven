@@ -144,13 +144,35 @@ export class SearchService {
     if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
       void this.runSweep('startup')
     }
-    this.periodicTimer = setInterval(() => {
-      if (this.settings.enabled && this.activeModel() && this.canEmbed()) {
-        void this.runSweep('periodic')
-      }
-    }, PERIODIC_SWEEP_MS)
+    this.refreshPeriodicSweep()
+  }
+
+  /**
+   * Arm or clear the periodic staleness sweep for the settings as they are now.
+   *
+   * A pass only has work when intent search is on, a model is active, and the
+   * local runtime can embed, so with any of the three missing the interval is
+   * cleared rather than waking up every five minutes to skip itself. Every write
+   * that can change one of the three calls this, which is why the sweep no longer
+   * has to re-check the same three inside its own callback.
+   */
+  private refreshPeriodicSweep(): void {
+    if (this.disposed) return
+    if (this.settings.enabled && this.activeModel() && this.canEmbed()) this.armPeriodicSweep()
+    else this.clearPeriodicSweep()
+  }
+
+  private armPeriodicSweep(): void {
+    if (this.periodicTimer) return
+    this.periodicTimer = setInterval(() => void this.runSweep('periodic'), PERIODIC_SWEEP_MS)
     // Never keep the process alive solely for the sweep timer.
     this.periodicTimer.unref?.()
+  }
+
+  private clearPeriodicSweep(): void {
+    if (!this.periodicTimer) return
+    clearInterval(this.periodicTimer)
+    this.periodicTimer = null
   }
 
   private updateCorpusThread(thread: Thread): void {
@@ -243,6 +265,7 @@ export class SearchService {
       await this.saveSettings()
     }
     await this.saveModelIndex()
+    this.refreshPeriodicSweep()
     this.emitStatus()
   }
 
@@ -289,6 +312,7 @@ export class SearchService {
       }
       if (this.canEmbed()) await this.runSweep('enabled')
     }
+    this.refreshPeriodicSweep()
     this.emitStatus()
   }
 
@@ -308,6 +332,7 @@ export class SearchService {
     await this.index.reset()
     this.sweepTotals = { total: null, pending: 0 }
     if (this.settings.enabled && modelId && this.canEmbed()) await this.runSweep('model-changed')
+    this.refreshPeriodicSweep()
     this.emitStatus()
   }
 
@@ -386,8 +411,7 @@ export class SearchService {
     this.unsubscribeCorpus = null
     this.sweepController?.abort()
     this.cancelSummaries()
-    if (this.periodicTimer) clearInterval(this.periodicTimer)
-    this.periodicTimer = null
+    this.clearPeriodicSweep()
     this.downloader.abortAll()
     await this.disposeRuntime()
     await this.index.dispose()
@@ -492,6 +516,7 @@ export class SearchService {
     }
     this.settings.enabled = true
     await this.saveSettings()
+    this.refreshPeriodicSweep()
     this.emitStatus()
     // Fire and forget: the install or import that triggered this must not wait
     // for a full backfill to finish before it answers the renderer.

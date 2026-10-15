@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { Check, CheckCheck, CornerDownRight, ShieldAlert, X } from '@lucide/svelte'
+  import { Check, CheckCheck, CornerDownRight, ShieldAlert } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardTag from '../shared/CardTag.svelte'
+  import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -34,11 +38,13 @@
     return alternativeEditor?.speechEditorTarget(alternativeSpeechTargetId) ?? null
   }
 
-  function riskClass(risk: NonNullable<PermissionRequest['policy']>['risk']): string {
-    if (risk === 'critical') return 'bg-danger/10 text-danger'
-    if (risk === 'high') return 'bg-warning/15 text-warning'
-    if (risk === 'medium') return 'bg-info/10 text-info'
-    return 'bg-success/10 text-success'
+  function riskTone(
+    risk: NonNullable<PermissionRequest['policy']>['risk']
+  ): 'ok' | 'info' | 'warn' | 'err' {
+    if (risk === 'critical') return 'err'
+    if (risk === 'high') return 'warn'
+    if (risk === 'medium') return 'info'
+    return 'ok'
   }
 
   function formatMetadata(value: unknown): string {
@@ -93,42 +99,32 @@
 
 <section
   out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border border-warning/30 bg-surface shadow-sm"
+  class={cardFrameClass('replace', 'overflow-hidden')}
   aria-label="Permission requested"
 >
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-    <div class="flex min-w-0 items-center gap-2">
-      <ShieldAlert size={15} class="shrink-0 text-warning" />
-      <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        Permission requested
-      </p>
+  <!-- The card that takes the composer's place while the agent waits for a
+     decision: what it wants to do, the risk it carries, and the three answers. -->
+  <CardHead
+    icon={ShieldAlert}
+    title="Permission requested"
+    chip={{
+      text: 'Waiting',
+      tone: 'paused',
+      title: 'The run is held until this request is answered'
+    }}
+    foldLabel="permission request"
+    bind:folded
+  >
+    {#snippet meta()}
       {#if request.policy}
-        <span
-          class="rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase {riskClass(
-            request.policy.risk
-          )}"
-        >
-          {request.policy.risk}
-        </span>
+        <CardTag text={request.policy.risk} tone={riskTone(request.policy.risk)} />
       {/if}
       <!-- Folded, the header carries what is being asked for, like the task card. -->
       {#if folded}
-        <span class="min-w-0 truncate text-xs text-muted">{request.permission}</span>
+        <span class="min-w-0 truncate text-[0.6875rem] text-muted">{request.permission}</span>
       {/if}
-    </div>
-    <div class="flex shrink-0 items-center gap-1">
-      <button
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-30"
-        disabled={working}
-        onclick={() => void reject()}
-        aria-label="Reject and close permission request"
-        title="Reject and close"
-      >
-        <X size={15} />
-      </button>
-      <CardFoldToggle bind:folded label="permission request" />
-    </div>
-  </div>
+    {/snippet}
+  </CardHead>
 
   {#if !folded}
     <div transition:slide={foldSlide()}>
@@ -148,7 +144,7 @@
             <div class="space-y-1">
               {#each request.patterns as pattern, index (`${pattern}-${index}`)}
                 <p
-                  class="break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
+                  class="break-all bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
                 >
                   {pattern}
                 </p>
@@ -180,7 +176,7 @@
                 <div class="grid gap-1">
                   <dt class="text-[0.6875rem] font-semibold text-muted">{key}</dt>
                   <dd
-                    class="whitespace-pre-wrap break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
+                    class="whitespace-pre-wrap break-all bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
                   >
                     {formatMetadata(value)}
                   </dd>
@@ -203,7 +199,7 @@
                 autofocus
                 disabled={working}
                 placeholder="Describe what the agent should do instead…"
-                class="w-full resize-y rounded-lg border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                class="w-full resize-y  border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
                 containerClass="min-w-0 flex-1"
                 ariaLabel="Alternative instruction"
                 onSubmit={() => void submitAlternative()}
@@ -226,58 +222,65 @@
         {/if}
       </div>
 
-      <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-        <button
-          class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
-          disabled={working}
-          onclick={() => void reject()}
-        >
-          Reject
-        </button>
-        <div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+      <!-- Reject is the only falsy answer. "Provide alternative" steers the run
+         instead of refusing it, so it sits on the truthy side attached to "Allow
+         always", and the editor's Cancel keeps that slot when it opens. Least
+         privilege keeps the primary slot: the least a grant needs is one
+         allowance. -->
+      <CardFoot>
+        {#snippet left()}
+          <CardButton
+            label="Reject"
+            title="Reject this permission"
+            variant="ghost-danger"
+            disabled={working}
+            onclick={() => void reject()}
+          />
+        {/snippet}
+        {#snippet right()}
           {#if showingAlternative}
-            <button
-              class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            <CardButton
+              label="Cancel"
+              title="Go back to the permission choices"
+              variant="secondary"
               disabled={working}
               onclick={() => (showingAlternative = false)}
-            >
-              Cancel
-            </button>
-            <button
-              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+            />
+            <CardButton
+              label="Send alternative"
+              title="Reject the request and steer the run with this instruction"
+              icon={CornerDownRight}
+              variant="primary"
               disabled={!canSubmitAlternative}
               onclick={() => void submitAlternative()}
-            >
-              Send alternative
-              <CornerDownRight size={13} />
-            </button>
+            />
           {:else}
-            <button
-              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+            <CardButton
+              label="Provide alternative"
+              title="Provide an alternative instead"
+              variant="secondary"
               disabled={working}
-              onclick={() => void allowOnce()}
-            >
-              Allow once
-              <Check size={13} />
-            </button>
-            <button
-              class="flex min-h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+              onclick={showAlternative}
+            />
+            <CardButton
+              label="Allow always"
+              title="Allow this kind of request always"
+              icon={CheckCheck}
+              variant="secondary"
               disabled={working}
               onclick={() => void allowAlways()}
-            >
-              Allow always
-              <CheckCheck size={13} />
-            </button>
-            <button
-              class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            />
+            <CardButton
+              label="Allow once"
+              title="Allow this request once"
+              icon={Check}
+              variant="primary"
               disabled={working}
-              onclick={() => void showAlternative()}
-            >
-              Provide alternative
-            </button>
+              onclick={() => void allowOnce()}
+            />
           {/if}
-        </div>
-      </div>
+        {/snippet}
+      </CardFoot>
     </div>
   {/if}
 </section>

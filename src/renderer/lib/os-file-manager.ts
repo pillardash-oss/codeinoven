@@ -22,3 +22,14 @@ export function osFileManagerLabel(): string {
 export async function revealInOsFileManager(absolutePath: string): Promise<boolean> {
   return await invoke('shell:revealPath', absolutePath).catch(() => false)
 }
+
+/**
+ * Reveal a path the app does not own: a file the user just exported or saved
+ * somewhere of their own choosing. `shell:revealPath` answers false for anything
+ * outside the app's approved roots, so an export whose whole point is to land
+ * outside them needs this reveal instead. Existence is checked; no content is
+ * read or opened.
+ */
+export async function revealExportedPathInOsFileManager(absolutePath: string): Promise<boolean> {
+  return await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
+}

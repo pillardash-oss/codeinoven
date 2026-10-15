@@ -94,18 +94,18 @@
   }
 
   const actionClass =
-    'flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-1.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground'
 
   /** The same control for one that is only an icon, so it stays square. */
   const iconActionClass =
-    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center border border-border text-muted transition-colors hover:bg-elevated hover:text-foreground'
 
   function openReportFile(): void {
     void revealCitationFile(projectId, report.path)
   }
 </script>
 
-<article class="overflow-hidden rounded-lg border border-border bg-surface">
+<article class="overflow-hidden border border-border bg-surface">
   <!--
     Two rows, because the card answers two questions: what this assignment was,
     and where its answer can be read. The first row names it, the second carries
@@ -193,7 +193,7 @@
       {#if clipped || expanded}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex cursor-pointer items-center gap-1 px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-expanded={expanded}
           title={expanded ? 'Fold this report to five lines' : 'Show the whole report'}
           onclick={() => (expanded = !expanded)}
@@ -207,7 +207,7 @@
       {/if}
       <button
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Post this report as a comment on the pull request"
         disabled={posting}
         onclick={() => onPostReport(report)}

@@ -337,7 +337,7 @@ export const CHAT_FILESYSTEM_BOUNDARY_LINES = [
   'The harness starts in a neutral chat-cwd only because its process requires a working directory. That directory is not part of the conversation, not project context, and never a source to inspect.',
   'Do not proactively call read, list, glob, grep, find, bash, powershell, or another local tool to discover context. Do not inspect chat-cwd, the open project, the repository, the home directory, or application storage.',
   'Use the conversation and your own knowledge first. Use web search, web fetch, and other internet tools when current or external information is needed.',
-  'Ordinary internet research is already authorized in this chat. Proceed with web searches, reading public pages, and routine browser navigation without asking for internet access or asking the user to enable File System.',
+  'Ordinary internet research is already authorized in this chat. Proceed with web searches, reading public pages, and assistant browser navigation without asking for internet access or asking the user to enable File System.',
   'If native web search or web fetch tools are absent, use cio_util_find to discover web search or web fetch capabilities. The in-app browser is also reachable through cio_util_init with utility_id "cio:browser" and cio_util_use; load its operations, open a page, and use its navigation and snapshot operations to research. A discovery result containing unrelated utilities does not mean internet access is unavailable.',
   'Do not substitute bash, curl, wget, shell pipelines, or local scripts for missing web tools. These are shell operations and can require permission even when their purpose is internet research. Use the web or browser gateway instead. If those routes fail, report the actual failure rather than requesting broader filesystem access.',
   'You may read only files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
@@ -669,12 +669,12 @@ export function composeTurnSystemPrompt(input: {
   behaviorPrompt: string
   utilityInstructions: string
   /**
-   * The routine contract for this thread (how-to authoring, or a saved
-   * routine's run), when one applies. It rides the system prompt rather than
+   * The assistant contract for this thread (knowledge authoring, or a saved
+   * assistant's run), when one applies. It rides the system prompt rather than
    * the user message so every turn re-states it and no harness transcript
    * accumulates a copy per turn.
    */
-  routineInstruction?: string
+  assistantInstruction?: string
   behaviorMode: 'implement' | 'brainstorm' | 'chat' | 'assistant'
 }): string {
   // A chat and an assistant task are both non-engineering conversations, so
@@ -688,7 +688,7 @@ export function composeTurnSystemPrompt(input: {
     input.assignmentCoordinatorSystemPrompt,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.routineInstruction,
+    input.assistantInstruction,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
     conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined
@@ -712,8 +712,8 @@ export function composeBrainstormSystemPrompt(input: {
   imageDescriptorNote: string
   behaviorPrompt: string
   utilityInstructions: string
-  /** The routine contract, when the planning turn belongs to a routine thread. */
-  routineInstruction?: string
+  /** The assistant contract, when the planning turn belongs to an assistant thread. */
+  assistantInstruction?: string
 }): string {
   const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
   const assignmentTurnPrompt = input.assignmentDiscussionPrompt ?? ''
@@ -734,7 +734,7 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.routineInstruction,
+    input.assistantInstruction,
     ARTIFACT_OUTPUT_INSTRUCTION,
     'In studio output, keep artifact fences inside the appropriate Markdown string field and preserve the required structured output contract.'
   ]

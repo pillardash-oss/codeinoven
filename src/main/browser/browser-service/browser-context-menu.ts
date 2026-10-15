@@ -16,6 +16,7 @@
 import type { ContextMenuParams, MenuItemConstructorOptions } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 import type { BrowserContextMenuBoxEntry } from '../../../lib/browser/browser-box-menu'
+import type { BrowserPeekMediaTarget } from './browser-peek'
 
 /** Longest selected phrase echoed in the "Search ... for" item. */
 const MAX_LABEL_TEXT_LENGTH = 32
@@ -46,8 +47,13 @@ export interface BrowserContextMenuActions {
   openLinkInNewTab(url: string): void
   /** Open a link in a new tab in the selected named box. */
   openLinkInBox(url: string, boxId: string): void
-  /** Open an ephemeral peek at a navigable link under the cursor. */
-  openPeekWindow?(url: string): void
+  /**
+   * Open an ephemeral peek at a navigable address under the cursor.
+   *
+   * `media` is the picture or player the peek should grow out of, or null for a
+   * link, which the probe finds from the click point.
+   */
+  openPeekWindow?(url: string, media?: BrowserPeekMediaTarget | null): void
   /** Save a link's target through the download manager. */
   saveLinkAs(url: string): void
 
@@ -171,6 +177,22 @@ function buildSpellingItems(
   ]
 }
 
+/**
+ * The peek item for the thing under the cursor.
+ *
+ * Shared by the link, image and media sections so that every address the menu
+ * can open in a new tab can also be peeked, and all three offer it in the same
+ * words. A surface without a peek window contributes nothing.
+ */
+function buildPeekItems(
+  url: string,
+  media: BrowserPeekMediaTarget | null,
+  actions: BrowserContextMenuActions
+): MenuItemConstructorOptions[] {
+  if (!actions.openPeekWindow) return []
+  return [{ label: 'Take a Peek', click: () => actions.openPeekWindow?.(url, media) }]
+}
+
 /** The actions for a link, headed by opening it. */
 function buildLinkItems(
   params: ContextMenuParams,
@@ -191,8 +213,7 @@ function buildLinkItems(
         }))
       })
     }
-    if (actions.openPeekWindow)
-      items.push({ label: 'Take a Peek', click: () => actions.openPeekWindow?.(url) })
+    items.push(...buildPeekItems(url, null, actions))
   }
   if (params.linkText.trim()) {
     items.push({ label: 'Copy Link Text', click: () => actions.copyText(params.linkText) })
@@ -216,6 +237,7 @@ function buildImageItems(
       label: 'Open Image in New Tab',
       click: () => actions.openMediaInNewTab(url)
     })
+    items.push(...buildPeekItems(url, { url, kind: 'image' }, actions))
   }
   items.push({ label: 'Copy Image', click: () => actions.copyImage(params.x, params.y) })
   if (url) {
@@ -240,6 +262,13 @@ function buildMediaItems(
       label: `Open ${noun} in New Tab`,
       click: () => actions.openMediaInNewTab(url)
     })
+    items.push(
+      ...buildPeekItems(
+        url,
+        { url, kind: params.mediaType === 'video' ? 'video' : 'audio' },
+        actions
+      )
+    )
   }
   if (url) {
     items.push({ label: `Copy ${noun} Address`, click: () => actions.copyAddress(url) })

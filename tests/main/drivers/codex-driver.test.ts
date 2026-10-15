@@ -811,6 +811,82 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     )
   })
 
+  it('surfaces an expired Codex credential as a sign-in error, not a connection wait', async () => {
+    // Reproduced against codex-cli 0.162.1 app-server with a revoked refresh
+    // token: the reconnecting notification carries only a counter as its
+    // message and puts the cause in `additionalDetails`. Classifying on the
+    // counter alone produced the "Provider connection interrupted" card, whose
+    // actions are Retry/Stop, so the user could no longer sign in again.
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'error',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        willRetry: true,
+        error: {
+          message: 'Reconnecting... 2/5',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+          additionalDetails: 'workspace routing discovery unauthorized (401)'
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'session.status',
+          sessionId,
+          status: expect.objectContaining({
+            state: 'error',
+            issue: expect.objectContaining({
+              kind: 'authentication',
+              harnessId: 'codex',
+              retryable: false
+            })
+          })
+        })
+      )
+    })
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'session.status' &&
+          event.sessionId === sessionId &&
+          event.status.state === 'waiting'
+      )
+    ).toBe(false)
+
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message: 'workspace routing discovery unauthorized (401)',
+            codexErrorInfo: 'other'
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'session.error',
+          sessionId,
+          issue: expect.objectContaining({ kind: 'authentication', harnessId: 'codex' })
+        })
+      )
+    })
+  })
+
   it('schedules retry from the time-only usage-limit variant', async () => {
     // Codex emits a bare "try again at 9:30 AM" for same-day resets. The time
     // has not passed yet on the faked clock, so today's 9:30 AM is the reset.

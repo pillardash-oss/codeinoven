@@ -1,12 +1,9 @@
 <script lang="ts">
   import {
-    ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
     Cog,
     Cpu,
-    Check,
-    ChevronDown,
     GlobeCode,
     MemoryStick,
     MessagesSquare,
@@ -20,13 +17,14 @@
     Trash2,
     X
   } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
+  import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
   import Switch from '$lib/components/ui/Switch.svelte'
   import TaskManagerNode from './TaskManagerNode.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -125,6 +123,29 @@
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
 
   /**
+   * The footer's project filter rows, in the shape the shared in-panel picker
+   * draws. The picker keeps its list inside the panel rather than in a portal
+   * popup, which is what lets the native projection carry this toolbar.
+   */
+  const projectFilterOptions: readonly MultiSelectOption[] = $derived(
+    scopeState.projects.map((project) => ({
+      id: project.id,
+      label: project.name,
+      ...(project.color ? { color: project.color } : {}),
+      iconUrl: project.iconUrl ?? null
+    }))
+  )
+
+  /** The sort picker's rows: the three modes with their explanatory hint. */
+  const sortFilterOptions = $derived(
+    SORT_MODES.map((mode) => ({
+      id: mode,
+      label: SORT_MODE_LABELS[mode],
+      hint: SORT_MODE_DESCRIPTIONS[mode]
+    }))
+  )
+
+  /**
    * App-scoped processes (ASR, LAMA server, …) have no owning project, so a
    * project filter can never exclude them; they always stay visible.
    */
@@ -212,28 +233,36 @@
   }
 
   /**
-   * Aggregate resource use for a set of rows. A harness root already reports the
-   * totals for its whole tree while its descendants are also listed as their own
-   * rows, so summing every row would count them twice. Only the top-most rows
-   * (whose parent is not itself in the set) are summed, counting each once.
+   * Aggregate resource use for a set of rows. Every process row reports one
+   * process and every descendant a harness spawns is listed as its own row, so
+   * processes are a plain sum. A service backed by its own pid is usually the
+   * app's child with no process row of its own, so it is added too, skipping
+   * any pid already counted as a row.
    */
-  function aggregateResources(rows: readonly TaskManagerProcess[]): {
+  function aggregateResources(
+    processes: readonly TaskManagerProcess[],
+    services: readonly TaskManagerService[] = []
+  ): {
     memoryBytes: number
     cpuPercent: number
   } {
-    const pids = new Set(rows.map((row) => row.pid))
     let memoryBytes = 0
     let cpuPercent = 0
-    for (const row of rows) {
-      if (pids.has(row.parentPid)) continue
+    const processPids = processes.map((row) => row.pid)
+    for (const row of processes) {
       memoryBytes += row.memoryBytes ?? 0
       cpuPercent += row.cpuPercent ?? 0
+    }
+    for (const service of services) {
+      if (service.pid !== null && processPids.includes(service.pid)) continue
+      memoryBytes += service.memoryBytes ?? 0
+      cpuPercent += service.cpuPercent ?? 0
     }
     return { memoryBytes, cpuPercent }
   }
 
   /**
-   * The owner node a runtime belongs to: its thread when it has one (a routine
+   * The owner node a runtime belongs to: its thread when it has one (an assistant
    * run), otherwise its project. App-scoped runtimes have neither and return
    * null, so they list under the app node instead.
    */
@@ -304,7 +333,7 @@
     const list = [...groups.values()]
     for (const group of list) {
       group.pids = group.processes.map((process) => process.pid)
-      const totals = aggregateResources(group.processes)
+      const totals = aggregateResources(group.processes, group.services)
       group.memoryBytes = totals.memoryBytes
       group.cpuPercent = totals.cpuPercent
     }
@@ -323,7 +352,7 @@
 
   const appOwnedPids = $derived(appScopedProcesses.map((process) => process.pid))
 
-  const appOwnedTotals = $derived(aggregateResources(appScopedProcesses))
+  const appOwnedTotals = $derived(aggregateResources(appScopedProcesses, appOwnedServices))
 
   function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
     if (sortMode === 'name') {
@@ -382,8 +411,8 @@
     else selected.add(process.pid)
   }
 
-  /** Aggregate use across every managed process, counting a harness tree once. */
-  const processTotals = $derived(aggregateResources(processes))
+  /** Aggregate use across every managed runtime, counting each process once. */
+  const processTotals = $derived(aggregateResources(processes, services))
   const totalRamBytes = $derived(processTotals.memoryBytes)
   const totalCpuPercent = $derived(processTotals.cpuPercent)
 
@@ -584,9 +613,9 @@
    * Everything the task manager opens belongs to a conversation: a browser tab,
    * a terminal, or the conversation itself. A tab's context is the project that
    * is on screen, and opening one for a process in another project, chat, or
-   * routine run without landing there first created it in a context nobody
+   * assistant run without landing there first created it in a context nobody
    * could see. Landing first also puts the surface in the right hands: a run of
-   * a routine shares the routine's browser and terminal, a chat owns its own.
+   * an assistant shares the assistant's browser and terminal, a chat owns its own.
    */
   async function landOnOwner(target: { projectId: string; threadId: string }): Promise<void> {
     const [thread, project] = await Promise.all([
@@ -829,7 +858,7 @@
         {#snippet serviceRow(service: TaskManagerService)}
           <li class="flex items-start gap-3 px-5 py-3">
             <span
-              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
             >
               {#if service.kind === 'mcp'}
                 <Plug size={15} />
@@ -846,13 +875,13 @@
                 <p class="truncate text-sm font-semibold text-foreground">{service.name}</p>
                 {#if service.port !== null}
                   <span
-                    class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                    class="shrink-0 bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                   >
                     :{service.port}
                   </span>
                 {/if}
                 <span
-                  class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
+                  class="shrink-0 bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
                 >
                   {SERVICE_KIND_LABELS[service.kind]}
                 </span>
@@ -869,6 +898,20 @@
                 class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
               >
                 {#if service.pid !== null}
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title="CPU used by the process behind this service"
+                  >
+                    <Cpu size={11} />
+                    {formatCpu(service.cpuPercent)}
+                  </span>
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title="Memory used by the process behind this service"
+                  >
+                    <MemoryStick size={11} />
+                    {formatMemory(service.memoryBytes)}
+                  </span>
                   <span>PID {service.pid}</span>
                 {/if}
                 <span>{formatDuration(service.startedAt)}</span>
@@ -877,7 +920,7 @@
             <div class="mt-0.5 flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!service.stoppable || stopping}
                 title={service.stoppable
                   ? `Stop ${service.name}`
@@ -917,7 +960,7 @@
             >
               {#if harnessId}
                 <span
-                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
                 >
                   <AgentIcon agentId={harnessId} size={16} />
                 </span>
@@ -925,12 +968,12 @@
                 {@render projectIconTile(
                   process.projectId,
                   process.projectName ?? processName(process.command),
-                  'mt-0.5 h-8 w-8 rounded-lg',
+                  'mt-0.5 h-8 w-8',
                   'h-4 w-4'
                 )}
               {:else}
                 <span
-                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
                 >
                   <SquareTerminal size={15} />
                 </span>
@@ -942,7 +985,7 @@
                   </p>
                   {#if process.ports.length > 0}
                     <span
-                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                      class="shrink-0 bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                     >
                       :{process.ports[0]}
                       {#if process.ports.length > 1}
@@ -951,7 +994,7 @@
                     </span>
                   {/if}
                   <span
-                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
+                    class="shrink-0 bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
                     'app'
                       ? 'uppercase tracking-wide'
                       : ''}"
@@ -970,18 +1013,14 @@
                 >
                   <span
                     class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'CPU used by this process and its descendants'
-                      : 'CPU used by this process'}
+                    title="CPU used by this process"
                   >
                     <Cpu size={11} />
                     {formatCpu(process.cpuPercent)}
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'Memory used by this process and its descendants'
-                      : 'Memory used by this process'}
+                    title="Memory used by this process"
                   >
                     <MemoryStick size={11} />
                     {formatMemory(process.memoryBytes)}
@@ -997,7 +1036,7 @@
             <div class="mt-0.5 flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={process.ports.length === 0 || !process.projectId}
                 title={process.ports.length === 0
                   ? 'No port detected'
@@ -1011,7 +1050,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!process.projectId}
                 title={process.projectId
                   ? 'Open path in in-app terminal'
@@ -1023,7 +1062,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!process.threadId}
                 title={process.threadId
                   ? `Open the thread responsible for ${processName(process.command)}`
@@ -1057,7 +1096,7 @@
 
             <!-- The app node holds only what the app owns for its whole run:
             the config-rooted services and the app-scoped processes such as the
-            shared model server. Projects and routines are never nested here. -->
+            shared model server. Projects and assistants are never nested here. -->
             <ul class="divide-y divide-border">
               {#each appScopedProcesses as process (process.pid)}
                 {@render processRow(process)}
@@ -1090,7 +1129,7 @@
               {@render projectIconTile(
                 group.projectId ?? group.id,
                 group.projectName ?? group.label,
-                'h-6 w-6 rounded-md',
+                'h-6 w-6',
                 'h-4 w-4'
               )}
             {/snippet}
@@ -1117,7 +1156,7 @@
           is exactly the space they occupied. The filter stays applied   only
           its control is off screen. -->
           <div
-            class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-elevated px-2"
+            class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border border-border bg-elevated px-2"
           >
             <Search size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
             <input
@@ -1164,37 +1203,37 @@
           </p>
           <span
             class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-            title="Total memory used by listed processes"
-            aria-label="Total memory used by listed processes"
+            title="Total memory used by the listed processes and services"
+            aria-label="Total memory used by the listed processes and services"
           >
             <MemoryStick size={13} aria-hidden="true" />
             {formatMemory(totalRamBytes)}
           </span>
           <span
             class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-            title="Total CPU usage of listed processes"
-            aria-label="Total CPU usage of listed processes"
+            title="Total CPU usage of the listed processes and services"
+            aria-label="Total CPU usage of the listed processes and services"
           >
             <Cpu size={13} aria-hidden="true" />
             {formatCpu(totalCpuPercent)}
           </span>
           <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-          <ProjectSwitch
-            projects={scopeState.projects}
-            activeProjectId={filterProjectId}
-            onSwitch={(projectId) => setFilterProject(projectId)}
+          <MultiSelectPicker
+            single
+            compact
+            options={projectFilterOptions}
+            selectedIds={filterProjectId ? [filterProjectId] : []}
+            onSelectionChange={(ids) => setFilterProject(ids[0] ?? null)}
+            allLabel="All projects"
             ariaLabel="Filter processes by project"
-            placeholder="All projects"
             searchPlaceholder="Search projects…"
             emptyMessage="No matching projects"
-            class="h-7 shrink-0"
-            compact
-            align="start"
+            class="shrink-0"
           />
           {#if filterProjectId}
             <button
               type="button"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              class="flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
               title="Clear the project filter"
               aria-label="Clear the project filter"
               onclick={() => setFilterProject(null)}
@@ -1202,49 +1241,20 @@
               <X size={12} />
             </button>
           {/if}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
-              title="Choose sort mode"
-              aria-label="Choose sort mode"
-            >
-              <ArrowDownUp size={12} />
-              {SORT_MODE_LABELS[sortMode]}
-              <ChevronDown size={11} class="text-dimmed" />
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="top"
-                align="start"
-                sideOffset={6}
-                collisionPadding={8}
-                class="z-60 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-              >
-                {#each SORT_MODES as mode (mode)}
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated focus:bg-elevated max-md:py-2.5 {mode ===
-                    sortMode
-                      ? 'text-foreground'
-                      : 'text-muted'}"
-                    title={SORT_MODE_DESCRIPTIONS[mode]}
-                    aria-label={SORT_MODE_DESCRIPTIONS[mode]}
-                    onSelect={() => (sortMode = mode)}
-                  >
-                    <Check
-                      size={12}
-                      class={mode === sortMode ? 'text-primary' : 'opacity-0'}
-                      aria-hidden="true"
-                    />
-                    {SORT_MODE_LABELS[mode]}
-                  </DropdownMenu.Item>
-                {/each}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <EnumSelect
+            inline
+            options={sortFilterOptions}
+            value={sortMode}
+            onChange={(mode) => (sortMode = mode)}
+            placeholder="Sort"
+            ariaLabel="Choose sort mode"
+            title="Choose sort mode"
+            class="shrink-0"
+          />
         {/if}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border transition-colors {searchOpen
+          class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {searchOpen
             ? 'bg-overlay text-foreground'
             : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
           aria-pressed={searchOpen}
@@ -1266,7 +1276,7 @@
       <div class="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-[width] hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-[width] hover:bg-overlay hover:text-foreground disabled:opacity-50"
           disabled={checking}
           title="Refresh running processes"
           aria-label="Refresh running processes"
@@ -1287,7 +1297,7 @@
         {#if selected.size > 0}
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             disabled={ending || forceEnding}
             title="Gracefully stop the selected processes"
             onclick={() => void endSelected()}
@@ -1305,7 +1315,7 @@
           </button>
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-8 items-center gap-1.5 bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
             disabled={ending || forceEnding}
             title="Force kill the selected processes"
             onclick={requestForceEnd}
@@ -1337,7 +1347,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 text-sm font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-3 text-sm font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
       disabled={forceEnding}
       title="Cancel"
       onclick={() => (forceEndTargets = [])}
@@ -1347,7 +1357,7 @@
     <button
       type="button"
       data-modal-primary
-      class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-1.5 bg-danger px-3 text-sm font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
       disabled={forceEnding}
       title="Force kill the selected processes"
       onclick={() => void confirmForceEnd()}

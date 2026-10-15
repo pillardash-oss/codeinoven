@@ -3,7 +3,7 @@
  *
  * Every workspace CodeInOven can stage scratch in owns one `.cio` folder: a
  * project checkout, a managed scope worktree, a standalone chat's workspace, an
- * assistant routine's workspace, and a browser tab's workspace. All of them are
+ * assistant's workspace, and a browser tab's workspace. All of them are
  * swept by the same rules, so the shapes that cross the IPC boundary live here
  * rather than in the main-process service that owns the work.
  */
@@ -95,8 +95,8 @@ export interface CioCleanupTarget {
   /** Human label of the workspace, e.g. `CodeInOven · Default`. */
   label: string
   /**
-   * Every mount key that names this folder. A routine's workspace is shared by
-   * all of its tasks, so the folder answers to the routine's directory name and
+   * Every mount key that names this folder. An assistant's workspace is shared by
+   * all of its tasks, so the folder answers to the assistant's directory name and
    * to each task's own id; an exclusion set from any of their file trees must
    * therefore protect the one folder they mount.
    */

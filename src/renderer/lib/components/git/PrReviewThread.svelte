@@ -184,7 +184,7 @@
   <div class="flex items-center gap-1">
     <button
       type="button"
-      class="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-foreground"
+      class="flex size-5 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
       aria-expanded={!collapsed}
       aria-label={collapsed ? 'Show this thread' : 'Fold this thread'}
       title={collapsed ? 'Show this thread' : 'Fold this thread'}
@@ -199,7 +199,7 @@
     -->
     <button
       type="button"
-      class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left hover:bg-elevated/60"
+      class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 px-1 py-0.5 text-left hover:bg-elevated/60"
       title="Open {location} in this project"
       onclick={() => void openFileAtLine()}
     >
@@ -213,13 +213,13 @@
       <!-- The line the thread was written about is gone from the diff, which is
            the only reason GitHub keeps a thread around as outdated. -->
       <span
-        class="shrink-0 rounded bg-warning/10 px-1.5 py-px text-[0.5625rem] font-medium text-warning"
+        class="shrink-0 bg-warning/10 px-1.5 py-px text-[0.5625rem] font-medium text-warning"
         title="The line this thread was written about is no longer in the diff">outdated</span
       >
     {/if}
     {#if thread.resolved}
       <span
-        class="flex shrink-0 items-center gap-1 rounded bg-success/10 px-1.5 py-px text-[0.5625rem] font-medium text-success"
+        class="flex shrink-0 items-center gap-1 bg-success/10 px-1.5 py-px text-[0.5625rem] font-medium text-success"
         title="This thread is resolved"
       >
         <CheckCircle2 size={10} class="shrink-0" />
@@ -233,7 +233,7 @@
     </span>
     <button
       type="button"
-      class="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-foreground"
+      class="flex size-5 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
       title="Open this thread on GitHub"
       aria-label="Open the thread on {thread.path} on GitHub"
       onclick={openOnGitHub}
@@ -254,7 +254,7 @@
       hunk={threadDiffHunk(thread)}
       anchor={thread.line}
       side={thread.side}
-      class="overflow-hidden rounded-lg border border-border/60 bg-elevated/20 py-1"
+      class="overflow-hidden border border-border/60 bg-elevated/20 py-1"
     />
 
     <div class="flex flex-col gap-2">
@@ -308,7 +308,7 @@
         {#if !collapsed && !replyTo}
           <button
             type="button"
-            class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
+            class="flex cursor-pointer items-center gap-1.5 border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
             title="Reply to this thread"
             onclick={() => openReply()}
           >
@@ -320,7 +320,7 @@
       {#if thread.threadNodeId}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] disabled:opacity-40 {thread.resolved
+          class="flex cursor-pointer items-center gap-1.5 border px-2 py-1 text-[0.6875rem] disabled:opacity-40 {thread.resolved
             ? 'border-border text-muted hover:bg-elevated hover:text-foreground'
             : 'border-success/40 bg-success/10 text-success hover:bg-success/20'}"
           title={thread.resolved ? 'Reopen this thread' : 'Resolve this thread'}

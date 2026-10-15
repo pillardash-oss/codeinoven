@@ -49,7 +49,7 @@
 
 {#if filterOpen}
   <div
-    class="absolute left-2 right-2 top-7 z-20 rounded-xl border border-border bg-surface shadow-xl"
+    class="absolute left-2 right-2 top-7 z-20 border border-border bg-surface shadow-xl"
     role="search"
     aria-label="Search project files"
   >
@@ -68,7 +68,7 @@
       <input
         bind:this={filterInput}
         type="search"
-        class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+        class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
         placeholder="Search files and folders…"
         value={filterQuery}
         oninput={onFilterInput}
@@ -77,7 +77,7 @@
       />
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground"
         aria-label="Close file search"
         title="Close file search (Escape)"
         onclick={onCloseFilter}
@@ -92,7 +92,7 @@
   <button
     type="button"
     class={[
-      'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+      'mt-1.5 flex h-7 w-full items-center gap-1.5 border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
       lastTurnOnly
         ? 'border-primary/40 bg-primary/10 text-primary'
         : 'border-border text-muted hover:bg-elevated hover:text-foreground'
@@ -111,7 +111,7 @@
     <button
       type="button"
       class={[
-        'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors',
+        'mt-1.5 flex h-7 w-full items-center gap-1.5 border px-2 text-[0.625rem] font-medium transition-colors',
         conflictsOnly
           ? 'border-warning/40 bg-warning/10 text-warning'
           : 'border-border text-muted hover:bg-elevated hover:text-foreground'

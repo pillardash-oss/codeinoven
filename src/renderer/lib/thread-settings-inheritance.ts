@@ -1,6 +1,7 @@
 import type { Project, Thread, ThreadSettings } from '$shared/types'
 import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { invoke } from '$lib/ipc.svelte'
+import { loadLifecycleIntent } from '$lib/stores/lifecycle-intent'
 import {
   assistantEffectiveSettings,
   assistantSettings,
@@ -104,32 +105,64 @@ export async function persistInheritedThreadSettings(
 }
 
 /**
- * Carry the source thread's Engineering stage selection into a sibling thread
- * so the switch that was turned on stays on. Best-effort and non-fatal: when
- * the source has no lifecycle selection (or is not in engineering mode) the
- * destination keeps its default untouched state.
+ * Carry the source thread's Engineering identity into a sibling thread: mark it
+ * as an Engineering thread and copy the switches the user actually sees.
+ *
+ * An Engineering thread stays one for its lifetime, even with every switch off
+ * (a parked, completed or cancelled run): its Toolbox is still filled, so a
+ * sibling must inherit that highlight instead of arriving neutral. The switch
+ * set the user sees wins over the persisted row   a staged (not-yet-sent)
+ * Toolbox selection must travel too.
+ *
+ * Best-effort and non-fatal: a source that is not an Engineering thread, or an
+ * independent-audit/orchestration-child source, leaves the destination neutral
+ * and returns `null`.
+ *
+ * Returns the destination as persisted once inheritance lands, so a caller that
+ * opens the thread afterwards can adopt the row that carries the marker and the
+ * attached defaults instead of a stale pre-inheritance snapshot.
  */
 export async function inheritEngineeringLifecycle(
   projectId: string,
   sourceThreadId: string,
   destinationThreadId: string
-): Promise<void> {
+): Promise<Thread | null> {
   try {
-    const source = await invoke('engineeringLifecycle:get', projectId, sourceThreadId)
-    if (!source?.selection || source.selection === 'none') return
+    const [sourceThread, sourceLifecycle] = await Promise.all([
+      invoke('thread:get', projectId, sourceThreadId),
+      invoke('engineeringLifecycle:get', projectId, sourceThreadId)
+    ])
+    if (!sourceThread) return null
+    // The staged (not-yet-sent) Toolbox selection is what the source view is
+    // currently showing as on; it is intent the user expects to travel even
+    // though it was never committed to the lifecycle row.
+    const staged = loadLifecycleIntent(projectId, sourceThreadId)
+    const stagedActive = staged !== null && (staged.autopilot === true || staged.stages.length > 0)
+    const sourceIsEngineering =
+      sourceThread.engineering === true ||
+      sourceLifecycle?.startedAt !== undefined ||
+      (sourceLifecycle?.selection ?? 'none') !== 'none' ||
+      stagedActive
+    if (!sourceIsEngineering) return null
     // The destination is created optimistically; make sure its row is durable
-    // before writing lifecycle state onto it.
+    // before writing onto it (the handler also waits, but an early failure here
+    // keeps the attempt off the wire entirely).
     await invoke('thread:get', projectId, destinationThreadId)
-    await invoke('engineeringLifecycle:select', projectId, destinationThreadId, {
-      stages: source.selectedStages ?? [],
-      autopilot: source.autopilot
-    })
+    const inherited = await invoke(
+      'engineeringLifecycle:inherit',
+      projectId,
+      sourceThreadId,
+      destinationThreadId,
+      staged ?? undefined
+    )
     // The destination view may already be mounted and have hydrated its
-    // lifecycle state before this copy landed   signal it to re-read so the
+    // lifecycle state before the copy landed   signal it to re-read so the
     // inherited switches show as on instead of staying neutral.
     notifyEngineeringLifecycleInherited(destinationThreadId)
+    return inherited
   } catch {
     // Lifecycle inheritance is cosmetic   never block thread creation on it.
+    return null
   }
 }
 

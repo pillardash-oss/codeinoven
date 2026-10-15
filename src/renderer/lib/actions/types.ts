@@ -15,7 +15,7 @@ export type ActionCategory =
   | 'file'
   | 'thread'
   | 'project'
-  | 'routine'
+  | 'assistant'
   | 'browser'
   | 'other'
 
@@ -87,7 +87,6 @@ export interface ActionStatusBadge {
   kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
   variant?: 'dot' | 'spinner' | 'icon'
   icon?: Component
-  animated?: boolean
 }
 
 export interface ActionSelection {

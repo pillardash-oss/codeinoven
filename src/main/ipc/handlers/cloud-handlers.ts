@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto'
 import { APP_NAME } from '../../../lib/brand'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../../providers/base-url'
 import { resolveDeploymentProvider } from '../../providers/registry'
-import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { listInstalledSkillLocations } from '../../utilities/installed-skill-locations'
 import { uninstallMarketSkill } from '../../utilities/skill-uninstall'
 import {
@@ -1747,39 +1746,6 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
   })
 
-  ipcMain.handle('utilities:setupWithAgent', async (_, ...args: unknown[]) => {
-    if (!chatEngine?.runVirtualTask) throw new Error('The utility setup agent is unavailable')
-    const projectId = validateEntityId(args[0], 'Project ID')
-    const taskId = validateEntityId(args[1], 'Virtual task ID')
-    const settings = validateThreadSettings({
-      ...validateThreadSettings(args[2]),
-      permissionLevel: 'auto_review',
-      assignmentMode: false,
-      loopMode: false
-    })
-    const request = validateBoundedString(args[3], 'Utility setup request', 1, 100_000)
-    await resolveProjectPath(projectId)
-    const registry = new UtilityRegistryService(storage)
-    const beforeIds = new Set((await registry.list()).map((utility) => utility.id))
-    const response = await chatEngine.runVirtualTask(
-      projectId,
-      taskId,
-      settings,
-      'Set up utility',
-      request,
-      { utilityManagement: true }
-    )
-    const installed = (await registry.list()).filter((utility) => !beforeIds.has(utility.id))
-    const summary = response.parts
-      .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
-      .join('\n\n')
-      .trim()
-    if (installed.length === 0) {
-      throw new Error(summary || 'The setup agent did not install a utility')
-    }
-    return { taskId, summary, installed }
-  })
-
   ipcMain.handle('plugins:listMarketplaces', () => agentPlugins.listMarketplaces())
   ipcMain.handle('plugins:addMarketplace', (_, rawRequest: unknown) => {
     if (!isRecord(rawRequest)) throw new TypeError('Marketplace request must be an object')
@@ -1924,7 +1890,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
     const activation: UtilityActivation | undefined =
       rawActivation === 'always' || rawActivation === 'on_demand' ? rawActivation : undefined
-    // One install routine serves the card and the background updater, so both
+    // One install assistant serves the card and the background updater, so both
     // put the skill in exactly the destination the card advertises.
     return installMarketSkill(skillInstallContext(), {
       source,

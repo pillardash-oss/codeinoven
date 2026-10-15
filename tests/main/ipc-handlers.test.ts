@@ -130,6 +130,7 @@ const defaultConfig: AppConfig = {
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+  browserAllowSiteKeymapOverride: true,
   backgroundMode: 'scheduled',
   launchAtLogin: true,
   launchAtLoginPrompted: true,
@@ -192,6 +193,7 @@ describe('validateAppConfigPatch', () => {
           }
         },
         imageDescriptorAskAgain: true,
+        browserAllowSiteKeymapOverride: false,
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
         browserSearchEngine: 'google',
@@ -236,6 +238,7 @@ describe('validateAppConfigPatch', () => {
         }
       },
       imageDescriptorAskAgain: true,
+      browserAllowSiteKeymapOverride: false,
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
       browserSearchEngine: 'google',
@@ -295,6 +298,8 @@ describe('validateAppConfigPatch', () => {
     { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
     { imageDescriptorAskAgain: 'yes' },
     { imageDescriptorAskAgain: 1 },
+    { browserAllowSiteKeymapOverride: 'yes' },
+    { browserAllowSiteKeymapOverride: 1 },
     { autoRetryAfterReset: 'yes' },
     { resumeWorkOnRestart: 'yes' },
     { browserSearchEngine: '' },
@@ -1108,7 +1113,8 @@ describe('cloudDeploy IPC', () => {
             uuid: 'app-1',
             name: 'Provider-Assigned Name',
             environment_id: 7,
-            status: 'running',
+            // Coolify reports the runtime state as `state:health`.
+            status: 'running:healthy',
             fqdn: 'https://app-1.example.dev'
           },
           {

@@ -19,7 +19,7 @@
 
 {#if onReveal}
   <button
-    class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-8 flex-1 items-center justify-center gap-2 px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
     disabled={busy}
     title={viewTitle}
     onclick={() => void onReveal?.()}
@@ -30,7 +30,7 @@
 {/if}
 {#if onOpen}
   <button
-    class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-8 flex-1 items-center justify-center gap-2 px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
     disabled={busy}
     title={openTitle}
     onclick={() => void onOpen?.()}

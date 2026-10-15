@@ -24,6 +24,7 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
@@ -263,6 +264,33 @@
   $effect(claimRequestedAddressFocus)
 
   /**
+   * Continue typing started in the empty state when the fullscreen surface
+   * mounts: the bar already mirrors the shared draft, so only the caret has
+   * to be placed where typing stopped. Runs once per fullscreen mount while
+   * the tab is still blank and a draft exists; the sidebar instance behind it
+   * is not visible and leaves focus alone.
+   */
+  let continuedBlankDraft = $state(false)
+  $effect(() => {
+    if (!fullscreen) return
+    if (continuedBlankDraft) return
+    if (!panelVisible) return
+    const bar = addressBar
+    if (!bar) return
+    if (!isBlank) return
+    const stored = browserBlankDraft.get(tabId)
+    if (!stored) return
+    continuedBlankDraft = true
+    void tick().then(() => {
+      try {
+        bar.focusWithCaret(stored.caret ?? stored.text.length)
+      } catch {
+        // Focus alone is the fallback.
+      }
+    })
+  })
+
+  /**
    * Tell the keyboard owner whether the focus that just moved belongs to this
    * browser.
    *
@@ -288,11 +316,6 @@
    * The focus a keyboard-driven shortcut lands on. Only the instance that owns
    * the native view may take it: a full screen and a sidebar panel can both be
    * mounted for one tab, and the hidden one has no visible address bar.
-   *
-   * Find is the same shape of answer   the bar is this column's own row, so the
-   * request is honoured by the instance that is on screen and the other one leaves
-   * it alone   and its state is the shared one, so the surface that does answer
-   * opens the bar the user last left.
    */
   function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
     if (eventTabId !== tabId) return
@@ -301,15 +324,6 @@
       addressBar?.focusAndSelect()
       return
     }
-    if (action === 'find') {
-      browserFindState.open(tabId)
-      return
-    }
-    if (action === 'find-next') {
-      browserFindState.step(tabId, 'next')
-      return
-    }
-    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -411,6 +425,7 @@
   /** Open a resolved address in this tab. */
   function navigate(url: string): void {
     address = url
+    browserBlankDraft.clear(tabId)
     contextSidebarState.updateBrowserTab(tabId, url)
     void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
   }
@@ -560,7 +575,7 @@
   <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
       disabled={!pageState.canGoBack}
       aria-label="Go back"
       title="Go back"
@@ -570,7 +585,7 @@
     </button>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
       disabled={!pageState.canGoForward}
       aria-label="Go forward"
       title="Go forward"
@@ -584,7 +599,7 @@
     {#if pageState.loading || pageState.url !== ''}
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
         title={pageState.loading ? 'Stop loading' : 'Reload page'}
         onclick={onReloadButton}
@@ -599,6 +614,7 @@
     {/if}
     <BrowserAddressBar
       bind:this={addressBar}
+      tabId={tabId}
       url={address}
       projectId={tabProjectId}
       threadId={tabThreadId}
@@ -621,7 +637,7 @@
     />
     <button
       type="button"
-      class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Browser downloads"
       title="Browser downloads"
       onclick={openDownloadsMenu}
@@ -629,7 +645,7 @@
       <Download size={13} />
       {#if unfinishedDownloadCount > 0}
         <span
-          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
+          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
         >
           {unfinishedDownloadCount}
         </span>
@@ -638,7 +654,7 @@
     <button
       type="button"
       class={[
-        'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+        'relative flex h-7 shrink-0 items-center justify-center transition-colors',
         fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
         devToolsOpen
           ? 'bg-elevated text-foreground'
@@ -674,7 +690,7 @@
       <button
         type="button"
         class={[
-          'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+          'relative flex h-7 shrink-0 items-center justify-center transition-colors',
           fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
           inspectArmed
             ? 'bg-accent/15 text-accent'
@@ -752,6 +768,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
+        tabId={tabId}
         projectId={tabProjectId}
         threadId={tabThreadId}
         boxId={tabBoxId}

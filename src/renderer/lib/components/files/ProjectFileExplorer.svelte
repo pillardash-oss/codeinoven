@@ -55,14 +55,14 @@
     projectId: string
     projectName: string
     /** Label beside the root icon; empty when the root names itself with the
-     *  icon alone (a routine root). */
+     *  icon alone (an assistant root). */
     projectLabel?: string
-    /** Root icon image for the tree header (a routine's own icon), or null for
+    /** Root icon image for the tree header (an assistant's own icon), or null for
      *  the generic mark. */
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine, which draws the routine default
-     *  mark when the routine has no icon of its own. */
-    routineRoot?: boolean
+    /** True when the tree's root is an assistant, which draws the assistant default
+     *  mark when the assistant has no icon of its own. */
+    assistantRoot?: boolean
     /** Accent colour of the tree's root identity, or null for the default
      *  accent. */
     projectAccentColor?: string | null
@@ -90,7 +90,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null,
     projectState,
     onWidthChange,
@@ -493,6 +493,61 @@
     )
     row?.focus()
   }
+
+  /** The active file tab this tree has already located. The first run starts
+   *  settled: the mount locates the tab the panel opened on (see `onMount`).
+   *  The read is deliberately a one-off outside any reactive context. */
+  function seedLocatedTabPath(): string | null {
+    return selectedPath
+  }
+
+  let locatedTabPath = seedLocatedTabPath()
+
+  /** Locate a file tab in the tree: load the folders above it, select its row,
+   *  and let the reveal effect below scroll it into view. A file inside a folded
+   *  subfolder is the whole point - it has no row to scroll to until those
+   *  folders are open. */
+  async function locateFileTab(path: string): Promise<void> {
+    const ancestors = collectAncestorDirectories([path])
+    // A locate is an explicit request to see this folder chain, so it releases
+    // the folders the user folded by hand during a filter session: a search
+    // override would keep hiding the row again the moment it is opened.
+    for (const directory of ancestors) collapsedOverrides.delete(directory)
+    // A search session owns the expansions it forces, so folders this locate
+    // opens inside one are recorded as transient and the next filter change
+    // folds them back instead of persisting the detour. Under the Last-turn and
+    // Conflicts filters they stay ordinary tree state, exactly as a manual
+    // expansion there does.
+    const openedFolders = filterQuery.trim()
+      ? ancestors.filter((directory) => !projectState.expandedDirectories[directory])
+      : []
+    await projectFilesWorkspace.focusFileInExplorer(projectId, path)
+    for (const directory of openedFolders) searchExpandedDirectories.add(directory)
+  }
+
+  /** Bring the active file on screen in the tree. The tree header's target
+   *  button and every file tab the user activates both land here. */
+  function locateActiveFileTab(): void {
+    if (!selectedPath) return
+    void locateFileTab(selectedPath)
+  }
+
+  $effect(() => {
+    const tabPath = selectedPath
+    if (!tabPath) {
+      locatedTabPath = null
+      return
+    }
+    if (tabPath === locatedTabPath) return
+    locatedTabPath = tabPath
+    // Activating a file tab outranks a search result the tree was still
+    // pointing at: the tree now follows the file the user is editing.
+    if (revealedSearchPath && revealedSearchPath !== tabPath) revealedSearchPath = null
+    // Already part of the tree: the reveal effect below scrolls its row in, and
+    // a tab switch is no reason to reload the folders above it.
+    if (treeRowIndexByPath.has(tabPath)) return
+    void locateFileTab(tabPath)
+  })
 
   $effect(() => {
     const focusRequest = projectState.focusRequest
@@ -1197,7 +1252,7 @@
     {projectName}
     {projectLabel}
     {projectIconUrl}
-    {routineRoot}
+    {assistantRoot}
     {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}
@@ -1209,8 +1264,10 @@
     rootLoading={Boolean(projectState.loadingDirectories[''])}
     onStartResize={startResize}
     onResizeKeydown={handleResizeKeydown}
+    canRevealActiveFile={Boolean(selectedPath)}
     onToggleExpandAll={() => void toggleExpandAll()}
     onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
+    onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
   />
 

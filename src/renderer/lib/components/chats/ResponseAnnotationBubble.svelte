@@ -17,7 +17,7 @@
 
 <button
   type="button"
-  class="fixed z-40 flex h-6 w-11 items-center justify-center gap-1 rounded-full border bg-white text-black shadow-md transition-colors {active
+  class="fixed z-40 flex h-6 w-11 items-center justify-center gap-1 border bg-white text-black shadow-md transition-colors {active
     ? 'border-black/90 ring-2 ring-black/20'
     : hasComment
       ? 'border-accent hover:bg-zinc-100'

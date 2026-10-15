@@ -10,6 +10,7 @@ import type {
   SpeechScope
 } from '../../lib/speech/types'
 import { SpeechService, speechResult } from '../speech/speech-service'
+import { saveRecordingAs } from '../speech/recording-export'
 import { sendToRenderer } from './renderer-delivery'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 
@@ -374,6 +375,12 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:readAudio', (_event, rawAttemptId: unknown) =>
     speechResult(() => service.readPlaybackAudio(entityId(rawAttemptId, 'Attempt id')))
   )
+  ipcMain.handle('speech:exportRecording', (_event, rawAttemptId: unknown) =>
+    speechResult(async () => {
+      const attemptId = entityId(rawAttemptId, 'Attempt id')
+      return await saveRecordingAs(attemptId, await service.readPlaybackAudio(attemptId))
+    })
+  )
   ipcMain.handle(
     'speech:retryTranscription',
     (
@@ -523,6 +530,7 @@ export function registerSpeechIpc(
       'speech:deleteHistory',
       'speech:deleteAllHistory',
       'speech:readAudio',
+      'speech:exportRecording',
       'speech:retryTranscription',
       'speech:deleteArtifact',
       'speech:preparePlayback',

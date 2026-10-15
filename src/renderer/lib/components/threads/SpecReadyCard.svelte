@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { FileText, ListChecks, Play, X } from '@lucide/svelte'
+  import { ListChecks, Play, Toolbox, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -61,6 +66,12 @@
 
   let folded = $state(false)
 
+  const chip = $derived<CardChipData>(
+    specless
+      ? { text: 'No deadline', tone: 'paused', title: 'Nothing runs until you send work' }
+      : { text: 'Ready', title: 'The specification is ready to review' }
+  )
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -88,133 +99,131 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border bg-surface shadow-sm"
-  aria-label={specless ? 'Assignment' : 'Specification ready'}
->
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-    <div class="flex min-w-0 items-center gap-2">
-      {#if specless}
-        <ListChecks size={15} class="shrink-0 text-accent" />
-      {:else}
-        <FileText size={15} class="shrink-0 text-accent" />
-      {/if}
-      <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        {specless ? 'Assignment' : 'Specification ready'}
-      </p>
-    </div>
-    <div class="flex shrink-0 items-center gap-1">
-      <button
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-        disabled={busy}
-        onclick={onCancel}
-        aria-label={specless ? 'Dismiss Assignment entry' : 'Cancel specification review'}
-        title="Cancel"
-      >
-        <X size={15} />
-      </button>
-      <CardFoldToggle bind:folded label={specless ? 'Assignment entry' : 'specification'} />
-    </div>
-  </div>
-
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="space-y-1.5 p-4">
-        {#if specless}
-          <p class="text-sm font-semibold text-foreground">No specification for this thread.</p>
-          <p class="text-xs leading-relaxed text-muted">
-            Send the work you want assigned. The Sr. Engineer breaks it into tasks with their own
-            worker threads you can follow and chat with independently, and it asks you the missing
-            questions first whenever your message and this conversation cannot carry a task graph
-            yet.
-          </p>
-        {:else}
-          <p class="text-sm font-semibold text-foreground">
-            The engineering specification is ready.
-          </p>
-          <p class="text-xs leading-relaxed text-muted">
-            {assignmentMode
-              ? 'Review and annotate the persisted spec, then prepare or open its Assignment.'
-              : 'Review and annotate the persisted spec, or proceed with the signed version.'}
-          </p>
-        {/if}
-      </div>
-
-      {#if error}
-        <p class="border-t px-4 py-2 text-xs text-danger" role="alert">{error}</p>
-      {/if}
-
-      <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label={specless ? 'Assignment' : 'Specification ready'}>
+    <CardHead
+      icon={specless ? ListChecks : Toolbox}
+      title={specless ? 'Assignment' : 'Specification ready'}
+      {chip}
+      bind:folded
+      foldLabel={specless ? 'Assignment entry' : 'specification'}
+    >
+      {#snippet controls()}
         <button
-          class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
           disabled={busy}
           onclick={onCancel}
+          aria-label={specless ? 'Dismiss Assignment entry' : 'Cancel specification review'}
+          title="Cancel"
         >
-          Cancel
+          <X size={14} />
         </button>
-        <div class="flex items-center gap-2">
-          {#if settings}
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={settings.harnessId}
-              providerId={settings.providerId}
-              modelId={settings.modelId}
-              accountId={settings.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="top"
-              label="Change"
-              variant="action"
-              onSelect={chooseModel}
-              thinkingLevel={settings.thinkingLevel}
-              runtimeSettings={settings}
-              onSelectThinking={chooseThinking}
-              onSelectRuntime={chooseRuntime}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
+      {/snippet}
+    </CardHead>
+
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-1.5 px-3 py-2.5">
+          {#if specless}
+            <p class="text-xs font-semibold text-foreground">No specification for this thread.</p>
+            <p class="text-xs leading-relaxed text-muted">
+              Send the work you want assigned. The Sr. Engineer breaks it into tasks with their own
+              worker threads you can follow and chat with independently, and it asks you the missing
+              questions first whenever your message and this conversation cannot carry a task graph
+              yet.
+            </p>
           {:else}
-            <button
-              class="flex min-h-8 items-center gap-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-40"
-              disabled
-              title="Choose a model before proceeding"
-            >
-              Change
-            </button>
+            <p class="text-xs font-semibold text-foreground">
+              The engineering specification is ready.
+            </p>
+            <p class="text-xs leading-relaxed text-muted">
+              {assignmentMode
+                ? 'Review and annotate the persisted spec, then prepare or open its Assignment.'
+                : 'Review and annotate the persisted spec, or proceed with the signed version.'}
+            </p>
           {/if}
-          {#if !specless}
-            <button
-              class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-              disabled={busy}
-              onclick={onReview}
-            >
-              Review spec
-            </button>
-          {/if}
-          {#if assignmentMode}
-            <button
-              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-              disabled={busy}
-              onclick={assignmentAvailable ? onOpenAssignment : onGenerateAssignment}
-            >
-              {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
-              <Play size={13} />
-            </button>
-          {:else}
-            <button
-              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-              disabled={busy}
-              onclick={onProceed}
-            >
-              Implement
-              <Play size={13} />
-            </button>
+          {#if error}
+            <CardNotice tone="danger">{error}</CardNotice>
           {/if}
         </div>
+
+        <CardFoot>
+          {#snippet left()}
+            <CardButton
+              label="Cancel"
+              title="Cancel specification review"
+              variant="ghost"
+              disabled={busy}
+              onclick={onCancel}
+            />
+          {/snippet}
+          {#snippet right()}
+            {#if settings}
+              <ModelPicker
+                {providers}
+                {projectId}
+                harnessId={settings.harnessId}
+                providerId={settings.providerId}
+                modelId={settings.modelId}
+                accountId={settings.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="top"
+                label="Change"
+                variant="action"
+                onSelect={chooseModel}
+                thinkingLevel={settings.thinkingLevel}
+                runtimeSettings={settings}
+                onSelectThinking={chooseThinking}
+                onSelectRuntime={chooseRuntime}
+                {onToggleFavorite}
+                {onReorderFavorite}
+              />
+            {:else}
+              <CardButton
+                label="Change"
+                title="Choose a model before proceeding"
+                variant="secondary"
+                disabled
+              />
+            {/if}
+            {#if !specless}
+              <CardButton
+                label="Review spec"
+                title="Review the specification"
+                variant="secondary"
+                disabled={busy}
+                onclick={onReview}
+              />
+            {/if}
+            {#if assignmentMode}
+              <CardButton
+                label={assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
+                title={assignmentAvailable
+                  ? 'Open the existing Assignment'
+                  : 'Generate the Assignment from this thread'}
+                icon={Play}
+                variant="primary"
+                disabled={busy}
+                loading={busy}
+                onclick={assignmentAvailable ? onOpenAssignment : onGenerateAssignment}
+              />
+            {:else}
+              <CardButton
+                label="Implement"
+                title="Implement this specification"
+                icon={Play}
+                variant="primary"
+                disabled={busy}
+                loading={busy}
+                onclick={onProceed}
+              />
+            {/if}
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

@@ -148,7 +148,7 @@
       />
       <button
         type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border bg-elevated text-muted hover:text-foreground"
         title="Refresh search settings"
         aria-label="Refresh search settings"
         onclick={() => void search.load()}
@@ -159,14 +159,14 @@
   </div>
 
   {#if search.error}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {search.error}
     </p>
   {/if}
 
   <div class="space-y-4">
     {#if status && (!status.runtimeAvailable || runtimeTooOld)}
-      <div class="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+      <div class="flex items-start gap-3 border border-warning/40 bg-warning/10 p-4">
         <CircleAlert size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div class="min-w-0 flex-1">
           <p class="text-sm font-medium">
@@ -190,7 +190,7 @@
         </div>
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
           disabled={installingRuntime}
           onclick={() => void installRuntime()}
         >
@@ -206,12 +206,12 @@
     {/if}
 
     <!-- Index -->
-    <div class="rounded-xl border bg-surface p-4">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Index</h3>
+    <div class="border bg-surface p-4">
+      <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Index</h3>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
           title="Rebuild the thread index from scratch"
           aria-label="Rebuild thread index"
           disabled={!enabled || status?.indexing}
@@ -271,13 +271,13 @@
     </div>
 
     <!-- Models -->
-    <div class="rounded-xl border bg-surface p-4">
-      <div class="mb-1 flex items-center justify-between gap-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Embedding model</h3>
+    <div class="border bg-surface p-4">
+      <div class="mb-1 flex items-center justify-between gap-3 border-b border-border pb-2">
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Embedding model</h3>
         <div class="flex items-center gap-1.5">
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
             title="Paste a path to a GGUF embedding model"
             aria-label="Paste an embedding model path"
             onclick={() => (pasteOpen = true)}
@@ -287,7 +287,7 @@
           </button>
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
             title="Import a GGUF embedding model from disk"
             aria-label="Import an embedding model"
             onclick={() => void search.importModel()}
@@ -299,7 +299,7 @@
       </div>
 
       {#if models.length === 0}
-        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
+        <p class="border border-dashed px-3 py-2 text-xs text-dimmed">
           No embedding model is installed. Download one below, or import a compatible GGUF model of
           your own.
         </p>
@@ -309,7 +309,7 @@
             {@const isActive = status?.activeModelId === model.id}
             <li class="flex items-center gap-3 py-2.5">
               <span
-                class="size-1.5 shrink-0 rounded-full {isActive
+                class="size-1.5 shrink-0 {isActive
                   ? 'bg-primary'
                   : 'bg-border-strong'}"
                 aria-hidden="true"
@@ -325,13 +325,13 @@
               </div>
               {#if isActive}
                 <span
-                  class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-medium text-primary"
+                  class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
                   >Active</span
                 >
               {:else}
                 <button
                   type="button"
-                  class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+                  class="shrink-0 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
                   title="Use this model for intent search"
                   aria-label="Use {model.label} for intent search"
                   onclick={() => void search.setActiveModel(model.id)}
@@ -341,7 +341,7 @@
               {/if}
               <button
                 type="button"
-                class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex size-7 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 title="Remove this model"
                 aria-label="Remove {model.label}"
                 onclick={() => (pendingDelete = { id: model.id, label: model.label })}
@@ -378,7 +378,7 @@
           </div>
           <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
             <input
-              class="w-24 rounded-lg border bg-elevated px-2 py-1 text-right tabular-nums"
+              class="w-24 border bg-elevated px-2 py-1 text-right tabular-nums"
               type="number"
               min={SEARCH_CONTEXT_TOKENS_MIN}
               max={SEARCH_CONTEXT_TOKENS_MAX}
@@ -402,7 +402,7 @@
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p class="text-sm font-medium">{artifact.label}</p>
-          <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
+          <span class="border border-border bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
             >{artifact.quantization}</span
           >
         </div>
@@ -415,7 +415,7 @@
       {#if !download || download.state === 'cancelled' || download.state === 'failed'}
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
           title="Download {artifact.label}"
           aria-label="Download {artifact.label}"
           onclick={() => void search.download(artifact.id)}

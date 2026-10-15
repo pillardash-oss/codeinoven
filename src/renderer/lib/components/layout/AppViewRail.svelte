@@ -65,7 +65,6 @@
         option.id,
         projectBadgeOption,
         activity.counts,
-        activity.unreadCounts,
         activity.browserTransfers,
         activity.browserAssistant,
         activity.audio
@@ -81,8 +80,15 @@
       >
         {#snippet badge()}
           {#if badges.activity || badges.unread}
+            <!-- One container for every indicator this item carries, anchored at
+                 its top-right corner. Each indicator takes a row of its own: the
+                 rail is against the left edge of the window, so a wider row would
+                 grow left, past the edge, and out of the viewport. Stacking keeps
+                 the container no wider than its widest indicator, which fits
+                 inside the item, and the 4px overhang is the only part that
+                 reaches past the rail. -->
             <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
-              {#if badges.hasWorkingThreads && badges.activity}
+              {#if badges.activity}
                 <WorkingCountBadge
                   icon={badges.activity.icon}
                   count={badges.activity.count}
@@ -97,15 +103,6 @@
                   label={badges.unread.label}
                   tone={badges.unread.tone}
                   colors={badges.unread.colors}
-                  class={badges.hasWorkingThreads ? '' : 'order-first'}
-                />
-              {/if}
-              {#if badges.activity && !badges.hasWorkingThreads}
-                <WorkingCountBadge
-                  icon={badges.activity.icon}
-                  count={badges.activity.count}
-                  label={badges.activity.label}
-                  tone={badges.activity.tone}
                 />
               {/if}
             </span>

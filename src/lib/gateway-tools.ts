@@ -1,6 +1,7 @@
 import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
+import { ENGINEERING_TOOLS } from './engineering-tools'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
@@ -8,7 +9,13 @@ export const UTILITY_ACTIVATE_TOOL_NAME = 'cio_util_init'
 export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
-/** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */
+/**
+ * Always-available, read-only app diagnostics for debugging user-reported issues.
+ * This is an app capability rather than a utility operation, so the gateway
+ * grants its route on every turn: a user reporting a problem never has to
+ * re-send their message with a tag before the agent can look at the thread or
+ * the log they named.
+ */
 export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
 /**
  * Proposes a capability the agent found for the user to install. Always
@@ -130,6 +137,7 @@ const UTILITY_BUNDLE_INPUT_SCHEMA: Record<string, unknown> = {
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
+  ...ENGINEERING_TOOLS,
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:
@@ -276,7 +284,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -333,14 +341,15 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       additionalProperties: false
     },
     route: '/diagnostics',
-    sentWhen: 'Only an explicit @cio-utility debugging turn'
+    sentWhen:
+      'Whenever the user reports a problem with the app, a thread, an assistant, or a log line and the evidence lives in app data'
   },
   {
     name: UTILITY_SUGGEST_TOOL_NAME,
     description:
-      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
+      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. The card lists every utility in the bundle, so send the real definition (an MCP entry needs config.transport plus config.url or config.command), never a placeholder. The app validates the bundle the same way the install does: an invalid bundle is rejected without asking the user, so fix the definition and call again. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
       ASK_SECRET_TOOL_NAME +
-      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, or "declined" with the instruction to continue without the capability.',
+      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, "declined", "alternative" when the user answered in their own words, or "invalid"/"failed" with the reason to correct.',
     inputSchema: {
       type: 'object',
       properties: {

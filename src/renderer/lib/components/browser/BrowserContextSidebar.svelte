@@ -506,7 +506,7 @@
         <p class="text-xs text-muted">Ask the agent about the page on this tab.</p>
         <button
           type="button"
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
           title="Start a conversation about this page"
           onclick={() => globalBrowser.showAgentSidebar()}
         >

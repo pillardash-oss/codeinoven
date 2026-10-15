@@ -16,6 +16,12 @@
  * windows Monday through Friday and bills off-peak all day on Saturdays and
  * Sundays). Schedules that do this declare a `days` set; schedules without one
  * apply their windows every day of the week.
+ *
+ * A schedule may also carry the vendor's peak multiplier. The pricing feed
+ * publishes ONE flat official rate per model, and for a vendor that bills by
+ * hour that flat rate is its off-peak rate, so the multiplier is what raises a
+ * cost estimate inside a peak window. It is curated from the vendor's official
+ * pricing page, the same as the windows themselves.
  */
 
 import { formatTime } from './date-time-format'
@@ -40,6 +46,13 @@ export interface PeakHoursSchedule {
    * Outside these days the model bills off-peak around the clock.
    */
   days?: readonly number[]
+  /**
+   * Multiplier applied to the vendor's reference rate inside a peak window,
+   * e.g. `2` when peak rates are double off-peak. Omitted when the vendor
+   * bills peak hours but publishes no peak rate, in which case a cost estimate
+   * keeps using the reference rate and records the window it fell in.
+   */
+  peakMultiplier?: number
 }
 
 /** What a model's peak-hours badge should say right now, or null when the model
@@ -58,6 +71,18 @@ export interface PeakHoursBadge {
 /**
  * DeepSeek V4   peak `01:00–04:00` and `06:00–10:00` UTC, weekdays only
  * (Monday–Friday); weekends bill off-peak around the clock.
+ *
+ * Peak rates are double the reference rate. DeepSeek's official pricing page
+ * states "Off-peak rates are half of the peak rates. Peak hours are 01:00 -
+ * 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public
+ * holidays", and its peak column is exactly 2x the off-peak column the pricing
+ * feed publishes (Flash `0.15/0.6/0.003` → `0.3/1.2/0.006`, Pro
+ * `0.66/1.98/0.022` → `1.32/3.96/0.044`). OpenRouter's published per-window
+ * overrides for the Pro model double the same three rates inside the same two
+ * windows, so both sources agree on the multiplier.
+ *
+ * Chinese public holidays are billed off-peak and are NOT modelled here, so a
+ * holiday run inside a window is recorded at peak rates.
  */
 export const DEEPSEEK_V4_PEAK_HOURS: PeakHoursSchedule = {
   label: 'DeepSeek V4',
@@ -65,7 +90,8 @@ export const DEEPSEEK_V4_PEAK_HOURS: PeakHoursSchedule = {
     { startHour: 1, endHour: 4 },
     { startHour: 6, endHour: 10 }
   ],
-  days: [1, 2, 3, 4, 5]
+  days: [1, 2, 3, 4, 5],
+  peakMultiplier: 2
 }
 
 /** How a peak-hours registration selects the models it bills. */

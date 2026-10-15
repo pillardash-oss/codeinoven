@@ -80,7 +80,7 @@
   the measured offset would land the surface padding-height below its item.
 -->
 <span
-  class="pointer-events-none absolute left-1 right-1 top-0 rounded-lg bg-elevated transition-[transform,height,opacity] duration-200 ease-out motion-reduce:transition-none {surface
+  class="pointer-events-none absolute left-1 right-1 top-0 bg-elevated transition-[transform,height,opacity] duration-200 ease-out motion-reduce:transition-none {surface
     ? 'opacity-100'
     : 'opacity-0'}"
   style:transform="translateY({surface?.top ?? lastSurface.top}px)"
@@ -89,7 +89,7 @@
   {@attach measureRail}
 >
   <span
-    class="absolute top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary {accentSide === 'left'
+    class="absolute top-1.5 bottom-1.5 w-0.5 bg-primary {accentSide === 'left'
       ? 'left-0'
       : 'right-0'}"
   ></span>

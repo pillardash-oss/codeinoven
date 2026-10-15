@@ -59,11 +59,11 @@
 </script>
 
 <div
-  class="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface p-1.5 shadow-xl"
+  class="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-72 overflow-y-auto border border-border-strong bg-surface p-1.5 shadow-xl"
   role="listbox"
   aria-label="Slash actions"
 >
-  <div class="flex items-center justify-between px-2 py-1">
+  <div class="flex items-center justify-between border-b border-border px-2 py-1">
     <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `Actions matching “${query}”` : 'Available actions'}
     </p>
@@ -75,7 +75,9 @@
   {:else}
     {#each groups as group (group.category)}
       <div role="group" aria-label={categoryLabel(group.category)}>
-        <p class="px-2 pb-1 pt-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+        <p
+          class="border-b border-border px-2 pb-1 pt-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
+        >
           {categoryLabel(group.category)}
         </p>
 
@@ -84,7 +86,7 @@
             type="button"
             data-slash-action-index={entry.index}
             class={[
-              'flex min-h-10 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors',
+              'flex min-h-10 w-full items-center gap-2 px-2.5 py-1.5 text-left outline-none transition-colors',
               entry.action.disabledReason
                 ? 'cursor-not-allowed text-dimmed opacity-60'
                 : entry.index === activeIndex
@@ -103,12 +105,12 @@
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="truncate text-xs font-medium">{entry.action.title}</span>
                 <span
-                  class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+                  class="shrink-0 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
                 >
                   {categoryLabel(entry.action.category)}
                 </span>
                 <span
-                  class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
+                  class="min-w-0 truncate border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                 >
                   {entry.action.source.label}
                 </span>

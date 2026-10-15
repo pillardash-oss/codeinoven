@@ -174,7 +174,13 @@ Invoke this capability with operation \`preview\`:
 
 The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
 
+That URL is the address the thread's in-app browser opens, and it is the only one a screen you just wrote has: until \`preview\` has served the folder, there is nothing for a browser to render. So preview first, then look.
+
 ## Checking your own work
+
+The app's in-app browser is yours in this thread, and looking at your own screens in it is part of the design work rather than an extra. Activate the \`cio:browser\` capability with the utility tools (search for "browser"), point it at the tab this preview opened, and use \`snapshot\` for the visible text and controls, \`screenshot\` for the render, \`viewport\` to move between phone, tablet and desktop widths, and \`console\` for runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size; a page that has not changed since the previous capture is reported as unchanged rather than captured again, so pass \`force\` when you need the same page twice. A page nobody rendered is a page nobody tested.
+
+Never render your own work with a browser of your own: no cached headless Chrome or Chromium binary, no \`npx playwright\` or \`puppeteer\`, no \`curl\` and no screenshot script. That browser shows a page the app never served and tells you nothing about the tab the user is watching.
 
 Before calling a screen finished, render the current screen at phone and desktop widths, exercise its main action and states, then call \`lint\` with directory and entry. Fix objective craft failures. After that, call \`critique\` once for each changed screen. Supply five \`dimensions\`: philosophy, hierarchy, detail, functionality and innovation, each with a 0–10 score and concrete evidence. They are weighted equally. Supply \`fixes\` and \`criticalIssues\`, listing unresolved brand, accessibility, copy or functionality failures. Use the project's contract when judging the brand and actual measured contrast and keyboard behavior when judging accessibility.
 
@@ -198,8 +204,6 @@ When adjustable accent, density, theme or sample data helps the review, declare 
 \`\`\`
 
 Use the actual project token names and values. Up to 12 controls of type color, range, select or text are supported. A variable changes that CSS custom property immediately. For theme or sample data, listen for \`document\` event \`cio:tweaks\` and apply \`event.detail\` to the existing DOM. Changes never reload the page. Keep this review control strip out of production code when implementing the product in another thread.
-
-Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`snapshot\` lists the visible text and controls, \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, and \`console\` reports runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size, and screenshot to judge the render; a page that has not changed since the previous capture is reported as unchanged rather than captured again. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
 
 ## Delegating to the models the user assigned
 

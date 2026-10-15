@@ -226,7 +226,7 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-muted">
-        <StatusBadge stage="working" animated size="sm" title={stageLabel} />
+        <StatusBadge stage="working" size="sm" title={stageLabel} />
         {stageLabel}
       </dd>
     </div>
@@ -259,7 +259,7 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-warning">
-        <StatusBadge kind="attention" animated size="sm" title="Needs Attention" />
+        <StatusBadge kind="attention" size="sm" title="Needs Attention" />
         Needs Attention
       </dd>
     </div>

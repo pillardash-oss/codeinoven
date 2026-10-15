@@ -60,7 +60,7 @@
 
 <DropdownMenu.Root bind:open={menuOpen}>
   <DropdownMenu.Trigger
-    class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+    class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
     {disabled}
     title={`Model settings: ${summary}`}
     aria-label={`Model settings: ${summary}`}
@@ -78,12 +78,12 @@
       sideOffset={4}
       collisionPadding={12}
       onCloseAutoFocus={(event) => event.preventDefault()}
-      class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+      class="z-90 w-52 border border-border bg-surface p-1 shadow-xl"
     >
       <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Speed</div>
       {#each availableSpeeds as speed (speed.id)}
         <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+          class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
           title={`Use ${speed.label.toLowerCase()} speed`}
           onSelect={() => onSelect(speed.id)}
         >
@@ -95,7 +95,7 @@
           {#if currentSpeed.id === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
           <button
             type="button"
-            class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-primary"
+            class="flex size-5 shrink-0 items-center justify-center text-dimmed hover:bg-overlay hover:text-primary"
             title={modelRuntimeDefaults.settings.inferenceMode === speed.id
               ? `Clear ${speed.label} as default speed`
               : `Set ${speed.label} as default speed`}
@@ -125,7 +125,7 @@
         <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Context window</div>
         {#each contextWindows as tokens (tokens)}
           <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
             title={`Use ${contextLabel(tokens)} context window`}
             onSelect={() => onSelectContext(tokens === defaultContextWindow ? undefined : tokens)}
           >
@@ -136,7 +136,7 @@
               />{/if}
             <button
               type="button"
-              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-primary"
+              class="flex size-5 shrink-0 items-center justify-center text-dimmed hover:bg-overlay hover:text-primary"
               title={modelRuntimeDefaults.settings.contextWindow === tokens
                 ? `Clear ${contextLabel(tokens)} as default context window`
                 : `Set ${contextLabel(tokens)} as default context window`}

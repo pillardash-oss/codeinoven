@@ -48,7 +48,7 @@
 
 <div class="flex min-w-0 items-center gap-2">
   <button
-    class="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted max-md:h-9 max-md:w-9 max-md:justify-center max-md:px-0 hover:bg-elevated hover:text-foreground"
+    class="flex shrink-0 items-center gap-1.5 px-2 py-1.5 text-xs text-muted max-md:h-9 max-md:w-9 max-md:justify-center max-md:px-0 hover:bg-elevated hover:text-foreground"
     title="Back to the conversation"
     aria-label="Back to the conversation"
     onclick={onBack}
@@ -60,7 +60,7 @@
        for the agent-messages button below, whose rail lives in the sidebar. -->
   {#if onToggleSections}
     <button
-      class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md md:hidden {sectionsOpen
+      class="flex h-9 w-9 shrink-0 items-center justify-center md:hidden {sectionsOpen
         ? 'bg-elevated text-foreground'
         : 'text-muted hover:bg-elevated hover:text-foreground'}"
       aria-pressed={sectionsOpen}
@@ -72,7 +72,7 @@
     </button>
   {/if}
   <button
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md max-md:hidden {agentMessagesOpen
+    class="flex h-7 w-7 shrink-0 items-center justify-center max-md:hidden {agentMessagesOpen
       ? 'bg-elevated text-foreground'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     aria-pressed={agentMessagesOpen}
@@ -82,12 +82,14 @@
   >
     <MessageSquareText size={13} />
   </button>
-  <div class="studio-tabs flex min-w-0 overflow-x-auto rounded-lg bg-raised p-0.5" aria-label="Studio document">
+  <div
+    class="studio-tabs flex min-w-0 overflow-x-auto border border-border bg-raised p-0.5"
+    aria-label="Studio document"
+  >
     {#if brainstormAvailable && onOpenBrainstorm}
       <button
-        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
-        'brainstorm'
-          ? 'bg-surface font-semibold text-foreground shadow-sm'
+        class="shrink-0 px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'brainstorm'
+          ? 'bg-surface font-semibold text-foreground'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'brainstorm'}
         onclick={onOpenBrainstorm}
@@ -97,8 +99,8 @@
     {/if}
     {#if prdAvailable && onOpenPrd}
       <button
-        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'prd'
-          ? 'bg-surface font-semibold text-foreground shadow-sm'
+        class="shrink-0 px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'prd'
+          ? 'bg-surface font-semibold text-foreground'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'prd'}
         onclick={onOpenPrd}
@@ -108,8 +110,8 @@
     {/if}
     {#if specAvailable || active === 'spec'}
       <button
-        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
-          ? 'bg-surface font-semibold text-foreground shadow-sm'
+        class="shrink-0 px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
+          ? 'bg-surface font-semibold text-foreground'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'spec'}
         title="Open specification"
@@ -120,9 +122,8 @@
     {/if}
     {#if assignmentAvailable && onOpenAssignment}
       <button
-        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
-        'assignment'
-          ? 'bg-surface font-semibold text-foreground shadow-sm'
+        class="shrink-0 px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'assignment'
+          ? 'bg-surface font-semibold text-foreground'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'assignment'}
         onclick={onOpenAssignment}
@@ -132,8 +133,8 @@
     {/if}
     {#if auditAvailable && onOpenAudit}
       <button
-        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'audit'
-          ? 'bg-surface font-semibold text-foreground shadow-sm'
+        class="shrink-0 px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'audit'
+          ? 'bg-surface font-semibold text-foreground'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'audit'}
         onclick={onOpenAudit}

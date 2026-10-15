@@ -142,7 +142,7 @@
     return true
   }}
 >
-  <div class="flex items-center gap-2 rounded-lg bg-elevated px-3">
+  <div class="flex items-center gap-2 bg-elevated px-3">
     {#if secure}
       <Lock size={13} class="shrink-0 text-success" />
     {:else if initialValue !== ''}
@@ -179,9 +179,9 @@
       >
         <span class="flex h-4 w-4 items-center justify-center" aria-hidden="true">
           {#if spotlightBoxIcon}
-            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 object-contain" />
           {:else}
-            <span class="h-2 w-2 rounded-full" style:background-color={spotlightBoxAccent}></span>
+            <span class="h-2 w-2" style:background-color={spotlightBoxAccent}></span>
           {/if}
         </span>
         <span class="max-w-24 truncate text-[0.6875rem] text-muted">{spotlightBox.name}</span>

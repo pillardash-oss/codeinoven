@@ -82,7 +82,7 @@
   <div class="flex items-center gap-1.5">
     <button
       type="button"
-      class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-info focus-visible:outline-none disabled:opacity-40"
+      class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-info focus-visible:outline-none disabled:opacity-40"
       {title}
       aria-label={title}
       {disabled}
@@ -131,7 +131,6 @@
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
-    border-radius: 9999px;
     background: linear-gradient(
       to right,
       var(--color-primary) 0%,
@@ -149,7 +148,6 @@
     -webkit-appearance: none;
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);
@@ -158,7 +156,6 @@
   .tts-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);

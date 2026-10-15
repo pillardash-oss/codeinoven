@@ -144,7 +144,7 @@
     role="dialog"
     aria-label={`Diff preview for ${path}`}
     tabindex="-1"
-    class="fixed z-50 overflow-hidden rounded-lg border border-border bg-surface shadow-xl"
+    class="fixed z-50 overflow-hidden border border-border bg-surface shadow-xl"
     style="top: {position.top}px; left: {position.left}px; width: {popoverWidth}px;"
     onpointerenter={cancelHide}
     onpointerleave={scheduleHide}

@@ -23,7 +23,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={controller.cancelConfirm}
     >
       Cancel
@@ -31,7 +31,7 @@
     <button
       type="button"
       data-modal-primary
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       onclick={controller.confirm}
     >
       Continue

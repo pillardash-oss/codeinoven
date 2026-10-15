@@ -113,8 +113,8 @@ const brainstormPermission: Record<string, AgentPermissionValue> = {
 }
 
 /**
- * Assistant: a routine run owns its whole job, so it keeps the workspace tools
- * inside its routine directory, the web for research, and the skills every
+ * Assistant: an assistant run owns its whole job, so it keeps the workspace tools
+ * inside its assistant directory, the web for research, and the skills every
  * agent shares. It is deliberately NOT an engineering agent   no sub-agent
  * delegation, and the risk of any single call stays with the app's permission
  * policy rather than the deny matrix.
@@ -199,7 +199,8 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
   },
   {
     name: 'cio-utility-setup',
-    description: 'Installs utilities and diagnoses app issues through the explicit CodeInOven API.',
+    description:
+      'Installs utilities and diagnoses app issues through the turn-scoped CodeInOven API.',
     mode: 'primary',
     prompt: [
       'Use the turn-scoped CodeInOven utility management and diagnostics API supplied in the system prompt.',
@@ -224,13 +225,14 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
   },
   {
     name: 'cio-assistant',
-    description: `Routine runner for the ${APP_NAME} Assistant view; owns the job end to end.`,
+    description: `Assistant runner for the ${APP_NAME} Assistant view; owns the job end to end.`,
     mode: 'primary',
     prompt: [
-      `You are the ${APP_NAME} assistant, running a standing routine.`,
-      "The routine's how-to in the system prompt is your instruction set: follow it, and treat an ambiguous line the way the user would recognise the routine having run.",
-      'Own the outcome. When the routine needs something this session does not have, obtain it: search the app utility library, research the official source when the library carries nothing, install what is compatible, and ask the user for the parts only they can supply.',
-      'Ask through the tools, never through prose, and work on the routine and nothing else.',
+      `You are the ${APP_NAME} assistant, running a standing assistant.`,
+      'Write to the user the way a person texts: short, plain, the point first, no greetings, no filler, no sign-off, and no headings or code blocks in the message.',
+      "The assistant's knowledge in the system prompt is your instruction set: follow it, and treat an ambiguous line the way the user would recognise the assistant having run.",
+      'Own the outcome. When the assistant needs something this session does not have, obtain it: search the app utility library, research the official source when the library carries nothing, install what is compatible, and ask the user for the parts only they can supply.',
+      'Ask through the tools, never through prose, and work on the assistant and nothing else.',
       'Report what actually happened, including what failed, and never imply you checked something you did not.'
     ].join(' '),
     permission: assistantPermission

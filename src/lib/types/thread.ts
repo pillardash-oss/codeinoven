@@ -3,7 +3,7 @@ import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
-import type { RoutineSchedule } from './schedule'
+import type { AssistantSchedule } from './schedule'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
@@ -105,6 +105,14 @@ export interface Thread {
   dismissedSpecVersion?: number
   /** Audit gate for the latest implementation turn. */
   auditState?: 'offered' | 'running' | 'report_ready' | 'reworking'
+  /**
+   * Durable Engineering marker: set the first time this thread engages the
+   * Engineering lifecycle (a stage is selected and applied, or a run starts)
+   * and never cleared. A thread row draws its Engineering indicator straight
+   * from this field, so no lifecycle round trip stands between the persisted
+   * fact and the sidebar.
+   */
+  engineering?: boolean
   /** Independent (spec-less) audit is enabled for this thread. Excludes
    *  engineering modes for the thread's lifetime and is never inherited by
    *  forks or new threads created from this thread. */
@@ -136,19 +144,19 @@ export interface Thread {
   userInputLocked?: boolean
 
   // ─── Assistant task fields (assistant space only) ────────────────────────
-  /** Routine this assistant task belongs to, when it is grouped. */
-  routineId?: string
+  /** Assistant this assistant task belongs to, when it is grouped. */
+  assistantId?: string
   /** Custom icon key shown in the task row's provider-icon slot. */
   assistantIconType?: string
   /** Custom image filename shown in the task row's provider-icon slot. */
   assistantIcon?: string
-  /** Per-task schedule override; falls back to the routine schedule when undefined. */
-  scheduleOverride?: RoutineSchedule | null
+  /** Per-task schedule override; falls back to the assistant schedule when undefined. */
+  scheduleOverride?: AssistantSchedule | null
   /**
-   * Explicitly whether this task runs on a schedule, overriding its routine.
-   * Absent inherits the routine's `scheduled` flag, so a routine can hold one
+   * Explicitly whether this task runs on a schedule, overriding its assistant.
+   * Absent inherits the assistant's `scheduled` flag, so an assistant can hold one
    * function that fires on the clock and another the user only drives by hand.
-   * A routine-less task defaults to unscheduled unless it carries its own
+   * An assistant-less task defaults to unscheduled unless it carries its own
    * schedule.
    */
   scheduled?: boolean
@@ -163,8 +171,8 @@ export interface Thread {
   /** Epoch ms of the last run that finished successfully (a `completed` turn). */
   lastSuccessAt?: number
   /**
-   * The routine's seed task: the "Getting started" conversation where the
-   * how-to is authored. It carries a fixed title and runs no auxiliary work
+   * The assistant's seed task: the "Getting started" conversation where the
+   * knowledge is authored. It carries a fixed title and runs no auxiliary work
    * (auto-title, memory extraction), so its first exchange stays a pure
    * planning chat rather than a task run.
    */
@@ -198,7 +206,7 @@ export interface ThreadNote {
   updatedAt: number
 }
 
-/** A thread that lives in the assistant space (a routine task). */
+/** A thread that lives in the assistant space (an assistant task). */
 export function isAssistantThread(thread: Thread): boolean {
   return thread.projectId === ASSISTANT_SPACE_ID
 }
@@ -218,7 +226,7 @@ export function isBrowserAssistantThread(thread: Pick<Thread, 'projectId'>): boo
 }
 
 /**
- * Whether a thread is a routine's "Getting started" authoring thread. Auxiliary
+ * Whether a thread is an assistant's "Getting started" authoring thread. Auxiliary
  * work   prompt-derived titles and memory extraction   is suppressed on it.
  */
 export function isAssistantSetupThread(thread: Pick<Thread, 'assistantGettingStarted'>): boolean {
@@ -385,10 +393,13 @@ export interface CreateThreadInput {
   achievementRole?: Thread['achievementRole']
   auditorThreadId?: string
   userInputLocked?: boolean
-  routineId?: string
+  /** Seed the durable Engineering marker: a fork of an Engineering thread
+   *  opens as one too, so its row keeps the Engineering indicator. */
+  engineering?: boolean
+  assistantId?: string
   assistantIconType?: string
   assistantIcon?: string
-  scheduleOverride?: RoutineSchedule | null
+  scheduleOverride?: AssistantSchedule | null
   scheduled?: boolean
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */

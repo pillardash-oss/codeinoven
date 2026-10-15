@@ -741,7 +741,7 @@
 {#snippet tagChip(tag: string)}
   {#if tag === 'App'}
     <span
-      class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm"
+      class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
       title={APP_NAME}
     >
       <img class="h-full w-full object-contain" src={cioIconUrl} alt="" />
@@ -758,12 +758,12 @@
 {#snippet bookmarkRow(row: BookmarkRowItem)}
   <div class="flex items-start gap-3 p-4">
     <div
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-accent"
+      class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated text-accent"
     >
       <Bookmark size={15} fill="currentColor" />
     </div>
     <button
-      class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      class="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       type="button"
       title="Open {row.name}"
       onclick={() => openBookmark(row)}
@@ -771,7 +771,7 @@
       <span class="flex flex-wrap items-center gap-2">
         <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
         <span
-          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
         >
           Marketplace
         </span>
@@ -779,13 +779,13 @@
           <SkillInstalledBadge />
         {:else if row.kind === 'plugin' && row.entry.installed}
           <span
-            class="rounded-md bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
+            class="border border-success/30 bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
             >Installed</span
           >
         {/if}
         {#if row.kind === 'skill' && row.entry.isOfficial}
           <span
-            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+            class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
           >
             Official
           </span>
@@ -808,7 +808,7 @@
         <SkillBookmarkButton entry={row.entry} title={skillBookmarkTitle(row.name, true)} />
       {:else}
         <button
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-accent hover:bg-elevated"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-accent hover:bg-elevated"
           type="button"
           title="Remove bookmark for {row.name}"
           aria-label="Remove bookmark for {row.name}"
@@ -830,7 +830,7 @@
   {@const Icon = rowIcon(row)}
   <div class="flex items-start gap-3 p-4">
     <div
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
+      class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated text-muted"
     >
       <Icon size={15} />
     </div>
@@ -838,13 +838,13 @@
       <div class="flex flex-wrap items-center gap-2">
         <p class="text-sm font-semibold">{row.name}</p>
         <span
-          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
         >
           {rowKindBadge(row)}
         </span>
         {#if row.src === 'registry' && row.appOwned}
           <span
-            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+            class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
             title={canToggleUtilityEnabled(row.utility)
               ? 'Built into the app. It cannot be deleted, and you can switch it off so it stops competing with your own skill for a topic.'
               : 'Built into the app and always available; it cannot be deleted'}
@@ -867,7 +867,7 @@
       <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
         {#each row.tags as tag (tag)}
           <span
-            class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+            class="flex h-6 items-center gap-1.5 border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
           >
             {@render tagChip(tag)}
           </span>
@@ -901,7 +901,7 @@
       {/if}
       {#if !row.appOwned || (row.src === 'registry' && canToggleUtilityEnabled(row.utility))}
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
           aria-label="Edit {row.name}"
           title="Edit {row.name}"
           onclick={() => openEdit(row)}
@@ -911,7 +911,7 @@
       {/if}
       {#if !row.appOwned}
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          class="flex h-8 w-8 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
           aria-label="Delete {row.name}"
           title="Delete {row.name}"
           onclick={() => (deleteTarget = row)}
@@ -933,14 +933,14 @@
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         title="Add a skill, MCP server, or other utility"
         onclick={openCreate}
       >
         <Plus size={13} /> Add utility
       </button>
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         disabled={activeTab === 'tools'
           ? agentToolsStore.loading || agentToolsStore.refreshing
           : loading}
@@ -958,14 +958,14 @@
       </button>
       {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'}
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the skills marketplace"
           onclick={onOpenMarketplace}
         >
           <Search size={13} /> Skills marketplace
         </button>
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the agent plugin marketplace"
           onclick={onOpenPluginMarketplace}
         >
@@ -980,14 +980,14 @@
        and the background check reads as page housekeeping, not page action. -->
   <div class="mt-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
     <div
-      class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+      class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
       role="tablist"
       aria-label="Utilities sections"
     >
       {#each tabs as tab (tab.id)}
         <button
-          class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab === tab.id
-            ? 'bg-surface text-foreground shadow-sm'
+          class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === tab.id
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           role="tab"
           aria-selected={activeTab === tab.id}
@@ -1011,7 +1011,7 @@
         </span>
         <button
           type="button"
-          class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-7 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
           disabled={skillUpdateState.status.running}
           title="Check the skills installed by CodeInOven for updates now"
           onclick={() => void skillUpdateState.checkNow()}
@@ -1036,7 +1036,7 @@
         </span>
         <input
           bind:this={searchInputEl}
-          class="h-9 w-full rounded-lg border bg-elevated pl-9 pr-9 text-sm outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+          class="h-9 w-full border bg-elevated pl-9 pr-9 text-sm outline-none transition-colors placeholder:text-dimmed focus:border-primary"
           type="text"
           placeholder={SEARCH_PLACEHOLDER[activeTab]}
           bind:value={query}
@@ -1044,7 +1044,7 @@
         {#if query}
           <button
             type="button"
-            class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={clearSearch}
@@ -1069,7 +1069,7 @@
     <div class="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
         <select
-          class="h-7 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
+          class="h-7 border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
           aria-label="Filter tools by source"
           value={agentToolsStore.selectedSource}
           onchange={(event: Event) =>
@@ -1082,7 +1082,7 @@
         {#if toolHarnesses.length && agentToolsStore.selectedSource !== 'application'}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
             null
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1095,7 +1095,7 @@
           {#each toolHarnesses as harness (harness.id)}
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
               harness.id
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1113,7 +1113,7 @@
         {#if activeTab !== 'bookmarks' && builtInRowCount > 0}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {utilitiesViewPrefs.hideBuiltIn
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {utilitiesViewPrefs.hideBuiltIn
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
             aria-pressed={utilitiesViewPrefs.hideBuiltIn}
@@ -1132,7 +1132,7 @@
         {#if availableTags.length > 0 && activeTab !== 'bookmarks'}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
             'all'
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1144,7 +1144,7 @@
           {#each availableTags as tag (tag)}
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
               tag
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1164,25 +1164,25 @@
     {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks' || activeTab === 'mcp' || activeTab === 'web'}
       {#if (activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp') && !secureStorageAvailable}
         <div
-          class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+          class="mb-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
         >
           <AlertTriangle size={14} class="mt-0.5 shrink-0" />
           <span>Secure storage is unavailable. Credentials cannot be saved on this device.</span>
         </div>
       {/if}
       {#if error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
 
       {#if (loading || (activeTab === 'bookmarks' && pluginBookmarksLoading)) && tabRows.length === 0}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           <Loader2 size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading…</p>
         </div>
       {:else if filteredRows.length === 0}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           {#if hiddenBuiltInCount > 0}
             <Package size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">Built-in utilities are hidden</p>
@@ -1191,7 +1191,7 @@
               {hiddenBuiltInCount === 1 ? 'utility' : 'utilities'} from this list.
             </p>
             <button
-              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="mt-4 inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Show the utilities built into CodeInOven"
               onclick={() => utilitiesViewPrefs.setHideBuiltIn(false)}
@@ -1202,7 +1202,7 @@
             <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">Saved plugins could not load</p>
             <button
-              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="mt-4 inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Retry loading saved plugins"
               onclick={() => void loadPluginBookmarks()}
@@ -1215,7 +1215,7 @@
             <p class="mt-1 text-xs text-dimmed">Bookmark a skill or plugin to keep it here.</p>
             <div class="mt-4 flex justify-center gap-2">
               <button
-                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                class="inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
                 type="button"
                 title="Open the skills marketplace"
                 onclick={onOpenMarketplace}
@@ -1223,7 +1223,7 @@
                 <Search size={13} /> Skills marketplace
               </button>
               <button
-                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                class="inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
                 type="button"
                 title="Open the plugin marketplace"
                 onclick={onOpenPluginMarketplace}
@@ -1244,7 +1244,7 @@
             <section aria-label={group.vendor.label}>
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-overlay"
+                class="flex w-full items-center gap-2 px-1 py-1.5 text-left transition-colors hover:bg-overlay"
                 aria-expanded={!folded}
                 aria-label="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
                 title="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
@@ -1277,7 +1277,7 @@
                 {/if}
               </button>
               {#if !folded}
-                <div class="divide-y rounded-xl border bg-surface">
+                <div class="divide-y border bg-surface">
                   {#each group.rows as row (row.id)}
                     {#if row.src === 'bookmark'}
                       {@render bookmarkRow(row)}
@@ -1292,8 +1292,8 @@
         </div>
       {/if}
     {:else if activeTab === 'plugins'}
-      <div class="rounded-xl border bg-surface p-5">
-        <div class="rounded-xl border border-dashed bg-elevated p-5">
+      <div class="border bg-surface p-5">
+        <div class="border border-dashed bg-elevated p-5">
           <Boxes size={20} class="mb-3 text-muted" />
           <p class="text-sm font-semibold">Import a plugin bundle</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -1302,7 +1302,7 @@
             capabilities appear on their respective tabs.
           </p>
           <label
-            class="mt-4 inline-flex h-9 cursor-pointer items-center rounded-lg border bg-surface px-3 text-xs font-medium hover:bg-overlay"
+            class="mt-4 inline-flex h-9 cursor-pointer items-center border bg-surface px-3 text-xs font-medium hover:bg-overlay"
           >
             Choose JSON file
             <input
@@ -1314,19 +1314,19 @@
           </label>
         </div>
         {#if error}
-          <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="mt-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {error}
           </p>
         {/if}
         <label class="mt-4 block space-y-1 text-xs font-medium">
           <span>Or paste the manifest</span>
           <textarea
-            class="min-h-64 w-full resize-y rounded-xl border bg-raised px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+            class="min-h-64 w-full resize-y border bg-raised px-3 py-2 font-mono text-xs outline-none focus:border-primary"
             placeholder={'{\n  "name": "My plugin",\n  "utilities": [\n    { "definition": { ... }, "credentials": [] }\n  ]\n}'}
             bind:value={pluginManifest}></textarea>
         </label>
         <button
-          class="mt-3 flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="mt-3 flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
           disabled={!pluginManifest.trim()}
           onclick={() => void importPluginBundle()}
@@ -1338,20 +1338,20 @@
       {#if agentToolsStore.catalog?.notices.length}
         <div class="mb-4 space-y-2">
           {#each agentToolsStore.catalog.notices as notice (notice)}
-            <p class="rounded-lg border bg-elevated px-3 py-2 text-xs text-muted">
+            <p class="border bg-elevated px-3 py-2 text-xs text-muted">
               {notice}
             </p>
           {/each}
         </div>
       {/if}
       {#if agentToolsStore.error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {agentToolsStore.error}
         </p>
       {/if}
 
       {#if agentToolsStore.loading && !agentToolsStore.catalog}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           <RefreshCw size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading agent tools…</p>
         </div>
@@ -1359,12 +1359,12 @@
         <div class="space-y-2">
           {#each filteredToolGroups as group (group.key)}
             {@const tool = group.definition}
-            <details class="group rounded-xl border bg-surface">
+            <details class="group border bg-surface">
               <summary
                 class="flex cursor-pointer list-none items-start gap-3 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 <span
-                  class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
+                  class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center bg-elevated text-muted"
                 >
                   <Wrench size={14} />
                 </span>
@@ -1372,13 +1372,13 @@
                   <span class="flex flex-wrap items-center gap-2">
                     <span class="font-mono text-sm font-semibold">{tool.name}</span>
                     <span
-                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+                      class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
                     >
                       {tool.source}
                     </span>
                     {#each group.harnessIds as harnessId (harnessId)}
                       <span
-                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+                        class="flex h-6 items-center gap-1.5 border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
                       >
                         <AgentIcon
                           agentId={harnessId}
@@ -1407,7 +1407,7 @@
                   Input / parameter schema
                 </p>
                 <pre
-                  class="max-h-128 overflow-auto rounded-lg bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
+                  class="max-h-128 overflow-auto bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
                     >{schemaText(tool)}</code
                   ></pre>
               </div>
@@ -1415,7 +1415,7 @@
           {/each}
         </div>
       {:else}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           <Wrench size={18} class="mx-auto mb-2 text-dimmed" />
           <p class="text-sm font-medium">
             {selectedToolHarnessDetails?.status === 'unsupported' ||

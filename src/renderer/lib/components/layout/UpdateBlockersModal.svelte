@@ -107,7 +107,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="shrink-0 whitespace-nowrap px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Keep waiting for the active work instead of installing now"
       onclick={onDismiss}
     >
@@ -116,7 +116,7 @@
     <button
       type="button"
       data-modal-primary
-      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       title="Stop everything listed above and install the update now"
       disabled={forcing}
       onclick={() => void updateBlockers.forceInstall()}

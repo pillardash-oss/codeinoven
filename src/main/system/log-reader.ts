@@ -9,7 +9,7 @@ import { LOGS_DIRECTORY, isLogDayName } from './log-paths'
  * Two rules keep a debug read cheap on a log tree that can reach hundreds of
  * megabytes: a read never parses more than the newest bytes of a file, and a
  * day listing is bounded. Both the exported failure report and the read-only
- * `@cio-utility` diagnostics go through here, so they see the same day folders
+ * app diagnostics go through here, so they see the same day folders
  * and the same tail limit.
  */
 

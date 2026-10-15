@@ -149,7 +149,7 @@
           -->
           <button
             type="button"
-            class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            class="shrink-0 cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
             title="Assign this failed check to an agent to diagnose and report on"
             aria-label="Assign the {check.name} check to an agent"
             disabled={assigningCheck !== null}
@@ -192,7 +192,7 @@
         {#if check.url}
           <button
             type="button"
-            class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="shrink-0 cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Open {check.name} externally"
             aria-label="Open {check.name} externally"
             data-external-url={check.url}

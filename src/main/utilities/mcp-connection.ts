@@ -1,12 +1,12 @@
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { McpUtilityConfig, UtilityCredentialMetadata } from '../../lib/types'
 import { resolveEnvironmentReferences } from './utility-orchestration/utility-input'
-import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
+import { McpHttpError, RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 
 /** The connection half of an MCP utility config, shared by the turn gateway and the connection test. */
 export type McpConnectionConfig = Pick<
   McpUtilityConfig,
-  'transport' | 'command' | 'args' | 'url' | 'environment' | 'headers'
+  'transport' | 'command' | 'args' | 'url' | 'environment' | 'headers' | 'oauth'
 >
 
 /** Named context that turns a stdio startup failure into something the user can act on. */
@@ -23,6 +23,19 @@ export interface McpConnectionRequest {
   environment: Record<string, string>
   /** Declared credentials, used to inject a remote server's secret into its request headers. */
   credentials?: readonly UtilityCredentialMetadata[]
+  /**
+   * OAuth 2.1 bearer token resolved for this server, when its utility is
+   * authorized. It is the credential the authorization server just issued, so it
+   * replaces any configured `Authorization` header rather than being ignored
+   * behind one.
+   */
+  authorization?: string | null
+  /**
+   * Whether the app can complete an OAuth authorization for this server: true
+   * for an installed utility, false for a harness-native server the app only
+   * reads, whose own host has to authorize it.
+   */
+  authorizable?: boolean
   /** Omit to keep the raw client failure, e.g. inside a turn that reports its own context. */
   owner?: McpConnectionOwner
   /** Turn that started the server, so the task manager attributes its row. */
@@ -63,11 +76,16 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
     }
   }
   if (!config.url) throw new Error('Remote MCP URL is not configured')
-  return RemoteMcpClient.connect(
-    config.url,
-    resolveMcpHeaders(config, environment, request.credentials),
-    clientOwner
-  )
+  try {
+    return await RemoteMcpClient.connect(
+      config.url,
+      resolveMcpHeaders(config, environment, request.credentials, request.authorization),
+      clientOwner
+    )
+  } catch (error) {
+    if (!owner) throw error
+    throw mcpAuthorizationFailure(request, error)
+  }
 }
 
 /**
@@ -86,7 +104,26 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
 export function resolveMcpHeaders(
   config: McpConnectionConfig,
   environment: Record<string, string>,
-  credentials: readonly UtilityCredentialMetadata[] = []
+  credentials: readonly UtilityCredentialMetadata[] = [],
+  authorization?: string | null
+): Record<string, string> {
+  const headers = resolveConfiguredHeaders(config, environment, credentials)
+  if (!authorization) return headers
+  // An OAuth grant is the credential the server itself issued for this app.
+  // A leftover `Authorization` header   an API key the user pasted while the
+  // server still refused it, say   would shadow the grant, so the grant wins and
+  // the stale header is dropped under every spelling of its name.
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === 'authorization') delete headers[name]
+  }
+  headers['Authorization'] = `Bearer ${authorization}`
+  return headers
+}
+
+function resolveConfiguredHeaders(
+  config: McpConnectionConfig,
+  environment: Record<string, string>,
+  credentials: readonly UtilityCredentialMetadata[]
 ): Record<string, string> {
   const configured = config.headers ?? {}
   const headers = resolveEnvironmentReferences(configured, environment)
@@ -174,8 +211,59 @@ export function mcpStartupFailure(
 }
 
 /**
- * Where a connection actually goes, for display. Headers, credentials, and
- * every other secret stay out: this is the same string the row already shows.
+ * The `WWW-Authenticate` header a refusal carried, when it actually asks for
+ * OAuth.
+ *
+ * A `Bearer` challenge without `resource_metadata` is what an API-key server
+ * sends, and it is not an invitation to authorize; only the protected-resource
+ * form names a server whose authorization this app can complete.
+ */
+export function mcpOAuthChallengeHeader(error: unknown): string | null {
+  // The refusal is wrapped once on its way out of `connectMcpServer` (it is
+  // reported as "Utility X could not be reached"), so the challenge is looked for
+  // down the cause chain rather than only at the top.
+  for (let current: unknown = error, depth = 0; depth < 5; depth += 1) {
+    if (current instanceof McpHttpError) {
+      const header = current.wwwAuthenticate
+      return header && /resource_metadata\s*=/iu.test(header) ? header : null
+    }
+    current = current instanceof Error ? current.cause : undefined
+    if (current === undefined || current === null) return null
+  }
+  return null
+}
+
+/**
+ * Turn a remote MCP refusal into something the user can act on.
+ *
+ * An MCP server that refuses for lack of authorization says so only in its
+ * `WWW-Authenticate` header, which no user reads. Naming the utility, the
+ * challenge, and the exact fix is the difference between "connection failed" and
+ * "this server needs to be authorized".
+ */
+export function mcpAuthorizationFailure(request: McpConnectionRequest, error: unknown): Error {
+  const name = request.owner?.name ?? 'MCP server'
+  const message = error instanceof Error ? error.message : String(error)
+  const challenge = mcpOAuthChallengeHeader(error)
+  if (!challenge) {
+    return new Error(`Utility \`${name}\` could not be reached: ${message}`, { cause: error })
+  }
+  const authorizable = request.authorizable !== false
+  const guidance = !authorizable
+    ? 'This server requires OAuth authorization, which only the harness that owns it can complete'
+    : request.config.oauth?.enabled
+      ? request.authorization
+        ? 'The server rejected the stored authorization; authorize it again in Utilities'
+        : 'Its authorization has not been completed yet; use Authorize in Utilities'
+      : 'This server requires OAuth authorization; turn MCP authorization on for it in Utilities'
+  return new Error(`Utility \`${name}\` could not be reached: ${message}. ${guidance}`, {
+    cause: error
+  })
+}
+
+/**
+ * Where a connection actually goes, for display. Headers, credentials, and every
+ * other secret stay out: this is the same string the row already shows.
  */
 export function mcpTargetLabel(config: McpConnectionConfig): string {
   if (config.transport === 'stdio') {

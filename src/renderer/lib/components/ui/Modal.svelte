@@ -9,13 +9,14 @@
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
     focusOwnsEnter,
     isFocusableTarget
   } from '$lib/modal-primary-action.svelte'
-  import { isWithinToastLayer } from '$lib/toast-layer'
+  import { isWithinLayerAboveModal } from '$lib/layer-above-modal'
 
   /**
    * The canonical modal.
@@ -99,13 +100,13 @@
   function panelLayout(placement: ModalPlacement, fill: boolean): string {
     switch (placement) {
       case 'right':
-        return 'h-full w-full rounded-none border-l bg-surface'
+        return 'h-full w-full border-l bg-surface'
       case 'bottom':
-        return 'max-h-[90dvh] w-full rounded-t-2xl border-t bg-surface pb-[env(safe-area-inset-bottom)]'
+        return 'max-h-[90dvh] w-full border-t bg-surface pb-[env(safe-area-inset-bottom)]'
       case 'fullscreen':
-        return 'h-dvh w-dvw max-h-none max-w-none rounded-none'
+        return 'h-dvh w-dvw max-h-none max-w-none'
       default:
-        return `w-full max-h-full rounded-2xl border bg-surface ${fill ? 'h-full' : ''}`
+        return `w-full max-h-full border bg-surface ${fill ? 'h-full' : ''}`
     }
   }
 
@@ -125,6 +126,15 @@
     /** Override Cmd/Mod+W without changing backdrop or Escape dismissal. */
     onCloseShortcut?: () => void
     children: Snippet
+    /**
+     * Actions that sit in the canonical header beside the close control.
+     *
+     * A surface whose one or two actions belong to the panel itself (a viewer
+     * that toggles a mode) puts them here rather than in a footer bar, which
+     * would add a whole band for a single control. Only rendered with the
+     * canonical chrome.
+     */
+    headerActions?: Snippet
     /** The fixed action bar. Only rendered with the canonical chrome. */
     footer?: Snippet
     /** Where the panel sits. `palette` is a top-anchored command surface.
@@ -209,6 +219,7 @@
     onClose,
     onCloseShortcut,
     children,
+    headerActions,
     footer,
     placement = 'center',
     size = 'md',
@@ -452,13 +463,15 @@
             if (!escapeCloses) event.preventDefault()
           }}
           onInteractOutside={(event) => {
-            // A toast is drawn above this modal (svelte-sonner stacks at
-            // `z-index: 999999999`) and stays interactive there, so a press that
-            // lands on one is not a backdrop press. Without this the pointerdown
-            // bubbled to the dismissible layer and dismissed the modal as well as
-            // the toast it was aimed at: pressing a toast's close button threw the
-            // full screen surface away behind it.
-            if (isWithinToastLayer(event.target)) event.preventDefault()
+            // A toast (svelte-sonner stacks at `z-index: 999999999`) and Vite's
+            // development compile-error overlay both draw above this modal and
+            // stay interactive there, so a press that lands on either is not a
+            // backdrop press. Without this the pointerdown bubbled to the
+            // dismissible layer and dismissed the modal as well as the layer it
+            // was aimed at: pressing a toast's close button threw the full
+            // screen surface away behind it, and dismissing the dev error card
+            // took the modal down with it.
+            if (isWithinLayerAboveModal(event.target)) event.preventDefault()
             if (!closeOnBackdrop) event.preventDefault()
           }}
           class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
@@ -475,18 +488,39 @@
               }}
             >
               {#if chrome}
-                <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                <!-- A fullscreen panel is the window, so its canonical header doubles
+                     as the title bar. It reserves the OS window-control inset so the
+                     title never sits underneath the macOS traffic lights, and it is a
+                     fixed `h-12` like the app header and the fullscreen file editor, so
+                     the title centres on the same band the traffic lights sit in.
+                     Every other placement draws a panel inset from the window edge,
+                     where the controls are outside it: it keeps the intrinsic `py-4`
+                     that matches the header of every centred dialog. -->
+                <div
+                  class={[
+                    'flex shrink-0 items-center justify-between border-b px-6',
+                    placement === 'fullscreen' ? 'h-12' : 'py-4'
+                  ]}
+                  style={placement === 'fullscreen'
+                    ? trafficLightInsetStyle({ mirrorRightInset: false })
+                    : undefined}
+                >
                   <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
                   {#if description}
                     <Dialog.Description class="sr-only">{description}</Dialog.Description>
                   {/if}
-                  <Dialog.Close
-                    class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    <X size={16} />
-                  </Dialog.Close>
+                  <div class="flex items-center gap-1">
+                    {#if headerActions}
+                      {@render headerActions()}
+                    {/if}
+                    <Dialog.Close
+                      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      aria-label="Close"
+                      title="Close"
+                    >
+                      <X size={16} />
+                    </Dialog.Close>
+                  </div>
                 </div>
 
                 <div class="min-h-0 flex-1 {contentClass}">

@@ -35,7 +35,7 @@
 <div class="flex flex-wrap items-center gap-1.5">
   <!-- Live current-colour indicator so the selection is always obvious. -->
   <span
-    class="flex {swatchClass} shrink-0 items-center justify-center rounded-full border-2 {value ===
+    class="flex {swatchClass} shrink-0 items-center justify-center border-2 {value ===
     null
       ? 'border-border'
       : 'border-foreground'}"
@@ -50,7 +50,7 @@
   {#if allowNone}
     <button
       type="button"
-      class="flex {swatchClass} items-center justify-center rounded-full border-2 transition-transform hover:scale-110 {value ===
+      class="flex {swatchClass} items-center justify-center border-2 transition-transform hover:scale-110 {value ===
       null
         ? 'border-foreground'
         : 'border-border'}"
@@ -65,7 +65,7 @@
   {#each PROJECT_COLORS as option (option.value)}
     <button
       type="button"
-      class="relative {swatchClass} rounded-full border-2 transition-transform hover:scale-110 {value ===
+      class="relative {swatchClass} border-2 transition-transform hover:scale-110 {value ===
       option.value
         ? 'border-foreground'
         : 'border-transparent'}"
@@ -77,7 +77,7 @@
     >
       {#if value === option.value}
         <span
-          class="absolute inset-0 m-auto flex {chipInner} items-center justify-center rounded-full bg-white/90 shadow-sm"
+          class="absolute inset-0 m-auto flex {chipInner} items-center justify-center bg-white/90 shadow-sm"
         >
           <Check size={checkSize} class="text-black/70" />
         </span>
@@ -86,7 +86,7 @@
   {/each}
   <button
     type="button"
-    class="relative flex {swatchClass} items-center justify-center rounded-full border-2 transition-transform hover:scale-110 {isCustomColor
+    class="relative flex {swatchClass} items-center justify-center border-2 transition-transform hover:scale-110 {isCustomColor
       ? 'border-foreground'
       : 'border-dashed border-muted'}"
     style={isCustomColor ? `background-color: ${value}; box-shadow: 0 0 0 1px ${value}` : ''}

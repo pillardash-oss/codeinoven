@@ -27,7 +27,7 @@
   {#snippet trigger()}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
       aria-label="New browser tab"
       title="New tab"
       data-shortcut={keymapState.keysFor('browser-new-tab').join(',')}

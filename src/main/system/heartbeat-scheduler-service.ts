@@ -122,8 +122,21 @@ export class HeartbeatSchedulerService {
     return this.persistChain
   }
 
+  /**
+   * Whether any heartbeat is enabled with times to fire, which is the only reason
+   * the tick exists.
+   *
+   * The residency check reads the same answer to decide whether a windowless
+   * process still has a reason to exist: a heartbeat only fires while the app is
+   * running, so a process that quits stops its pings until the app is launched
+   * again.
+   */
+  hasHeartbeatOnTheClock(): boolean {
+    return this.heartbeats.some((entry) => entry.enabled && entry.times.length > 0)
+  }
+
   private refreshTimer(): void {
-    const shouldRun = this.heartbeats.some((entry) => entry.enabled && entry.times.length > 0)
+    const shouldRun = this.hasHeartbeatOnTheClock()
     if (shouldRun && this.timer === null) {
       this.timer = setInterval(() => this.tick(), HEARTBEAT_TICK_MS)
     } else if (!shouldRun && this.timer !== null) {

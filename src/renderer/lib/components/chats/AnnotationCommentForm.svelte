@@ -36,6 +36,16 @@
     fieldClass?: string
     removeTitle?: string
     doneTitle?: string
+    /**
+     * Keep Remove available with an empty comment.
+     *
+     * A response selection only exists because its comment does, so removing
+     * the comment removes the reference and an empty field has nothing to
+     * remove. A mark drawn on a picture is the payload itself: it can be
+     * deleted before any comment is written, so its editor must not gate
+     * removal on text the user never intended to write.
+     */
+    allowEmptyRemove?: boolean
   }
 
   let {
@@ -49,7 +59,8 @@
     placeholder = 'Add a comment for the agent…',
     fieldClass = 'h-20 min-h-20',
     removeTitle = 'Remove this comment and the reference it belongs to',
-    doneTitle = 'Done: attach this comment'
+    doneTitle = 'Done: attach this comment',
+    allowEmptyRemove = false
   }: Props = $props()
 
   // The editor is remounted fresh each time it opens, so the initial text is
@@ -108,16 +119,16 @@
   bind:this={textarea}
   {@attach focusTextarea}
   value={comment}
-  class="{fieldClass} w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-dimmed"
+  class="{fieldClass} w-full resize-y border border-border bg-elevated px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-dimmed"
   {placeholder}
   oninput={updateDraft}
   onkeydown={onKeydown}></textarea>
 <div class="mt-2 flex items-center justify-between gap-1.5">
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
+    class="flex h-8 items-center gap-1.5 px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
     title={removeTitle}
-    disabled={!comment.trim()}
+    disabled={!allowEmptyRemove && !comment.trim()}
     onclick={onRemove}
   >
     <Trash2 size={12} />
@@ -126,7 +137,7 @@
   <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+    class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
     title={doneTitle}
     onclick={submit}
   >

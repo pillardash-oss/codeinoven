@@ -224,7 +224,7 @@
     <div>
       <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Target Scope</p>
       <select
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground"
         value={mergeTargetBucketId}
         onchange={(event: Event) => {
           mergeTargetBucketId = (event.currentTarget as HTMLSelectElement).value
@@ -250,7 +250,7 @@
           <button
             type="button"
             class={[
-              'flex w-full flex-col gap-1 rounded-xl border p-3 text-left transition-colors',
+              'flex w-full flex-col gap-1 border p-3 text-left transition-colors',
               mode === option.value
                 ? 'border-primary bg-elevated ring-1 ring-primary/40'
                 : 'border-border bg-surface hover:bg-elevated'
@@ -269,7 +269,7 @@
       </div>
     </div>
 
-    <div class="relative space-y-2 rounded-lg border bg-elevated/50 p-3 text-xs text-muted">
+    <div class="relative space-y-2 border bg-elevated/50 p-3 text-xs text-muted">
       {#if refreshing}
         <RefreshCw
           size={12}
@@ -306,12 +306,12 @@
     <p class="text-xs text-muted">{modeNote}</p>
 
     {#if preflight?.hasActiveProcesses}
-      <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+      <div class="border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
         Active agent processes are still running in this scope.
       </div>
     {/if}
     {#if (preflight?.dirtyFiles.length ?? 0) > 0}
-      <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+      <div class="border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
         <p class="font-medium">
           {mode === 'merge-keep'
             ? `Uncommitted changes stay in the worktree (${preflight?.dirtyFiles.length ?? 0} files)`

@@ -6,12 +6,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
-import {
-  deliverTranscriptHeadless,
-  sendUnsentComposerContentNow,
-  unsentComposerContent,
-  voiceScopeTarget
-} from './voice-send'
+import { deliverTranscriptHeadless, voiceScopeTarget } from './voice-send'
 import { logRendererError } from '../system/renderer-logger'
 import type {
   SpeechDictationSpan,
@@ -40,7 +35,7 @@ import {
   transcribeCapture,
   type SpeechArtifactSelection
 } from './speech-controller-artifacts'
-import { playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
+import { endSpeechCues, playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
 import { SpeechPlaybackEngine } from './speech-controller-playback.svelte'
 import {
   nextVoiceSendLevel,
@@ -156,10 +151,6 @@ class SpeechController {
   private preloadFired = false
   /** In-flight background transcription jobs, keyed by attempt id. */
   private readonly transcriptions = new Map<string, Promise<void>>()
-  /** Level-2 steers still in flight, keyed by attempt id. A transcript that
-   *  lands meanwhile must wait for the box content to leave the composer before
-   *  it reads the mirrored draft, or it delivers the same message twice. */
-  private readonly pendingSteers = new Map<string, Promise<void>>()
   /**
    * Detached transcriptions whose transcript has not landed yet, with the
    * editor and thread they belong to. Rows, mic buttons and the armed-send
@@ -205,9 +196,10 @@ class SpeechController {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalKeydown, true)
       window.addEventListener('cio:soundChanged', this.handleSoundChanged)
-      // Open the cue output once, at startup, so no audio device is opened at
-      // the moment a recording captures the microphone (see the cue module).
-      prepareSpeechCues()
+      // The cue output used to be opened here, which held an audio output
+      // stream for the whole process lifetime even when speech was never used.
+      // It is opened per session in `start()` now, before the microphone comes
+      // up, and released once that session ends (see the cue module).
       void this.loadSettings()
     }
   }
@@ -215,7 +207,12 @@ class SpeechController {
   private readonly handleSoundChanged = (event: Event): void => {
     const detail = (event as CustomEvent<unknown>).detail
     if (!detail || typeof detail !== 'object') return
-    this.sound = structuredClone(detail as typeof this.sound)
+    // The event carries the app's live sound settings, which are `$state`, and a
+    // state proxy (or any object holding one) cannot be structured-cloned: doing
+    // that raised an uncaught DataCloneError here and left this mirror on the
+    // old settings for every change. Snapshot it into plain data first   that is
+    // exactly what `$state.snapshot` is for   then take the private copy.
+    this.sound = structuredClone($state.snapshot(detail as typeof this.sound))
     this.soundReady = true
   }
 
@@ -424,12 +421,15 @@ class SpeechController {
    *
    * 1. the transcript is sent when it lands, together with whatever the
    *    composer already held, which waits for it instead of being sent alone;
-   * 2. the composer's text is steered into the running turn right now and the
-   *    transcript follows as its own message;
-   * 3. the transcript itself is steered, interrupting the running turn;
-   * 4. the intent is cleared again, so the transcript goes back to being pasted
+   * 2. the transcript itself is steered, interrupting the running turn;
+   * 3. the intent is cleared again, so the transcript goes back to being pasted
    *    into its editor (and written to the clipboard) with nothing sent, and
    *    the next press arms a fresh send.
+   *
+   * The ladder only ever steers the transcript. What the composer already held
+   * is never handed over on its own behalf: the page content stays where it is
+   * until the transcript lands, and even then it only leaves as part of the
+   * message the transcript is sent with.
    *
    * Returns false when nothing is armable: a dictation on a plain editor, or
    * no dictation at all, so callers can leave the event to its normal meaning.
@@ -440,8 +440,8 @@ class SpeechController {
     const existing = this.voiceSends.find((entry) => entry.attemptId === record.attemptId)
     // The press after "steer the transcript" ends the ladder instead of
     // escalating it: the intent goes away and the cycle starts over.
-    const cleared = existing?.level === 3
-    const level = nextVoiceSendLevel(existing?.level, unsentComposerContent(record.scope) !== null)
+    const cleared = existing?.level === 2
+    const level = nextVoiceSendLevel(existing?.level)
     this.voiceSends = [
       // Prune intents whose transcription already settled: only the dictation
       // in flight may carry an armed state, and a cleared one is dropped so the
@@ -468,49 +468,13 @@ class SpeechController {
     // the armed state is then the most recent claim, which is what the row's
     // last-action-wins rule compares against computer-use activity.
     this.claimThreadSlot(record.scope)
-    // Level 2 hands over what the composer holds at this instant: that text is
-    // an instruction for the running turn and must not wait for the transcript.
-    // Clearing is never level 2, so this only fires on a fresh ladder step.
-    if (level === 2) this.trackPendingSteer(record)
     return true
-  }
-
-  /** Hand the composer content to the running turn, remembering the work so a
-   *  transcript landing meanwhile waits for it instead of racing it. */
-  private trackPendingSteer(record: VoiceTranscriptionRecord): void {
-    // Never rejects: the delivery awaits this promise, and a steer that threw
-    // must not turn into a transcription failure for the transcript behind it.
-    const steering = this.steerPendingComposerContent(record).catch((cause: unknown) => {
-      logRendererError('The queued voice message could not be steered.', cause)
-    })
-    this.pendingSteers.set(record.attemptId, steering)
-    void steering.finally(() => {
-      if (this.pendingSteers.get(record.attemptId) === steering)
-        this.pendingSteers.delete(record.attemptId)
-    })
   }
 
   /** The dictation an arming gesture applies to (see the selector module). */
   private voiceSendCandidate(targetId?: string): VoiceTranscriptionRecord | null {
     const viewed = workspaceState.selectedThread
     return selectVoiceSendCandidate(this.transcribing, this.voiceSends, targetId, viewed)
-  }
-
-  /**
-   * Steer what a thread's composer already holds. A mounted composer drives its
-   * own send path so the steer obeys every gate the send button has; otherwise
-   * the mirrored draft is steered headlessly.
-   */
-  private async steerPendingComposerContent(record: VoiceTranscriptionRecord): Promise<void> {
-    const autoSend = record.target.autoSend
-    if (autoSend?.isLive()) {
-      autoSend.submit(true)
-      // A composer that dispatched clears its own buffer. One that refused (an
-      // open slash or mention menu, a locked field) left the text in place, so
-      // steer it headlessly instead of quietly dropping the intent.
-      if (unsentComposerContent(record.scope) === null) return
-    }
-    await sendUnsentComposerContentNow(record.scope)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -561,6 +525,21 @@ class SpeechController {
     }
   }
 
+  /**
+   * Release the cue output once a dictation is fully over.
+   *
+   * Guarded on `active` because a detached transcription outlives its own
+   * capture: the user may already be recording the next dictation while the
+   * previous transcript settles, and arming a close then would take the live
+   * capture's output stream down underneath it. `prepareSpeechCues` on the new
+   * session cancels any release armed before it, so this guard is what keeps a
+   * close from landing on a live microphone.
+   */
+  private endSpeechCuesIfIdle(): void {
+    if (this.active) return
+    endSpeechCues()
+  }
+
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
@@ -578,6 +557,11 @@ class SpeechController {
       this.surfaceFailure(target.id, 'prepare', new Error('Focus the editor before recording.'))
       return
     }
+    // The user's intent to record is known and no capture IPC has run yet: open
+    // the cue output now, so the first blip never opens an audio device while
+    // the microphone is coming up. `endSpeechCuesIfIdle` below settles every
+    // path that does not end in a live recording.
+    prepareSpeechCues()
     // Flip the surface to recording immediately: the double-press shortcut and
     // the mic button must respond in the same frame they are pressed. Every
     // async pipeline step below has a failure path that settles into `failed`.
@@ -749,6 +733,10 @@ class SpeechController {
       }
     } finally {
       if (this.startToken === startToken) this.startToken = null
+      // A start that did not reach a live recording (aborted, refused, or
+      // failed) must not leave the output stream armed forever. On success
+      // `active` is set, so the guard leaves the live session's context alone.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -911,6 +899,10 @@ class SpeechController {
       if (active.stream) for (const track of active.stream.getTracks()) track.stop()
       this.active = null
       if (this.state.state === 'stopping') this.state = { state: 'idle' }
+      // The capture is over: the 'stopped' cue has played (or the finalize
+      // failed), so the output stream may be released once the idle window
+      // passes. `active` is null here, so the guard cannot block it.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -934,7 +926,6 @@ class SpeechController {
   private endTranscription(attemptId: string): void {
     this.transcribing = this.transcribing.filter((entry) => entry.attemptId !== attemptId)
     this.voiceSends = this.voiceSends.filter((entry) => entry.attemptId !== attemptId)
-    this.pendingSteers.delete(attemptId)
   }
 
   /**
@@ -1012,6 +1003,11 @@ class SpeechController {
     } finally {
       this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
+      // The transcript settled (landed, held for its field, or failed), which
+      // is the last thing this session's output stream is needed for. A new
+      // recording already running makes the guard skip, so no close lands on
+      // its live microphone.
+      this.endSpeechCuesIfIdle()
     }
   }
 
@@ -1054,6 +1050,9 @@ class SpeechController {
     this.pendingDeliveries.delete(target.id)
     this.recordDictationSpan(pending.attemptId, target.id, pending.transcript, pending.scope)
     playSpeechCue(this.sound, 'completed')
+    // This is the last cue of the held dictation, so its output stream can go
+    // once the idle window passes (unless another recording is live).
+    this.endSpeechCuesIfIdle()
     try {
       toast.success('Voice recording inserted into its field', {
         id: 'voice-recording-delivered',
@@ -1095,11 +1094,7 @@ class SpeechController {
    * that then holds the transcript.
    */
   private async deliverArmedVoiceSend(intent: VoiceSendIntent, landedLive: boolean): Promise<void> {
-    // A level-2 steer may still be handing the box content over. The transcript
-    // must not be read out of the mirrored draft until that text has left it, or
-    // the same message is delivered twice.
-    await this.pendingSteers.get(intent.attemptId)
-    const direct = intent.level >= 3
+    const direct = intent.level >= 2
     if (landedLive) {
       const autoSend = intent.target.autoSend
       if (autoSend?.isLive()) {

@@ -63,7 +63,7 @@
     <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Back to boxes"
         aria-label="Back to boxes"
         onclick={() => (creating = false)}
@@ -89,7 +89,7 @@
       </p>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        class="flex items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
         title="Create a box"
         onclick={openCreate}
       >
@@ -105,7 +105,7 @@
         {@const isDefault = defaultBoxId === box.id}
         <li>
           <div
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors {activeBoxId ===
+            class="group flex items-center gap-2 px-2 py-1.5 transition-colors {activeBoxId ===
             box.id
               ? 'bg-elevated'
               : 'hover:bg-elevated'}"
@@ -119,7 +119,7 @@
             >
               <span class="flex h-4 w-4 shrink-0 items-center justify-center">
                 {#if url}
-                  <img src={url} alt="" class="h-4 w-4 rounded-sm object-contain" />
+                  <img src={url} alt="" class="h-4 w-4 object-contain" />
                 {/if}
               </span>
               <span class="flex min-w-0 flex-1 flex-col">
@@ -137,7 +137,7 @@
             <button
               type="button"
               class={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors group-hover:opacity-100 hover:bg-overlay focus-visible:opacity-100',
+                'flex h-6 w-6 shrink-0 items-center justify-center transition-colors group-hover:opacity-100 hover:bg-overlay focus-visible:opacity-100',
                 isDefault ? 'text-primary opacity-100' : 'text-muted opacity-0'
               ]}
               title={isDefault
@@ -154,7 +154,7 @@
             <button
               type="button"
               class={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                'flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
                 expanded ? 'opacity-100' : 'opacity-0'
               ]}
               title={expanded ? `Hide ${box.name} settings` : `Settings for ${box.name}`}
@@ -170,7 +170,7 @@
           {#if expanded}
             <div
               id="box-settings-{box.id}"
-              class="mb-1 rounded-lg border p-3"
+              class="mb-1 border p-3"
               transition:slide={{ duration: 150 }}
             >
               <BrowserBoxEditor {box} onDeleted={() => (expandedBoxId = null)} />

@@ -24,14 +24,13 @@
 
 {#if status}
   <span
-    class="inline-flex min-w-0 shrink-0 items-center gap-1 rounded-md border border-border bg-raised px-1.5 py-0.5 font-medium text-dimmed {sizeClass} {className}"
+    class="inline-flex min-w-0 shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 font-medium text-dimmed {sizeClass} {className}"
   >
     <StatusBadge
       stage={status.stage}
       tone={status.tone}
       kind={status.kind}
       variant={status.variant ?? 'dot'}
-      animated={status.animated}
       size="sm"
       title={status.label}
     />

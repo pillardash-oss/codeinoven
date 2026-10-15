@@ -84,7 +84,7 @@ describe('entryVisibleOnSurface', () => {
     expect(entryVisibleOnSurface(entry({ scopes: ['project'], projectId: 'p' }), settings)).toBe(
       false
     )
-    expect(entryVisibleOnSurface(entry({ scopes: ['routine'], routineId: 'r' }), settings)).toBe(
+    expect(entryVisibleOnSurface(entry({ scopes: ['routine'], assistantId: 'r' }), settings)).toBe(
       false
     )
   })
@@ -134,15 +134,15 @@ describe('entryVisibleOnSurface', () => {
       surface: 'sidebar-assistant',
       projectId: ASSISTANT_SPACE_ID,
       threadId: 'task-1',
-      routineId: 'routine-1'
+      assistantId: 'assistant-1'
     }
     expect(entryVisibleOnSurface(entry({ scopes: ['assistant'] }), context)).toBe(true)
     expect(entryVisibleOnSurface(entry({ scopes: ['projects'] }), context)).toBe(false)
     expect(
-      entryVisibleOnSurface(entry({ scopes: ['routine'], routineId: 'routine-1' }), context)
+      entryVisibleOnSurface(entry({ scopes: ['routine'], assistantId: 'assistant-1' }), context)
     ).toBe(true)
     expect(
-      entryVisibleOnSurface(entry({ scopes: ['routine'], routineId: 'routine-2' }), context)
+      entryVisibleOnSurface(entry({ scopes: ['routine'], assistantId: 'assistant-2' }), context)
     ).toBe(false)
     expect(entryVisibleOnSurface(entry({ scopes: ['task'], threadId: 'task-1' }), context)).toBe(
       true
@@ -198,9 +198,9 @@ describe('locationForScopeChange', () => {
   })
 
   it('pins routine and task memory to the assistant space', () => {
-    expect(locationForScopeChange(['routine'], {}, { routineId: 'routine-1' })).toEqual({
+    expect(locationForScopeChange(['routine'], {}, { assistantId: 'assistant-1' })).toEqual({
       projectId: ASSISTANT_SPACE_ID,
-      routineId: 'routine-1'
+      assistantId: 'assistant-1'
     })
     expect(locationForScopeChange(['task'], {}, { threadId: 'task-1' })).toEqual({
       projectId: ASSISTANT_SPACE_ID,
@@ -241,7 +241,9 @@ describe('memoryDestinationFor', () => {
   })
 
   it('routes routine entries to the assistant container file', () => {
-    expect(memoryDestinationFor(entry({ scopes: ['routine'], routineId: 'routine-1' }))).toEqual({
+    expect(
+      memoryDestinationFor(entry({ scopes: ['routine'], assistantId: 'assistant-1' }))
+    ).toEqual({
       projectId: ASSISTANT_SPACE_ID
     })
   })
@@ -267,7 +269,7 @@ describe('memoryDestinationFor', () => {
       })
     ).toEqual({ projectId: 'proj-1', threadId: 'thr-1' })
     expect(
-      memoryDestinationFor(entry({ scopes: ['routine'] }), { routineId: 'routine-1' })
+      memoryDestinationFor(entry({ scopes: ['routine'] }), { assistantId: 'assistant-1' })
     ).toEqual({
       projectId: ASSISTANT_SPACE_ID
     })
@@ -276,7 +278,7 @@ describe('memoryDestinationFor', () => {
   it('rejects located entries without a place', () => {
     expect(() => memoryDestinationFor(entry({ scopes: ['project'] }))).toThrow(/needs a project/)
     expect(() => memoryDestinationFor(entry({ scopes: ['thread'] }))).toThrow(/needs a thread/)
-    expect(() => memoryDestinationFor(entry({ scopes: ['routine'] }))).toThrow(/needs a routine/)
+    expect(() => memoryDestinationFor(entry({ scopes: ['routine'] }))).toThrow(/needs an assistant/)
     expect(() => memoryDestinationFor(entry({ scopes: ['task'] }))).toThrow(/needs a task/)
   })
 
@@ -290,12 +292,12 @@ describe('memoryDestinationFor', () => {
 describe('normalizeMemoryEntryForLocation', () => {
   it('strips ids from audience-level entries', () => {
     const normalized = normalizeMemoryEntryForLocation(
-      entry({ scopes: ['projects'], projectId: 'proj-1', threadId: 'thr-1', routineId: 'r-1' }),
+      entry({ scopes: ['projects'], projectId: 'proj-1', threadId: 'thr-1', assistantId: 'r-1' }),
       {}
     )
     expect(normalized.projectId).toBeUndefined()
     expect(normalized.threadId).toBeUndefined()
-    expect(normalized.routineId).toBeUndefined()
+    expect(normalized.assistantId).toBeUndefined()
   })
 
   it('stamps the inbox as the chat entry project', () => {
@@ -303,7 +305,7 @@ describe('normalizeMemoryEntryForLocation', () => {
     expect(normalized).toMatchObject({
       projectId: INBOX_PROJECT_ID,
       threadId: undefined,
-      routineId: undefined
+      assistantId: undefined
     })
   })
 
@@ -311,16 +313,16 @@ describe('normalizeMemoryEntryForLocation', () => {
     const normalized = normalizeMemoryEntryForLocation(entry({ scopes: ['assistant'] }), {})
     expect(normalized.projectId).toBe(ASSISTANT_SPACE_ID)
     expect(normalized.threadId).toBeUndefined()
-    expect(normalized.routineId).toBeUndefined()
+    expect(normalized.assistantId).toBeUndefined()
   })
 
   it('keeps only the project id for project entries', () => {
     const normalized = normalizeMemoryEntryForLocation(
-      entry({ scopes: ['project'], projectId: 'proj-1', threadId: 'thr-1', routineId: 'r-1' }),
+      entry({ scopes: ['project'], projectId: 'proj-1', threadId: 'thr-1', assistantId: 'r-1' }),
       { projectId: 'proj-1' }
     )
     expect(normalized).toMatchObject({ projectId: 'proj-1', threadId: undefined })
-    expect(normalized.routineId).toBeUndefined()
+    expect(normalized.assistantId).toBeUndefined()
   })
 
   it('keeps both ids for thread entries', () => {
@@ -333,25 +335,25 @@ describe('normalizeMemoryEntryForLocation', () => {
 
   it('stamps the assistant space and routine for routine entries', () => {
     const normalized = normalizeMemoryEntryForLocation(
-      entry({ scopes: ['routine'], projectId: 'proj-1', threadId: 'thr-1', routineId: 'r-1' }),
-      { routineId: 'r-1' }
+      entry({ scopes: ['routine'], projectId: 'proj-1', threadId: 'thr-1', assistantId: 'r-1' }),
+      { assistantId: 'r-1' }
     )
     expect(normalized).toMatchObject({
       projectId: ASSISTANT_SPACE_ID,
       threadId: undefined,
-      routineId: 'r-1'
+      assistantId: 'r-1'
     })
   })
 
   it('stamps the assistant space and task for task entries', () => {
     const normalized = normalizeMemoryEntryForLocation(
-      entry({ scopes: ['task'], threadId: 'task-1', routineId: 'r-1' }),
+      entry({ scopes: ['task'], threadId: 'task-1', assistantId: 'r-1' }),
       { threadId: 'task-1' }
     )
     expect(normalized).toMatchObject({
       projectId: ASSISTANT_SPACE_ID,
       threadId: 'task-1',
-      routineId: undefined
+      assistantId: undefined
     })
   })
 })
@@ -447,14 +449,14 @@ describe('planMemorySaveGroups', () => {
 
   it('keeps a routine id while grouping into the assistant container file', () => {
     const groups = planMemorySaveGroups(
-      [entry({ id: 'routine-entry', scopes: ['routine'], routineId: 'routine-1' })],
+      [entry({ id: 'assistant-entry', scopes: ['routine'], assistantId: 'assistant-1' })],
       []
     )
     expect(groups).toHaveLength(1)
     expect(groups[0].location).toEqual({ projectId: ASSISTANT_SPACE_ID })
     expect(groups[0].managedEntries[0]).toMatchObject({
       projectId: ASSISTANT_SPACE_ID,
-      routineId: 'routine-1'
+      assistantId: 'assistant-1'
     })
   })
 })

@@ -158,6 +158,18 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **Looking into an issue no longer needs a tag.** Read-only app diagnostics
+  (`cio_util_diagnose`: thread lookup by id or title, mirrored conversation
+  pages, log tails, the SQLite schema, and read-only SELECTs) was granted only on
+  a turn that carried the explicit `@cio-utility` tag, so an agent asked to look
+  into "this thread failed" or "what does the log say" could not reach any
+  evidence until the user re-sent the same message with the tag. It is now an app
+  capability granted on every turn that carries the utility gateway, and the Pi
+  extension advertises it, so an ordinary turn knows it can look a reported
+  problem up itself. The capability is otherwise unchanged: read-only, redacted,
+  bounded, and it never writes, deletes, or reconfigures anything. Installing a
+  utility is still a state change and still needs the explicit setup grant.
+
 - **The main instance is now an explicit, remembered choice.** Picking **Make this the main
   instance** in a secondary window used to be honored only while that exact process lived:
   once it restarted, ownership fell back to the longest-running live process, so a leftover
@@ -205,6 +217,33 @@ All notable changes to CodeInOven are documented here. This project follows
   longer proposed for memory.
 
 ### Fixed
+
+- **A resumed thread continues the harness conversation it already had.** A pi
+  account that keeps its own container runs pi with `PI_CODING_AGENT_DIR` pointing
+  at that container, but the app resolved pi's session directory from its own
+  process environment, which never carries the variable. The driver looked for the
+  thread's transcript under `~/.pi/agent`, found nothing, and silently booted a
+  brand new pi session on every resume, so a thread picked up after an idle gap
+  answered from a replayed transcript instead of from its own conversation, with
+  tool results reduced to summaries and no session to continue. The account's agent
+  directory now travels with every transcript lookup (resume, transfer, seeding,
+  sub-agent reads and compaction reconciliation), and the replay decision asks the
+  driver whether the harness really holds the session rather than inferring it from
+  a message count a driver's own durable mirror can satisfy.
+
+- **Only one transfer of a thread can be in flight.** Two windows could ask an
+  owning instance to hand a run over at the same moment, and both requests passed
+  the owner's "is this still my turn" check before either stopped anything: both
+  were accepted and both asked their window to adopt, which put two harness
+  writers on one session and interleaved their output. Moving a run between
+  instances now takes a per-thread mutex, a lease row in the shared config-root
+  database. The receiving side holds the `adopt` claim for the whole hand-off and
+  hands its token to the owner; the owner holds the `release` claim while it stops
+  and settles, and refuses to act for any request whose claim it does not actually
+  hold. A second claimant is refused before a run is stopped, a claim outlives its
+  holder only briefly (its process dying or its lease running out frees the
+  thread), and a legacy request without a token is still served under the release
+  claim alone.
 
 - An update can no longer hang on ghost active threads. The install gate read the
   chat engine's `working` status, which is recorded when a turn is dispatched and

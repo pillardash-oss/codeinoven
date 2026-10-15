@@ -92,9 +92,9 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
-    state.routineScheduler?.dispose()
+    state.assistantScheduler?.dispose()
   } catch (error) {
-    Logger.error('Routine scheduler cleanup failed during shutdown:', error)
+    Logger.error('Assistant scheduler cleanup failed during shutdown:', error)
   }
 
   try {
@@ -224,6 +224,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
 
   state.foreignRuns?.dispose()
   state.foreignRuns = null
+  state.crossInstanceThreads?.dispose()
+  state.crossInstanceThreads = null
 
   state.threadTransfer?.dispose()
   state.threadTransfer = null

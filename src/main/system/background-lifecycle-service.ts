@@ -3,13 +3,14 @@
  *
  * "Closed" in background mode means **no window and no renderer process**. The
  * main process keeps running with a menu bar icon, SQLite, and a 30s scheduler
- * tick; when a routine comes due the run fires exactly as it does with a window
+ * tick; when an assistant comes due the run fires exactly as it does with a window
  * open, persists, notifies, and returns to idle. Reopening hydrates everything
  * from durable state, which is why nothing about background state may live in
  * renderer memory.
  *
  * This service owns the decisions and the surfaces:
- *   - whether a close parks or quits (`shouldPark`),
+ *   - whether a close parks or quits (`shouldPark`, which is only true while the
+ *     process still has something to preserve; see `evaluateResidency`),
  *   - the menu bar icon and its two states (normal / error, the latter a bold
  *     exclamation beside the mark whenever a thread holds a live problem),
  *   - the Dock icon hiding while windowless and returning with a window,
@@ -22,8 +23,8 @@
  *
  * It is deliberately decoupled from the window and from the schedulers: the
  * composition root hands in the callbacks (`openWindow`, `destroyWindow`,
- * `quitApp`, `hasUpcomingWork`), so the service never imports the boot module
- * that creates them.
+ * `quitApp`, `hasUpcomingWork`, `residencyReason`), so the service never imports
+ * the boot module that creates them.
  */
 
 import {
@@ -31,7 +32,9 @@ import {
   BrowserWindow,
   Menu,
   nativeImage,
+  nativeTheme,
   Notification,
+  screen,
   Tray,
   type MenuItemConstructorOptions,
   type NativeImage
@@ -55,6 +58,7 @@ import { instanceRegistry } from './instance-registry'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { BootstrapState } from '../bootstrap/bootstrap-state'
+import type { ResidencyReason } from './background-work-state'
 
 /** How long the renderer gets to persist its own state before the window dies. */
 const PARK_GRACE_MS = 350
@@ -64,6 +68,17 @@ const ACTIVATION_POLL_MS = 2_000
 
 /** Activation requests older than this are leftovers from a crashed instance. */
 const ACTIVATION_TTL_MS = 60_000
+
+/**
+ * How long a windowless process waits after its last reason to stay drains
+ * before it quits.
+ *
+ * A run that has just settled, a retry that has just fired and a slot that has
+ * just been recorded each pass through a moment where nothing is pending yet, and
+ * an exit taken inside that moment would cut the settlement short. The wait is
+ * also what keeps a flapping predicate (work, no work, work) from quitting.
+ */
+const RESIDENCY_DRAIN_GRACE_MS = 15_000
 
 /**
  * How long thread-update bursts are coalesced before the icon is recomputed.
@@ -93,12 +108,17 @@ export interface BackgroundLifecycleDeps {
    * to decide whether a real quit should warn.
    */
   hasUpcomingWork: () => boolean
+  /**
+   * Why the process still has to outlive its window, or null when nothing does.
+   * Read at every close decision and again while parked, so it must stay cheap.
+   */
+  residencyReason: () => ResidencyReason | null
   /** Something needs the user: a parked gate or an unread failure. */
   computeAttention: () => boolean
   /** Called when this instance becomes the owner of scheduled work. */
   onBecameOwner: () => void
-  /** Absolute path to the tray template art (attention variant when true). */
-  resolveTrayIcon: (attention: boolean) => string
+  /** Absolute path to platform tray art, using the Windows taskbar theme. */
+  resolveTrayIcon: (attention: boolean, darkTaskbar?: boolean) => string
 }
 
 /**
@@ -133,6 +153,10 @@ export class BackgroundLifecycleService {
   private stopped = false
   private activationWatcher: FSWatcher | null = null
   private activationTimer: ReturnType<typeof setInterval> | null = null
+  /** When the window last closed, or null while one is open (and at boot). */
+  private windowlessSince: number | null = null
+  /** The armed "nothing left to preserve" quit, or null when none is pending. */
+  private residencyTimer: ReturnType<typeof setTimeout> | null = null
   private readonly activationDir = join(getConfigRoot(), 'instances', 'activate')
   private readonly unsubscribers: Array<() => void> = []
   private updater: BackgroundUpdaterBridge | null = null
@@ -155,6 +179,7 @@ export class BackgroundLifecycleService {
     this.unsubscribers.push(instanceRegistry.onLiveInstanceSetChanged(() => this.evaluateRole()))
     this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
     this.startActivationWatcher()
+    this.refreshActivationWatch()
     this.broadcastRole()
     // A launch can inherit problems from the last one: a run that failed
     // overnight, a thread still parked on an approval gate. The icon states
@@ -174,10 +199,8 @@ export class BackgroundLifecycleService {
     this.updaterUnsubscribe = null
     this.activationWatcher?.close()
     this.activationWatcher = null
-    if (this.activationTimer) {
-      clearInterval(this.activationTimer)
-      this.activationTimer = null
-    }
+    this.clearActivationPoll()
+    this.clearResidencyQuit()
     this.destroyTray()
   }
 
@@ -221,16 +244,28 @@ export class BackgroundLifecycleService {
 
   /**
    * Whether closing the window (or Cmd+Q) should park to the menu bar instead of
-   * quitting. Background mode on means the backend is expected to keep the
-   * schedule, so the full quits are the menu bar's Quit item, the direct-quit
-   * shortcut, and an OS logout. A secondary instance parks nothing: it owns no
-   * schedule, so closing it quits that process and leaves the owner alone. A
-   * probe launch opted out of registration outright, so closing its window
-   * closes the process.
+   * quitting.
+   *
+   * Parking is not free: it holds SQLite, the menu bar icon, the schedule and a
+   * live main process. The mode is therefore only half the answer, and the other
+   * half is {@link BackgroundLifecycleDeps.residencyReason}: a process with
+   * nothing left to run or to hold has no reason to outlive its window, so
+   * closing it quits like any other app. With work still pending it parks exactly
+   * as before, and {@link evaluateResidency} takes the exit once that work drains.
+   *
+   * A secondary instance parks nothing: it owns no schedule, so closing it quits
+   * that process and leaves the owner alone. A probe launch opted out of
+   * registration outright, so closing its window closes the process.
    */
   shouldPark(): boolean {
     if (this.stopped || this.optedOut || this.mode === 'off') return false
-    return this.currentRole().role === 'owner'
+    if (this.currentRole().role !== 'owner') return false
+    return this.deps.residencyReason() !== null
+  }
+
+  /** Why the process still has to exist, for a log line or a diagnosis. */
+  residencyReason(): ResidencyReason | null {
+    return this.deps.residencyReason()
   }
 
   /** Apply a config change without a restart. */
@@ -239,11 +274,16 @@ export class BackgroundLifecycleService {
     this.mode = config.backgroundMode
     this.applyLoginItem(config)
     this.syncTray()
+    this.refreshActivationWatch()
     this.broadcastRole()
   }
 
   /** A window now exists: restore the Dock icon and push the current role. */
   onWindowOpened(window: BrowserWindow): void {
+    // A window on screen is the user being here: the process is not parked, and
+    // an exit armed before this was never taken anyway.
+    this.windowlessSince = null
+    this.clearResidencyQuit()
     this.showDock()
     // Reconcile the menu bar icon here too, so a window that opens after the
     // process lost its icon (a role change, a missed event) brings it straight
@@ -251,13 +291,18 @@ export class BackgroundLifecycleService {
     this.syncTray()
     this.pushRoleTo(window)
     this.refreshAttention()
+    // With a visible window there is nothing to activate, so the drain stops.
+    this.refreshActivationWatch()
   }
 
   /** The window is gone: menu-bar-only while background mode is on. */
   onWindowClosed(): void {
+    this.windowlessSince = Date.now()
     if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
     this.refreshAttention()
+    // Windowless is the one state the drain exists for.
+    this.refreshActivationWatch()
   }
 
   /**
@@ -270,6 +315,11 @@ export class BackgroundLifecycleService {
    * {@link requestAttentionRefresh}.
    */
   refreshAttention(): void {
+    // Every state change the icon reacts to is also one that can drain the last
+    // reason to stay: a run settling, a retry firing, an assistant being paused.
+    // Deciding here means the residency exit happens on the change rather than at
+    // the next launch. It costs nothing while a window is on screen.
+    this.evaluateResidency()
     if (this.attentionRefreshTimer !== null) {
       clearTimeout(this.attentionRefreshTimer)
       this.attentionRefreshTimer = null
@@ -355,6 +405,9 @@ export class BackgroundLifecycleService {
       return
     }
     this.deps.state.parkingForBackground = true
+    // Worth a line: "why is this app still sitting in the menu bar?" is otherwise
+    // unanswerable from the outside, and the reason is the whole decision.
+    Logger.info('Parking in the background', { reason: this.deps.residencyReason() })
     // Let the renderer persist what only it holds (durable browser tab lists,
     // editor drafts) before its process is torn down.
     if (!window.webContents.isDestroyed()) {
@@ -371,6 +424,8 @@ export class BackgroundLifecycleService {
     this.deps.destroyWindow()
     this.syncTray()
     this.hideDock()
+    // Parked: the drain takes over as the only way back to a window.
+    this.refreshActivationWatch()
   }
 
   // ---------------------------------------------------------------- tray ----
@@ -393,6 +448,12 @@ export class BackgroundLifecycleService {
       this.tray.setContextMenu(this.buildContextMenu())
       // A left click on the icon opens the app, matching every other menu bar app.
       this.tray.on('click', () => this.deps.openWindow())
+      if (process.platform === 'win32') {
+        nativeTheme.on('updated', this.refreshWindowsTray)
+        screen.on('display-metrics-changed', this.refreshWindowsTray)
+        screen.on('display-added', this.refreshWindowsTray)
+        screen.on('display-removed', this.refreshWindowsTray)
+      }
     } catch (error) {
       Logger.error('Could not create the menu bar icon', error)
       this.tray = null
@@ -400,6 +461,12 @@ export class BackgroundLifecycleService {
   }
 
   private destroyTray(): void {
+    if (process.platform === 'win32' && this.tray) {
+      nativeTheme.removeListener('updated', this.refreshWindowsTray)
+      screen.removeListener('display-metrics-changed', this.refreshWindowsTray)
+      screen.removeListener('display-added', this.refreshWindowsTray)
+      screen.removeListener('display-removed', this.refreshWindowsTray)
+    }
     this.tray?.destroy()
     this.tray = null
   }
@@ -414,7 +481,20 @@ export class BackgroundLifecycleService {
     }
   }
 
-  private loadTrayImage(attention: boolean): NativeImage {
+  private readonly refreshWindowsTray = (): void => {
+    this.updateTrayAppearance()
+  }
+
+  private loadTrayImage(attention: boolean): NativeImage | string {
+    if (process.platform === 'win32') {
+      // Keep the ICO path intact so Electron loads the native HICON at the
+      // Windows small-icon metric, choosing from all embedded resolutions.
+      // App theme and taskbar theme can differ on Windows.
+      return this.deps.resolveTrayIcon(
+        attention,
+        nativeTheme.shouldUseDarkColorsForSystemIntegratedUI
+      )
+    }
     const image = nativeImage.createFromPath(this.deps.resolveTrayIcon(attention))
     if (process.platform === 'darwin') image.setTemplateImage(true)
     return image
@@ -533,6 +613,9 @@ export class BackgroundLifecycleService {
     const wasOwner = this.tray !== null
     this.syncTray()
     this.broadcastRole()
+    // The icon's presence is half of what the drain watches, and a role change
+    // is one of the two ways it can appear or vanish.
+    this.refreshActivationWatch()
     // A launch that opted out never owned the icon, so "promotion" is not a
     // hand-off and must not run the catch-up.
     if (!wasOwner && this.backgroundEnabled && this.currentRole().role === 'owner') {
@@ -603,9 +686,101 @@ export class BackgroundLifecycleService {
     } catch (error) {
       Logger.dev('Activation directory unavailable (non-fatal):', error)
     }
+    this.drainActivationRequests()
+  }
+
+  /**
+   * Arm or clear the backstop poll over the activation directory.
+   *
+   * The poll covers two things a watch event cannot: a request file written by
+   * another instance that the event never reported, and a menu bar icon that
+   * failed to appear. Both only matter while this process has no window, because
+   * a visible window is the user already being here: there is nothing to bring
+   * forward, and whatever opened that window has just reconciled the icon. The
+   * watcher itself stays armed either way, so an arriving request is still
+   * delivered by its own event.
+   */
+  private refreshActivationWatch(): void {
+    if (this.stopped) return
+    const window = this.deps.state.mainWindow
+    const hasWindow = window !== null && !window.isDestroyed() && window.isVisible()
+    if (this.backgroundEnabled && (!hasWindow || this.tray === null)) this.armActivationPoll()
+    else this.clearActivationPoll()
+  }
+
+  private armActivationPoll(): void {
+    if (this.activationTimer) return
     this.activationTimer = setInterval(() => this.drainActivationRequests(), ACTIVATION_POLL_MS)
     this.activationTimer.unref()
+    // Read once now rather than up to two seconds from now: a request that landed
+    // while the poll was off, or an icon that is still missing, is handled here.
     this.drainActivationRequests()
+  }
+
+  private clearActivationPoll(): void {
+    if (!this.activationTimer) return
+    clearInterval(this.activationTimer)
+    this.activationTimer = null
+  }
+
+  // ----------------------------------------------------------- residency ----
+
+  /**
+   * Decide whether a windowless process may exit, and arm the quit when it may.
+   *
+   * A parked process is a scheduler: it exists for the work it still has to do or
+   * to hold, and once that drains there is nothing left to preserve, so it goes
+   * instead of sitting in the menu bar. The decision is taken again on every state
+   * change (see `refreshAttention`) and on the drain tick below, so a drain is
+   * acted on when it happens rather than at the next launch.
+   *
+   * Free while a window is on screen: a visible window is the user being here, so
+   * the whole check is skipped instead of being run and discarded.
+   */
+  private evaluateResidency(): void {
+    if (this.stopped || !this.isWindowlessAndRegistered()) {
+      this.clearResidencyQuit()
+      return
+    }
+    if (this.deps.residencyReason() !== null) {
+      // A reason to stay is back, so a quit that was already armed is spent.
+      this.clearResidencyQuit()
+      return
+    }
+    if (this.residencyTimer !== null) return
+    this.residencyTimer = setTimeout(() => {
+      this.residencyTimer = null
+      this.quitWhenDrained()
+    }, RESIDENCY_DRAIN_GRACE_MS)
+    this.residencyTimer.unref?.()
+  }
+
+  /** Take the exit, unless a reason to stay arrived inside the grace window. */
+  private quitWhenDrained(): void {
+    if (this.stopped || !this.isWindowlessAndRegistered()) return
+    if (this.deps.residencyReason() !== null) return
+    Logger.info('Nothing left to preserve: quitting instead of parking', {
+      windowlessForMs: this.windowlessSince === null ? 0 : Date.now() - this.windowlessSince
+    })
+    this.deps.quitApp()
+  }
+
+  /**
+   * Whether this process is the background one: registered, and with no window of
+   * its own. `windowlessSince` is what keeps this false until a window has really
+   * closed, so the first window, which does not exist yet during startup, is never
+   * mistaken for a parked process.
+   */
+  private isWindowlessAndRegistered(): boolean {
+    if (!this.backgroundEnabled || this.windowlessSince === null) return false
+    const window = this.deps.state.mainWindow
+    return window === null || window.isDestroyed() || !window.isVisible()
+  }
+
+  private clearResidencyQuit(): void {
+    if (this.residencyTimer === null) return
+    clearTimeout(this.residencyTimer)
+    this.residencyTimer = null
   }
 
   private drainActivationRequests(): void {
@@ -613,9 +788,18 @@ export class BackgroundLifecycleService {
     // Self-heal the menu bar icon. It is created on startup, on a config
     // change, on an ownership/membership change, and on a window open, but any
     // of those can be missed or coalesced, and a process that owns the schedule
-    // must never sit with an empty menu bar. This tick already runs every two
-    // seconds, and the check is a single field read whenever the icon exists.
-    if (!this.tray) this.syncTray()
+    // must never sit with an empty menu bar. A healed icon is also the end of
+    // one of the two reasons this drain runs at all, so the poll is re-decided
+    // before anything else (see `refreshActivationWatch`).
+    if (!this.tray) {
+      this.syncTray()
+      this.refreshActivationWatch()
+    }
+    // The drain tick is the one thing that runs for as long as a windowless
+    // process is parked, so it is also where the residency decision is re-taken
+    // between state changes: the last reason to stay can drain without an event
+    // that says so (a retry expiring, a run settling its final write).
+    this.evaluateResidency()
     let files: string[]
     try {
       files = readdirSync(this.activationDir).filter((name) => name.endsWith('.json'))

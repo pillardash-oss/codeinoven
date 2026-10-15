@@ -53,12 +53,10 @@ export interface TaskManagerProcess extends AgentRunningProcess {
   projectId: string | null
   threadId: string | null
   ports: number[]
-  /** Best-effort CPU use reported by the operating system for this process or tree. */
+  /** Best-effort CPU use the operating system reports for this one process. */
   cpuPercent: number | null
-  /** Resident/working-set memory for this process or tree. */
+  /** Resident/working-set memory for this one process. */
   memoryBytes: number | null
-  /** Harness roots include their descendants; descendant rows describe one process. */
-  resourceScope: 'process' | 'tree'
   /** Display name of the owning project, resolved at IPC time. */
   projectName?: string | null
   /** Display title of the owning thread, resolved at IPC time. */
@@ -102,6 +100,14 @@ export interface TaskManagerService {
   startedAt: number
   /** True when the service can be ended from the task manager. */
   stoppable: boolean
+  /**
+   * Best-effort CPU use the OS reports for the process backing this service.
+   * `null` for a service with no process of its own (an in-process loopback
+   * server) and for a pid the process snapshot does not know.
+   */
+  cpuPercent: number | null
+  /** Resident/working-set memory of the process backing this service. */
+  memoryBytes: number | null
   /** Display name of the owning project, resolved at IPC time. */
   projectName?: string | null
   /** Display title of the owning thread, resolved at IPC time. */

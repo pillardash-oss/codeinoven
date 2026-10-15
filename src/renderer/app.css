@@ -62,11 +62,9 @@
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
   --color-thread-working-paused: var(--color-warning);
-  /* Temporary (side) chat indicator — the context-rail tab icon, the parent
-     thread's side-chat badge and every temporary-chat notification share this
-     one colour, so a side chat reads as a side chat by one accent everywhere
-     it appears, whichever entity it belongs to. */
-  --color-temporary-chat: var(--color-info);
+  /* No hue identifies a temporary (side) chat or a sub-agent: their mark is
+     their glyph, so neither ever reads as a second class of thing, and blue on
+     these surfaces keeps meaning exactly one thing   work in progress. */
   /* Quiet but unmistakable purple for reviewable engineering artifacts. */
   --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);
@@ -293,7 +291,6 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-border-strong);
-  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -416,7 +413,6 @@ body {
   vertical-align: -0.125em;
   display: inline-block;
   object-fit: contain;
-  border-radius: 2px;
   max-width: 1em;
 }
 
@@ -431,7 +427,6 @@ body {
 .markdown-body :not(pre) > code {
   background: var(--color-elevated);
   border: 1px solid var(--color-border);
-  border-radius: 4px;
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -498,13 +493,19 @@ body {
   width: 100%;
   min-width: max-content;
   border-collapse: collapse;
+  border: 1px solid var(--color-border);
   font-size: 0.9em;
 }
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid var(--color-border);
-  padding: 0.35em 0.6em;
+  /* Rules run across the table, never between cells. The app's own tables
+     (`ui/DataTable.svelte`) draw one border per row and none per column, so
+     a markdown table and a native one read as the same object instead of two
+     languages in one surface. */
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.375em 0.6em;
   text-align: left;
   /* Cells may wrap long tokens inside their own column (GitHub-style):
      the table's min-width: max-content guarantees each column its natural
@@ -514,9 +515,22 @@ body {
   word-break: normal;
 }
 
+/* The table's own bottom border is the last row's rule; a second one under it
+   would double the line. */
+.markdown-body tr:last-child > th,
+.markdown-body tr:last-child > td {
+  border-bottom: 0;
+}
+
 .markdown-body th {
+  /* The header band: an uppercase micro-label on the raised surface, ruled off
+     from the body by a stronger line than the row rules below it. */
   background: var(--color-elevated);
+  border-bottom-color: var(--color-border-strong);
+  color: var(--color-muted);
   font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
 }
 
 /* ─── Table controls (wrap, column resize) ──────────────────────────────── */
@@ -536,7 +550,6 @@ body {
   align-items: center;
   gap: 0.125rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
   background: var(--color-elevated);
   padding: 0.0625rem;
 }
@@ -544,7 +557,6 @@ body {
 .markdown-body .md-table-control {
   display: flex;
   align-items: center;
-  border-radius: 0.25rem;
   color: var(--color-dimmed);
   padding: 0.1875rem;
   transition:
@@ -602,9 +614,11 @@ body {
   user-select: none;
 }
 
-/* The drag target sits over the column's right padding, ending exactly on the
-   border, so it is the border the reader grabs   and so the cell's own
-   `overflow: hidden` (resize mode) can never clip it. */
+/* The drag target sits over the column's right padding, flush with the column
+   edge the reader drags   and so the cell's own `overflow: hidden` (resize
+   mode) can never clip it. The strip paints its own hover line, which is what
+   the reader aims at now that columns are separated by space rather than by a
+   rule. */
 .markdown-body .md-col-resizer {
   position: absolute;
   inset-block: 0;
@@ -673,7 +687,6 @@ body {
      around. */
   display: inline-block;
   max-width: 100%;
-  border-radius: 8px;
 }
 
 /*
@@ -713,7 +726,6 @@ body {
   gap: 0.375rem;
   overflow: hidden;
   border: 1px dashed var(--color-border);
-  border-radius: 8px;
   padding: 0.25rem 0.5rem;
   color: var(--color-text-dimmed);
   font-size: 0.75em;
@@ -731,7 +743,6 @@ body {
    requests). `<details>` collapsibles are the common case in PR templates. */
 .markdown-body details {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   padding: 0.5em 0.75em;
 }
 
@@ -939,8 +950,29 @@ html body [data-sonner-toaster] {
      dismissed the modal instead and left the toast stranded on screen.
 
      `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
-     panel; `lib/toast-layer.ts` owns the selector both sides share. */
+     panel; `lib/layer-above-modal.ts` owns the selector both sides share. */
   pointer-events: auto;
+}
+
+html body vite-error-overlay {
+  /* Vite's development error overlay is appended to `document.body`, so it
+     inherits the same `body { pointer-events: none }` a modal bits-ui Dialog
+     locks the page with. Left inherited, the card was painted yet invisible to
+     the mouse (hit-testing skipped straight to `<html>`), so neither the
+     click-outside nor the Esc route could dismiss it while a modal held the
+     lock, and it blocked the window until the compile error was fixed. Opting
+     the host back in restores Vite's own dismissal; `lib/layer-above-modal.ts`
+     owns the selector `ui/Modal.svelte` shares to ignore presses aimed at it. */
+  pointer-events: auto;
+  /* `pointer-events` alone was not enough: the app header and every panel
+     header are `-webkit-app-region: drag` strips, and a drag region is
+     computed from layout rather than paint order, so a `drag` rectangle under
+     this full-screen overlay still swallowed the press and dragged the window
+     instead of dismissing the card. A card scrolled into the top of the window
+     was then impossible to click away, which reads as "undismissable" again.
+     `no-drag` subtracts the rectangle, exactly as the header's own controls
+     rely on via `titlebar-no-drag`, so the whole card surface is clickable. */
+  -webkit-app-region: no-drag;
 }
 
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
@@ -1020,7 +1052,6 @@ html body [data-sonner-toaster] {
 .cm-jump-line {
   outline: 1.5px solid transparent;
   outline-offset: -1px;
-  border-radius: 3px;
   animation: reveal-flash-outline 0.7s ease-in-out 3;
 }
 

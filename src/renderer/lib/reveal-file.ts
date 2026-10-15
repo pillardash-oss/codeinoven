@@ -19,7 +19,7 @@ import { fileUrlToPath } from '$lib/mime'
  *
  * A chat, an assistant task, and a browser tab each own an app-storage
  * directory mounted as their file tree (`chats-cwd/<threadId>`,
- * `assistant-cwd/<routineId ?? threadId>`, `browser-cwd/<threadId>`), and a
+ * `assistant-cwd/<assistantId ?? threadId>`, `browser-cwd/<threadId>`), and a
  * path an agent cites from one of them is absolute. Only the conversation the
  * view is showing can own it - a tree mounts one directory at a time - so the
  * open thread decides which mount to strip.
@@ -31,7 +31,7 @@ function conversationWorkspaceTarget(
   if (!usesThreadWorkspaceMount(projectId)) return null
   const thread = workspaceState.selectedThread
   if (!thread || thread.projectId !== projectId) return null
-  const directory = conversationWorkspaceDirectory(projectId, thread.id, thread.routineId)
+  const directory = conversationWorkspaceDirectory(projectId, thread.id, thread.assistantId)
   if (!directory) return null
   const normalized = normalizeCitationPath(absolutePath)
   const marker = `/${directory}/`

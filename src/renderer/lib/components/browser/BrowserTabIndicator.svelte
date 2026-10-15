@@ -47,7 +47,7 @@
   {:else}
     <button
       type="button"
-      class="pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-overlay"
+      class="pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center text-accent transition-colors hover:bg-overlay"
       aria-pressed={runtime.muted}
       title={muteLabel}
       aria-label={muteLabel}
