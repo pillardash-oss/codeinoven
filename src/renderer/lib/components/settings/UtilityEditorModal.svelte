@@ -37,6 +37,7 @@
   import UtilityEditorModalCredentialFields from './UtilityEditorModalCredentialFields.svelte'
   import UtilityEditorModalFooter from './UtilityEditorModalFooter.svelte'
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
+  import UtilityEditorModalMcpAuth from './UtilityEditorModalMcpAuth.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
   import { utilityInstallFolderNameFor } from '$shared/utility-scope-paths'
@@ -216,6 +217,16 @@
   /** Secrets the utility being edited already declares, in registry order. */
   let editedCredentials = $derived(
     (draft.id ? utilities.find((utility) => utility.id === draft.id)?.credentials : undefined) ?? []
+  )
+  /**
+   * The saved definition behind the draft, which carries the MCP OAuth block.
+   * The auth section writes through `utilities:update` and hands the result
+   * back, so this stays the single copy the modal and the list agree on.
+   */
+  let savedUtility = $derived(
+    draft.id
+      ? (utilities.find((utility) => utility.id === draft.id) ?? editingRegistry ?? null)
+      : null
   )
   let credentialTarget = $derived(
     editedCredentials.find((credential) => credential.id === credentialTargetId) ?? null
@@ -675,6 +686,12 @@
     if (credential) credentialDeleteTarget = { utilityId, credential }
   }
 
+  /** Keep the editor's own list in step after the auth section rewrites a server. */
+  function handleMcpAuthChanged(updated: UtilityDefinition): void {
+    utilities = utilities.map((utility) => (utility.id === updated.id ? updated : utility))
+    onChanged?.()
+  }
+
   async function removeCredential(): Promise<void> {
     const target = credentialDeleteTarget
     if (!target) return
@@ -941,6 +958,10 @@
         {/if}
 
         <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
+
+        {#if !isNative && draft.kind === 'mcp' && draft.transport !== 'stdio'}
+          <UtilityEditorModalMcpAuth utility={savedUtility} onChanged={handleMcpAuthChanged} />
+        {/if}
 
         {#if draft.kind === 'mcp' && !computerUseConnection}
           <McpConnectionTester

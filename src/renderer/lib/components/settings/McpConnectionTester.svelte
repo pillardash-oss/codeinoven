@@ -95,6 +95,11 @@
           {reason}
         </span>
       </p>
+      {#if result.oauthRequired}
+        <p class="text-[0.6875rem] text-muted">
+          This server requires OAuth authorization. Use MCP authorization above.
+        </p>
+      {/if}
     {/if}
 
     {#if result.missingCredentials.length}
