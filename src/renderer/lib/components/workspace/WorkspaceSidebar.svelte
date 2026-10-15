@@ -260,38 +260,44 @@
       : []
   )
 
-  type ThreadListEntry =
-    | { key: string; kind: 'header'; group: (typeof threadGroups)[number] }
-    | { key: string; kind: 'thread'; thread: Thread }
+  /**
+   * The Threads list as sections: one heading per status group, with its rows
+   * beneath it, plus the ungrouped list as a single headingless section.
+   *
+   * The nesting is what makes a heading stick. `position: sticky` travels only
+   * inside its containing block, which is its parent, so a heading must be the
+   * first child of the very element its rows occupy. A flat list of entries (a
+   * heading entry followed by row entries, what this used to be) gives a heading
+   * a containing block exactly its own height, which is no range at all: the
+   * heading scrolls away the instant the row below it moves. Grouping each
+   * heading with its own rows is therefore not a layout preference, it is the
+   * only shape in which the heading can stay put while its rows pass under it
+   * and be pushed out by the next group as that group takes the top.
+   */
+  type ThreadSection = {
+    key: string
+    /** The status group this section heads, or null for the ungrouped list. */
+    group: (typeof threadGroups)[number] | null
+    threads: Thread[]
+  }
 
-  // One keyed list owns the rows in both layouts. Switching inbox mode only
-  // moves existing instances and inserts the small group headers.
-  const threadListEntries = $derived.by((): ThreadListEntry[] => {
+  const threadSections = $derived.by((): ThreadSection[] => {
     if (!threadGroupingState.enabled) {
       const threads = searchingThreads
         ? sidebar.threadsSearchResults.map((result) => result.thread)
         : settledTimelineThreads
-      return threads.map((thread) => ({
-        key: `thread:${thread.projectId}:${thread.id}`,
-        kind: 'thread',
-        thread
+      // No section at all when there is nothing to show, so the list's own empty
+      // state still fires for an ungrouped view with no threads.
+      return threads.length > 0 ? [{ key: 'flat', group: null, threads }] : []
+    }
+    return threadGroups
+      .filter((group) => threadGroupingState.isVisible(group.label))
+      .map((group) => ({
+        key: `group:${group.label}`,
+        group,
+        // A folded group keeps its heading and drops its rows.
+        threads: threadGroupingState.isFolded(group.label) ? [] : group.threads
       }))
-    }
-    const entries: ThreadListEntry[] = []
-    for (const group of threadGroups) {
-      if (!threadGroupingState.isVisible(group.label)) continue
-      entries.push({ key: `group:${group.label}`, kind: 'header', group })
-      if (!threadGroupingState.isFolded(group.label)) {
-        for (const thread of group.threads) {
-          entries.push({
-            key: `thread:${thread.projectId}:${thread.id}`,
-            kind: 'thread',
-            thread
-          })
-        }
-      }
-    }
-    return entries
   })
 
   // Animate only rows that were or will be on screen. Offscreen rows move
@@ -800,7 +806,8 @@
             label="Pinned Threads"
             threads={pinnedTimelineThreads}
             detailed
-            trailingBreak={!threadGroupingState.enabled}
+            sticky
+            trailingClass={threadGroupingState.enabled ? '' : 'mb-3 pb-3'}
             activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}
@@ -812,62 +819,79 @@
               onTimelinePinnedMove(draggedId, targetId, pos)}
           />
         {/if}
+        <!-- One section per status group: the heading and its own rows, so the
+             heading has a containing block to stick inside and is pushed out by
+             the next group as that group takes the top. The section must stay a
+             real block: `display: contents` would drop its box, leaving the
+             heading's containing block as the whole list, so it would out-stick
+             its own group. The inner keyed list keeps the row FLIP for reorders
+             inside a group. -->
         <div class="space-y-px" role="list">
-          {#each threadListEntries as entry (entry.key)}
-            <div animate:moveThreadEntry>
-              {#if entry.kind === 'header'}
-                <div in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}>
-                  <PinnedSection
-                    sectionKey="threads"
-                    label={entry.group.label}
-                    threads={entry.group.threads}
-                    headerOnly
-                    icon={THREAD_GROUP_ICONS[entry.group.label]}
-                    accent={THREAD_GROUP_COLORS[entry.group.label]}
-                    folded={threadGroupingState.isFolded(entry.group.label)}
-                    onToggleFold={() => threadGroupingState.toggleFold(entry.group.label)}
-                    activeThreadId={activeThreadId ?? null}
-                    onOpen={onOpenThread}
-                    {onRename}
-                    {onTogglePin}
-                    {onDelete}
-                    {onFork}
-                  />
+          {#each threadSections as section (section.key)}
+            <section>
+              {#if section.group}
+                {@const group = section.group}
+                <div>
+                  <div in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}>
+                    <PinnedSection
+                      sectionKey="threads"
+                      label={group.label}
+                      threads={group.threads}
+                      headerOnly
+                      sticky
+                      icon={THREAD_GROUP_ICONS[group.label]}
+                      accent={THREAD_GROUP_COLORS[group.label]}
+                      folded={threadGroupingState.isFolded(group.label)}
+                      onToggleFold={() => threadGroupingState.toggleFold(group.label)}
+                      activeThreadId={activeThreadId ?? null}
+                      onOpen={onOpenThread}
+                      {onRename}
+                      {onTogglePin}
+                      {onDelete}
+                      {onFork}
+                    />
+                  </div>
                 </div>
-              {:else}
-                {@const result = searchingThreads
-                  ? searchResultsById.get(entry.thread.id)
-                  : undefined}
-                {#if result}
-                  <ThreadSearchResultRow
-                    {result}
-                    selected={activeThreadId === entry.thread.id}
-                    onOpen={onOpenThread}
-                  />
-                {:else}
-                  <ThreadRow
-                    thread={entry.thread}
-                    detailed
-                    projectIconUrl={getThreadIcon(entry.thread)}
-                    selected={activeThreadId === entry.thread.id}
-                    onOpen={onOpenThread}
-                    {onRename}
-                    {onTogglePin}
-                    {onDelete}
-                    {onFork}
-                    onMoveThread={(draggedId, targetId, pos) => {
-                      // The Threads view spans projects, so the anchor belongs to
-                      // the dragged row's project, not the row it was dropped on.
-                      const dragged = settledTimelineThreads.find((t) => t.id === draggedId)
-                      const ordered = timelineDropOrder(draggedId, targetId, pos)
-                      if (dragged && ordered) {
-                        void onThreadDrop(dragged.projectId, ordered, draggedId)
-                      }
-                    }}
-                  />
-                {/if}
               {/if}
-            </div>
+              <div class="space-y-px" role="list">
+                {#each section.threads as thread (thread.id)}
+                  {@const result = searchingThreads
+                    ? searchResultsById.get(thread.id)
+                    : undefined}
+                  <div animate:moveThreadEntry>
+                    {#if result}
+                      <ThreadSearchResultRow
+                        {result}
+                        selected={activeThreadId === thread.id}
+                        onOpen={onOpenThread}
+                      />
+                    {:else}
+                      <ThreadRow
+                        {thread}
+                        detailed
+                        projectIconUrl={getThreadIcon(thread)}
+                        selected={activeThreadId === thread.id}
+                        onOpen={onOpenThread}
+                        {onRename}
+                        {onTogglePin}
+                        {onDelete}
+                        {onFork}
+                        onMoveThread={(draggedId, targetId, pos) => {
+                          // The Threads view spans projects, so the anchor belongs
+                          // to the dragged row's project, not the row it was
+                          // dropped on.
+                          const dragged = settledTimelineThreads.find((t) => t.id === draggedId)
+                          const ordered = timelineDropOrder(draggedId, targetId, pos)
+                          if (dragged && ordered) {
+                            void onThreadDrop(dragged.projectId, ordered, draggedId)
+                          }
+                        }}
+                      />
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </section>
           {:else}
             {#if searchingThreads || pinnedTimelineThreads.length === 0}
               <p class="px-2 py-6 text-center text-xs text-dimmed">
@@ -919,7 +943,7 @@
           <div class="mb-1 pb-2">
             <button
               type="button"
-              class="flex w-full items-center gap-1.5 px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
+              class="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-surface px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
               aria-expanded={!pinnedFold.isFolded('projects-projects')}
               aria-label="{pinnedFold.isFolded('projects-projects')
                 ? 'Expand'
@@ -963,6 +987,7 @@
                         {project}
                         iconUrl={projectIcons.get(project.id) ?? null}
                         {expanded}
+                        sticky
                         {stateCounts}
                         showLocation={hasProjectNameCollision(project, visibleProjects)}
                         actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
@@ -1201,6 +1226,7 @@
                     {project}
                     iconUrl={projectIcons.get(project.id) ?? null}
                     {expanded}
+                    sticky
                     {stateCounts}
                     showLocation={hasProjectNameCollision(project, visibleProjects)}
                     actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
