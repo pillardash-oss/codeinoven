@@ -56,7 +56,7 @@ import {
 } from './pi-status-extension'
 import { PI_USAGE_EXTENSION_KEY } from './pi-usage-extension'
 import { fetchPiProviderUsage } from './pi-provider-usage'
-import { PiRpcClient } from './pi-rpc-client'
+import { PiRpcClient, type PiRpcImage } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
   resolveHarnessRuntime,
@@ -240,6 +240,21 @@ const PI_LIVE_USAGE_REFRESH_INTERVAL_MS = 3_000
  *  only recovery is a fresh process with a regenerated providers extension. */
 function isPiModelNotFoundError(error: unknown): boolean {
   return error instanceof Error && /^Model not found: /u.test(error.message)
+}
+
+/**
+ * Whether a rejected `prompt` is pi refusing the input rather than failing to
+ * take it: its streaming guard (`agent-session.js`), or the manual-compaction
+ * guard that runs before it. Only a refusal means "this session is alive and the
+ * message needs another channel"; every other failure of a `prompt` is a real
+ * delivery error and must keep its own outcome.
+ */
+function isPiInputRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return (
+    error.message.includes('Agent is already processing') ||
+    error.message.includes('Cannot submit a prompt while compaction is in progress')
+  )
 }
 
 /** Materialized provider-only extension overlay used for model discovery. */
@@ -737,7 +752,7 @@ export class PiDriver extends PersistentCliDriver {
     this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
     try {
-      await client.prompt(commandText)
+      await this.promptIntoSession(client, projectPath, session.id, commandText, undefined)
     } catch (error) {
       this.activeTurns.delete(session.id)
       const message = error instanceof Error ? error.message : 'Pi command failed to start'
@@ -922,8 +937,10 @@ export class PiDriver extends PersistentCliDriver {
     await this.publishCioAllowedTools(session.id, options.allowedTools)
     const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
+    // The user's input is the thing that must survive: a session that turns out
+    // to be mid-run takes the prompt into that run instead of refusing it.
     try {
-      await turnClient.prompt(prompt, images)
+      await this.promptIntoSession(turnClient, projectPath, session.id, prompt, images)
     } catch (error) {
       this.activeTurns.delete(session.id)
       const message = error instanceof Error ? error.message : 'Pi turn failed to start'
@@ -1036,7 +1053,7 @@ export class PiDriver extends PersistentCliDriver {
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
     try {
-      await activeClient.prompt(message, images)
+      await this.promptIntoSession(activeClient, projectPath, options.sessionId, message, images)
     } catch (error) {
       this.activeTurns.delete(options.sessionId)
       const failure = error instanceof Error ? error.message : 'Pi turn failed to start'
@@ -1418,15 +1435,83 @@ export class PiDriver extends PersistentCliDriver {
     return this.activeTurns.has(sessionId)
   }
 
-  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+  /**
+   * The run this pi session has in flight right now, read from pi's own state
+   * (`get_state` → `isStreaming` / `isCompacting`) plus the one gap pi does not
+   * report there: its own provider retry.
+   *
+   * Pi keeps running across the windows where the app's view of the turn has
+   * already settled   an auto-compaction, a provider retry, a run adopted after
+   * a restart   so this is the only authority on whether the session will accept
+   * a bare `prompt`. `null` means no live run is visible: the session is idle,
+   * or its process is gone, and each caller decides what that means.
+   *
+   * Pi's own provider retry is a gap in the stream, not in the turn: the run is
+   * alive and resumes when the retry lands, so the session is busy. A retry gap
+   * reported as idle let the engine take one failed request for the turn's
+   * outcome   it finalized the live turn and cleared the utility gateway
+   * handoff the resumed run was still calling `cio_util_*` through, which is how
+   * a design turn lost its gateway mid-flight. The retry flag is only read off a
+   * state probe that answered, so a dead or wedged process still reports idle
+   * instead of busy forever.
+   */
+  private async readLiveRun(
+    projectPath: string,
+    sessionId: string
+  ): Promise<'streaming' | 'compacting' | 'retrying' | null> {
     const client = this.rpcClients.get(sessionId)
-    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return false
+    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return null
     try {
       const state = record(await client.getState())
-      return state?.['isStreaming'] === true || state?.['isCompacting'] === true
+      if (state === null) return null
+      if (state['isStreaming'] === true) return 'streaming'
+      if (state['isCompacting'] === true) return 'compacting'
     } catch (error) {
-      Logger.dev('Pi session busy probe failed:', error)
-      return false
+      Logger.dev('Pi live-run probe failed:', error)
+      return null
+    }
+    return this.turnStates.get(sessionId)?.providerRetry === true ? 'retrying' : null
+  }
+
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    return (await this.readLiveRun(projectPath, sessionId)) !== null
+  }
+
+  /**
+   * Deliver a composed prompt to the session, continuing into the run that is
+   * already in flight when the app's snapshot of the turn went stale.
+   *
+   * Pi refuses a bare `prompt` while the agent streams ("Agent is already
+   * processing. Specify streamingBehavior ('steer' or 'followUp') to queue the
+   * message."). Taking that refusal for the turn's outcome ended a run that was
+   * still producing output and put pi's protocol prose in front of the user in
+   * place of their message, so the prompt asks pi to steer when a run is live
+   * (`streamingBehavior`, decided on pi's own state) and, if it is still refused
+   *   an older pi that does not know the field, or a manual compaction, the one
+   * state pi does not arbitrate   a re-probe picks the channel that run accepts:
+   * a steer while it streams, a follow-up while it compacts or retries.
+   *
+   * A refusal with no live run behind it stays the caller's error to report.
+   */
+  private async promptIntoSession(
+    client: PiRpcClient,
+    projectPath: string,
+    sessionId: string,
+    prompt: string,
+    images: PiRpcImage[] | undefined
+  ): Promise<void> {
+    try {
+      await client.prompt(prompt, images, 'steer')
+    } catch (error) {
+      if (!isPiInputRefusal(error)) throw error
+      const liveRun = await this.readLiveRun(projectPath, sessionId)
+      if (!liveRun) throw error
+      if (liveRun === 'streaming') {
+        await client.steer(prompt, images)
+      } else {
+        await client.followUp(prompt, images)
+      }
+      Logger.dev('Pi prompt joined the run already in flight:', { sessionId, liveRun })
     }
   }
 

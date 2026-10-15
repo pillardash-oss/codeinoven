@@ -157,13 +157,29 @@ export class PiRpcClient {
     }
   }
 
-  /** Send a prompt turn. The response resolves at preflight; events stream after. */
-  async prompt(message: string, images?: PiRpcImage[]): Promise<void> {
-    await this.send(
-      images && images.length > 0
-        ? { type: 'prompt', message, images }
-        : { type: 'prompt', message }
-    )
+  /**
+   * Send a prompt turn. The response resolves at preflight; events stream after.
+   *
+   * `streamingBehavior` answers the one race a caller cannot answer itself: pi
+   * refuses a bare `prompt` outright while a run is streaming. Asking it for
+   * `'steer'` lets pi queue the message into that run, or start the turn when
+   * nothing is streaming, in the same step it reads its own state   so there is
+   * no window in which a queued steer could land on a run that has already
+   * stopped. Pi builds that predate the field ignore it and answer with their
+   * streaming guard instead, which the caller has to recover from (see
+   * `PiDriver.promptIntoSession`).
+   */
+  async prompt(
+    message: string,
+    images?: PiRpcImage[],
+    streamingBehavior?: 'steer' | 'followUp'
+  ): Promise<void> {
+    await this.send({
+      type: 'prompt',
+      message,
+      ...(images && images.length > 0 ? { images } : {}),
+      ...(streamingBehavior ? { streamingBehavior } : {})
+    })
   }
 
   /** Steer the active turn. Requires a running turn. */
