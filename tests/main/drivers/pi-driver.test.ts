@@ -237,7 +237,7 @@ describe('PiDriver', () => {
     expect(client.newSession).toHaveBeenCalled()
     expect(client.setModel).toHaveBeenCalledWith('lmstudio', 'qwen/qwen3.5-9b')
     expect(client.setThinkingLevel).toHaveBeenCalledWith('medium')
-    expect(client.prompt).toHaveBeenCalledWith('go', [])
+    expect(client.prompt).toHaveBeenCalledWith('go', [], 'steer')
   })
 
   it('skips re-sending set_model/set_thinking_level when nothing changed since the last turn', async () => {
