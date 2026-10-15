@@ -39,6 +39,8 @@
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
+  import { videoPackagesStore } from '$lib/stores/video-packages.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -300,17 +302,33 @@
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
   /**
-   * The composition tab the board is showing, when it is open.
+   * The view this board plays its composition in, named by main when it opened it.
    *
-   * A composition is played by a browser tab, and the board mounts that tab's
-   * native page into its own stage rather than picturing it. The tab arrives on
-   * `browser:state`, so this is the live handle: while it is here the board is a
-   * player and an editor at once, and while it is not the stage falls back to the
-   * last export or the captured frame.
+   * The board owns its view rather than borrowing the thread's browser tab, so
+   * the view's id is the only way to be sure which page is being placed in the
+   * stage. Empty until the first open settles.
    */
-  let liveTab = $derived(
-    video ? videoTimelineState.compositionIn(projectId, threadId, selected.directory) : null
-  )
+  let boardTabId = $state('')
+  /**
+   * Whether the optional video pack is installed, which is what enables the
+   * live editor.
+   *
+   * The pack is the app's one on-demand video dependency, so it is the signal
+   * for whether the board offers direct editing at all: with it the board plays
+   * the composition, scrubs it and edits its controls, and without it the board
+   * stays a reader and the user edits by prompting the agent.
+   */
+  let liveEditing = $derived(video && videoPackagesStore.state?.installed === true)
+  /**
+   * The composition the board is playing, when its own view is on screen.
+   *
+   * The view arrives on `browser:state`, and it is addressed by the id main
+   * returned rather than by the thread: a browser tab on the same folder must not
+   * be mistaken for the board's own page. While it is here the board is a player
+   * and an editor at once, and while it is not the stage falls back to the last
+   * export or the captured frame.
+   */
+  let liveTab = $derived(boardTabId !== '' ? videoTimelineState.compositionByTab(boardTabId) : null)
   /**
    * Whether the folder in front has an entry page, which is what makes it playable.
    *
@@ -489,6 +507,9 @@
    *
    * A composition has no screens, so its single picture keeps coming from the one
    * thumbnail call, which is also what reports the tab the mute button drives.
+   * Once the board is playing the composition in its own view, that call is
+   * skipped: the live view is on screen, and a poster would reload it to a still
+   * under the playhead. The mute then drives the view the user is watching.
    */
   async function loadGallery(force = false): Promise<void> {
     if (selected.directory === '') {
@@ -497,7 +518,10 @@
     }
     galleryBusy = true
     try {
-      if (video) {
+      if (video && liveEditing && boardTabId !== '') {
+        gallery = []
+        tabId = boardTabId
+      } else if (video) {
         const shot = await invoke(
           'design:thumbnail',
           projectId,
@@ -586,12 +610,12 @@
   /**
    * Open the composition in the background, so the board can play it itself.
    *
-   * The same call the Live preview action makes, minus the reveal. A composition
-   * is played by a browser tab, and nothing opens one for the board, so without
-   * this the panel could only ever picture the work and the user had to leave for
-   * the browser to watch it. The tab is served, marked as a composition and
-   * reported on `browser:state`, which is what mounts the stage; the browser is
-   * left exactly where it was, because the user asked to watch the work here.
+   * The same call the Live preview action makes, minus the reveal. The board owns
+   * its own composition view rather than borrowing the thread's browser tab, so
+   * nothing the user has to find or open takes part: the view is served, marked as
+   * a composition and reported on `browser:state`, which is what mounts the stage.
+   * The browser is left exactly where it was, because the browser is not where this
+   * board plays.
    */
   async function ensureComposition(directory: string, force = false): Promise<void> {
     if (!video || directory === '') return
@@ -599,7 +623,16 @@
     compositionAsked = directory
     composing = directory
     try {
-      await invoke('design:open', projectId, threadId, directory, null, false, forcedKind)
+      const opened = await invoke(
+        'design:open',
+        projectId,
+        threadId,
+        directory,
+        null,
+        false,
+        forcedKind
+      )
+      boardTabId = opened.tabId
       compositionError = ''
     } catch (failure) {
       compositionError =
@@ -740,9 +773,9 @@
   function startExport(entry: string | null, format: DesignExportFormat): void {
     const directory = selected.directory
     const exportProjectId = projectId
-    void import('$lib/stores/design-export.svelte')
-      .then(({ designExportState }) =>
-        designExportState.start(exportProjectId, directory, entry, format)
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startDesign(exportProjectId, directory, entry, format)
       )
       .catch((failure: unknown) => {
         error = failure instanceof Error ? failure.message : 'Could not start export.'
@@ -785,6 +818,9 @@
     boardRevision += 1
     void loadGallery(true)
     void readVideoJobs()
+    // A view that was closed under the board has nothing to mount, so the one
+    // Refresh asks for it again rather than leaving the stage on a still.
+    if (liveEditing) void ensureComposition(selected.directory, true)
   }
 
   /** Read the composition's jobs, the list the board's export stands on. */
@@ -806,15 +842,23 @@
     }
   }
 
-  /** Start an export, so the action can live in the board's own menu. */
-  async function exportVideo(): Promise<void> {
+  /**
+   * Start an export from the board's own menu or the controls' primary action.
+   *
+   * The export reports in the shared dockable export panel, so the board only
+   * hands the folder over; its own job poll picks the running export up again for
+   * the readout above the controls.
+   */
+  function exportVideo(): void {
     if (selected.directory === '') return
-    try {
-      await invoke('video:export', projectId, threadId, selected.directory)
-      await readVideoJobs()
-    } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'The export could not be started.'
-    }
+    const directory = selected.directory
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startVideo(projectId, threadId, directory)
+      )
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : 'The export could not be started.'
+      })
   }
 
   /** The controls' unsaved state, so a refresh can ask before discarding it. */
@@ -879,14 +923,16 @@
   })
 
   onMount(() => {
-    // A rail-opened board lists the project's folders itself, so the project's
-    // work is read here as well as by the dock; the store coalesces the two.
     void projectWorkState.ensure(projectId)
+    // The board is one of the surfaces that watches the optional video pack, so
+    // installing it from Settings turns on live editing here without a reload.
+    void videoPackagesStore.load()
     void loadState().then(async () => {
       await loadGallery()
       await loadCanvas()
     })
     void loadWorkRoots()
+    return () => videoPackagesStore.dispose()
   })
 
   // Play the composition in the board rather than in the browser.
@@ -901,7 +947,16 @@
     const live = liveTab
     const canPlay = playable
     const busyFolder = composing
-    if (!video || !canPlay || live !== null || directory === '' || busyFolder === directory) return
+    const enhanced = liveEditing
+    if (
+      !video ||
+      !enhanced ||
+      !canPlay ||
+      live !== null ||
+      directory === '' ||
+      busyFolder === directory
+    )
+      return
     void ensureComposition(directory)
   })
 
@@ -932,6 +987,39 @@
 
 <div class="flex h-full min-h-0 flex-col">
   {#snippet videoStage()}
+    {#if video && selected.directory !== '' && !liveEditing}
+      <!--
+        Live editing is off because the optional video pack is not installed.
+
+        The board stays a reader: it shows the last export or the captured still
+        and the timeline below still places notes, so a user edits by prompting
+        the agent. The pack is what turns the board into a player and a direct
+        editor, so the one thing this asks for is the pack, in one click, rather
+        than explaining a setting the user would have to go and find.
+      -->
+      <div class="mb-2 shrink-0 rounded-xl border border-border bg-surface p-3">
+        <div class="flex items-center gap-1.5">
+          <Download size={13} class="text-accent" aria-hidden="true" />
+          <span class="text-xs font-semibold text-foreground">
+            Install the video pack to edit here
+          </span>
+        </div>
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+          {exportPath
+            ? 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent and watch the last export here.'
+            : 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent.'}
+        </p>
+        <button
+          type="button"
+          class="mt-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
+          title="Open Design and video settings to install the optional video pack"
+          aria-label="Open Design and video settings to install the optional video pack"
+          onclick={() => workspaceState.navigateToSettings?.('design')}
+        >
+          Open Settings
+        </button>
+      </div>
+    {/if}
     {#if liveTab}
       <!--
         The live composition, played in the board.
@@ -1593,15 +1681,17 @@
       </div>
       <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto px-2.5 py-2">
         {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
-          <VideoTimeline {projectId} {threadId} directory={selected.directory} />
-          <VideoStudioControls
-            {projectId}
-            {threadId}
-            directory={selected.directory}
-            jobs={videoJobs}
-            onCancelJob={cancelVideoJob}
-            onDirtyChange={setStudioDirty}
-          />
+          <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
+          {#if liveEditing}
+            <VideoStudioControls
+              {projectId}
+              directory={selected.directory}
+              jobs={videoJobs}
+              onCancelJob={cancelVideoJob}
+              onExport={exportVideo}
+              onDirtyChange={setStudioDirty}
+            />
+          {/if}
         {/key}
       </div>
     {:else}

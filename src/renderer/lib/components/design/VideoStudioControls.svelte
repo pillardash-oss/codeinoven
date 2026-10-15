@@ -23,7 +23,6 @@
    */
   interface Props {
     projectId: string
-    threadId: string
     directory: string
     /**
      * The composition's jobs, owned by the board.
@@ -36,6 +35,14 @@
     jobs: VideoJob[]
     onCancelJob: (id: string) => void
     /**
+     * Start an export.
+     *
+     * The board owns the export, so it reports in the shared dockable export
+     * panel its own menu opens rather than a second copy of that surface. These
+     * controls only say when the user asked for one.
+     */
+    onExport: () => void
+    /**
      * Whether these controls hold unsaved edits.
      *
      * The board's Refresh reloads them, so it must know when that would throw work
@@ -43,7 +50,7 @@
      */
     onDirtyChange?: (dirty: boolean) => void
   }
-  let { projectId, threadId, directory, jobs, onCancelJob, onDirtyChange }: Props = $props()
+  let { projectId, directory, jobs, onCancelJob, onExport, onDirtyChange }: Props = $props()
   let studio = $state<VideoStudioDocument | null>(null)
   let revision = ''
   let error = $state('')
@@ -89,7 +96,7 @@
     event.preventDefault()
     event.stopPropagation()
     if (dirty) void save()
-    else void exportVideo()
+    else onExport()
   }
 
   async function load(): Promise<void> {
@@ -142,18 +149,6 @@
       studio = result.document
       revision = result.revision
       dirty = false
-      error = ''
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause)
-    } finally {
-      busy = false
-    }
-  }
-  async function exportVideo(): Promise<void> {
-    if (busy || dirty) return
-    busy = true
-    try {
-      await invoke('video:export', projectId, threadId, directory)
       error = ''
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause)
