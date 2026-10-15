@@ -659,6 +659,16 @@ export class CuaBridgeService {
     const pid = before?.pid ?? null
     if (pid === null) return
     if (!(await this.daemonStillReports(binaryPath, pid, DAEMON_STOP_TIMEOUT_MS))) return
+    // A `stop` that did not take is information, not a failure to push through:
+    // the driver refuses while a client is attached, and signalling the daemon
+    // then ends that client's control session (the PiP reports it as "daemon
+    // control session closed"). Only a daemon with nothing attached at all is
+    // signalled, and anything else is reported for the next attempt.
+    const sessions = await this.readDaemonSessions(binaryPath)
+    if (sessions === null || sessions.total > 0) {
+      Logger.info('The Cua Driver daemon was left running, with a client still attached', { pid })
+      return
+    }
     for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
       try {
         process.kill(pid, signal)
@@ -829,8 +839,13 @@ export class CuaBridgeService {
     // standard, bounded or unreadable one may belong to someone else.
     if (!live || live.pid === null || live.mode?.mode !== 'unrestricted') return
     // Another CodeInOven instance may be mid-run against this daemon, and its
-    // sessions are the only evidence either process has.
-    if ((await this.daemonLiveSessionCount(binaryPath)) > 0) return
+    // sessions are the only evidence either process has. This read's own session
+    // is discounted, or the reap could never fire.
+    const sessions = await this.readDaemonSessions(binaryPath)
+    if (sessions === null || sessions.attributed > 0) return
+    // A run that claimed the daemon while this was reading owns it now, and that
+    // claim has to win over anything decided above.
+    if (daemonClaims.size > 0) return
     Logger.info('Stopping a Cua Driver daemon left over from an earlier run', {
       pid: live.pid,
       mode: live.mode.mode,
@@ -840,18 +855,20 @@ export class CuaBridgeService {
   }
 
   /**
-   * How many clients other than this read are attached to the daemon. An answer
-   * that cannot be read counts as one, so an unreadable daemon is never stopped.
+   * The daemon's own session list, or null when the answer could not be read.
+   * Every caller treats null as "someone is using it".
    */
-  private async daemonLiveSessionCount(binaryPath: string): Promise<number> {
+  private async readDaemonSessions(
+    binaryPath: string
+  ): Promise<{ total: number; attributed: number } | null> {
     try {
       const { stdout } = await execFileAsync(binaryPath, ['sessions', '--json'], {
         timeout: 8_000,
         maxBuffer: 256_000
       })
-      return parseDaemonSessionCount(stdout) ?? 1
+      return parseDaemonSessions(stdout)
     } catch {
-      return 1
+      return null
     }
   }
 
@@ -1110,15 +1127,18 @@ function isCompatibleVersion(value: string): boolean {
 }
 
 /**
- * Live client sessions the daemon reports, or null when the answer could not be
- * read at all.
+ * The daemon's session list, as two counts, or null when it could not be read.
  *
- * `implicit` marks the session a CLI invocation creates for itself, and every
- * read of this kind is one, so it is not another actor using the daemon. Anything
- * else still in `active` is a real client, and one of those is enough to leave
- * the daemon alone.
+ * `total` counts every session still in `active`. `attributed` excludes the session
+ * a CLI invocation creates for itself, which is what every read of this kind is,
+ * so it is not another actor using the daemon.
+ *
+ * Both are needed because the two callers are asking different questions. A reap
+ * deciding whether anything else wants the daemon discounts its own read, or it
+ * could never fire at all. A signal deciding whether the process can be killed has
+ * to count everything, including this read.
  */
-function parseDaemonSessionCount(output: string): number | null {
+function parseDaemonSessions(output: string): { total: number; attributed: number } | null {
   const start = output.indexOf('{')
   if (start < 0) return null
   let parsed: unknown
@@ -1130,14 +1150,16 @@ function parseDaemonSessionCount(output: string): number | null {
   if (typeof parsed !== 'object' || parsed === null) return null
   const sessions = (parsed as { sessions?: unknown }).sessions
   if (!Array.isArray(sessions)) return null
-  let live = 0
+  let total = 0
+  let attributed = 0
   for (const entry of sessions) {
     if (typeof entry !== 'object' || entry === null) continue
     const session = entry as { state?: unknown; implicit?: unknown }
-    if (session.state !== 'active' || session.implicit === true) continue
-    live += 1
+    if (session.state !== 'active') continue
+    total += 1
+    if (session.implicit !== true) attributed += 1
   }
-  return live
+  return { total, attributed }
 }
 
 function platformName(): CuaBridgeStatus['platform'] {
