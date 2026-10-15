@@ -687,7 +687,6 @@
       kind?: 'completed' | 'attention' | 'error'
       variant?: 'dot' | 'spinner' | 'icon'
       icon?: Component | null
-      animated?: boolean
       color?: string
     } | null => {
       switch (threadState) {
@@ -710,7 +709,7 @@
         case 'spec':
           return { stage: 'spec' }
         case 'approval':
-          return { kind: 'attention', animated: true }
+          return { kind: 'attention' }
         case 'temporary-unread':
           // The same circular unread dot as a primary thread: what is waiting, not
           // which kind of thing is waiting. The row's own dashed side-chat marker
@@ -725,21 +724,13 @@
     }
   )
 
-  /** A busy row's own pulse is the fallback animation for a state whose badge
-   *  cannot animate itself: a queued thread shows a static clock, so the row
-   *  pulses. When the badge already spins (the local working spinner) the pulse
-   *  adds nothing, and animating a whole row subtree is the expensive part.
-   *
-   *  A busy row never paints a working/warning background tint. The badge is the
-   *  authority on the thread's state (spinner, clock, or another instance's
-   *  icon), and selecting the thread is the only thing that changes a row's
-   *  background. A tinted working row reads as "this is the open thread" at a
-   *  glance when it is not, so the tint was removed on purpose. A retry-paused
-   *  or foreign run stays static for the same reason: its badge already carries
-   *  the state. */
-  let rowPulses = $derived(
-    isBusyIndicator && !isRetryPaused && !isForeignRun && badgeProps?.variant !== 'spinner'
-  )
+  /** A busy row never paints a working/warning background tint and never
+   *  pulses. The badge is the authority on the thread's state (spinner, clock,
+   *  or another instance's icon), so selecting the thread is the only thing
+   *  that changes a row's background. A tinted working row reads as "this is
+   *  the open thread" at a glance when it is not, and a running pulse is a
+   *  frame cost for as long as the state lasts, so both were removed on
+   *  purpose. */
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
@@ -887,7 +878,6 @@
           color={badgeProps.color}
           variant={badgeProps.variant ?? 'dot'}
           icon={badgeProps.icon}
-          animated={badgeProps.animated}
           size="md"
           title={badgeTitle}
         />
@@ -949,7 +939,6 @@
             color={badgeProps.color}
             variant={badgeProps.variant ?? 'dot'}
             icon={badgeProps.icon}
-            animated={badgeProps.animated}
             size="md"
             title={badgeTitle}
           />
@@ -1100,7 +1089,7 @@
   <button
     class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
-      : `${rowPulses ? 'animate-pulse ' : ''}hover:bg-elevated`}"
+      : 'hover:bg-elevated'}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}

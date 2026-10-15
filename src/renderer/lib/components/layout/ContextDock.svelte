@@ -135,7 +135,6 @@
                 <StatusBadge
                   tone={item.badge}
                   variant="spinner"
-                  animated
                   title={item.badgeTitle ?? item.label}
                 />
               {:else}

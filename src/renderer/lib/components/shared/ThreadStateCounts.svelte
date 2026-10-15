@@ -41,9 +41,9 @@
   })
 </script>
 
-{#snippet stateItem(color: string, count: number, animated: boolean)}
+{#snippet stateItem(color: string, count: number)}
   <span class="flex items-center gap-1">
-    <StatusBadge {color} {animated} decorative />
+    <StatusBadge {color} decorative />
     <span class="text-[0.5625rem] font-semibold tabular-nums" style="color: {color}">
       {formatCount(count)}
     </span>
@@ -58,19 +58,19 @@
     title={label}
   >
     {#if counts.unread > 0}
-      {@render stateItem('var(--color-thread-unread)', counts.unread, false)}
+      {@render stateItem('var(--color-thread-unread)', counts.unread)}
     {/if}
     {#if counts.attention > 0}
-      {@render stateItem('var(--color-warning)', counts.attention, true)}
+      {@render stateItem('var(--color-warning)', counts.attention)}
     {/if}
     {#if counts.retry > 0}
-      {@render stateItem('var(--color-thread-working-paused)', counts.retry, true)}
+      {@render stateItem('var(--color-thread-working-paused)', counts.retry)}
     {/if}
     {#if counts.error > 0}
-      {@render stateItem('var(--color-thread-error)', counts.error, false)}
+      {@render stateItem('var(--color-thread-error)', counts.error)}
     {/if}
     {#if counts.working > 0}
-      {@render stateItem('var(--color-thread-working)', counts.working, true)}
+      {@render stateItem('var(--color-thread-working)', counts.working)}
     {/if}
   </span>
 {/if}

@@ -46,7 +46,7 @@
 {#if count > 0}
   {@const Icon = icon}
   <span
-    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px rounded-full border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm animate-pulse motion-reduce:animate-none {colors?.length
+    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px rounded-full border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colors?.length
       ? ''
       : toneClass} {className}"
     role="status"

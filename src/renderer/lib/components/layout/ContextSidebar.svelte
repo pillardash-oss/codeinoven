@@ -594,9 +594,9 @@
         {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
-            <StatusBadge kind="attention" animated title="Needs attention" />
+            <StatusBadge kind="attention" title="Needs attention" />
           {:else if agentRuns.isBusy(conversation.projectId, conversation.conversationId)}
-            <StatusBadge stage="working" animated title="Working" />
+            <StatusBadge stage="working" title="Working" />
           {/if}
         {/if}
         {#if dirtyFileTabIds.has(tab.id)}
@@ -660,7 +660,7 @@
             {titleFor(activeTab)}
           </span>
           {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
-            <StatusBadge stage="working" animated title="Running" />
+            <StatusBadge stage="working" title="Running" />
           {/if}
           {#if siblingTabs.length > 1}
             <DropdownMenu.Root>

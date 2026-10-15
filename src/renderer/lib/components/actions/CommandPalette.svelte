@@ -345,7 +345,6 @@
                     kind={action.status.kind}
                     variant={action.status.variant ?? 'dot'}
                     icon={action.status.icon}
-                    animated={action.status.animated}
                     size="sm"
                     title={action.status.label}
                   />

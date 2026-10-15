@@ -66,7 +66,7 @@
       return { stage: 'working' as const, variant: 'spinner' as const }
     }
     if (thread.status === 'awaiting_approval') {
-      return { kind: 'attention' as const, animated: true }
+      return { kind: 'attention' as const }
     }
     if (thread.status === 'spec') {
       return { stage: 'spec' as const }
@@ -195,7 +195,6 @@
           kind={badgeProps.kind}
           variant={badgeProps.variant ?? 'dot'}
           icon={queuedBadge.icon}
-          animated={badgeProps.animated}
           size="sm"
           title={queuedBadge.label}
         />

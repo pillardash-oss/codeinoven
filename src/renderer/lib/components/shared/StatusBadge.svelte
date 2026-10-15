@@ -12,7 +12,6 @@
     /** Icon (Lucide component) rendered when `variant` is 'icon'. */
     icon?: Component | null
     size?: 'sm' | 'md' | 'lg'
-    animated?: boolean
     title?: string
     /**
      * Render as a purely visual mark: no role, no aria-label, no title, so a
@@ -31,7 +30,6 @@
     variant = 'dot',
     icon = null,
     size = 'sm',
-    animated = false,
     title,
     decorative = false,
     class: className = ''
@@ -102,7 +100,7 @@
   </span>
 {:else}
   <span
-    class="{sizeClass} shrink-0 rounded-full {animated ? 'animate-pulse' : ''} {className}"
+    class="{sizeClass} shrink-0 rounded-full {className}"
     style="background: {resolvedColor}"
     {role}
     aria-label={ariaLabel}

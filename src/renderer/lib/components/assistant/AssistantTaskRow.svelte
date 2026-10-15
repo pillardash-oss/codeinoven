@@ -194,7 +194,6 @@
         kind: undefined,
         variant: 'dot' as const,
         icon: null,
-        animated: false,
         title: 'A scheduled run was missed'
       }
     if (isForeignRun)
@@ -204,7 +203,6 @@
         kind: undefined,
         variant: 'icon' as const,
         icon: AppWindow,
-        animated: false,
         title: 'Running in another instance'
       }
     return {
@@ -213,7 +211,6 @@
       kind: statusBadge.kind,
       variant: statusBadge.variant ?? ('dot' as const),
       icon: null,
-      animated: statusBadge.animated,
       title: statusBadge.label
     }
   })
@@ -441,7 +438,6 @@
           kind={rowBadge.kind}
           variant={rowBadge.variant}
           icon={rowBadge.icon}
-          animated={rowBadge.animated}
           size="sm"
           title={rowBadge.title}
         />

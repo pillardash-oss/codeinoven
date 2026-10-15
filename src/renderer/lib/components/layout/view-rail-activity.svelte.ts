@@ -147,13 +147,16 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
 /**
  * Thread counts per family, feeding the activity badges on the view rail.
  *
- * Working threads pulse in the working tone; threads parked on
- * `working-paused` pulse in the retry tone; threads in `awaiting_approval` or
- * `failed` pulse in the attention tone (error-red when a failure is inside the
- * family). Orchestration children are folded into their coordinator (same rule
- * as the sidebar rows) so a delegated run counts once instead of inflating the
- * total with hidden worker threads. A live-working thread always counts as
- * working, never as attention/retry, so no thread is ever double-counted.
+ * Working threads wear the working tone; threads parked on `working-paused`
+ * wear the retry tone; threads in `awaiting_approval` or `failed` wear the
+ * attention tone (error-red when a failure is inside the family). A badge
+ * carries its count and never animates, because a running animation keeps the
+ * compositor producing frames for as long as it runs, which a parked state can
+ * hold open indefinitely. Orchestration children are folded into their
+ * coordinator (same rule as the sidebar rows) so a delegated run counts once
+ * instead of inflating the total with hidden worker threads. A live-working
+ * thread always counts as working, never as attention/retry, so no thread is
+ * ever double-counted.
  */
 export class ViewRailActivity {
   counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {

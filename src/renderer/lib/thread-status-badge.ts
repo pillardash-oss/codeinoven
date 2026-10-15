@@ -78,7 +78,7 @@ export function statusBadgeForThread(
     case 'working-paused':
       return { label: 'Waiting to retry', tone: 'working-paused', variant: 'spinner' }
     case 'awaiting_approval':
-      return { label: threadStatusPolicy(thread.status).label, kind: 'attention', animated: true }
+      return { label: threadStatusPolicy(thread.status).label, kind: 'attention' }
     case 'spec':
       return { label: 'Spec ready', stage: 'spec' }
     case 'failed':
