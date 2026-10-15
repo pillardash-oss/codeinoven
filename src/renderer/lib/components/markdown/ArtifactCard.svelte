@@ -16,6 +16,8 @@
   } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
+  import { PanZoom } from '$lib/pan-zoom.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import Modal from '../ui/Modal.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { buildArtifactSrcdoc, type ArtifactKind } from './artifact'
@@ -92,6 +94,35 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
+  /**
+   * The viewer body draws the inspector rather than the sandboxed preview frame.
+   *
+   * The frame is its own document, so the viewer's own gestures never reach it;
+   * the inspector is app DOM and takes them directly, which is why only the frame
+   * needs the drag surface.
+   */
+  const viewerShowsInspector = $derived(inspecting && annotationScope !== undefined)
+
+  /**
+   * The expanded viewer's zoom.
+   *
+   * One instance for the whole viewer, so the preview the user zoomed into is
+   * the surface they pick in. The threshold is what lets both work: a press that
+   * does not move is a pick on the artifact, and a press that moves is a pan.
+   */
+  const panZoom = new PanZoom({ dragThreshold: 4 })
+  let viewerViewport = $state<HTMLElement | undefined>(undefined)
+  const viewerViewportAttachment = (node: HTMLElement): (() => void) => {
+    viewerViewport = node
+    return () => {
+      if (viewerViewport === node) viewerViewport = undefined
+    }
+  }
+
+  // A viewer reopened on another artifact must not inherit the last zoom.
+  $effect(() => {
+    if (!viewerOpen) panZoom.reset()
+  })
 
   onDestroy(() => clearTimeout(copyResetTimer))
 
@@ -144,6 +175,7 @@
         {picks}
         editingId={inspectorEditingId}
         onEditClosed={releaseFocusRequest}
+        {panZoom}
         onExit={() => {
           releaseFocusRequest()
           manualInspecting = false
@@ -156,8 +188,39 @@
       sandbox=""
       {srcdoc}
       class={['block w-full border-0 bg-app', fullscreen ? 'h-full min-h-0' : 'h-80']}
+      style={fullscreen ? panZoom.transform : undefined}
+      {@attach fullscreen ? panZoom.bindTarget : () => {}}
     ></iframe>
   {/if}
+{/snippet}
+
+{#snippet viewerStage()}
+  <!-- The viewer's own zoom surface. The artifact inside it is the only element
+       that carries the transform, so the controls drawn on top of it keep their
+       size and their place. -->
+  <div
+    {@attach viewerViewportAttachment}
+    role="group"
+    aria-label="Zoomable {label.toLowerCase()}"
+    class={[
+      'relative h-full w-full touch-none overflow-hidden',
+      panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+    ]}
+    onwheel={panZoom.onWheel}
+    onpointerdown={panZoom.onPointerDown}
+    onpointermove={panZoom.onPointerMove}
+    onpointerup={panZoom.onPointerUp}
+    onpointercancel={panZoom.onPointerUp}
+    ondblclick={() => panZoom.reset()}
+  >
+    {@render artifactBody(true)}
+    {#if panZoom.zoom > 1 && !viewerShowsInspector}
+      <!-- The preview frame is a document of its own: a gesture inside it never
+           reaches this surface, so a pan over it is taken here instead. -->
+      <div class="absolute inset-0" role="presentation"></div>
+    {/if}
+  </div>
+  <PanZoomToolbar {panZoom} viewport={viewerViewport} class="absolute right-3 bottom-9 z-20" />
 {/snippet}
 
 <div class="overflow-hidden border bg-elevated" data-artifact-key={artifactKey}>
@@ -265,7 +328,7 @@
   contentClass="flex flex-col overflow-hidden p-0"
   headerActions={canInspect ? inspectAction : undefined}
 >
-  <div class="min-h-0 flex-1">
-    {@render artifactBody(true)}
+  <div class="relative min-h-0 flex-1">
+    {@render viewerStage()}
   </div>
 </Modal>

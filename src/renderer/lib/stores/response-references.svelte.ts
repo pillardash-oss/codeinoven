@@ -174,7 +174,13 @@ class ResponseReferencesState {
         if (oldestKey) delete next[oldestKey]
       }
       stored = uniqueReferencesById(references)
-        .slice(0, MAX_REFERENCES_PER_THREAD)
+        // The cap keeps the newest references, not the oldest. A reference is
+        // created by the gesture the user just made (a pick, a mark, a
+        // selection), so trimming from the front is what keeps the thing the
+        // user is looking at commentable. Trimming the tail silently swallowed
+        // every new pick once a thread reached the cap, which reads as a
+        // surface where clicking an element does nothing at all.
+        .slice(-MAX_REFERENCES_PER_THREAD)
         .map((reference, index) => ({
           ...reference,
           // A response selection is named by its position, and so is a picked

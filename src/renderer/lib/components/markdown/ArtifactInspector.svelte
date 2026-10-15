@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import type { Attachment } from 'svelte/attachments'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -15,6 +15,8 @@
     type ArtifactInspectorTarget
   } from '$lib/artifact-element-reference'
   import { referenceLabelNumber } from '$lib/reference-labels'
+  import { MARK_TAP_SLOP_PX } from '$lib/annotation-marks'
+  import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   /**
    * The element inspector for one inline SVG artifact.
@@ -24,9 +26,12 @@
    * rendered in the conversation, so it gets the same inspection. The picture is
    * re-rendered here as a shadow-root document   the artifact's own styles must
    * not escape into the app, and the app's layout must not leak back in   and a
-   * hover outline plus a click turns the element under the pointer into a
-   * compositor reference carrying the same kind of descriptor the browser
-   * inspector sends.
+   * hover box plus a pick turns the element under the pointer into a composer
+   * reference carrying the same kind of descriptor the browser inspector sends.
+   *
+   * Only the picture is isolated. The hover box, the numbered pins, the hint and
+   * the comment box are the app's own DOM placed in the viewer's own pixels, so
+   * they are never scaled with the artifact while the viewer is zoomed.
    */
   interface Props {
     code: string
@@ -41,10 +46,22 @@
     onEditClosed: () => void
     /** Escape left the inspector, so the card returns to the plain preview. */
     onExit: () => void
+    /** The expanded viewer's zoom, shared with its preview so the view the user
+     *  zoomed into is the view they pick in. */
+    panZoom: PanZoom
   }
 
-  let { code, artifactKey, projectId, threadId, picks, editingId, onEditClosed, onExit }: Props =
-    $props()
+  let {
+    code,
+    artifactKey,
+    projectId,
+    threadId,
+    picks,
+    editingId,
+    onEditClosed,
+    onExit,
+    panZoom
+  }: Props = $props()
 
   /**
    * The surface and its isolated document.
@@ -56,6 +73,8 @@
    */
   let host = $state<HTMLDivElement | null>(null)
   let shadowRoot = $state<ShadowRoot | null>(null)
+  /** The viewer's own box, which every control on the artifact is placed in. */
+  let frame = $state<HTMLDivElement | null>(null)
   /** The element under the pointer, outlined while it would be picked. */
   let hoverName = $state<string | null>(null)
   /** The pick whose editor this surface opened by itself. */
@@ -66,7 +85,15 @@
   /** Pin elements by reference id, so the editor anchors to its own pin. */
   const pinElements = new SvelteMap<string, HTMLElement>()
 
-  const activeEditingId = $derived(editingId ?? localEditingId)
+  /**
+   * The pick whose comment is open.
+   *
+   * A pick made or re-opened on this surface outranks the card's jump request:
+   * the user's latest action is the one they are looking at. A request the card
+   * still holds (a jump whose pick was since removed) must never shadow a pick
+   * the user just made   that reads as an inspector that ignores every click.
+   */
+  const activeEditingId = $derived(localEditingId ?? editingId)
   const editingPick = $derived(
     activeEditingId ? (picks.find((pick) => pick.id === activeEditingId) ?? null) : null
   )
@@ -89,7 +116,7 @@
     const root = shadowRoot
     const element = root ? resolvePick(root, pick) : null
     if (element) return anchorBelow(element.getBoundingClientRect())
-    const box = host?.getBoundingClientRect()
+    const box = frame?.getBoundingClientRect() ?? host?.getBoundingClientRect()
     return box ? { x: box.left + box.width / 2, y: box.top + 48 } : null
   })
 
@@ -104,13 +131,15 @@
    * path resolves to right now rather than from the rectangle it had when it was
    * picked: an SVG that re-renders (a resized pane, a new theme, a data update)
    * moves its elements, and a pin left at the old coordinates would point at
-   * nothing. A pick whose element no longer exists draws no pin, and its comment
-   * stays readable from the composer.
+   * nothing. The viewer's own untransformed box is subtracted from the element's
+   * (already zoomed) rectangle, so a pin lands on its element at any zoom while
+   * the pin itself keeps its size. A pick whose element no longer exists draws no
+   * pin, and its comment stays readable from the composer.
    */
   const pins = $derived.by(() => {
     void measureToken
     const root = shadowRoot
-    const box = host?.getBoundingClientRect()
+    const box = frame?.getBoundingClientRect()
     if (!root || !box) return []
     return picks.flatMap((pick, index) => {
       const element = resolvePick(root, pick)
@@ -129,11 +158,41 @@
     })
   })
 
+  /**
+   * The attachment that registers one pick's pin, kept per pick so a re-render
+   * re-uses it.
+   *
+   * Svelte re-runs an attachment whose expression is a new function, and the pin
+   * map is reactive because the open editor follows its own pin; a fresh closure
+   * per render would therefore write the map the editor reads on every render,
+   * which is an update loop rather than a layout. The cache is keyed by the pick
+   * and dropped with the pin it belongs to.
+   */
+  const pinAttachments = new SvelteMap<string, Attachment<HTMLButtonElement>>()
+
   function pinAttachment(id: string): Attachment<HTMLButtonElement> {
-    return (node) => {
+    const existing = pinAttachments.get(id)
+    if (existing) return existing
+    const attachment: Attachment<HTMLButtonElement> = (node) => {
       pinElements.set(id, node)
-      return () => pinElements.delete(id)
+      return () => {
+        pinElements.delete(id)
+        pinAttachments.delete(id)
+      }
     }
+    pinAttachments.set(id, attachment)
+    return attachment
+  }
+
+  /**
+   * The artifact's root `<svg>`, reached from the element the pointer is on.
+   *
+   * Read from the gesture rather than searched for separately: a root lookup that
+   * came back empty used to end the pick before it was stored, so an element the
+   * user could hover was an element they could not comment on.
+   */
+  function pickRoot(element: SVGElement): Element {
+    return element.closest('svg') ?? element
   }
 
   function resolvePick(root: ShadowRoot, pick: ResponseReferenceAnchor): SVGElement | null {
@@ -216,58 +275,78 @@
   }
 
   /** The element under the pointer, which a keyboard pick would take. */
-  let hoveredElement: SVGElement | null = null
+  let hoveredElement = $state<SVGElement | null>(null)
 
-  /** Move the shadow document's outline onto the element about to be picked. */
-  function outline(element: SVGElement | null): void {
-    const box = shadowRoot?.querySelector<HTMLElement>('.cio-outline')
-    const frame = host?.getBoundingClientRect()
-    if (!box || !frame) return
-    if (!element) {
-      box.hidden = true
-      return
-    }
+  /**
+   * The hover box, in the viewer's pixels.
+   *
+   * Derived rather than written once, so a zoom, a pan or a resize moves the box
+   * with the element under the pointer instead of leaving it behind at the
+   * coordinates the element had when the pointer last moved.
+   */
+  const hoverRect = $derived.by(() => {
+    void measureToken
+    const element = hoveredElement
+    const box = frame?.getBoundingClientRect()
+    if (!element || !box) return null
     const rect = element.getBoundingClientRect()
-    box.hidden = false
-    box.style.left = `${rect.left - frame.left}px`
-    box.style.top = `${rect.top - frame.top}px`
-    box.style.width = `${rect.width}px`
-    box.style.height = `${rect.height}px`
-  }
+    return {
+      x: rect.left - box.left,
+      y: rect.top - box.top,
+      width: rect.width,
+      height: rect.height
+    }
+  })
 
   function handlePointerMove(event: PointerEvent): void {
     const target = targetUnderPointer(event)
     hoveredElement = target
-    outline(target)
     hoverName = target ? shortName(target) : null
   }
 
   function handlePointerLeave(): void {
     hoveredElement = null
-    outline(null)
     hoverName = null
   }
 
   /**
-   * The element a pick at this event takes.
+   * The gesture that takes a pick.
    *
-   * A click that reaches the surface without landing on a painted element (an
-   * artifact's own margin, a gap between its shapes) still means the artifact, so
-   * the SVG root stands in rather than the gesture doing nothing at all.
+   * The pick is taken on release, exactly as the annotation pen takes a mark on
+   * a picture: a pointer gesture is what a surface the user is pointing at
+   * receives, and it cannot be swallowed by anything that suppresses the click
+   * the browser would otherwise fire. Movement past the tap slop makes the
+   * gesture a pan of a zoomed artifact, not a pick.
    */
-  function pickTarget(event: Event, root: SVGSVGElement | null): SVGElement | null {
-    return targetUnderPointer(event) ?? root
+  let pressOrigin: { x: number; y: number } | null = null
+
+  function handlePointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || !event.isPrimary) return
+    pressOrigin = { x: event.clientX, y: event.clientY }
   }
 
-  function handleClick(event: MouseEvent): void {
-    const root = shadowRoot ? shadowRoot.querySelector<SVGSVGElement>('svg') : null
-    const target = pickTarget(event, root)
-    if (!root || !target) return
-    // The click is an inspection, not a click on the artifact: nothing inside the
-    // SVG should react to it.
+  function handlePointerUp(event: PointerEvent): void {
+    const origin = pressOrigin
+    pressOrigin = null
+    if (!origin) return
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > MARK_TAP_SLOP_PX) return
+    const target = pickTarget(event)
+    if (!target) return
+    // The release is an inspection, not a click on the artifact: nothing inside
+    // the SVG should react to it.
     event.preventDefault()
-    event.stopPropagation()
-    addPick(describeTarget(target, root))
+    void addPick(describeTarget(target, pickRoot(target)))
+  }
+
+  /**
+   * The element a pick at this gesture takes.
+   *
+   * A release that never landed on a painted element (an artifact's own margin, a
+   * gap between its shapes) still means the artifact, so the root stands in
+   * rather than the gesture doing nothing at all.
+   */
+  function pickTarget(event: Event): SVGElement | null {
+    return targetUnderPointer(event) ?? shadowRoot?.querySelector<SVGSVGElement>('svg') ?? null
   }
 
   /**
@@ -280,14 +359,13 @@
    */
   function handleSurfaceKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
-    const root = shadowRoot ? shadowRoot.querySelector<SVGSVGElement>('svg') : null
-    const target = hoveredElement ?? root
-    if (!root || !target) return
+    const target = hoveredElement ?? shadowRoot?.querySelector<SVGSVGElement>('svg') ?? null
+    if (!target) return
     event.preventDefault()
-    addPick(describeTarget(target, root))
+    void addPick(describeTarget(target, pickRoot(target)))
   }
 
-  function addPick(target: ArtifactInspectorTarget): void {
+  async function addPick(target: ArtifactInspectorTarget): Promise<void> {
     const id = crypto.randomUUID()
     const current = responseReferencesState.forThread(projectId, threadId)
     responseReferencesState.setForThread(projectId, threadId, [
@@ -300,6 +378,9 @@
       return
     }
     localEditingId = id
+    // The pin the editor anchors to is drawn by the update the store just caused,
+    // so the measurement waits for that frame instead of landing before it.
+    await tick()
     measureToken += 1
   }
 
@@ -334,7 +415,9 @@
   }
 
   function remeasure(): void {
-    if (!activeEditingId && pins.length === 0) return
+    // Guarded on the props and the hover alone: reading the placed pins here would
+    // make the measurement effect read the state it writes.
+    if (!activeEditingId && picks.length === 0 && !hoveredElement) return
     measureToken += 1
   }
 
@@ -342,7 +425,6 @@
     if (event.key !== 'Escape') return
     // The comment field owns Escape while it is open.
     if (activeEditingId) return
-    outline(null)
     hoveredElement = null
     hoverName = null
     // Leaving inspection claims the key. The inspector can be drawn inside the
@@ -362,17 +444,23 @@
    */
   const shadowSheet = $derived(`:host { display: block; height: 100%; }
 .cio-stage { position: relative; box-sizing: border-box; display: flex; height: 100%; align-items: center; justify-content: center; padding: 1.25rem; background: var(--color-app); }
-.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }
-.cio-outline { position: absolute; pointer-events: none; border: 1.5px solid var(--color-accent); background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
-.cio-outline[hidden] { display: none; }`)
+.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }`)
 
   function artifactMarkup(): string {
-    return `<div class="cio-stage">${sanitizedSvgArtifact(code)}<div class="cio-outline" hidden></div></div>`
+    return `<div class="cio-stage">${sanitizedSvgArtifact(code)}</div>`
   }
 
   function mountInspector(node: HTMLDivElement): void {
     host = node
     shadowRoot = node.attachShadow({ mode: 'open' })
+  }
+
+  /** The untransformed box every control on the artifact is placed in. */
+  function frameAttachment(node: HTMLDivElement): () => void {
+    frame = node
+    return () => {
+      if (frame === node) frame = null
+    }
   }
 
   // The artifact's source and the app's theme can both change while the card is
@@ -386,32 +474,66 @@
     root.innerHTML = `<style>${theme}${sheet}</style>${artifactMarkup()}`
   })
 
+  // A zoom or a pan moves every element the pins, the hover box and the open
+  // editor are placed from, so the surface re-measures once the view it draws has
+  // actually moved. Measuring from inside a derived would read the rectangles the
+  // artifact still had before the transform landed.
+  $effect(() => {
+    void panZoom.zoom
+    void panZoom.panX
+    void panZoom.panY
+    // The transform lands after this effect's own flush, so the pins, the hover
+    // box and the open editor are re-measured on the next frame, once the view
+    // they are placed against has actually moved. Deferring it also keeps this
+    // effect dependent on the zoom alone: a measurement taken here would read the
+    // very state it then writes, and the surface would loop instead of settling.
+    const frame = requestAnimationFrame(() => remeasure())
+    return () => cancelAnimationFrame(frame)
+  })
+
   onDestroy(() => {
     pinElements.clear()
+    pinAttachments.clear()
     shadowRoot = null
   })
 </script>
 
 <svelte:window onkeydown={handleKeydown} onscrollcapture={remeasure} onresize={remeasure} />
 
-<div class="relative h-full w-full">
-  <!-- The picking surface is pointer-driven by nature, exactly like the element
-       picker the browser panel uses: an element is chosen by pointing at it. The
-       role says so, and the keyboard path is Enter or Space on the element the
-       pointer is outlining, so the interaction is not pointer-only. -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
-  <div
-    class="h-full w-full overflow-hidden"
-    data-artifact-inspector
-    role="application"
-    aria-label="Artifact element inspector: hover an element and click, or press Enter, to comment on it"
-    tabindex="0"
-    {@attach mountInspector}
-    onpointermove={handlePointerMove}
-    onpointerleave={handlePointerLeave}
-    onclick={handleClick}
-    onkeydown={handleSurfaceKeydown}
-  ></div>
+<div class="relative h-full w-full" {@attach frameAttachment}>
+  <!-- Only the artifact itself carries the viewer's zoom. The hover box, the pins
+       and the comment box are the app's own DOM placed in this box's pixels, so
+       the controls keep their size and stay on their elements at any zoom. -->
+  <div class="h-full w-full" style={panZoom.transform} {@attach panZoom.bindTarget}>
+    <!-- The picking surface is pointer-driven by nature, exactly like the element
+         picker the browser panel uses: an element is chosen by pointing at it. The
+         role says so, and the keyboard path is Enter or Space on the element the
+         pointer is on, so the interaction is not pointer-only. -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+    <div
+      class="h-full w-full overflow-hidden"
+      data-artifact-inspector
+      role="application"
+      aria-label="Artifact element inspector: hover an element and click, or press Enter, to comment on it"
+      tabindex="0"
+      {@attach mountInspector}
+      onpointerdown={handlePointerDown}
+      onpointerup={handlePointerUp}
+      onpointermove={handlePointerMove}
+      onpointerleave={handlePointerLeave}
+      onkeydown={handleSurfaceKeydown}
+    ></div>
+  </div>
+
+  {#if hoverRect}
+    <div
+      class="pointer-events-none absolute z-10 border border-accent bg-accent/15"
+      style:left={`${hoverRect.x}px`}
+      style:top={`${hoverRect.y}px`}
+      style:width={`${hoverRect.width}px`}
+      style:height={`${hoverRect.height}px`}
+    ></div>
+  {/if}
 
   <!-- The pins live in app DOM rather than inside the artifact: they are app
        controls (focusable, labelled, clickable), and the host never scrolls, so

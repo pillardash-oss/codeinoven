@@ -3,6 +3,18 @@ export interface PanZoomOptions {
   max?: number
   /** Multiplier applied per wheel tick / toolbar click. */
   step?: number
+  /**
+   * Pointer travel, in pixels, before a press becomes a pan.
+   *
+   * A surface that also acts on a click (an artifact element being picked)
+   * cannot pan from the first pixel: capturing the pointer retargets the
+   * gesture, so the click the surface was waiting for never arrives. With a
+   * threshold, a press that does not move stays a click and a press that moves
+   * captures the pointer and pans, and the two never fight. Zero (the default)
+   * pans from the first pixel, which is what a surface with no click action
+   * wants.
+   */
+  dragThreshold?: number
 }
 
 /**
@@ -23,13 +35,17 @@ export class PanZoom {
   readonly min: number
   readonly max: number
   private readonly step: number
+  private readonly dragThreshold: number
   private target?: HTMLElement
   private panStart = { x: 0, y: 0, panX: 0, panY: 0 }
+  /** Where a press started, while it is still young enough to be a click. */
+  private pressOrigin: { x: number; y: number } | null = null
 
   constructor(options: PanZoomOptions = {}) {
     this.min = options.min ?? 0.5
     this.max = options.max ?? 6
     this.step = options.step ?? 1.15
+    this.dragThreshold = Math.max(0, options.dragThreshold ?? 0)
   }
 
   /** Attach to the transformed element as `{@attach panZoom.bindTarget}`. */
@@ -87,18 +103,38 @@ export class PanZoom {
 
   onPointerDown = (event: PointerEvent): void => {
     if (this.zoom === 1) return
-    this.isPanning = true
-    this.panStart = { x: event.clientX, y: event.clientY, panX: this.panX, panY: this.panY }
-    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    if (this.dragThreshold > 0) {
+      this.pressOrigin = { x: event.clientX, y: event.clientY }
+      return
+    }
+    this.beginPan(event)
   }
 
   onPointerMove = (event: PointerEvent): void => {
-    if (!this.isPanning) return
-    this.panX = this.panStart.panX + (event.clientX - this.panStart.x)
-    this.panY = this.panStart.panY + (event.clientY - this.panStart.y)
+    if (this.isPanning) {
+      this.panX = this.panStart.panX + (event.clientX - this.panStart.x)
+      this.panY = this.panStart.panY + (event.clientY - this.panStart.y)
+      return
+    }
+    const origin = this.pressOrigin
+    if (!origin) return
+    // Below the threshold the press is still a click, and is left alone: the
+    // surface under it decides what a click on it means.
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < this.dragThreshold) {
+      return
+    }
+    this.pressOrigin = null
+    this.beginPan(event)
   }
 
   onPointerUp = (): void => {
     this.isPanning = false
+    this.pressOrigin = null
+  }
+
+  private beginPan(event: PointerEvent): void {
+    this.isPanning = true
+    this.panStart = { x: event.clientX, y: event.clientY, panX: this.panX, panY: this.panY }
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
   }
 }
