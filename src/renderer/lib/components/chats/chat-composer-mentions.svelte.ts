@@ -1,4 +1,4 @@
-import { SvelteSet } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -30,7 +30,7 @@ export interface ComposerMentionSearchOptions {
  * the state survives the host's prop updates.
  */
 export function createComposerMentionSearch(options: ComposerMentionSearchOptions) {
-  let entries = $state<ComposerMentionEntry[]>([])
+  let entries = $state.raw<ComposerMentionEntry[]>([])
   let query = $state('')
   let open = $state(false)
   let index = $state(0)
@@ -40,6 +40,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
   async function update(nextValue: string): Promise<void> {
     const nextQuery = composerMentionQuery(nextValue)
     if (nextQuery === null) {
+      requestId += 1
       open = false
       return
     }
@@ -61,6 +62,11 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
             .some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
         })
         .map((entry) => ({ type: 'task', entry }))
+      // Local tags must remain usable while the filesystem index warms or fails.
+      query = nextQuery
+      entries = [...utilityEntries, ...taskEntries].slice(0, 40)
+      index = 0
+      open = true
       const fileTagProjectId = options.getFileTagProjectId()
       const files = fileTagProjectId
         ? (
@@ -84,7 +90,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       index = 0
       open = true
     } catch {
-      if (currentRequestId === requestId) open = false
+      // Keep the local suggestions already published above on file lookup failure.
     }
   }
 
@@ -95,6 +101,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       open = false
       return
     }
+    requestId += 1
     searchTimer = setTimeout(() => void update(textBeforeCaret), 120)
   }
 
@@ -121,17 +128,34 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
     const projectId = options.getFileTagProjectId()
     const scopeBucketId = projectId ? workspaceState.activeScopeBucketIdFor(projectId) : undefined
 
+    const fileMatches = new SvelteMap<string, Promise<ProjectFileEntry | null>>()
+    const deadline = Date.now() + 1_500
+
     /** The single visible project entry a typed name resolves to, or null. */
     const matchTypedFile = async (typedName: string): Promise<ProjectFileEntry | null> => {
-      if (!projectId) return null
-      try {
-        const files = (
-          await invoke('projectFiles:search', projectId, typedName, 'all', scopeBucketId)
-        ).filter((file) => !isEntryHiddenByVisibility(file.path, file.ignored))
-        return matchProjectEntry(typedName, files)
-      } catch {
-        return null
-      }
+      if (!projectId || Date.now() >= deadline) return null
+      const cached = fileMatches.get(typedName)
+      if (cached) return cached
+      const lookup = (async (): Promise<ProjectFileEntry | null> => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          const files = (
+            await Promise.race([
+              invoke('projectFiles:search', projectId, typedName, 'all', scopeBucketId),
+              new Promise<ProjectFileEntry[]>((resolve) => {
+                timer = setTimeout(() => resolve([]), Math.max(0, deadline - Date.now()))
+              })
+            ])
+          ).filter((file) => !isEntryHiddenByVisibility(file.path, file.ignored))
+          return matchProjectEntry(typedName, files)
+        } catch {
+          return null
+        } finally {
+          clearTimeout(timer)
+        }
+      })()
+      fileMatches.set(typedName, lookup)
+      return lookup
     }
 
     for (const mention of mentions) {
@@ -175,6 +199,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
 
   function dispose(): void {
     clearTimeout(searchTimer)
+    requestId += 1
   }
 
   return {
@@ -188,6 +213,10 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       return open
     },
     set open(value: boolean) {
+      if (!value) {
+        clearTimeout(searchTimer)
+        requestId += 1
+      }
       open = value
     },
     get index() {
