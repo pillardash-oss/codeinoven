@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CodeInOven small-size mono mark: the tray glyph, idle state.
+  The shell draws tray art at 16 device pixels at 100% display scaling, where the
+  full mark (`icon-mono.svg`, the oven with its window, knobs, handle and steam)
+  is a smear: its walls land on fractions of a pixel and close the gaps that tell
+  the shapes apart. This variant is built the other way round, as a solid slab
+  with one knockout, so every edge is a whole pixel wide and nothing competes.
+  A tray glyph is drawn at roughly 16pt no matter how many device pixels back it,
+  which is why every tray entry uses this art rather than only the small ones.
+  Ink comes from `currentColor`: the generators set `color` to black for the
+  macOS template and to the taskbar ink colour for the Windows ICOs.
+  Regenerate the rasters with `bun scripts/build-app-icons.ts`.
+-->
+<svg width="100%" height="100%" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" style="color:#000000;fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+  <defs>
+    <!-- Knockouts are punched from the slab rather than painted, so the glyph
+         stays transparent and the tray surface shows through. -->
+    <mask id="small-mark-cut">
+      <rect width="1024" height="1024" fill="black"/>
+      <rect x="132" y="172" width="760" height="720" rx="112" fill="white"/>
+      <!-- Bracket pair, sized for a 16px draw: 1.9px strokes and a 1.5px gap at
+          16px once the tray framing has fitted the mark to the slot. -->
+      <g stroke="black" stroke-width="104" stroke-linejoin="miter" stroke-linecap="butt" fill="none">
+        <path d="M420 406 L286 532 L420 658"/>
+        <path d="M604 406 L738 532 L604 658"/>
+      </g>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" fill="currentColor" mask="url(#small-mark-cut)"/>
+</svg>
