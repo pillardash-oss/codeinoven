@@ -4940,7 +4940,7 @@
       {projectHasMoreInDb}
       onLoadProjectThreadsPage={loadProjectThreadsPage}
       onLoadHistoryPage={loadHistoryPage}
-      onSetProjects={(next) => (projects = next)}
+      onSetProjects={(next: Project[]) => (projects = next)}
       onOpenThread={openThread}
       onRename={handleRename}
       onTogglePin={togglePin}

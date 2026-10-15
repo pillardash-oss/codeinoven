@@ -1,6 +1,6 @@
 <script lang="ts">
   import { prefersReducedMotion } from 'svelte/motion'
-  import { fade } from 'svelte/transition'
+  import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
   import {
@@ -21,6 +21,7 @@
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import type { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -939,8 +940,8 @@
               >
               <span class="text-[0.625rem] text-dimmed/70">{pinnedProjects.length}</span>
             </button>
-            <div class="space-y-px" role="list">
-              {#if !pinnedFold.isFolded('projects-projects')}
+            {#if !pinnedFold.isFolded('projects-projects')}
+              <div transition:slide={foldSlide()} class="space-y-px" role="list">
                 {#each pinnedProjects as project (project.id)}
                   {@const folderThreads = threadOrderSettle.view(
                     projectOrderKey(project.id),
@@ -1028,7 +1029,7 @@
                           filteredThreads,
                           visibleFolderThreads
                         )}
-                        <div class="ml-2">
+                        <div transition:slide={foldSlide()} class="ml-2">
                           {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                             <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                           {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
@@ -1166,8 +1167,8 @@
                     </DropdownMenu.Portal>
                   </DropdownMenu.Root>
                 {/each}
-              {/if}
-            </div>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -1268,7 +1269,7 @@
                       filteredThreads,
                       visibleFolderThreads
                     )}
-                    <div class="ml-2">
+                    <div transition:slide={foldSlide()} class="ml-2">
                       {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                         <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                       {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
