@@ -48,15 +48,27 @@
     accent?: string
     /** Render only the reusable header when rows belong to a shared keyed list. */
     headerOnly?: boolean
-    /** Whether the block carries the break below itself.
+    /**
+     * Keep the header at the top of the sidebar's scroller while the block's own
+     * rows pass underneath, so the block can be folded without scrolling back to
+     * its top.
      *
-     *  The pinned block is the break's owner in every host that has no header
-     *  after it, which is all of them but the threads view. There it is off
-     *  while status groups are shown: each group header opens with its own
-     *  `pt-5`, and the block's trailing space would stack on top of it and leave
-     *  the pinned rows further from the first group than two groups are from each
-     *  other. */
-    trailingBreak?: boolean
+     *  Only a block that owns its rows passes this. Its wrapper spans header and
+     *  rows, so the button sticks for exactly as long as the block is on screen
+     *  and the next header takes the top as this one leaves. A keyed-group header
+     *  (`headerOnly`) has no wrapper of its own to stick inside, so the host that
+     *  owns its section carries the sticking on the wrapper it renders around this
+     *  header (see the grouped list in WorkspaceSidebar); passing this alongside
+     *  `headerOnly` has no effect.
+     */
+    sticky?: boolean
+    /** The class the block's own wrapper carries below its rows.
+     *
+     *  A host that has no header after this block lets the block own its break
+     *  (the default). A host whose next block is a status group passes the same
+     *  break a group carries, so the pinned rows sit exactly as far from the first
+     *  group as two groups sit from each other. */
+    trailingClass?: string
   }
 
   let {
@@ -79,32 +91,38 @@
     icon,
     accent,
     headerOnly = false,
-    trailingBreak = true
+    sticky = false,
+    trailingClass = 'mb-3 pb-3'
   }: Props = $props()
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
 
   /** The header of a keyed group list (the threads view's status groups) sits in
    *  the same two columns a row does: the fold control takes the mark column, so
-   *  the group's glyph and label land on the axis the row titles start at. The
-   *  break above a group is padding rather than a margin, because a margin here
-   *  collapses with the row's own bottom margin and the group boundary would end
-   *  up barely larger than the gap it sits in.
+   *  the group's glyph and label land on the axis the row titles start at.
    *
    *  A pinned section keeps the plain header it has always had: it is a section
    *  of rows, not a parent of them, and it is titled by nothing but its label.
    *
-   *  A pinned block that does not own the break below itself carries none: its
-   *  rows already hold the same bottom margin a grouped row does, and that margin
-   *  is trapped by whatever padding the wrapper adds (`padding` always blocks a
-   *  child margin from collapsing out), so a trailing `pb-3` plus its own `mb-3`
-   *  sat 24px proud of the 12 + 20 + 6px break a group header opens. Handing the
-   *  break to the block that follows makes the two measure the same. */
-  const wrapperClass = $derived(headerOnly ? 'pt-5' : trailingBreak ? 'mb-3 pb-3' : '')
+   *  A keyed-group header carries no box of its own: any wrapper between it and
+   *  the section it heads becomes its containing block, and a wrapper only as tall
+   *  as the header leaves the header no room to stick at all, so it would scroll
+   *  away exactly as before. `display: contents` hands the header straight to the
+   *  section, which spans the header and its rows and is therefore the only shape
+   *  in which the header can stay put and be pushed out by the next section. The
+   *  host owns the break: it trails the group's rows, so neighbouring headings meet
+   *  edge to edge and hand the top line over with nothing uncovered between them
+   *  (see the grouped list in WorkspaceSidebar), so this renders none of its own
+   *  when it is a plain header. A block that follows the groups emits the same
+   *  break through `trailingClass`, so the pinned rows sit as far from the first
+   *  group as two groups sit from each other. */
+  const wrapperClass = $derived(headerOnly ? 'contents' : trailingClass)
   const buttonClass = $derived(
-    headerOnly
-      ? 'flex w-full items-center gap-2 py-1.5 pr-2 pl-0 text-left transition-colors hover:bg-overlay'
-      : 'flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-overlay'
+    [
+      'flex w-full items-center text-left transition-colors hover:bg-overlay',
+      headerOnly ? 'gap-2 py-1.5 pr-2 pl-0' : 'gap-1.5 px-2 py-1.5',
+      !headerOnly && sticky ? 'sticky -top-2 z-10 bg-surface' : ''
+    ].join(' ')
   )
 </script>
 

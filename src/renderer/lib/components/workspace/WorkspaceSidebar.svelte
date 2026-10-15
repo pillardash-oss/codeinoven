@@ -807,7 +807,7 @@
             threads={pinnedTimelineThreads}
             detailed
             sticky
-            trailingClass={threadGroupingState.enabled ? '' : 'mb-3 pb-3'}
+            trailingClass={threadGroupingState.enabled ? 'pb-5' : 'mb-3 pb-3'}
             activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}
@@ -826,38 +826,60 @@
              heading's containing block as the whole list, so it would out-stick
              its own group. The inner keyed list keeps the row FLIP for reorders
              inside a group. -->
-        <div class="space-y-px" role="list">
+        <div>
           {#each threadSections as section (section.key)}
+            <!-- The section spans the heading and its rows, so `position: sticky`
+                 keeps the heading put while its own rows pass underneath and the
+                 next section pushes it out as that section reaches the top. Three
+                 things make that work, and the middle one was measured rather than
+                 reasoned: a probe scrolled the real structure one pixel at a time
+                 and counted the frames where no heading covered the top line.
+
+                   1. The sticky wrapper is the section's first box with nothing
+                      between it and the section. A box there would become the
+                      heading's containing block, and a header-height one leaves the
+                      heading no room to stick at all.
+                   2. The group break is trailing padding on the rows list, not on
+                      the section. Sections then meet edge to edge, so the next
+                      heading reaches the top at the exact moment the previous one
+                      is pushed out; a break on the section instead separates the
+                      two heading boxes and leaves the top line uncovered for every
+                      pixel of the break   a band of raw rows between one heading
+                      leaving and the next arriving (the probe measured 20 such
+                      frames).
+                   3. The heading pins to the scroller's own top edge, so its
+                      `-top-2` cancels the scroller's `pt-2`. Without that, a pinned
+                      heading sits 8px below the app header: the heading is held to
+                      its containing block's padding box, and the scroller's own
+                      top padding is inside it. -->
             <section>
               {#if section.group}
                 {@const group = section.group}
-                <div>
-                  <div in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}>
-                    <PinnedSection
-                      sectionKey="threads"
-                      label={group.label}
-                      threads={group.threads}
-                      headerOnly
-                      sticky
-                      icon={THREAD_GROUP_ICONS[group.label]}
-                      accent={THREAD_GROUP_COLORS[group.label]}
-                      folded={threadGroupingState.isFolded(group.label)}
-                      onToggleFold={() => threadGroupingState.toggleFold(group.label)}
-                      activeThreadId={activeThreadId ?? null}
-                      onOpen={onOpenThread}
-                      {onRename}
-                      {onTogglePin}
-                      {onDelete}
-                      {onFork}
-                    />
-                  </div>
+                <div
+                  class="sticky -top-2 z-10 bg-surface"
+                  in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}
+                >
+                  <PinnedSection
+                    sectionKey="threads"
+                    label={group.label}
+                    threads={group.threads}
+                    headerOnly
+                    icon={THREAD_GROUP_ICONS[group.label]}
+                    accent={THREAD_GROUP_COLORS[group.label]}
+                    folded={threadGroupingState.isFolded(group.label)}
+                    onToggleFold={() => threadGroupingState.toggleFold(group.label)}
+                    activeThreadId={activeThreadId ?? null}
+                    onOpen={onOpenThread}
+                    {onRename}
+                    {onTogglePin}
+                    {onDelete}
+                    {onFork}
+                  />
                 </div>
               {/if}
-              <div class="space-y-px" role="list">
+              <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
                 {#each section.threads as thread (thread.id)}
-                  {@const result = searchingThreads
-                    ? searchResultsById.get(thread.id)
-                    : undefined}
+                  {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
                   <div animate:moveThreadEntry>
                     {#if result}
                       <ThreadSearchResultRow
@@ -919,12 +941,16 @@
         {/if}
       </SidebarListPane>
       <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>
-        <!-- Pinned threads above everything -->
+        <!-- Pinned threads above everything. This block owns its rows, so it
+             sticks on its own wrapper: the header stays put while the pinned
+             rows pass under it and the pinned-projects block below pushes it
+             out, exactly as the threads view's own pinned block does. -->
         <PinnedSection
           sectionKey="projects-threads"
           label="Pinned Threads"
           threads={pinnedThreads}
           detailed
+          sticky
           activeThreadId={activeThreadId ?? null}
           getRowIcon={(t) => {
             const project = projects.find((p) => p.id === t.projectId)
@@ -943,7 +969,7 @@
           <div class="mb-1 pb-2">
             <button
               type="button"
-              class="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-surface px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
+              class="sticky -top-2 z-10 flex w-full items-center gap-1.5 bg-surface px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
               aria-expanded={!pinnedFold.isFolded('projects-projects')}
               aria-label="{pinnedFold.isFolded('projects-projects')
                 ? 'Expand'

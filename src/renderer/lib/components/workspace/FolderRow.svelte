@@ -33,6 +33,18 @@
     onContextMenu?: (e: MouseEvent, projectId: string) => void
     /** Show location metadata when this name collides with another visible project. */
     showLocation?: boolean
+    /**
+     * Keep the folder row at the top of the sidebar's scroller while its own
+     * threads pass underneath, so the project that owns the rows stays named
+     * while the reader is inside them.
+     *
+     *  The folder row and its thread list share one parent in the sidebar, so
+     *  the row's containing block is that pair: it sticks for exactly as long as
+     *  its own threads are on screen and is pushed out by the next project as
+     *  that project takes the top. A stuck row must be opaque, so the 70% tint an
+     *  expanded folder wears becomes its solid form while it is stuck.
+     */
+    sticky?: boolean
   }
 
   let {
@@ -45,12 +57,30 @@
     actionsPinned = false,
     onMoveProject,
     onContextMenu,
-    showLocation = false
+    showLocation = false,
+    sticky = false
   }: Props = $props()
 
   const resolvedIcon = $derived(getProjectIcon(project, iconUrl ?? undefined))
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
+
+  /**
+   * The row's own background.
+   *
+   *  An expanded folder wears a 70% tint and a collapsed one wears none, both of
+   *  which let the rows behind a stuck row show through. A stuck row must be
+   *  opaque, so it takes the solid form of whatever it was wearing.
+   */
+  const rootBackgroundClass = $derived(
+    expanded
+      ? sticky
+        ? 'bg-elevated hover:bg-overlay'
+        : 'bg-elevated/70 hover:bg-elevated'
+      : sticky
+        ? 'bg-surface hover:bg-elevated'
+        : 'hover:bg-elevated'
+  )
 
   function setDragImage(e: DragEvent, label: string): void {
     const ghost = document.createElement('div')
@@ -98,9 +128,9 @@
 </script>
 
 <div
-  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {expanded
-    ? 'bg-elevated/70 hover:bg-elevated'
-    : 'hover:bg-elevated'}"
+  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {rootBackgroundClass} {sticky
+    ? 'sticky -top-2 z-10'
+    : ''}"
   style={project.color
     ? `border-color: ${project.color}`
     : expanded

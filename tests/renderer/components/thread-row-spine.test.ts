@@ -70,10 +70,13 @@ class ResizeObserverStub {
 ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub
 
 const invokeMock = vi.hoisted(() => vi.fn(async () => undefined))
-vi.mock('$lib/ipc.svelte', () => ({
-  invoke: invokeMock,
-  subscribe: vi.fn(() => () => {})
-}))
+vi.mock('$lib/ipc.svelte', async (importOriginal) => {
+  // `subscribeGuarded` is kept real: it is the guard the stores and the app
+  // wiring subscribe through, and stubbing it would hide whether a subscription
+  // is actually made.
+  const actual = await importOriginal<typeof import('$lib/ipc.svelte')>()
+  return { ...actual, invoke: invokeMock, subscribe: vi.fn(() => () => {}) }
+})
 
 const speech = vi.hoisted(() => ({
   recording: new Set<string>(),
