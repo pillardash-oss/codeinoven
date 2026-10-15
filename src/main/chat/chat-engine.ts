@@ -10041,9 +10041,9 @@ export class ChatEngine {
     // memoized, so it ends the moment the how-to is saved.
     const assistantAuthoringTurn = this.isRoutineAuthoringThread(targetThread)
     // Once @cio-utility has been invoked in this thread (earlier or now), later
-    // turns keep the setup + diagnostics contract reusable without repeating
-    // the invocation. Other utilities were already freely invocable whenever
-    // the gateway runs.
+    // turns keep the setup contract reusable without repeating the invocation.
+    // Other utilities were already freely invocable whenever the gateway runs,
+    // and read-only app diagnostics never needed the invocation at all.
     // An assistant task whose routine is saved keeps management too: a run (or a
     // follow-up on the task) has to be able to supply a connection the routine
     // needs instead of dead-ending on "connect it yourself".

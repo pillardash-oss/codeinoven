@@ -199,7 +199,8 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
   },
   {
     name: 'cio-utility-setup',
-    description: 'Installs utilities and diagnoses app issues through the explicit CodeInOven API.',
+    description:
+      'Installs utilities and diagnoses app issues through the turn-scoped CodeInOven API.',
     mode: 'primary',
     prompt: [
       'Use the turn-scoped CodeInOven utility management and diagnostics API supplied in the system prompt.',

@@ -50,13 +50,18 @@ describe('cio-utility contract', () => {
     expect(CIO_UTILITY_SETUP_PROMPT).toContain('install_bundle')
   })
 
-  it('exposes diagnostics and manage with explicit-turn routing in the gateway catalog', () => {
+  it('exposes diagnostics and manage in the gateway catalog', () => {
     const diagnostics = GATEWAY_TOOLS.find((tool) => tool.name === UTILITY_DIAGNOSTICS_TOOL_NAME)
     expect(diagnostics).toBeDefined()
     expect(diagnostics?.route).toBe('/diagnostics')
     expect(diagnostics?.inputSchema).toMatchObject({ required: ['action'] })
+    // Read-only diagnostics are an app capability granted on every turn, so an
+    // issue can be looked up without the user re-sending it with a tag.
+    expect(diagnostics?.description).not.toContain('explicit @cio-utility turn')
+    // Installing is a state change, so it still announces the setup grant.
     const manage = GATEWAY_TOOLS.find((tool) => tool.name === UTILITY_MANAGE_TOOL_NAME)
     expect(manage?.route).toBe('/manage')
+    expect(manage?.description).toContain('@cio-utility')
   })
 
   it('puts installing, online research, and the secret path in scope for a routine run', () => {

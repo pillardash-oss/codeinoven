@@ -21,7 +21,7 @@ import {
   readLogFileTail
 } from '../system/log-reader'
 
-/** Bounded, redacted, read-only app diagnostics for an explicit @cio-utility turn. */
+/** Bounded, redacted, read-only app diagnostics, granted on every gateway turn. */
 
 const MAX_MESSAGE_TEXT_LENGTH = 4_000
 const MAX_LOG_ENTRY_LENGTH = 2_000
@@ -34,7 +34,7 @@ const MAX_QUERY_SQL_LENGTH = 4_000
 const MAX_QUERY_PARAMS = 32
 const MAX_SCHEMA_TABLES = 80
 
-/** Log files an agent may inspect during an explicit diagnostics turn. */
+/** Log files an agent may inspect through the diagnostics capability. */
 const READABLE_LOG_FILES = [MAIN_LOG_FILE, ERROR_LOG_FILE, PERMISSION_EVENTS_LOG_FILE]
 
 /** Schema PRAGMA statements an agent may run to learn the app schema. */

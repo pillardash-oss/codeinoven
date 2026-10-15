@@ -158,6 +158,18 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **Looking into an issue no longer needs a tag.** Read-only app diagnostics
+  (`cio_util_diagnose`: thread lookup by id or title, mirrored conversation
+  pages, log tails, the SQLite schema, and read-only SELECTs) was granted only on
+  a turn that carried the explicit `@cio-utility` tag, so an agent asked to look
+  into "this thread failed" or "what does the log say" could not reach any
+  evidence until the user re-sent the same message with the tag. It is now an app
+  capability granted on every turn that carries the utility gateway, and the Pi
+  extension advertises it, so an ordinary turn knows it can look a reported
+  problem up itself. The capability is otherwise unchanged: read-only, redacted,
+  bounded, and it never writes, deletes, or reconfigures anything. Installing a
+  utility is still a state change and still needs the explicit setup grant.
+
 - **The main instance is now an explicit, remembered choice.** Picking **Make this the main
   instance** in a secondary window used to be honored only while that exact process lived:
   once it restarted, ownership fell back to the longest-running live process, so a leftover

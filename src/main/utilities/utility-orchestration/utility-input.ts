@@ -79,7 +79,7 @@ export function recordValue(value: unknown): Record<string, unknown> {
   return value
 }
 
-/** Explicit @cio-utility diagnostics require the app database; fail fast otherwise. */
+/** App diagnostics need the app database; fail fast when a deployment has none. */
 export function requiredDatabase(
   database: import('../../database/database').Database | undefined
 ): import('../../database/database').Database {

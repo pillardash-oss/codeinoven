@@ -500,7 +500,7 @@ interface TurnState {
   cuaViews: Map<string, CuaSnapshotView>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
-  /** Lazily created read-only diagnostics provider for explicit @cio-utility turns. */
+  /** Lazily created read-only diagnostics provider, shared by every turn. */
   diagnostics: CioDiagnosticsService | null
   /** Lazily derived once because a turn may issue several refined searches. */
   projectSearchTerms: Promise<Set<string>> | null
@@ -1070,9 +1070,14 @@ export class UtilityOrchestrationService {
     // making a video learns it exists without carrying the edit pass.
     const hasVideoCapability = eligible.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
-      if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
-        return request.allowManagement === true
-      }
+      // Installing is a state change, so it stays behind the explicit setup grant.
+      if (name === UTILITY_MANAGE_TOOL_NAME) return request.allowManagement === true
+      // Reading the app's own evidence trail is not a state change, and it is an
+      // app capability rather than a utility operation: an agent asked to look
+      // into a reported problem must be able to read the thread and the log
+      // itself, instead of sending the user back to re-send the same message
+      // with @cio-utility.
+      if (name === UTILITY_DIAGNOSTICS_TOOL_NAME) return true
       // Asking for a secret is an app capability rather than a utility
       // operation, and it never needs a secret to be installed: it is offered on
       // every turn that carries the gateway at all, plus every explicit setup
@@ -1169,6 +1174,7 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
+      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, a routine, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
             `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
@@ -1244,8 +1250,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`,
-            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`
           ]
         : [])
     ].join('\n')
@@ -1693,13 +1698,8 @@ export class UtilityOrchestrationService {
     }
   }
 
-  /** Read-only app diagnostics, available only on explicit @cio-utility turns. */
+  /** Read-only app diagnostics, granted on every turn that carries the gateway. */
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    if (state.request.allowManagement !== true) {
-      throw new Error(
-        'App diagnostics require an explicit @cio-utility turn   tell the user to re-send their request starting with @cio-utility.'
-      )
-    }
     state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
       this.projectNames()
     )

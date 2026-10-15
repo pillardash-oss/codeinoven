@@ -13,11 +13,12 @@
  * this extension everywhere   no surface can drift.
  *
  * Visibility contract: pi's system prompt lists a custom tool only when it
- * carries a `promptSnippet`. The three always-on tools (find/init/use) carry
- * one so the model discovers them on every turn. `cio_util_manage` and
- * `cio_util_diagnose` are registered WITHOUT a snippet: they stay callable
- * whenever an explicit @cio-utility setup turn names them in prose, but they
- * never advertise themselves during ordinary work.
+ * carries a `promptSnippet`. The app capabilities an ordinary turn can use
+ * (find/init/use, `cio_ask_secret`, `cio_util_suggest` and the read-only
+ * `cio_util_diagnose`) carry one so the model discovers them on every turn.
+ * `cio_util_manage` is registered WITHOUT a snippet: it stays callable on a
+ * turn whose gateway carries the setup route (an explicit @cio-utility setup
+ * turn), but it never advertises itself during ordinary work.
  *
  * The gateway URL and bearer token are turn-scoped, while a Pi session process
  * persists across turns   extensions load at spawn, so their source cannot
@@ -496,10 +497,10 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
-  // Setup/diagnostics tools: registered without a promptSnippet so they stay
-  // out of the always-on system prompt, but remain callable whenever an
-  // explicit @cio-utility turn names them in prose. The gateway server still
-  // enforces allowManagement, so ordinary turns cannot misuse them.
+  // Setup tool: registered without a promptSnippet so it stays out of the
+  // always-on system prompt, but remains callable on a turn whose gateway
+  // carries the setup route   an explicit @cio-utility setup turn. The gateway
+  // server still enforces allowManagement, so ordinary turns cannot misuse it.
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(manageTool.name)},
     label: 'Install a CodeInOven utility bundle',
@@ -570,10 +571,19 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
+  // Read-only app diagnostics, advertised like the other app capabilities: the
+  // gateway grants the route on every turn, because a user reporting a problem
+  // must never have to re-send their message before the agent can look at the
+  // thread or the log they named.
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(diagnosticsTool.name)},
     label: 'Run CodeInOven app diagnostics',
     description: ${JSON.stringify(diagnosticsTool.description)},
+    promptSnippet: 'Look up an app, thread, routine or log problem yourself with read-only CodeInOven diagnostics',
+    promptGuidelines: [
+      'When the user reports a problem with the app, a thread, a routine, or a log line, look it up with ${JSON.stringify(diagnosticsTool.name)} instead of asking them to re-send their request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs.',
+      'Diagnostics output is redacted and bounded and the capability never writes, deletes, or reconfigures anything. Report the evidence you actually read, and say plainly when it is insufficient instead of guessing.'
+    ],
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('lookup_thread'),
