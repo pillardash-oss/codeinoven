@@ -280,6 +280,12 @@
       note: 'The message waits on two threads.'
     },
     {
+      id: 'stack-queued-tasks',
+      group: 'above',
+      label: 'Tasks under a queued message',
+      note: 'Two cards in one stack: the boundary between them is a broken line, and the composer carries the last one.'
+    },
+    {
       id: 'vision-gate',
       group: 'inside',
       label: 'Vision gate',
@@ -797,6 +803,34 @@
               onRemoveStartAfter={noop}
               onOpenStartAfter={noop}
               onPreloadStartAfter={noop}
+            />
+            {@render mockComposer(true)}
+          {:else if selected.id === 'stack-queued-tasks'}
+            <ComposerQueuedCard
+              text="Also check the staging deploy before merging."
+              hasContent
+              count={1}
+              next={[]}
+              promptReferences={[]}
+              presentation={undefined}
+              startAfterThreads={[]}
+              steerModifierLabel="⌘⇧"
+              onSteer={noop}
+              onEdit={noop}
+              onDelete={noop}
+              onDeleteAll={noop}
+              onAddStartAfter={noop}
+              onRemoveStartAfter={noop}
+              onOpenStartAfter={noop}
+              onPreloadStartAfter={noop}
+            />
+            <AgentTodoCard
+              items={galleryTodoItems}
+              signature="gallery-stacked"
+              busy
+              stopped={false}
+              stackedAbove
+              onClose={noop}
             />
             {@render mockComposer(true)}
           {:else if selected.id === 'vision-gate'}

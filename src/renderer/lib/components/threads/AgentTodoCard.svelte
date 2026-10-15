@@ -17,11 +17,22 @@
      * without this the list would report a live run as stopped.
      */
     foreign?: boolean
+    /** Another card sits directly above the list, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
 
-  let { items, signature, busy, stopped, foreign = false, onClose }: Props = $props()
+  let {
+    items,
+    signature,
+    busy,
+    stopped,
+    foreign = false,
+    stackedAbove = false,
+    onClose
+  }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
@@ -92,6 +103,7 @@
   title="Tasks"
   {chip}
   warn={stoppedUnfinished}
+  {stackedAbove}
   bind:folded={foldState.folded}
   foldLabel="task list"
 >

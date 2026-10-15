@@ -6527,14 +6527,15 @@
 
   /**
    * True when a stack sits on the composer's top edge: the task list renders
-   * immediately above it, and the queued-message card renders above that. The
-   * composer's top rule then breaks into the dashed line that carries the join,
-   * which is the design's composer-edge rule.
+   * immediately above it, and the queued-message card renders above that. Each
+   * boundary between those surfaces is a broken line, and the composer carries
+   * the last one with its dashed top rule, which is the design's composer-edge
+   * rule.
    */
-  let composerStackedAbove = $derived(
-    visibleTodo !== null ||
-      ((queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread)
+  let queuedCardVisible = $derived(
+    (queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread
   )
+  let composerStackedAbove = $derived(visibleTodo !== null || queuedCardVisible)
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -13715,11 +13716,12 @@
           </div>
         {/if}
 
-        <!-- Queued message card   attached to the top of the composer. It stacks on
-       the composer's edge, so its own bottom rule is dropped and the composer's
-       dashed top rule carries the join. The head names what waits; the footer
-       sends it now (the steer key) or removes it. -->
-        {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
+        <!-- Queued message card   attached to the top of the composer. It stacks on the
+       edge of whatever the composer slot shows, so its own bottom rule is dropped
+       and the surface below carries the join: a broken line when a card is what
+       follows, the composer's dashed top rule when the composer is. The head names
+       what waits, and Send now (the steer key) is a head control. -->
+        {#if queuedCardVisible}
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
               <ComposerQueuedCard
@@ -13746,8 +13748,14 @@
         {/if}
 
         <!-- Composer   always anchored at the bottom. Blocking permission and question
-       tools replace it until the user responds. -->
-        <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
+       tools replace it until the user responds. The queued card sits directly on
+       whatever this slot shows, so it keeps its own top spacing and gives up the
+       padding here rather than opening a gap in the middle of the stack. -->
+        <div
+          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {queuedCardVisible
+            ? 'pt-0'
+            : 'pt-2'}"
+        >
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
               {#if assistantMode}
@@ -14260,6 +14268,7 @@
                     {busy}
                     stopped={todoRunStopped}
                     foreign={foreignRunActive}
+                    stackedAbove={queuedCardVisible}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}
