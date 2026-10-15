@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toast } from 'svelte-sonner'
-  import { AppWindow, Loader2 } from '@lucide/svelte'
+  import { AppWindow, LoaderCircle } from '@lucide/svelte'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
@@ -181,7 +181,10 @@
             {#if isForeignRun}
               <AppWindow size={10} />
             {:else}
-              <Loader2 size={10} class="animate-spin" />
+              <!-- A static mark in the chip's own status colour. The label beside it
+                   states the work, and anything that keeps animating keeps the
+                   compositor producing frames for as long as the work lasts. -->
+              <LoaderCircle size={10} aria-hidden="true" />
             {/if}
             <span class="header-status-label">
               {workspaceState.specStudioFormulating
