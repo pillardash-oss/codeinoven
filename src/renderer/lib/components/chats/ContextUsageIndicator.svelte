@@ -367,7 +367,7 @@
     >
       <div
         class={`h-full ${fillClass} transition-[width] duration-700 ease-out`}
-        style={`width: ${boundedPercent}%`}
+        style={`width: ${boundedPercent ?? 0}%`}
       ></div>
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
@@ -467,12 +467,6 @@
     }
     100% {
       transform: translateX(420%);
-    }
-  }
-
-  @container (max-width: 520px) {
-    .context-usage-label {
-      display: none;
     }
   }
 </style>

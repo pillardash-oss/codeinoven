@@ -96,9 +96,12 @@
 
   interface Props {
     shoe: ComposerShoeData
-    /** The composer's own reading: context and quota, or nothing when the turn
-     *  has reported none. */
-    usage?: ComposerUsage
+    /**
+     * The composer's own reading: context and quota. Required, because the
+     * battery is always on screen   it is how the user checks a model choice
+     * before sending, and hovering it is what fetches live quota.
+     */
+    usage: ComposerUsage
     /** Runs whenever the scope picker menu closes, so the composer that renders
      *  the shoe can win its focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
@@ -484,22 +487,22 @@
   {/if}
 
   <!-- What the context holds, before the keys: the composer's own reading, in the
-       row the composer already owns, so the toolbar above keeps its room. Its
-       popover opens over the composer it belongs to. -->
-  {#if usage}
-    <ContextUsageIndicator
-      usage={usage.usage}
-      efficiencyKpis={usage.efficiencyKpis}
-      harnessUsage={usage.harnessUsage ?? []}
-      canCompact={usage.canCompact ?? false}
-      compacting={usage.compacting ?? false}
-      onCompact={usage.onCompact}
-      onActivateBankedReset={usage.onActivateBankedReset}
-      onReveal={usage.onReveal}
-      onHide={usage.onHide}
-      refreshing={usage.refreshing ?? false}
-    />
-  {/if}
+       row the composer already owns, so the toolbar above keeps its room. It is
+       never hidden: a thread with no reading yet still shows the gauge, which is
+       what the user hovers to check usage before sending. Its popover opens over
+       the composer it belongs to. -->
+  <ContextUsageIndicator
+    usage={usage.usage}
+    efficiencyKpis={usage.efficiencyKpis}
+    harnessUsage={usage.harnessUsage ?? []}
+    canCompact={usage.canCompact ?? false}
+    compacting={usage.compacting ?? false}
+    onCompact={usage.onCompact}
+    onActivateBankedReset={usage.onActivateBankedReset}
+    onReveal={usage.onReveal}
+    onHide={usage.onHide}
+    refreshing={usage.refreshing ?? false}
+  />
 
   <!-- The tips: the keys that end a message, there only to be read. Nothing here
        lights up, because there is nothing to pick, and they are the first thing

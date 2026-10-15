@@ -660,25 +660,22 @@
   let shoeComponent: ComposerShoe | undefined = $state(undefined)
   /**
    * The context reading the shoe carries. It is the composer's own data, so it
-   * stays out of the shoe contract the host builds, and a turn that has reported
-   * no usage simply shows no meter: an empty gauge read as a broken one.
+   * stays out of the shoe contract the host builds. It is always present: the
+   * battery is how the user checks what a model choice will cost before sending
+   * the first message of a thread, and hovering it is what fetches live quota.
    */
-  let usageReading = $derived<ComposerUsage | undefined>(
-    contextUsage === undefined
-      ? undefined
-      : {
-          usage: contextUsage,
-          efficiencyKpis,
-          harnessUsage,
-          canCompact,
-          compacting,
-          onCompact,
-          onActivateBankedReset,
-          onReveal: onRevealUsage,
-          onHide: onHideUsage,
-          refreshing: usageRefreshing
-        }
-  )
+  let usageReading = $derived<ComposerUsage>({
+    usage: contextUsage,
+    efficiencyKpis,
+    harnessUsage,
+    canCompact,
+    compacting,
+    onCompact,
+    onActivateBankedReset,
+    onReveal: onRevealUsage,
+    onHide: onHideUsage,
+    refreshing: usageRefreshing
+  })
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
