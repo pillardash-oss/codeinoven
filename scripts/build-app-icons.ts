@@ -8,6 +8,7 @@
  *  - `favicon.png`                    → renderer favicon
  *  - `macos/AppIcon*.png` + `.icns`   → macOS Dock/Finder (via `iconutil`)
  *  - `logo.png`                       → large opaque logo raster
+ *  - `../build/appx/*.png`            → MSIX Store tile and taskbar logos
  *
  * Rerun after editing the master SVG: `bun scripts/build-app-icons.ts`.
  * Requires macOS for the `.icns` step (`iconutil`); every other output is
@@ -24,12 +25,41 @@ import { buildWindowsTrayIcons } from './build-windows-tray-icons'
 const root = join(import.meta.dir, '..')
 const staticDir = join(root, 'src/renderer/static')
 const macosDir = join(staticDir, 'macos')
+/**
+ * MSIX user assets. electron-builder's `appx` target reads its user asset
+ * directory straight out of the build resources directory by this name
+ * (`APPX_ASSETS_DIR_NAME`), and maps whatever it finds to `assets\` inside the
+ * package, so the manifest references these exact file names.
+ */
+const appxDir = join(root, 'build/appx')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
 
 /** Render an SVG string to a PNG buffer at the requested pixel size. */
 function renderPng(svg: string, size: number): Buffer {
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()
   return Buffer.from(png)
+}
+
+/**
+ * Render the master mark centred on a wider transparent canvas.
+ *
+ * MSIX tile art is landscape (a 310x150 wide tile), while the master is a square
+ * squircle that already draws its own tile body. Rendering the square straight
+ * into a landscape canvas would stretch it, so the master's inner content is
+ * re-wrapped in an outer document and scaled to sit centred at `mark` pixels.
+ * The squircle's own fill rules have to be repeated on the wrapping group: they
+ * are set as attributes on the master's root element, and attributes do not
+ * inherit through a child `<g>`.
+ */
+function renderTile(svg: string, width: number, height: number, mark: number): Buffer {
+  const scale = mark / 1024
+  const inner = svg.slice(svg.indexOf('>', svg.indexOf('<svg')) + 1, svg.lastIndexOf('</svg>'))
+  const wrapped =
+    `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" ` +
+    `xmlns="http://www.w3.org/2000/svg"><g fill-rule="evenodd" clip-rule="evenodd" ` +
+    `transform="translate(${(width - mark) / 2} ${(height - mark) / 2}) scale(${scale})">` +
+    `${inner}</g></svg>`
+  return renderPng(wrapped, width)
 }
 
 /** Render the master (or a variant) flattened onto an opaque backdrop for
@@ -72,6 +102,30 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   for (const size of iconSizes) {
     writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
   }
+  // MSIX tile and taskbar logos. The four base names are the ones the generated
+  // manifest references: `Properties/Logo` (StoreLogo), both `VisualElements`
+  // square logos, and a wide tile, which the template always emits even though
+  // the schema calls it optional. `Square44x44Logo` additionally gets targetsize
+  // variants, which is what Windows uses for the taskbar, Alt+Tab, Task View and
+  // the Start tile corner; providing any variant also makes electron-builder run
+  // `makepri` and ship a `resources.pri` alongside them.
+  mkdirSync(appxDir, { recursive: true })
+  const square44TargetSizes = [16, 24, 32, 48, 256]
+  const appxOutputs: Array<[string, Buffer]> = [
+    ['StoreLogo.png', renderPng(master, 50)],
+    ['Square150x150Logo.png', renderPng(master, 150)],
+    ['Square44x44Logo.png', renderPng(master, 44)],
+    ...square44TargetSizes.map(
+      (size) =>
+        [`Square44x44Logo.targetsize-${size}.png`, renderPng(master, size)] as [string, Buffer]
+    ),
+    ['Wide310x150Logo.png', renderTile(master, 310, 150, 120)]
+  ]
+  for (const [name, buffer] of appxOutputs) {
+    writeFileSync(join(appxDir, name), buffer)
+  }
+  Logger.dev(`[build-app-icons] Wrote ${appxOutputs.length} MSIX assets to ${appxDir}.`)
+
   if (process.platform === 'darwin') {
     const scratchDir = join(root, '.cio/tmp')
     mkdirSync(scratchDir, { recursive: true })

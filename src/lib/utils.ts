@@ -238,6 +238,23 @@ export function isUnpackagedElectronLaunch(): boolean {
 }
 
 /**
+ * Is this launch running from a Windows app package (MSIX/AppX) rather than a
+ * traditional installer?
+ *
+ * Electron sets `process.windowsStore` when the process carries Windows package
+ * identity, which is exactly the Store-distributed case. Package identity
+ * changes three things this app cares about: Windows derives the Application
+ * User Model ID from the package instead of from a Start Menu shortcut, the
+ * install directory is read-only, and the Store owns app updates. Shared
+ * utilities cannot import `electron`, so this reads the flag off the process the
+ * same way {@link isUnpackagedElectronLaunch} does.
+ */
+export function isWindowsStorePackage(): boolean {
+  const electronProcess = process as NodeJS.Process & { readonly windowsStore?: boolean }
+  return electronProcess.windowsStore === true
+}
+
+/**
  * Get the app config root path.
  *
  * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.

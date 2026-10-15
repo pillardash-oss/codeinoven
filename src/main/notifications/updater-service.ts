@@ -10,6 +10,7 @@ import type {
   UpdaterStatus
 } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
+import { isWindowsStorePackage } from '../../lib/utils'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
@@ -155,7 +156,13 @@ export class UpdaterService {
   constructor(storage: StorageEngine) {
     this.storage = storage
     this._status = {
-      canAutoUpdate: autoUpdater.isUpdaterActive(),
+      // A Store (MSIX) install cannot self-update. The package directory is
+      // read-only, so the NSIS payload electron-updater would hand to the
+      // platform installer has nowhere to install, and once a package has
+      // identity the Store owns delivery. Gating here is enough: the periodic
+      // timer, the explicit check, the tray path, the updater IPC and the fatal
+      // recovery path all key off `canAutoUpdate`.
+      canAutoUpdate: autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
       state: 'idle',
       currentVersion: app.getVersion()
     }

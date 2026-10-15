@@ -71,7 +71,9 @@
     "deploy:nightly": "bash scripts/deploy-nightly.sh",
     "deploy:main": "bash scripts/deploy-main.sh",
     "release:mirror": "bun scripts/publish-release-mirror.ts",
-    "winget:manifest": "bun scripts/winget-manifest.ts"
+    "winget:manifest": "bun scripts/winget-manifest.ts",
+    "msix:check": "bun scripts/msix.ts --check",
+    "msix:build": "bun scripts/msix.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

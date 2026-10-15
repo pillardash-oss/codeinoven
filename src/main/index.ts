@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { usageAnalytics } from './system/usage-analytics'
@@ -77,7 +78,12 @@ app.enableSandbox()
 // Custom scheme must be registered as privileged before the app is ready so
 // Chromium recognizes it when the renderer frames `appfile://` previews.
 registerFilePreviewScheme()
-if (process.platform === 'win32') {
+// A packaged (MSIX) build already has an Application User Model ID that Windows
+// derives from its package identity, and Windows attributes toasts and taskbar
+// pinning to whichever AUMID the process claims. Overriding it there would
+// detach notifications from the package that owns them, so the explicit
+// reverse-DNS id is only set for the traditionally installed build.
+if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
 if (app.isPackaged) {

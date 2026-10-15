@@ -109,6 +109,55 @@ win:
 # by the installer (and removed by the uninstaller)   build/installer.nsh.
 nsis:
   include: build/installer.nsh
+# Microsoft Store packaging. Built on demand with `bun run package:msix`; the
+# `win.target` above stays NSIS so ordinary builds and the winget feed are
+# unchanged, and the MSIX is the Store channel only.
+#
+# electron-builder's `appx` target produces an MSIX. Partner Center re-signs the
+# package with a Microsoft certificate, which is the whole point: it gives
+# Windows a publisher identity without us buying a Windows code-signing
+# certificate.
+#
+# `identityName` and `publisher` are deliberately absent. Partner Center assigns
+# both (Product management > Product identity > Package/Identity/*), the values
+# are case- and punctuation-sensitive, and a wrong value fails certification
+# long after the build. `scripts/msix.ts` is therefore the only supported entry
+# point and refuses to build without them. That guard is not cosmetic:
+# electron-builder silently substitutes `CN=ms` for a missing publisher on an
+# unsigned appx build (app-builder-lib/out/codeSign/windowsSignToolManager.js,
+# `computePublisherName`), and falls back to the package.json `name` for a
+# missing identity name.
+appx:
+  # Partner Center assigns both of these: Product management > Product identity >
+  # "Package/Identity/Name" and "Package/Identity/Publisher". Paste them here
+  # byte for byte, including case and punctuation. They are left deliberately
+  # unset-looking so `bun run msix:check` fails with the value to paste instead of
+  # producing a package with an invented identity; see scripts/msix.ts.
+  identityName: REPLACE_WITH_PARTNER_CENTER_IDENTITY_NAME
+  publisher: REPLACE_WITH_PARTNER_CENTER_PUBLISHER
+  applicationId: CodeInOven
+  displayName: CodeInOven
+  publisherDisplayName: Pillardash Solutions Limited
+  # There is no i18n layer in this app, so en-US is the only honest answer, and
+  # it has to agree with the languages selected on the Store listing.
+  languages:
+    - en-US
+  # Windows 10 1809. The manifest electron-builder generates uses
+  # EntryPoint="Windows.FullTrustApplication", which is the correct full-trust
+  # form below 10.0.19041.0, so the floor stays under that.
+  minVersion: 10.0.17763.0
+  maxVersionTested: 10.0.26100.0
+  # `runFullTrust` is mandatory for a full-trust desktop app and electron-builder
+  # adds it automatically; declared here so the package's trust story is
+  # readable rather than implied. It is a restricted capability, so the Store
+  # submission asks for a justification.
+  capabilities:
+    - runFullTrust
+  backgroundColor: '#0c0c10'
+  # Store tile and taskbar logos are rendered from the master SVG into
+  # `build/appx` by scripts/build-app-icons.ts, which is where the appx target
+  # looks for its user assets.
+  artifactName: codeinoven-${version}-${arch}.msix
 linux:
   icon: src/renderer/static/icon.png
   target:
