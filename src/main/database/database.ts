@@ -910,9 +910,19 @@ export class Database {
    * recreates it under its new name, and SQLite carries an index through a table
    * rename with its old name still attached.
    *
+   * The assistant's written instruction set was its how-to: the `how_to` and
+   * `how_to_updated_at` columns became `knowledge` and `knowledge_updated_at`.
+   * The rename reached the schema but not the rows an existing database already
+   * held, so the columns are renamed here rather than only added: a database
+   * that predates the wording keeps its authored knowledge and the timestamp the
+   * schedule anchor backfill reads, instead of failing on a column that only the
+   * fresh schema carried. A table that already uses the new names is untouched.
+   *
    * Runs first, before the schema is applied: `CREATE TABLE IF NOT EXISTS
    * assistants` would otherwise create an empty table the rename could not
-   * replace. Idempotent, so a database that has already migrated is untouched.
+   * replace, and the later migrations (the schedule anchor reads
+   * `knowledge_updated_at`) would find the old columns. Idempotent, so a database
+   * that has already migrated is untouched.
    */
   private migrateAssistantVocabulary(connection: DatabaseType): void {
     const hasTable = (name: string): boolean =>
@@ -932,6 +942,28 @@ export class Database {
     )
     if (columns.has('routine_id') && !columns.has('assistant_id')) {
       connection.exec('ALTER TABLE threads RENAME COLUMN routine_id TO assistant_id')
+    }
+
+    const assistantColumns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!assistantColumns.has('knowledge')) {
+      if (assistantColumns.has('how_to')) {
+        connection.exec('ALTER TABLE assistants RENAME COLUMN how_to TO knowledge')
+      } else if (assistantColumns.size > 0) {
+        connection.exec("ALTER TABLE assistants ADD COLUMN knowledge TEXT NOT NULL DEFAULT ''")
+      }
+    }
+    if (!assistantColumns.has('knowledge_updated_at')) {
+      if (assistantColumns.has('how_to_updated_at')) {
+        connection.exec(
+          'ALTER TABLE assistants RENAME COLUMN how_to_updated_at TO knowledge_updated_at'
+        )
+      } else if (assistantColumns.size > 0) {
+        connection.exec('ALTER TABLE assistants ADD COLUMN knowledge_updated_at INTEGER')
+      }
     }
   }
 
