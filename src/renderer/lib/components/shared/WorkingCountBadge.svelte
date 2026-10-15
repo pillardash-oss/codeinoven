@@ -50,14 +50,13 @@
 
 {#if count > 0}
   {@const Icon = icon}
-  <!-- A host anchors this badge's corner with an overhang, which a 14px box can
-       afford and a 6px bare mark cannot: left as-is the mark drifts into the
-       gutter between two rail entries and stops saying which entry it belongs
-       to. The mark therefore cancels the overhang to sit just inside its own
-       entry's corner, 2px in from each edge. -->
+  <!-- The host places this badge in its corner row, so the mark only has to fill
+       its own space and stay legible over the glyph. A counted badge wears the
+       box and the tone; a colour mark shows its swatches and the count beside
+       them, because every status on the strip reports how many it stands for. -->
   <span
     class="flex items-center gap-px text-[0.5625rem] font-semibold tabular-nums {colorOnly
-      ? 'mt-1.5 mr-1.5'
+      ? ''
       : `h-3.5 min-w-3.5 justify-center border border-border bg-elevated px-1 shadow-sm ${toneClass}`} {className}"
     role="status"
     aria-label={label}
@@ -69,7 +68,7 @@
           <span class="h-1.5 w-1.5" style:background={accent}></span>
         {/each}
       </span>
-      <span class="sr-only">{display}</span>
+      {display}
     {:else}
       <Icon size={8} strokeWidth={2.6} aria-hidden="true" />
       {display}

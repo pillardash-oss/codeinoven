@@ -80,15 +80,32 @@
         onHover={() => onOptionHover(option.id)}
       >
         {#snippet badge()}
-          {#if badges.activity || badges.unread}
+          {#if badges.activity || badges.error || badges.unread}
             <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
-              {#if badges.hasWorkingThreads && badges.activity}
-                <WorkingCountBadge
-                  icon={badges.activity.icon}
-                  count={badges.activity.count}
-                  label={badges.activity.label}
-                  tone={badges.activity.tone}
-                />
+              <!-- Every status that is not unread shares one row in the corner, so
+                   a family that is both working and failing shows both counts side
+                   by side instead of one hiding the other. Unread keeps the row
+                   under them, because it says somebody should look rather than
+                   what the work is doing. -->
+              {#if badges.activity || badges.error}
+                <span class="flex items-center gap-0.5">
+                  {#if badges.activity}
+                    <WorkingCountBadge
+                      icon={badges.activity.icon}
+                      count={badges.activity.count}
+                      label={badges.activity.label}
+                      tone={badges.activity.tone}
+                    />
+                  {/if}
+                  {#if badges.error}
+                    <WorkingCountBadge
+                      icon={badges.error.icon}
+                      count={badges.error.count}
+                      label={badges.error.label}
+                      tone={badges.error.tone}
+                    />
+                  {/if}
+                </span>
               {/if}
               {#if badges.unread}
                 <WorkingCountBadge
@@ -97,15 +114,6 @@
                   label={badges.unread.label}
                   tone={badges.unread.tone}
                   colors={badges.unread.colors}
-                  class={badges.hasWorkingThreads ? '' : 'order-first'}
-                />
-              {/if}
-              {#if badges.activity && !badges.hasWorkingThreads}
-                <WorkingCountBadge
-                  icon={badges.activity.icon}
-                  count={badges.activity.count}
-                  label={badges.activity.label}
-                  tone={badges.activity.tone}
                 />
               {/if}
             </span>

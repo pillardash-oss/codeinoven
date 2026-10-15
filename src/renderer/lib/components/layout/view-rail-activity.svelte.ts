@@ -39,8 +39,14 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 export interface ViewFamilyActivity {
   working: number
   attention: number
-  /** True when an attention thread in the family has actually failed. */
-  attentionError: boolean
+  /**
+   * Threads that ended in failure, counted whatever the user has read.
+   *
+   * Its own group rather than part of attention: a failure is a total the strip
+   * reports, and a count that stayed out of the total until the thread was opened
+   * could not be one.
+   */
+  error: number
   retry: number
 }
 
@@ -66,8 +72,8 @@ export interface ViewBadge {
 export interface ViewRailBadges {
   activity: ViewBadge | null
   unread: ViewBadge | null
-  /** The family has active work, regardless of the visible status label. */
-  hasWorkingThreads: boolean
+  /** The family's failed threads, in the error tone, beside the activity pill. */
+  error: ViewBadge | null
   /** A browser surface behind this item is playing sound right now. */
   playing: boolean
 }
@@ -109,7 +115,7 @@ const subscribeToRetryClock = createSubscriber((update) => {
 })
 
 function emptyFamilyActivity(): ViewFamilyActivity {
-  return { working: 0, attention: 0, attentionError: false, retry: 0 }
+  return { working: 0, attention: 0, retry: 0, error: 0 }
 }
 
 /** The family a rail view belongs to. Every project-mode view shares one badge. */
@@ -124,7 +130,7 @@ function plural(noun: string, count: number): string {
 }
 
 /** Tooltip/aria text naming every active group in the family, so a hidden
- *  attention or retry group is still reachable from the single pill. */
+ *  attention, error or retry group is still reachable from the single pill. */
 function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyActivity): string {
   const noun = FAMILY_NOUN[family]
   const parts: string[] = []
@@ -138,10 +144,30 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
       } attention`
     )
   }
+  if (activity.error > 0) {
+    parts.push(`${activity.error} ${plural(noun, activity.error)} failed`)
+  }
   if (activity.retry > 0) {
     parts.push(`${activity.retry} ${plural(noun, activity.retry)} waiting to retry`)
   }
   return parts.join(', ')
+}
+
+/**
+ * A failure group's own pill: the error tone and the total that failed.
+ *
+ * It rides beside the activity pill rather than replacing it, so a family that is
+ * working and has failures shows both instead of the failure hiding behind the
+ * working count.
+ */
+function errorBadgeFor(family: ContentThreadFamily, activity: ViewFamilyActivity): ViewBadge | null {
+  if (activity.error <= 0) return null
+  return {
+    tone: 'error',
+    count: activity.error,
+    label: `${activity.error} ${plural(FAMILY_NOUN[family], activity.error)} failed`,
+    icon: FAMILY_ICONS[family]
+  }
 }
 
 /**
@@ -188,9 +214,12 @@ export class ViewRailActivity {
         bucket.retry += 1
         continue
       }
-      if (thread.status === 'awaiting_approval' || (thread.status === 'failed' && thread.read)) {
+      if (thread.status === 'failed') {
+        bucket.error += 1
+        continue
+      }
+      if (thread.status === 'awaiting_approval') {
         bucket.attention += 1
-        if (thread.status === 'failed') bucket.attentionError = true
       }
     }
     return counts
@@ -255,11 +284,9 @@ export class ViewRailActivity {
         activity.working += 1
         continue
       }
-      if (thread.status === 'awaiting_approval') activity.attention += 1
-      else if (thread.status === 'failed' && thread.read) {
-        activity.attention += 1
-        activity.attentionError = true
-      } else if (thread.status === 'working-paused') activity.retry += 1
+      if (thread.status === 'failed') activity.error += 1
+      else if (thread.status === 'awaiting_approval') activity.attention += 1
+      else if (thread.status === 'working-paused') activity.retry += 1
     }
     return activity
   })
@@ -330,13 +357,13 @@ export function viewBadgesFor(
       activity:
         browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
       unread: null,
-      hasWorkingThreads: browserAssistantActivity.working > 0,
+      error: errorBadgeFor('chats', browserAssistantActivity),
       playing: audio.global
     }
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) {
-    return { activity: null, unread: null, hasWorkingThreads: false, playing: false }
+    return { activity: null, unread: null, error: null, playing: false }
   }
   // The project family shares one badge option, so its sound mark rides the same
   // option its activity badge does; Chats and Assistant own their single view.
@@ -360,6 +387,7 @@ export function viewBadgesFor(
       : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
+  const errorBadge = errorBadgeFor(family, activity)
   if (activity.working > 0) {
     return {
       activity: {
@@ -369,20 +397,20 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: true,
+      error: errorBadge,
       playing
     }
   }
   if (activity.attention > 0) {
     return {
       activity: {
-        tone: activity.attentionError ? 'error' : 'attention',
+        tone: 'attention',
         count: activity.attention,
         label: familyActivityLabel(family, activity),
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false,
+      error: errorBadge,
       playing
     }
   }
@@ -395,11 +423,11 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      hasWorkingThreads: false,
+      error: errorBadge,
       playing
     }
   }
-  return { activity: null, unread: unreadBadge, hasWorkingThreads: false, playing }
+  return { activity: null, unread: unreadBadge, error: errorBadge, playing }
 }
 
 /**
@@ -414,7 +442,7 @@ export function viewBadgesFor(
 function browserAgentBadge(activity: ViewFamilyActivity): ViewBadge | null {
   if (activity.attention > 0) {
     return {
-      tone: activity.attentionError ? 'error' : 'attention',
+      tone: 'attention',
       count: activity.attention,
       label: browserAssistantLabel(activity.attention, activity.attention === 1 ? 'needs' : 'need'),
       icon: FAMILY_ICONS.chats

@@ -30,6 +30,9 @@ export function emptyThreadStateCounts(): ThreadStateCounts {
  * unread and parked at once), so it is counted on its own, and every row that
  * renders the strip shows it on the same terms as working.
  *
+ * Error counts every failed thread, read or not: the number beside the red dot is
+ * the total that failed, and a failure the user has not opened is still a failure.
+ *
  * Working reads the one live-working rule, so a row's badge can never disagree
  * with the thread rows it summarizes. Retry is the `working-paused` status, the
  * same threads the rail counts as "waiting to retry"; without it a routine
@@ -39,9 +42,7 @@ export function countThreadStates(threads: Iterable<Thread>): ThreadStateCounts 
   const counts = emptyThreadStateCounts()
   for (const thread of threads) {
     if (threadHasVisibleWork(thread)) counts.working += 1
-    // A settled thread the user has not read reads as unread, so it leaves the
-    // error axis for the unread one, matching its row badge.
-    else if (thread.status === 'failed' && thread.read) counts.error += 1
+    else if (thread.status === 'failed') counts.error += 1
     else if (thread.status === 'awaiting_approval') counts.attention += 1
     else if (thread.status === 'working-paused') counts.retry += 1
     if (!thread.read) counts.unread += 1
