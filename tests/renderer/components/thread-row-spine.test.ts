@@ -2,7 +2,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import type { Thread } from '$shared/types'
-import { THREAD_GROUP_MARK, THREAD_STATE_MARKS } from '$lib/components/threads/thread-state-marks'
+import type { QueuedMessageEntry } from '$lib/stores/renderer-recovery'
+import {
+  THREAD_FOREIGN_MARK,
+  THREAD_GROUP_MARK,
+  THREAD_STATE_MARKS
+} from '$lib/components/threads/thread-state-marks'
 
 // The row asks the live agent-run store whether a thread is working. These tests
 // drive that one question directly, so a fixture can be "working" without a real
@@ -26,14 +31,31 @@ vi.mock('$lib/stores/agent-runs.svelte', () => ({
   }
 }))
 
+// Whether another CodeInOven instance owns this thread's turn. The spine has to
+// say so with its own mark, so these tests drive the question directly rather
+// than standing up a second instance.
+const foreign = vi.hoisted(() => ({ threads: new Set<string>() }))
+vi.mock('$lib/stores/foreign-runs.svelte', () => ({
+  foreignRuns: {
+    isForeign: (projectId: string, threadId: string) =>
+      foreign.threads.has(`${projectId}:${threadId}`),
+    isWorkflow: () => false,
+    transferState: () => ({ pending: false, error: null }),
+    transfer: async () => undefined
+  }
+}))
+
 /**
- * The detailed row after the spine redesign.
+ * The detailed row: the spine redesign plus the two-status model on top of it.
  *
- * These lock in the three promises the user is relying on:
+ * These lock in the promises the user is relying on:
  *  1. every live action the thread has is drawn at once, not ranked down to one;
- *  2. the scope rides the context line beside the project name, and its presence
+ *  2. the rail always speaks for the thread's own state, and what is waiting on
+ *     it rides the glyph above;
+ *  3. the secondary slot is the flexible one, and the last action wins;
+ *  4. the scope rides the context line beside the project name, and its presence
  *     never pushes the Oven or the branch off the row;
- *  3. no reserved pin slot sits on the primary line, so the title starts at a
+ *  5. no reserved pin slot sits on the primary line, so the title starts at a
  *     constant x.
  */
 
@@ -86,6 +108,29 @@ vi.mock('$lib/stores/browser-access.svelte', () => ({
   browserStore: () => ({ hasThreadPeek: () => false })
 }))
 
+/**
+ * The row asks the recovery store what is waiting on a thread: composer content
+ * the user has typed, a message queued behind the run, and whether that message
+ * waits on another thread. These spies drive that one question, so a fixture can
+ * carry a draft or a queue without a composer behind it.
+ */
+const waiting = vi.hoisted(() => ({
+  typed: false,
+  /** Queued messages, oldest first: the head is what sends next. */
+  queue: [] as QueuedMessageEntry[]
+}))
+
+const { rendererRecovery } = await import('$lib/stores/renderer-recovery.svelte')
+
+vi.spyOn(rendererRecovery, 'hasDraftContent').mockImplementation(
+  () => waiting.typed || waiting.queue.length > 0
+)
+// The row reads the typed-only signal for the draft mark, so a message already
+// queued never reports as the user still typing.
+vi.spyOn(rendererRecovery, 'hasTypedContent').mockImplementation(() => waiting.typed)
+vi.spyOn(rendererRecovery, 'queuedMessageCount').mockImplementation(() => waiting.queue.length)
+vi.spyOn(rendererRecovery, 'queuedMessageFor').mockImplementation(() => waiting.queue[0] ?? null)
+
 const ThreadRow = (await import('$lib/components/threads/ThreadRow.svelte')).default
 
 function thread(over: Partial<Thread> = {}): Thread {
@@ -102,6 +147,21 @@ function thread(over: Partial<Thread> = {}): Thread {
     branch: 'feat/scopes',
     ...over
   } as unknown as Thread
+}
+
+/** A message queued behind the running turn, optionally waiting on another thread. */
+function queuedMessage(waitsOnAnotherThread = false): QueuedMessageEntry {
+  return {
+    id: `q-${waiting.queue.length + 1}`,
+    text: 'Queue this for me',
+    attachments: [],
+    promptReferences: [],
+    projectReferences: [],
+    taskReferences: [],
+    startAfterThreads: waitsOnAnotherThread
+      ? [{ id: 't2', title: 'Wait for the other thread' }]
+      : []
+  }
 }
 
 function render(t: Thread, over: Record<string, unknown> = {}) {
@@ -340,6 +400,33 @@ describe('ThreadRow, the detailed spine row', () => {
     }
   })
 
+  it('draws the another-instance mark, not the working hammer, when a run belongs elsewhere', async () => {
+    // A window that receives none of another instance's stream holds no live
+    // output and no stop control for that run. The pickaxe would promise both,
+    // so the spine swaps in the window glyph and keeps the working colour the
+    // rest of the app already paints this state with.
+    foreign.threads.add('p1:t1')
+    runs.settled = true
+    runs.busy.add('p1:t1')
+
+    const { target, app } = render(thread({ status: 'executing' }))
+    await tick()
+
+    const glyph = target.querySelector('[aria-label="Running in another instance"]')
+    expect(glyph).not.toBeNull()
+    expect((glyph as HTMLElement).getAttribute('style')).toContain(THREAD_FOREIGN_MARK.colour)
+    // The icon is the registry's own, so the row and the badge cannot drift.
+    expect(THREAD_FOREIGN_MARK.icon).not.toBe(THREAD_STATE_MARKS.working.icon)
+    // The rail still says work is happening, in the working colour.
+    const column = glyph?.parentElement as HTMLElement
+    expect(column.className).toContain('flex-col')
+
+    unmount(app)
+    foreign.threads.delete('p1:t1')
+    runs.busy.delete('p1:t1')
+    runs.settled = false
+  })
+
   it('flushes the context line left when there is no project icon', async () => {
     // A project's own thread list passes no icon and hides the name, so the
     // scope must start at the row's own left edge rather than floating right.
@@ -370,5 +457,107 @@ describe('ThreadRow, the detailed spine row', () => {
     expect(rows.length).toBe(1)
 
     unmount(app)
+  })
+
+  it('rides a waiting status above the thread state, and keeps the state on the rail', async () => {
+    runs.busy.add('p1:t1')
+    waiting.queue.push(queuedMessage())
+    const { target, app } = render(
+      thread({ status: 'executing', read: true, sessionId: 's1' } as Partial<Thread>)
+    )
+    await tick()
+
+    // One mark, two statuses: the glyph is what waits, the rail is what the
+    // thread is doing. The thread's own state never leaves the row.
+    const glyph = target.querySelector('[aria-label="Working · Message queued"]')
+    expect(glyph).not.toBeNull()
+    const column = glyph?.parentElement as HTMLElement
+    // pin, glyph, rail
+    expect(column.children.length).toBe(3)
+    const rail = column.children[2] as HTMLElement
+    expect(rail.getAttribute('style')).toContain('var(--color-thread-working)')
+
+    unmount(app)
+    waiting.queue.length = 0
+    runs.busy.delete('p1:t1')
+  })
+
+  it('lets typing take the secondary slot back from the queue', async () => {
+    runs.busy.add('p1:t1')
+    waiting.queue.push(queuedMessage())
+    waiting.typed = true
+    const { target, app } = render(
+      thread({ status: 'executing', read: true, sessionId: 's1' } as Partial<Thread>)
+    )
+    await tick()
+
+    // Last action wins: the user is typing, so the pen is what the row has to say
+    // now, and the message already queued keeps no glyph of its own.
+    expect(target.querySelector('[aria-label="Working · Draft in the composer"]')).not.toBeNull()
+    expect(target.querySelector('[aria-label="Working · Message queued"]')).toBeNull()
+
+    unmount(app)
+    waiting.typed = false
+    waiting.queue.length = 0
+    runs.busy.delete('p1:t1')
+  })
+
+  it('wears the alarm clock only when the next message waits on another thread', async () => {
+    waiting.queue.push(queuedMessage(true))
+    const { target, app } = render(thread())
+    await tick()
+
+    expect(
+      target.querySelector('[aria-label="Completed · Starts after another thread"]')
+    ).not.toBeNull()
+
+    unmount(app)
+    waiting.queue.length = 0
+  })
+
+  it('keeps the clock when a plain message is ahead of a start-after', async () => {
+    waiting.queue.push(queuedMessage(), queuedMessage(true))
+    const { target, app } = render(thread())
+    await tick()
+
+    // The head of the queue is what happens next, so a message that still sends
+    // the moment its run stops keeps the plain clock.
+    expect(target.querySelector('[aria-label="Completed · Message queued"]')).not.toBeNull()
+    expect(
+      target.querySelector('[aria-label="Completed · Starts after another thread"]')
+    ).toBeNull()
+
+    unmount(app)
+    waiting.queue.length = 0
+  })
+
+  it('keeps a settled thread quiet under the mark that is waiting', async () => {
+    waiting.queue.push(queuedMessage())
+    const { target, app } = render(thread())
+    await tick()
+
+    const glyph = target.querySelector('[aria-label="Completed · Message queued"]')
+    expect(glyph).not.toBeNull()
+    // The primary status is settled, so no rail is drawn: the waiting mark and
+    // the pin are the whole column, and the row gains no attention for it.
+    const column = glyph?.parentElement as HTMLElement
+    expect(column.children.length).toBe(2)
+    expect(column.className).toContain('justify-center')
+
+    unmount(app)
+    waiting.queue.length = 0
+  })
+
+  it("says both statuses in the compact row's one mark", async () => {
+    waiting.queue.push(queuedMessage())
+    const { target, app } = render(thread(), { detailed: false, compact: true })
+    await tick()
+
+    // The dot layouts have a single slot, so it wears the waiting mark and names
+    // the thread's own state in its title: collapsing the row loses no status.
+    expect(target.querySelector('[title="Completed · Message queued"]')).not.toBeNull()
+
+    unmount(app)
+    waiting.queue.length = 0
   })
 })

@@ -22,9 +22,10 @@
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import {
     markDrawsRail,
-    threadActionMark,
+    THREAD_FOREIGN_MARK,
+    threadSecondaryMark,
     threadStateMark,
-    type ThreadStateMark
+    type ThreadRowSecondary
   } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
@@ -63,17 +64,7 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import {
-    AppWindow,
-    Eye,
-    Check,
-    Clock,
-    GitBranch,
-    MessageCircleDashed,
-    Monitor,
-    Pin,
-    Server
-  } from '@lucide/svelte'
+  import { Eye, Check, GitBranch, MessageCircleDashed, Monitor, Pin, Server } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import { tick } from 'svelte'
@@ -367,8 +358,6 @@
     | 'spec'
     | 'approval'
     | 'error'
-    | 'scheduled'
-    | 'queued'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -379,14 +368,34 @@
       speechController.isCapturingThread(thread.id)
   )
 
-  /** Queued messages get a clock instead of the draft dot, including during live work. */
+  /** Whether the user is typing into this thread's composer right now.
+   *
+   *  Deliberately narrower than `isDraft`: that one also reports a message
+   *  already queued, and the two must stay apart or the row could not tell
+   *  "waiting to send" from "typing now" -- which is the whole reason the
+   *  secondary slot can say which of the two happened last. Live dictation counts
+   *  too: from the first mic press through transcription the user is drafting with
+   *  their voice, so the row reads draft before the transcript reaches the
+   *  composer. */
+  let isTyping = $derived(
+    rendererRecovery.hasTypedContent(thread.projectId, thread.id) ||
+      speechController.isCapturingThread(thread.id)
+  )
+
+  /** Whether a message is waiting behind the thread's own run. */
   let hasQueuedMessage = $derived(
     rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
   )
 
-  /** A message scheduled behind other threads also gets the working-colour clock. */
-  let hasStartAfterPending = $derived(
-    rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
+  /** Whether the message that will send next is waiting on other threads.
+   *
+   *  The head of the queue is what happens next, so a plain message ahead of a
+   *  start-after keeps the plain clock: it still sends the moment the run stops.
+   *  Only a head that cannot go without another thread finishing reads as
+   *  scheduled. */
+  let queueHeadWaits = $derived(
+    (rendererRecovery.queuedMessageFor(thread.projectId, thread.id)?.startAfterThreads.length ??
+      0) > 0
   )
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread.
@@ -488,10 +497,10 @@
   })
 
   /**
-   * Sending clears the draft, which would otherwise flash the badge back to the
-   * thread's stale status before the harness confirms the working state. Hold
-   * the todo dot for a short grace after the draft clears so the transition
-   * reads as draft → (briefly todo) → working instead of draft → default.
+   * Sending clears the draft, which would otherwise flash the row back to the
+   * thread's stale status before the harness confirms the working state. Hold the
+   * draft mark for a short grace after the composer empties, so the transition
+   * reads as draft -> working instead of draft -> settled -> working.
    */
   let holdingDraft = $state(false)
 
@@ -504,7 +513,7 @@
   }
 
   $effect(() => {
-    if (isDraft) {
+    if (isTyping) {
       holdDraftDot()
       return
     }
@@ -518,8 +527,6 @@
     // they never opened falls through to the unread dot below, and the Error
     // badge returns the moment it is read (see `settledThreadReadsUnread`).
     if (thread.status === 'failed' && effectiveRead) return 'error'
-    if (hasQueuedMessage && thread.status !== 'awaiting_approval' && thread.status !== 'spec')
-      return 'queued'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
@@ -537,13 +544,6 @@
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
     }
-    // A scheduled message (queued behind other threads) reads as pending work
-    // and shows the timer badge   it is a draft in the sorting/pinning sense but
-    // not something still being typed.
-    if (hasStartAfterPending) return 'scheduled'
-    // Drafting (or the brief post-send grace) shows the todo dot.
-    if (holdingDraft) return 'todo'
-    if (isDraft) return 'todo'
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
@@ -573,44 +573,71 @@
     }
   })
 
-  /** The row's state rail: a mark down the left edge of the whole row.
+  /** The secondary status riding this row, if any: what is waiting on the thread
+   *  rather than what the thread is doing.
    *
-   *  Every value `threadState` can take gets a shape, not only a hue, so the
-   *  state survives for a reader who cannot tell the greens and violets apart:
-   *  solid for a live or settled state, dashed for one that is waiting, dotted
-   *  for one queued behind another. Width carries the two states that want the
-   *  user, so approval and error are findable from across the sidebar.
-   *
-   *  Read and completed draw the same quiet hairline. They are one settled state
-   *  to the eye, and the distinction that matters is carried by the title, the
-   *  tooltip and the accessible name instead of by two nearly identical rings. */
-  /** The action mark riding this row's rail, if any.
-   *
-   *  A draft, a queued message and a start-after are not states: they are things
-   *  waiting on the thread. They ride the rail as a mark rather than replacing
-   *  what the thread is doing, so a thread that is working with a draft waiting
-   *  shows the pen and its rail still says working. */
-  let pendingAction = $derived.by((): ThreadStateMark | null => {
-    if (hasQueuedMessage) return threadActionMark('queued')
-    if (hasStartAfterPending) return threadActionMark('scheduled')
-    if (holdingDraft) return threadActionMark('todo')
+   *  The slot is flexible and the last action wins. Typing takes it, sending
+   *  hands it to the queue, and typing the next message takes it back. Typing is
+   *  always the newest action, so it outranks a message already queued behind the
+   *  run; the one case where it does not is a thread nothing has been sent into,
+   *  whose primary status already is that draft. */
+  let secondaryStatus = $derived.by((): ThreadRowSecondary | null => {
+    // Typing first, and the `todo` guard is the one case where the primary status
+    // already says draft: a thread nothing has been sent into, so there is no
+    // second status for the row to report.
+    if (isTyping && threadState !== 'todo') return 'draft'
+    if (hasQueuedMessage) return queueHeadWaits ? 'scheduled' : 'queued'
+    // The post-send grace, which only covers the gap the queue and a confirmed
+    // working state have not filled yet.
+    if (holdingDraft && threadState !== 'todo') return 'draft'
     return null
   })
 
-  /** The glyph the rail carries, and the name it answers to. The action rides on
-   *  top of the state; with no action, the state speaks for itself. */
-  let spineMark = $derived.by((): ThreadStateMark => pendingAction ?? threadStateMark(threadState))
+  /** The thread's own status, which the rail carries: the mark that stays true
+   *  whatever is waiting above it.
+   *
+   *  A run another instance owns replaces the working mark outright. It is the
+   *  same state from this window's point of view (the thread is working), but the
+   *  glyph has to say where the work is, because this window holds no stream and
+   *  no stop control for it. Every other state is the thread's own and keeps its
+   *  mark. */
+  let primaryMark = $derived(isForeignRun ? THREAD_FOREIGN_MARK : threadStateMark(threadState))
 
-  /** Whether this row draws a rail under its glyph. A settled thread does not:
-   *  the glyph alone is the whole mark, vertically centred. */
-  let spineRailVisible = $derived(markDrawsRail(spineMark))
+  /** The secondary status's mark, or null when nothing is waiting. */
+  let secondaryMark = $derived(
+    secondaryStatus === null ? null : threadSecondaryMark(secondaryStatus)
+  )
 
-  /** The rail's paint: the state's own colour, and its dash pattern. The rail is
-   *  the same width as the glyph above it, so the mark reads as one column. */
+  /** The glyph: the secondary status when something is waiting, else the primary
+   *  one. The thread's own state never leaves the row, because the rail beneath
+   *  still carries it. */
+  let glyphMark = $derived(secondaryMark ?? primaryMark)
+
+  /** The glyph component itself, so the markup renders whichever mark owns the
+   *  slot directly (a capitalised value is a dynamic component in Svelte). */
+  let GlyphMarkIcon = $derived(glyphMark.icon)
+
+  /** What the whole mark is called: both statuses when the row carries two, so
+   *  assistive technology hears the thread's state and not only its glyph. */
+  let markLabel = $derived(
+    secondaryMark ? `${primaryMark.label} · ${secondaryMark.label}` : primaryMark.label
+  )
+
+  /** Whether this row draws a rail under its glyph. The rail is the primary
+   *  status, so a settled thread draws none: with nothing left to do it should
+   *  attract no attention, and its glyph stands alone, vertically centred. */
+  let spineRailVisible = $derived(markDrawsRail(primaryMark))
+
+  /** The rail's paint: the primary status's own colour, and its dash pattern,
+   *  which is the second carrier beside the hue. The rail is the same width as
+   *  the glyph above it, so the mark reads as one column. A secondary status
+   *  never repaints it: the rail is what the thread is doing, and the glyph above
+   *  is what is waiting on it. */
   let spineRailPaint = $derived.by((): string => {
-    if (spineMark.dash === 'solid') return spineMark.colour
-    const stripe = spineMark.dash === 'dashed' ? ['0.25rem', '0.4375rem'] : ['0.125rem', '0.25rem']
-    return `repeating-linear-gradient(to bottom, ${spineMark.colour} 0 ${stripe[0]}, transparent ${stripe[0]} ${stripe[1]})`
+    if (primaryMark.dash === 'solid') return primaryMark.colour
+    const stripe =
+      primaryMark.dash === 'dashed' ? ['0.25rem', '0.4375rem'] : ['0.125rem', '0.25rem']
+    return `repeating-linear-gradient(to bottom, ${primaryMark.colour} 0 ${stripe[0]}, transparent ${stripe[0]} ${stripe[1]})`
   })
 
   /** The row's own ground, when the state wants the user. A tint is the second
@@ -747,21 +774,23 @@
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered || effectivePinned)
 
-  /** Tooltip for the state badge: the only place a collapsed row can explain
-   *  itself, since the badge is a bare dot or spinner. */
+  /** Tooltip for the row's one visible mark in the dot layouts: the only place a
+   *  collapsed row can explain itself, since the badge is a bare dot or icon.
+   *  Both statuses are named when the row carries two, so a collapsed row never
+   *  hides the thread's own state behind the thing waiting on it. */
   let badgeTitle = $derived.by((): string => {
-    if (threadState === 'queued')
-      return isWorking ? 'Working · Queued' : isRetryPaused ? 'Waiting to retry · Queued' : 'Queued'
-    if (isForeignRun) return 'Running in another instance'
-    if (isRetryPaused || isWorking) return stageLabel
-    if (thread.status === 'spec') return 'Spec ready'
-    // A parked thread says what it waits for in the app's own words, and says it
-    // for as long as the status holds   opening or reading the row never
-    // changes it.
-    if (threadState === 'approval') return threadStatusPolicy(thread.status).label
-    if (threadState === 'scheduled') return 'Scheduled'
-    if (threadState === 'temporary-unread') return 'Temporary chat unread'
-    return threadState
+    const primary = isForeignRun
+      ? 'Running in another instance'
+      : isRetryPaused || isWorking
+        ? stageLabel || primaryMark.label
+        : thread.status === 'spec'
+          ? 'Spec ready'
+          : threadState === 'approval'
+            ? threadStatusPolicy(thread.status).label
+            : threadState === 'temporary-unread'
+              ? 'Temporary chat unread'
+              : primaryMark.label
+    return secondaryMark ? `${primary} · ${secondaryMark.label}` : primary
   })
 
   /** Maps ThreadState to StatusBadge props   all colours flow through the
@@ -775,6 +804,13 @@
       icon?: Component | null
       color?: string
     } | null => {
+      // The dot layouts have one visible mark, so a wait takes it, exactly as it
+      // takes the glyph in the detailed row.
+      if (secondaryMark) {
+        return secondaryStatus === 'draft'
+          ? { stage: 'todo' }
+          : { variant: 'icon', stage: 'working', icon: secondaryMark.icon }
+      }
       switch (threadState) {
         case 'unread':
           return { stage: 'unread' }
@@ -783,13 +819,12 @@
         case 'working':
           // Work owned by another instance keeps the working colour but gets a
           // distinct, still icon: a spinner here would promise live output this
-          // window never receives.
+          // window never receives. The glyph comes from the primary mark, which
+          // is what the spine draws, so the badge and the rail can never name
+          // the same state with two different icons.
           return isForeignRun
-            ? { variant: 'icon', icon: AppWindow, tone: 'working' }
+            ? { variant: 'icon', icon: primaryMark.icon, tone: 'working' }
             : { variant: 'spinner', stage: 'working' }
-        case 'queued':
-        case 'scheduled':
-          return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
           return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
@@ -1196,9 +1231,11 @@
   >
     {#if detailed}
       <!-- State mark: one column holding the pin, then the glyph, then the rail.
-           The glyph names the state and wears its colour; the rail repeats that
-           colour as a line beneath it, so the column reads as one mark and the
-           title's gutter stays flush and even.
+           The rail is the thread's primary status and always speaks for the
+           thread itself; the glyph above it is the secondary status, the thing
+           waiting on the thread, and falls back to the primary when nothing
+           waits. Both are one centred column, so the title's gutter stays flush
+           and even.
            A settled thread draws no rail at all: with nothing left to do it
            should attract no attention, so its row shows the glyph alone.
            The pin is a real control at the top of the column, lit while the
@@ -1242,15 +1279,12 @@
         </span>
         <span
           class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
-          style="color: {spineMark.colour};"
+          style="color: {glyphMark.colour};"
           role="img"
-          title={spineMark.label}
-          aria-label={spineMark.label}
+          title={markLabel}
+          aria-label={markLabel}
         >
-          {#if spineMark}
-            {@const SpineIcon = spineMark.icon}
-            <SpineIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-          {/if}
+          <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
         </span>
         {#if spineRailVisible}
           <span
@@ -1625,11 +1659,7 @@
           {isWorking}
           {isRetryPaused}
           {stageLabel}
-          threadState={threadState === 'queued'
-            ? hasStartAfterPending
-              ? 'scheduled'
-              : 'working'
-            : threadState}
+          threadState={secondaryStatus === 'scheduled' ? 'scheduled' : threadState}
           {isForeignRun}
         />
       </div>

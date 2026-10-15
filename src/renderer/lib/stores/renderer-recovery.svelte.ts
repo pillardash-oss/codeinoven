@@ -314,6 +314,24 @@ export class RendererRecoveryStore {
 
   /** Whether the thread has any unsent composer content (text, attachments, or references). */
   hasDraftContent(projectId: string, threadId: string): boolean {
+    return (
+      this.hasTypedContent(projectId, threadId) ||
+      this.queuedMessageFor(projectId, threadId) !== null ||
+      this.queuedMessagesFor(projectId, threadId).length > 0
+    )
+  }
+
+  /**
+   * Whether the composer holds something the user has typed but not sent.
+   *
+   * This is `hasDraftContent` minus everything already sent. The distinction is
+   * the whole reason the row can report two statuses: a queued message is a
+   * finished action waiting its turn, while text in the composer is the user
+   * still working. A row that folded both together could not tell "waiting to
+   * send" from "typing now", so it could not say which of the two happened
+   * last.
+   */
+  hasTypedContent(projectId: string, threadId: string): boolean {
     const entry = this.entryFor(projectId, threadId)
     return (
       entry.text.length > 0 ||
@@ -321,9 +339,7 @@ export class RendererRecoveryStore {
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
       entry.promptReferences.length > 0 ||
-      entry.startAfterThreads.length > 0 ||
-      this.queuedMessageFor(projectId, threadId) !== null ||
-      this.queuedMessagesFor(projectId, threadId).length > 0
+      entry.startAfterThreads.length > 0
     )
   }
 

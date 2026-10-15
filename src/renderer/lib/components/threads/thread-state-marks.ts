@@ -1,5 +1,6 @@
 import {
   AlarmClock,
+  AppWindow,
   CircleCheck,
   CircleX,
   Clock,
@@ -51,11 +52,6 @@ export interface ThreadStateMark {
   /** How the rail is drawn. Shape is the second carrier beside the colour. */
   dash: 'solid' | 'dashed' | 'dotted'
   /**
-   * Whether the rail is drawn wider. The two states that want the user get it,
-   * so they are findable from across the sidebar without reading a word.
-   */
-  wide?: boolean
-  /**
    * Whether a rail is drawn under the glyph at all.
    *
    * A settled thread draws none: with nothing left to do, the row should attract
@@ -66,7 +62,12 @@ export interface ThreadStateMark {
 }
 
 /**
- * The mark for each row state. Keys match `ThreadState` in ThreadRow.svelte.
+ * The mark for each primary state: the thread's own state, which the rail carries.
+ * Keys match `ThreadState` in ThreadRow.svelte.
+ *
+ * Nothing here describes something waiting on the thread. A draft, a queued
+ * message and a start-after are secondary statuses (`THREAD_SECONDARY_MARKS`),
+ * because they ride above the thread's own state rather than replacing it.
  *
  * Read and completed share a glyph on purpose: both are settled, and the row
  * does not need to spend a mark distinguishing them.
@@ -135,79 +136,95 @@ export const THREAD_STATE_MARKS = {
     label: 'Needs attention',
     tone: 'attention',
     colour: 'var(--color-warning)',
-    dash: 'solid',
-    wide: true
+    dash: 'solid'
   },
   error: {
     icon: CircleX,
     label: 'Failed',
     tone: 'error',
     colour: 'var(--color-danger)',
-    dash: 'solid',
-    wide: true
-  },
-  scheduled: {
-    icon: AlarmClock,
-    label: 'Starts after another thread',
-    tone: 'todo',
-    colour: 'var(--color-info)',
-    dash: 'dotted'
-  },
-  queued: {
-    icon: Clock,
-    label: 'Message queued',
-    tone: 'todo',
-    colour: 'var(--color-info)',
-    dash: 'dotted'
+    dash: 'solid'
   }
 } as const satisfies Record<string, ThreadStateMark>
 
-export type ThreadRowState = keyof typeof THREAD_STATE_MARKS
-
 /**
- * The mark for something waiting on the thread.
+ * The secondary statuses: what is waiting on the thread rather than what the
+ * thread itself is doing.
  *
- * These are not states: a draft, a queued message and a start-after all describe
- * what is waiting rather than what the thread is doing, so they ride the rail as
- * a mark. `scheduled` and `queued` are related but deliberately distinct: a
- * queued message waits behind this thread's own running turn and wears the
- * clock, while a scheduled one waits for another thread to finish and wears an
- * alarm clock.
+ * A row carries one primary status, drawn on the rail, and at most one secondary
+ * status, drawn as the glyph above it. The secondary slot is the flexible one and
+ * the last action wins: typing takes it, sending hands it to the queue, and
+ * typing the next message takes it back.
+ *
+ * A draft, a queued message and a start-after are all "something is waiting",
+ * which is why none of them is a primary state. The thread's own state survives
+ * underneath: a thread that is working while a message waits keeps the working
+ * rail and wears the clock above it.
+ *
+ * `queued` and `scheduled` are related but deliberately distinct: a queued message
+ * waits behind this thread's own running turn and wears the clock, while a
+ * scheduled one waits for another thread to finish and wears an alarm clock.
  */
-export const THREAD_ACTION_MARKS = {
-  todo: {
+export const THREAD_SECONDARY_MARKS = {
+  draft: {
     icon: SquarePen,
     label: 'Draft in the composer',
     tone: 'todo',
     colour: 'var(--color-muted)',
     dash: 'dashed'
   },
-  scheduled: {
-    icon: AlarmClock,
-    label: 'Starts after another thread',
-    tone: 'todo',
-    colour: 'var(--color-info)',
-    dash: 'dotted'
-  },
   queued: {
     icon: Clock,
     label: 'Message queued',
     tone: 'todo',
     colour: 'var(--color-info)',
     dash: 'dotted'
+  },
+  scheduled: {
+    icon: AlarmClock,
+    label: 'Starts after another thread',
+    tone: 'todo',
+    colour: 'var(--color-info)',
+    dash: 'dotted'
   }
 } as const satisfies Record<string, ThreadStateMark>
 
-export type ThreadRowAction = keyof typeof THREAD_ACTION_MARKS
-
-/** The mark for one row state. */
-export function threadStateMark(state: ThreadRowState): ThreadStateMark {
-  return THREAD_STATE_MARKS[state]
-}
+export type ThreadRowSecondary = keyof typeof THREAD_SECONDARY_MARKS
 
 /** The mark for something waiting on the thread. */
-export function threadActionMark(action: ThreadRowAction): ThreadStateMark {
-  return THREAD_ACTION_MARKS[action]
+export function threadSecondaryMark(secondary: ThreadRowSecondary): ThreadStateMark {
+  return THREAD_SECONDARY_MARKS[secondary]
+}
+
+/**
+ * The mark for a run another instance owns.
+ *
+ * The thread is working right now, but this window receives none of that work,
+ * so the working mark's pickaxe promises the reader something false: a turn
+ * running in front of them, with live output and a stop control. A window that
+ * is only a window into another instance's run has neither, so the row says so
+ * with the window glyph instead.
+ *
+ * It wears `--color-thread-working`, which is the working state's own blue and
+ * the blue every other surface already paints this state with: the header chip,
+ * the task list's "Live elsewhere", the trace footer. The state is work, and it
+ * is work this window can watch rather than drive, so the hue is shared and the
+ * glyph alone carries the difference. That keeps the spine and the row's badge
+ * derived from the same vocabulary instead of drifting apart.
+ */
+export const THREAD_FOREIGN_MARK: ThreadStateMark = {
+  icon: AppWindow,
+  label: 'Running in another instance',
+  tone: 'working',
+  colour: 'var(--color-thread-working)',
+  dash: 'solid'
+}
+
+export type ThreadRowState = keyof typeof THREAD_STATE_MARKS
+
+/** The mark for one primary state. */
+export function threadStateMark(state: ThreadRowState): ThreadStateMark {
+  return THREAD_STATE_MARKS[state]
 }
 
 /**
