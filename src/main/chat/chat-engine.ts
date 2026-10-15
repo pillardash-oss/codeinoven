@@ -27426,7 +27426,9 @@ export class ChatEngine {
       Logger.error('history mirror failed:', error)
       if (this.userAbortedSessions.has(sessionId)) return
       const issue = historyMirrorIssue(error, info.driverId)
-      await this.onSessionError(sessionId, issue.message, false, issue.rawError)
+      // The app established this failure while it was already finalizing the
+      // turn, so it may not be deferred to a driver registration.
+      await this.onSessionError(sessionId, issue.message, false, issue.rawError, false)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
       const interviewWaiting =
@@ -29122,7 +29124,15 @@ export class ChatEngine {
     sessionId: string,
     error?: string,
     retryScheduled = false,
-    errorDetail?: string
+    errorDetail?: string,
+    /**
+     * False when the caller has already ruled on the turn's liveness itself:
+     * the watchdog's silence verdict, and a failure the app established on its
+     * own (a history-mirror write). Those must land even while the driver still
+     * registers the turn, so a registration no live process stands behind is
+     * never deferred forever.
+     */
+    deferToLiveDriver = true
   ): Promise<void> {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
@@ -29136,6 +29146,29 @@ export class ChatEngine {
     if (errorDriver?.isSessionBusy) {
       const probe = await probeSessionLiveness(errorDriver, info, sessionId)
       if (probe === 'busy') return
+      // A harness can stop streaming with its turn intact: pi backs off for its
+      // own provider retry and aborts its run to compact and re-prompt inside
+      // the same turn, and codex holds its turn across the retry gaps. A verdict
+      // that lands in one of those gaps describes one request, not the turn, so
+      // finalizing here would fail a working turn's checkpoint and clear the
+      // utility gateway handoff the resumed run is still calling `cio_util_*`
+      // through   the "gateway is not active for this turn" dead end a live
+      // design turn abandoned its preview on. The driver's registration is the
+      // authority: it clears exactly when nothing can resume the turn, and the
+      // watchdog still surfaces a registration its process no longer backs. A
+      // probe that cannot answer at all (wedged or gone) is never deferred to.
+      if (
+        deferToLiveDriver &&
+        probe !== 'wedged' &&
+        this.driverHoldsTurn(sessionId, info.driverId, errorDriver)
+      ) {
+        Logger.dev('Provider failure deferred: the driver still holds the turn', {
+          sessionId,
+          driverId: info.driverId,
+          error: error ?? null
+        })
+        return
+      }
     }
     this.pendingMemoryDecisions.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
@@ -30046,7 +30079,10 @@ export class ChatEngine {
     issue: AgentProviderIssue
   ): Promise<void> {
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
-    await this.onSessionError(sessionId, issue.message, false, issue.rawError)
+    // The watchdog ruled on this session after its own silence window, so its
+    // verdict is authoritative: a driver registration it does not believe in
+    // must not be able to defer the failure out of existence.
+    await this.onSessionError(sessionId, issue.message, false, issue.rawError, false)
     try {
       const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) await driver.abort(info.projectPath, sessionId)

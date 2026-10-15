@@ -721,6 +721,30 @@ export function mapPiRecord(
 
   if (type === 'auto_retry_start') {
     const message = stringValue(entry['errorMessage']) ?? 'Pi is waiting to retry'
+    // The turn is alive for the whole gap: pi retries the failed request inside
+    // it. The driver reads this to answer every liveness question with
+    // "working" instead of "idle", so a retried request can never be mistaken
+    // for the turn's outcome.
+    turnState.providerRetry = true
+    // Only a retry that waits on a usage window is the app-wide will-retry wait:
+    // it can run for an hour, so the thread has to park with a concrete retry
+    // time and an auto-resume. That is what this branch exists for, and its
+    // message carries the reset.
+    //
+    // A transient provider failure (a 5xx, an overloaded endpoint) is not that.
+    // Treating every retry as a usage wait fabricated a one-hour "usage limit
+    // reached" card out of a single 500 and parked a thread that was still
+    // working, while the retry itself lands seconds later. The turn stays
+    // working instead; if the retries are exhausted, `auto_retry_end` reports the
+    // real failure and its classified kind.
+    const kind = classifyProviderIssue(message)
+    if (kind !== 'quota' && kind !== 'rate_limit') {
+      return {
+        events: [
+          { type: 'session.status', sessionId: context.sessionId, status: { state: 'working' } }
+        ]
+      }
+    }
     // When the retry is driven by a usage window, the message carries a
     // parseable reset so the card can show a concrete countdown and the
     // scheduler can resume at the right moment instead of guessing.
@@ -733,7 +757,7 @@ export function mapPiRecord(
           status: {
             state: 'waiting',
             issue: {
-              kind: 'provider_unavailable',
+              kind,
               message,
               harnessId: 'pi',
               retryable: true,
@@ -746,6 +770,7 @@ export function mapPiRecord(
   }
 
   if (type === 'auto_retry_end') {
+    turnState.providerRetry = false
     const success = entry['success'] === true
     if (success) {
       return {
@@ -797,6 +822,9 @@ export function mapPiRecord(
   }
 
   if (type === 'agent_settled') {
+    // The turn is over: no retry of its own can still be in flight, so the
+    // liveness flag must not outlive it.
+    turnState.providerRetry = false
     // A cancelled run can retain its last provider error; cancellation is not
     // a terminal provider failure. Pi 1.1.0 reports it explicitly.
     if (entry['aborted'] === true) return { events: [] }

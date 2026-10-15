@@ -22,6 +22,19 @@ export interface PiTurnState {
    *  `agent_settled` must not finalize the outer turn. */
   compacting?: boolean
   /**
+   * Set while pi backs off for its own provider retry, between
+   * `auto_retry_start` and `auto_retry_end`.
+   *
+   * Pi retries a failed request inside the same turn, so the run is alive but
+   * deliberately not streaming for the whole gap. Every liveness question the
+   * driver answers (`isSessionBusy`, may a prompt be dispatched, may a finished
+   * turn's transport be torn down) has to answer "working" while this is set: a
+   * retry gap reported as idle made the app finalize a live turn, which cleared
+   * the utility gateway handoff the resumed run was still calling `cio_util_*`
+   * through.
+   */
+  providerRetry?: boolean
+  /**
    * The turn's reported usage summed across its requests, guarded against the
    * repeat `turn_end` emits for the final request. Pi opens a turn per request,
    * so this normally equals that request's own usage; it matters when several

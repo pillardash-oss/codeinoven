@@ -2946,6 +2946,14 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
+    // A turn that ends without its own `auto_retry_end` (a watchdog kill, an
+    // abort, a crashed process) must not leave the session reading as retrying:
+    // the flag answers every liveness question, so a stale one would keep the
+    // next turn permanently busy.
+    const endedTurn = this.turnStates.get(session.id)
+    if (endedTurn?.providerRetry === true) {
+      this.turnStates.set(session.id, { ...endedTurn, providerRetry: false })
+    }
     // Reconcile compactions against pi's durable session transcript before
     // persisting: the live RPC event stream loses compaction records on
     // process exit, watchdog finalization, and between-turn compactions, but
