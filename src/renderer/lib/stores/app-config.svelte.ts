@@ -64,6 +64,12 @@ let cioCleanupExcludedCategories = $state<CioCleanupCategoryId[]>([
   ...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
 ])
 /**
+ * Whether a slot missed while the app was closed is dispatched on the next launch.
+ * Mirrored for the assistant panel's Schedule card, which states the recovery
+ * policy it actually follows instead of a fixed sentence that can drift from it.
+ */
+let autoRunMissedAssistantRuns = $state(true)
+/**
  * Saved model profiles, mirrored so the composer can read them without the config
  * being threaded down to it. Held as a plain array of plain records: the config is
  * synced on every `config:changed`, so this is a fresh array each time rather than
@@ -142,6 +148,9 @@ export const appConfigState = {
   get cioCleanupExcludedCategories(): CioCleanupCategoryId[] {
     return cioCleanupExcludedCategories
   },
+  get autoRunMissedAssistantRuns(): boolean {
+    return autoRunMissedAssistantRuns
+  },
   /** Named presets the user applies from the model picker. */
   get modelProfiles(): ModelProfile[] {
     return modelProfiles
@@ -183,6 +192,7 @@ export const appConfigState = {
     cioCleanupExcludedCategories = [
       ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
     ]
+    autoRunMissedAssistantRuns = config.autoRunMissedAssistantRuns
     modelProfiles = config.modelProfiles ?? []
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
