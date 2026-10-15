@@ -40,7 +40,27 @@ export interface AssistantPlanConnection {
 /** The validated plan: the schedule to apply, the connections to link, and how
  *  the assistant reports back to the user. */
 export interface AssistantPlan {
+  /**
+   * The name the user gave the assistant in the conversation, when they gave one
+   * there. The app renames the assistant from this on the same save, so an
+   * assistant built by talking is named by the person who built it rather than
+   * left as the placeholder the create flow had to use.
+   */
+  name: string | null
+  /**
+   * How the user asked the assistant to behave, in their own words. It becomes
+   * the assistant's personality, which rides every turn of its threads.
+   */
+  personality: string | null
+  /**
+   * Whether the assistant keeps a clock at all. A conversation can settle either
+   * way, so the answer travels with the plan: `false` makes the assistant
+   * on-demand, `true` keeps it on the clock, and absent leaves the flag alone.
+   */
+  scheduled: boolean | null
   schedule: AssistantSchedule | null
+  /** What the user calls that clock ("Daily account check"), when they named it. */
+  scheduleName: string | null
   connections: AssistantPlanConnection[]
   /** Where the assistant's output goes; absent for an action-only assistant. */
   delivery: AssistantDelivery | null
@@ -142,8 +162,31 @@ export const ASSISTANT_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
 export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
-  description: 'The machine-readable half of an assistant: when it runs and what it needs.',
+  description: 'The machine-readable half of an assistant: who it is, when it runs, what it needs.',
   properties: {
+    name: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'The name the user gave the assistant in the conversation, verbatim and nothing more ("Jenny"). Omit when they did not name it.'
+    },
+    personality: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'How the user asked the assistant to behave, in their own words, as a short paragraph. Omit when they left it to you.'
+    },
+    scheduled: {
+      type: 'boolean',
+      description:
+        'True when the assistant runs on its own clock, false when it runs only when the user asks. Omit when the user did not say.'
+    },
+    scheduleName: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'What the user calls the clock they asked for ("Daily account check"). Only when `scheduled` is true and they named it.'
+    },
     schedule: {
       anyOf: [ASSISTANT_SCHEDULE_JSON_SCHEMA, { type: 'null' }],
       description:
@@ -162,6 +205,24 @@ export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
 
 /** The plan schema as compact text, ready to paste into an authoring contract. */
 export const ASSISTANT_PLAN_SCHEMA_TEXT = JSON.stringify(ASSISTANT_PLAN_JSON_SCHEMA)
+
+/** Ceiling for the name a plan may carry, matching the store's own limit. */
+const MAX_PLAN_TEXT = 200
+/** Ceiling for the personality a plan may carry, matching the IPC validator. */
+const MAX_PLAN_PERSONALITY = 4_000
+/** Ceiling for the schedule name a plan may carry, matching the IPC validator. */
+const MAX_PLAN_SCHEDULE_NAME = 120
+
+/**
+ * One free-text field of a plan, trimmed and capped, or null when it carries
+ * nothing usable. A value the model did not mean to send (an object, an array, a
+ * blank string) contributes nothing rather than becoming the assistant's name.
+ */
+function normalizeReadableText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  return text.length > 0 ? text.slice(0, maxLength) : null
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -252,12 +313,27 @@ export function normalizePlanConnections(value: unknown): AssistantPlanConnectio
  */
 export function parseAssistantPlanValue(value: unknown): AssistantPlan | null {
   if (!isRecord(value)) return null
+  const name = normalizeReadableText(value.name, MAX_PLAN_TEXT)
+  const personality = normalizeReadableText(value.personality, MAX_PLAN_PERSONALITY)
+  const scheduleName = normalizeReadableText(value.scheduleName, MAX_PLAN_SCHEDULE_NAME)
+  const scheduled = typeof value.scheduled === 'boolean' ? value.scheduled : null
   const schedule = normalizePlanSchedule(value.schedule)
   const connections = normalizePlanConnections(value.connections)
   const delivery = normalizePlanDelivery(value.delivery)
   const priority = normalizePlanPriority(value.priority)
-  if (!schedule && connections.length === 0 && !delivery && !priority) return null
-  return { schedule, connections, delivery, priority }
+  if (
+    !schedule &&
+    connections.length === 0 &&
+    !delivery &&
+    !priority &&
+    !name &&
+    !personality &&
+    !scheduleName &&
+    scheduled === null
+  ) {
+    return null
+  }
+  return { name, personality, scheduled, schedule, scheduleName, connections, delivery, priority }
 }
 
 /** Parse a JSON plan body (the `assistant` fence) against the plan schema. */

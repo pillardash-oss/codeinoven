@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Clock, ListChecks, Plug } from '@lucide/svelte'
+  import { Check, Clock, ListChecks, Plug, Signature, Sparkles } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -59,19 +59,26 @@
 
   let folded = $state(false)
 
+  /**
+   * Whether the assistant ends up on a clock. The conversation settles that as
+   * well as the schedule itself, so a recap that turned the clock off says so
+   * instead of showing the assistant's stored flag.
+   */
+  const keepsClock = $derived(plan?.scheduled ?? scheduled)
+
   // An assistant that is already saved keeps everything the revision does not name,
   // so a plan that omits the schedule or the connections is not an empty one.
   // An on-demand assistant has no schedule at all, so it never reads as one left
   // unset.
-  const scheduleLabel = $derived(
-    !scheduled
-      ? 'Runs on demand'
-      : plan?.schedule
-        ? describeSchedule(plan.schedule)
-        : update
-          ? 'Kept as saved'
-          : 'No schedule agreed yet'
-  )
+  const scheduleLabel = $derived.by(() => {
+    if (!keepsClock) return 'Runs on demand'
+    const cadence = plan?.schedule
+      ? describeSchedule(plan.schedule)
+      : update
+        ? 'Kept as saved'
+        : 'No schedule agreed yet'
+    return plan?.scheduleName ? `${plan.scheduleName} · ${cadence}` : cadence
+  })
   const sectionCount = $derived(parseKnowledgeSections(knowledge).length)
   /** The connections the assistant has once this recap is saved. */
   const connectionNames = $derived(
@@ -83,11 +90,13 @@
     )
   )
 
-  const cardTitle = $derived(`${update ? 'Ready to update' : 'Ready to save'} ${assistantName}`)
+  const cardTitle = $derived(
+    `${update ? 'Ready to update' : 'Ready to save'} ${plan?.name ?? assistantName}`
+  )
 
   const saveTitle = $derived(
     (update ? "Save the assistant's revised " : "Save the assistant's ") +
-      (scheduled ? 'instructions, schedule, and connections' : 'instructions and connections')
+      (keepsClock ? 'instructions, schedule, and connections' : 'instructions and connections')
   )
 </script>
 
@@ -115,6 +124,27 @@
       </p>
 
       <dl class="flex flex-col gap-1">
+        {#if plan?.name}
+          <div class="flex items-start gap-2">
+            <dt class="flex shrink-0 items-center gap-1.5 text-dimmed" title="The name you gave it">
+              <Signature size={12} strokeWidth={1.8} />
+              <span>Name</span>
+            </dt>
+            <dd class="min-w-0 flex-1 text-foreground">{plan.name}</dd>
+          </div>
+        {/if}
+        {#if plan?.personality}
+          <div class="flex items-start gap-2">
+            <dt
+              class="flex shrink-0 items-center gap-1.5 text-dimmed"
+              title="How it behaves and sounds"
+            >
+              <Sparkles size={12} strokeWidth={1.8} />
+              <span>Personality</span>
+            </dt>
+            <dd class="min-w-0 flex-1 text-foreground">{plan.personality}</dd>
+          </div>
+        {/if}
         <div class="flex items-start gap-2">
           <dt
             class="flex shrink-0 items-center gap-1.5 text-dimmed"

@@ -496,11 +496,19 @@ thread names its assistant at a glance instead of showing no mark at all.
 
 - **Search** (`AssistantSearchControl.svelte`) filters assistants, tasks, and runs.
   Runs get their own result section, since a run is a row on the sidebar too.
-- **New assistant** (`AssistantCreateControl.svelte`) asks only for a title and an
-  optional **description** (a note for the user; it is never sent to the agent),
-  then immediately seeds the **Getting started** thread, exactly as adding a
-  project opens a first thread, and opens the assistant panel. No model is
-  requested: the primary is the model the user is already working on.
+- **New assistant** (`AssistantCreateControl.svelte`) asks for the assistant's name
+  and, optionally, how it should behave and what its clock is called. Cancel sits at
+  the bottom left; the two ways forward sit on the right. **Create assistant** stores
+  the assistant and seeds the **Getting started** thread, exactly as adding a project
+  opens a first thread. **Create via chat** stores an assistant with nothing known
+  about it and posts the app-owned opening turn (`assistant:startChatSetup`), so the
+  assistant asks the user its questions itself: the turn's visible half is one line
+  ("Creating a new assistant via chat") and the instruction the model receives is
+  hidden, exactly like the saved-assistant next-steps turn. That turn carries the
+  `user` origin, which is what attaches the authoring contract to it; an internal
+  turn would reach the model with the opening line and no contract at all. No model
+  is requested on either path: the primary is the model the user is already working
+  on.
 - **New task** creates a task, and is assistant-aware: when the user is inside a
   assistant (the selected task belongs to one, or its knowledge panel is docked) the
   task is created inside that assistant; otherwise it is assistant-less.
@@ -732,10 +740,41 @@ assistant's own clock, so the assistant still has a scheduled job the moment it 
 created. The user switches a function on from its row, or the agent schedules it
 in the knowledge.
 
-## How-to authoring
+## Knowledge authoring
 
 Every assistant has a required knowledge. The UI **never** uses the term "system
 prompt"; the user-facing term is knowledge.
+
+### The setup conversation
+
+The authoring contract (`assistantAuthoringContext`, `src/lib/assistant-authoring.ts`)
+walks the interview in one order, one question at a time, and the same order holds
+whether the assistant came from the form or from the chat path:
+
+1. the name the user gives it (`name`),
+2. how they want it to behave, in their own words (`personality`),
+3. the activities they want it to take on,
+4. whether it runs on a clock, and, when it does, what they call that clock
+   (`scheduled`, `scheduleName`) and the cadence and times (`schedule`),
+5. everything it needs to run: the services, the accounts, the tools.
+
+Every answer is reflected back in one short line before the next question, and the
+app-owned checkpoint is saved at the same time, so the user can see that they and
+the assistant are on the same page. The contract asks through the question tool
+whenever the answer is a choice or a short phrase, because that is where the user
+can answer by voice and where the answer is recorded as a resolved decision.
+
+When the work the user asked for is technical, medical, legal or otherwise
+specialist, the contract asks once whether they want to be spoken to in that
+language, and records the answer so every later run keeps to it.
+
+The answers that are not prose travel in the plan block's identity fields
+(`name`, `personality`, `scheduled`, `scheduleName`), validated by
+`parseAssistantPlanValue` (`src/lib/assistant-plan.ts`), and the recap commit
+applies them to the assistant on the same save as the knowledge
+(`saveAssistantKnowledge` in `ThreadView.svelte`). That is how an assistant built by
+talking ends up with the name the user gave it rather than the placeholder the
+create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
 
 - An assistant shows an amber **Incomplete** icon (`AlertTriangle`,
   `--color-warning`) whenever it cannot run yet, with the exact gap on hover.

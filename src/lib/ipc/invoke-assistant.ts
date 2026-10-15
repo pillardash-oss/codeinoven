@@ -82,6 +82,12 @@ export const invokeAssistantContract = {
    * Getting started thread makes this a no-op.
    */
   'assistant:postSetup': {} as Contract<[assistantId: string], void>,
+  /**
+   * Open a brand-new assistant's first conversation, for the create-by-chat flow:
+   * the user sees one line saying a new assistant is being created, and the model
+   * is told to run the setup conversation.
+   */
+  'assistant:startChatSetup': {} as Contract<[assistantId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   /** Read user-skipped scheduled slots used to calculate each task's next run. */
   'assistant:listSkippedRuns': {} as Contract<[], SkippedRun[]>,

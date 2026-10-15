@@ -575,11 +575,34 @@ describe('assistant plan schema', () => {
     expect(
       parseAssistantPlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
     ).toEqual({
+      name: null,
+      personality: null,
+      scheduled: null,
+      scheduleName: null,
       schedule: { cadence: 'once', times: [], onceAt: 1_700_000_000_000 },
       connections: [],
       delivery: null,
       priority: null
     })
+  })
+
+  it('keeps the name, the personality and the clock the conversation settled', () => {
+    const plan = parseAssistantPlanValue({
+      name: '  Jenny  ',
+      personality: 'You keep my X and LinkedIn moving.',
+      scheduled: false,
+      scheduleName: 'Daily account check',
+      connections: []
+    })
+    expect(plan?.name).toBe('Jenny')
+    expect(plan?.personality).toBe('You keep my X and LinkedIn moving.')
+    expect(plan?.scheduled).toBe(false)
+    expect(plan?.scheduleName).toBe('Daily account check')
+    // A plan that carries only the identity fields is still a plan: the
+    // conversation may settle who the assistant is in one turn and the schedule
+    // in the next.
+    expect(parseAssistantPlanValue({ name: 'Jenny' })?.name).toBe('Jenny')
+    expect(parseAssistantPlanValue({ name: '   ' })).toBeNull()
   })
 
   it('ignores JSON that is not a plan and a non-JSON body', () => {
@@ -606,6 +629,10 @@ describe('assistant plan schema', () => {
     }
     expect(schema.required).toEqual(['schedule', 'connections'])
     expect(Object.keys(schema.properties)).toEqual([
+      'name',
+      'personality',
+      'scheduled',
+      'scheduleName',
       'schedule',
       'connections',
       'delivery',

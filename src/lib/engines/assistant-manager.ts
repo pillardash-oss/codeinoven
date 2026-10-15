@@ -2,7 +2,12 @@ import { generateId, getAssistantPath } from '../utils'
 import { rm } from 'fs/promises'
 import { readIconDataUrl, removeIconFile, storeCustomIconFile } from '../icon-file'
 import type { CustomIconImage } from '../custom-icon'
-import { ASSISTANT_SPACE_ID, isAssistantSetupThread, isAssistantRunThread } from '../types'
+import {
+  ASSISTANT_PLACEHOLDER_NAME,
+  ASSISTANT_SPACE_ID,
+  isAssistantSetupThread,
+  isAssistantRunThread
+} from '../types'
 import { pickColorForSeed } from '../project-colors'
 import { sortAssistants } from '../assistant-order'
 import { assistantOwnedDirectories } from '../thread-storage-paths'
@@ -101,7 +106,7 @@ export class AssistantManager {
     const scheduled = input.scheduled ?? true
     const assistant: Assistant = {
       id: generateId(),
-      name: input.name.trim() || 'New Assistant',
+      name: input.name.trim() || ASSISTANT_PLACEHOLDER_NAME,
       description: input.description?.trim() || undefined,
       personality: input.personality?.trim() || undefined,
       scheduled,

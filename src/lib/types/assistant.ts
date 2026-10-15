@@ -201,6 +201,22 @@ export const ASSISTANT_DEFAULT_FALLBACKS = 2
  */
 export const ASSISTANT_SETUP_TITLE = 'Getting started'
 
+/**
+ * The name an assistant wears until its owner gives it one.
+ *
+ * The create flow needs something to store the moment an assistant exists, and
+ * the chat-creation flow deliberately creates an assistant with nothing known
+ * about it, so the first thing its conversation does is ask what to call it. Any
+ * surface that would otherwise present this as a chosen name checks it against
+ * this constant.
+ */
+export const ASSISTANT_PLACEHOLDER_NAME = 'New assistant'
+
+/** Whether an assistant is still wearing the name it was created with. */
+export function assistantIsUnnamed(assistant: Pick<Assistant, 'name'>): boolean {
+  return assistant.name.trim() === ASSISTANT_PLACEHOLDER_NAME
+}
+
 export interface CreateAssistantInput {
   name: string
   description?: string

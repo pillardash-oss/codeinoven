@@ -346,6 +346,15 @@ class AssistantsState {
   }
 
   /**
+   * Open a brand-new assistant's first conversation, for the create-by-chat flow.
+   * The assistant already exists with nothing known about it; this posts the
+   * app-owned opening turn that starts the setup conversation.
+   */
+  async startChatSetup(assistantId: string): Promise<void> {
+    await invoke('assistant:startChatSetup', assistantId)
+  }
+
+  /**
    * An assistant's knowledge ("Getting started") thread, hidden or not. Hidden rows
    * never reach the hydrated thread list, so the knowledge panel asks for its own
    * assistant's thread here instead of reading the workspace's rows.

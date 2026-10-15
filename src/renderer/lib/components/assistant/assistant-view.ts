@@ -962,6 +962,13 @@ export function parseAssistantPlan(body: string): AssistantPlanDraft | null {
 
   if (!sawAnything) return null
   return {
+    // The prose fallback reads the schedule and the connections only: a name, a
+    // personality or a clock the user named travel in the plan's JSON, where they
+    // are unambiguous.
+    name: null,
+    personality: null,
+    scheduled: null,
+    scheduleName: null,
     schedule: buildPlanSchedule(cadence, times, weekdays),
     connections: [
       ...new Map(connections.map((entry) => [entry.name.toLowerCase(), entry])).values()

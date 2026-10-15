@@ -93,6 +93,7 @@
   } from '$shared/types'
   import {
     activeThreadRowId,
+    ASSISTANT_PLACEHOLDER_NAME,
     ASSISTANT_SETUP_TITLE,
     ASSISTANT_SPACE_ID,
     conversationScopeId,
@@ -2659,6 +2660,7 @@
           component: AssistantCreateControl as unknown as ViewActionItem['component'],
           props: {
             onCreate: createAssistant,
+            onCreateViaChat: createAssistantViaChat,
             trigger: assistantCreateTrigger
           }
         },
@@ -4312,6 +4314,38 @@
     })
     await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
     await openAssistantKnowledgeFor(assistant)
+  }
+
+  /**
+   * Create an assistant by talking to it.
+   *
+   * It exists straight away with nothing known about it, its Getting started
+   * conversation is seeded exactly like the form's, and the app posts the opening
+   * turn: the user reads one line saying a new assistant is being created, and the
+   * model is told to run the setup conversation, starting with the name. The
+   * answers land back on the assistant when the recap is saved, so the name the
+   * user gives it in the conversation is the name every surface then uses.
+   */
+  async function createAssistantViaChat(): Promise<void> {
+    if (!assistantProject) return
+    const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const assistant = await assistants.createAssistant({
+      name: ASSISTANT_PLACEHOLDER_NAME,
+      agents
+    })
+    await createThreadInProject(assistantProject, undefined, {
+      assistantId: assistant.id,
+      gettingStarted: true
+    })
+    await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
+    await openAssistantKnowledgeFor(assistant)
+    try {
+      await assistants.startChatSetup(assistant.id)
+    } catch (error) {
+      // The assistant exists and its conversation is open, so a failed opening
+      // turn is not fatal: the user can send the first message themselves.
+      reportError(error, 'The first question could not be asked')
+    }
   }
 
   /** Create a task inside an assistant and open the assistant's knowledge panel. */

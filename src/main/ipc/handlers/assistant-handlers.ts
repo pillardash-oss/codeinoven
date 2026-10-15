@@ -3,6 +3,10 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
 import { ASSISTANT_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
+import {
+  ASSISTANT_CHAT_SETUP_ACTION,
+  ASSISTANT_CHAT_SETUP_PROMPT
+} from '../../../lib/assistant-chat-setup'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 import {
@@ -596,6 +600,47 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       undefined,
       undefined,
       'internal'
+    )
+  })
+
+  /**
+   * Open a new assistant's first conversation when the user chose to build it by
+   * talking rather than through the form. The assistant already exists and knows
+   * nothing, so this posts the app-owned opening turn: the user reads one line
+   * saying a new assistant is being created, and the model receives the setup
+   * instruction, which is never shown.
+   *
+   * The turn carries the `user` origin even though the user did not write it. That
+   * is what attaches the authoring contract to it: the contract rides the system
+   * prompt of a user turn on an assistant with no knowledge yet, and it is the part
+   * that carries the setup order and the mechanics. An internal turn would reach
+   * the model with the opening line alone and no contract to follow. An assistant
+   * with no Getting started thread, a hidden one, or one with no bound settings
+   * makes this a no-op.
+   */
+  ipcMain.handle('assistant:startChatSetup', async (_, assistantId: unknown) => {
+    const id = validateEntityId(assistantId, 'Assistant ID')
+    const assistant = assistantManager.getAssistant(id)
+    const thread = assistantManager.knowledgeThread(id)
+    const chatEngine = ctx.chatEngine
+    if (!assistant || !thread || thread.archived || !thread.settings || !chatEngine) return
+    const primary = assistantPrimaryModel(assistant.agents)
+    const settings = primary
+      ? settingsWithAssistantModel(thread.settings, primary)
+      : thread.settings
+    await chatEngine.sendPrompt(
+      thread.projectId,
+      thread.id,
+      settings,
+      ASSISTANT_CHAT_SETUP_PROMPT,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'user',
+      { action: ASSISTANT_CHAT_SETUP_ACTION }
     )
   })
 

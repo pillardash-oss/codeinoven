@@ -232,6 +232,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import {
+    ASSISTANT_PLACEHOLDER_NAME,
     ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
     GLOBAL_BROWSER_PROJECT_ID,
@@ -7185,6 +7186,13 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  /**
+   * Whether the assistant still wears the name the create flow had to store.
+   * Nothing about an assistant built by talking is known at first, so the copy
+   * that would otherwise greet it by name says what is happening instead.
+   */
+  const assistantUnnamed = $derived(assistantName === ASSISTANT_PLACEHOLDER_NAME)
+
   /** The assistant's own connection labels, for the recap card's kept ones. */
   const existingAssistantConnections = $derived(
     assistant?.connections.map((connection) => connection.label) ?? []
@@ -7397,11 +7405,19 @@
     try {
       const plan = draft.plan
       const assistant = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
-      const scheduled = assistant ? assistantIsScheduled(assistant) : true
+      const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
       const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
+      // A conversation settles who the assistant is as well as what it does, so a
+      // plan that carries the name the user gave it, the way they asked it to
+      // behave, or a clock they did or did not want is applied on the same save.
+      if (plan?.name) patch.name = plan.name
+      if (plan?.personality) patch.personality = plan.personality
+      if (typeof plan?.scheduled === 'boolean') patch.scheduled = plan.scheduled
+      const scheduled = plan?.scheduled ?? wasScheduled
       // An on-demand assistant has no schedule, so a plan that still carries one
       // (an agent that did not know) can never re-schedule it here.
       if (plan?.schedule && scheduled) patch.schedule = plan.schedule
+      if (plan?.scheduleName && scheduled) patch.scheduleName = plan.scheduleName
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
@@ -7413,7 +7429,9 @@
         )
       }
       await assistants.updateAssistant(assistantId, patch)
-      toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
+      // The name is the one part of the save the user should see confirmed, since
+      // it is what the sidebar and every later message will call the assistant.
+      toast.success(plan?.name ? `Saved as ${plan.name}` : 'Saved')
       assistantRecapDismissed = ''
       return true
     } catch (error) {
@@ -13876,7 +13894,10 @@
                     {assistantName ?? thread.title}
                   </h1>
                   <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
-                    {#if assistantName && !assistantKnowledgeComplete}
+                    {#if assistantName && assistantUnnamed && !assistantKnowledgeComplete}
+                      Your new assistant is getting to know you. Answer its first question and it
+                      takes it from there.
+                    {:else if assistantName && !assistantKnowledgeComplete}
                       Tell {assistantName} what you want it to handle. It asks what it needs, and writes
                       down what it learns so every run follows it.
                     {:else if assistantName}

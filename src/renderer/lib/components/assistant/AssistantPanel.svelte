@@ -34,6 +34,7 @@
     assistantAgentsComplete,
     assistantKnowledgeComplete,
     assistantIsScheduled,
+    assistantIsUnnamed,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
@@ -208,8 +209,14 @@
   })
 
   const collapsed = new SvelteSet<string>()
-  /** The assistant's name, for copy that would otherwise repeat "this assistant". */
-  const assistantLabel = $derived(assistant?.name?.trim() || 'your assistant')
+  /**
+   * The assistant's name, for copy that would otherwise repeat "this assistant".
+   * An assistant that has not been named yet (the create-by-chat flow starts with
+   * no name at all) is described by what it is rather than by a placeholder.
+   */
+  const assistantLabel = $derived(
+    assistant && !assistantIsUnnamed(assistant) ? assistant.name : 'your new assistant'
+  )
   let editingId = $state<string | null>(null)
   let editDraft = $state('')
 

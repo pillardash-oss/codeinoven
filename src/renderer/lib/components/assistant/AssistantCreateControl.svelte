@@ -11,13 +11,20 @@
      * know and writes its knowledge with the user.
      */
     onCreate: (draft: NewAssistantDraft) => void | Promise<void>
+    /**
+     * Build the assistant by talking to it instead of from this form. The host
+     * creates an assistant with nothing known about it and opens its first
+     * conversation, where the assistant itself asks for the name, the personality
+     * and the rest, one question at a time.
+     */
+    onCreateViaChat?: () => void | Promise<void>
     title?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
     trigger?: number
   }
 
-  let { onCreate, title = 'New assistant', trigger = 0 }: Props = $props()
+  let { onCreate, onCreateViaChat, title = 'New assistant', trigger = 0 }: Props = $props()
 
   let open = $state(false)
   let name = $state('')
@@ -53,13 +60,34 @@
         scheduleName: scheduleName.trim()
       })
       open = false
-      name = ''
-      personality = ''
-      scheduled = true
-      scheduleName = ''
+      resetForm()
     } finally {
       busy = false
     }
+  }
+
+  /**
+   * Hand the whole thing to the conversation. Nothing typed in this form is used:
+   * the assistant exists straight away with nothing known about it, and it asks
+   * for all of it, starting with the name.
+   */
+  async function submitViaChat(): Promise<void> {
+    if (busy || !onCreateViaChat) return
+    busy = true
+    try {
+      await onCreateViaChat()
+      open = false
+      resetForm()
+    } finally {
+      busy = false
+    }
+  }
+
+  function resetForm(): void {
+    name = ''
+    personality = ''
+    scheduled = true
+    scheduleName = ''
   }
 </script>
 
@@ -151,23 +179,43 @@
   </form>
 
   {#snippet footer()}
-    <div class="flex justify-end gap-2">
+    <!-- Cancel sits on the left, away from the two ways forward: the user who
+         opened this by accident reaches for the far corner, and the choice that
+         matters is the one between creating it here and building it by talking. -->
+    <div class="flex w-full items-center justify-between">
       <button
         type="button"
         data-modal-dismiss
         class="px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        onclick={() => (open = false)}
+        title="Close without creating an assistant"
+        onclick={() => {
+          resetForm()
+          open = false
+        }}
       >
         Cancel
       </button>
-      <button
-        type="submit"
-        data-modal-primary
-        class="bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={!canSubmit}
-      >
-        Create assistant
-      </button>
+      <div class="flex items-center gap-2">
+        {#if onCreateViaChat}
+          <button
+            type="button"
+            class="px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title="Let the assistant ask you the questions instead of filling this in"
+            disabled={busy}
+            onclick={() => void submitViaChat()}
+          >
+            Create via chat
+          </button>
+        {/if}
+        <button
+          type="submit"
+          data-modal-primary
+          class="bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          disabled={!canSubmit}
+        >
+          Create assistant
+        </button>
+      </div>
     </div>
   {/snippet}
 </Modal>
