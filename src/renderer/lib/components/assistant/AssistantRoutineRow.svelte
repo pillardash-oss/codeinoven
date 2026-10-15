@@ -4,7 +4,6 @@
     ChevronRight,
     Ellipsis,
     CalendarDays,
-    Hammer,
     Pause,
     Pencil,
     Pin,
@@ -14,6 +13,7 @@
     Trash2
   } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
@@ -432,7 +432,7 @@
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onOpenHowTo(routine)}
           >
-            <Hammer size={14} class="text-muted" />
+            <AssistantIcon mark="how-to" size={14} class="text-muted" />
             How to
           </DropdownMenu.Item>
           <DropdownMenu.Item

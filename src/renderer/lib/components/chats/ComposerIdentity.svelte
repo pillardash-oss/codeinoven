@@ -55,7 +55,8 @@
 </script>
 
 <script lang="ts">
-  import { ChevronDown, Clock1, Folder, Globe, Hammer, RotateCcw } from '@lucide/svelte'
+  import { ChevronDown, Folder, Globe } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
     ROUTINE_ICON_FALLBACK_COLOR,
@@ -184,19 +185,22 @@
     {#if taskIcon}
       <img src={taskIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
     {:else if taskIconKey === 'how-to'}
-      <Hammer
+      <AssistantIcon
+        mark="how-to"
         size={13}
         class="shrink-0 text-dimmed"
         style={taskAccent ? `color: ${taskAccent}` : ''}
       />
     {:else if taskIconKey === 'run'}
-      <RotateCcw
+      <AssistantIcon
+        mark="run"
         size={13}
         class="shrink-0 text-dimmed"
         style={taskAccent ? `color: ${taskAccent}` : ''}
       />
     {:else}
-      <Clock1
+      <AssistantIcon
+        mark="task"
         size={13}
         class="shrink-0 text-dimmed"
         style={taskAccent ? `color: ${taskAccent}` : ''}

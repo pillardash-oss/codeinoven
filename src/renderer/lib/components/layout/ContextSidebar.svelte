@@ -20,6 +20,7 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     browserTabIndicators,
@@ -46,7 +47,6 @@
     Files,
     GitBranch,
     GlobeCode,
-    Hammer,
     Info,
     Maximize2,
     MessageCircleDashed,
@@ -501,7 +501,7 @@
     {:else if tab.kind === 'oven'}
       <Server size={12} class="shrink-0" />
     {:else if tab.kind === 'assistant-how-to'}
-      <Hammer size={12} class="shrink-0 text-primary" />
+      <AssistantIcon mark="how-to" size={12} class="shrink-0 text-primary" />
     {:else}
       <Bot size={12} class="shrink-0" />
     {/if}

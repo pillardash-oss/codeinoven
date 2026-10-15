@@ -43,6 +43,7 @@
   import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import {
     assistantEffectiveSettings,
@@ -114,7 +115,6 @@
     FileDiff,
     FolderTree,
     GlobeCode,
-    Hammer,
     History,
     Info,
     MessageCircleDashed,
@@ -135,6 +135,7 @@
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import AssistantHowToIcon from '$lib/components/icons/AssistantHowToIcon.svelte'
   import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
@@ -292,7 +293,34 @@
     sidebar.expandedFolders.add(thread.projectId)
   }
 
-  async function revealThreadInSidebar(thread: Thread): Promise<void> {
+  /**
+   * Bring a thread's row into view.
+   *
+   * `force` is for a reveal the user asked for by acting on that very row (a
+   * pin, for example). The default honours the reader's hold on the scroll: a
+   * row that is already in view stays put, and this run gives the scroll back
+   * to the thread. A forced reveal wants the row on screen whatever the reader
+   * was looking at and whatever the row's own slot is worth in the sort, so it
+   * skips the in-view check and scrolls either way.
+   */
+  /**
+   * Bring a thread's row into view.
+   *
+   * `force` is for a reveal the user asked for by acting on that very row (a
+   * pin, for example), and it is a different contract from the focus-follow one:
+   * the row the user acted on is what they are looking for now, so it is brought
+   * on screen even when the active thread's row is somewhere else. The reveal
+   * therefore takes the scroll over (the same hold the reader's own gesture
+   * takes) instead of handing it back, and keeps correcting until the row is
+   * actually visible rather than merely rendered, because a pin re-hosts the row
+   * between the Pinned section and its own list and the move is animated.
+   */
+  async function revealThreadInSidebar(thread: Thread, force = false): Promise<void> {
+    // A reveal the user asked for is the reader handing the scroll over: they
+    // are looking for this row now. Taking the hold here is also what keeps the
+    // focus-follow effect from pulling the list back to the active thread's row
+    // a frame later, which is what used to undo this scroll.
+    if (force) sidebarReaderOwnsScroll = true
     // The row can only be measured once it is rendered, so prepare it first.
     prepareThreadRow(thread)
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
@@ -307,7 +335,7 @@
       // late (a folder expanding to reveal the row it holds).
       if (attempt > 0) await nextAnimationFrame()
       scrollThreadRowIntoView(thread.id)
-      if (findThreadRow(thread.id)) break
+      if (force ? isThreadRowVisible(thread.id) : findThreadRow(thread.id)) break
     }
   }
 
@@ -1092,7 +1120,7 @@
           {
             id: 'assistant-how-to',
             label: 'How to',
-            icon: Hammer,
+            icon: AssistantHowToIcon,
             active: dockKindActive('assistant-how-to'),
             onSelect: () =>
               toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
@@ -2820,6 +2848,37 @@
     if (sidebarReaderOwnsScroll && !selectedNewThread && !rowMoved) return
     void revealThreadInSidebar(thread)
   })
+
+  /**
+   * Pinning puts a row in a section of its own, at the top of the sidebar (and
+   * unpinning sends it back into the list it came from), so the thread's row is
+   * re-hosted somewhere else in the DOM either way.
+   *
+   * The scroll does not follow that move on its own: the sort key driving the
+   * follow effect reads the status bucket, not the pinned flag, and a list
+   * reorder commits no status. So a pin used to leave the sidebar where it was,
+   * hiding the very row the user had just pinned   and a folded Pinned section
+   * did not draw the row at all. Open the section the row will land in, so it
+   * has somewhere to be drawn, and let the caller reveal it afterwards.
+   */
+  function openPinnedSection(thread: Thread): void {
+    if (mode === 'assistant') {
+      pinnedFold.setFolded('assistant', false)
+      return
+    }
+    // The row lands in the section named for the view's own thread kind: the
+    // Threads view owns the flat timeline's pinned block, Chats owns the inbox's
+    // chats, and Projects owns its project threads. `setFolded` is a no-op when
+    // the section is already open, so nothing is written for a reader who keeps
+    // it that way.
+    const section =
+      mode === 'threads'
+        ? 'threads'
+        : thread.projectId === INBOX_PROJECT_ID
+          ? 'chats'
+          : 'projects-threads'
+    pinnedFold.setFolded(section, false)
+  }
 
   // Keep the header icon in sync with the active project and icon cache.
   // Reading activeProjectIconUrl also re-syncs after a thread switch: openThread
@@ -4652,10 +4711,20 @@
   }
 
   async function togglePin(thread: Thread): Promise<void> {
+    // A pin re-hosts the row into the Pinned section and an unpin sends it back
+    // into its own list, so both directions move it in the DOM. Open the section
+    // that will hold it   a folded one would not draw the row at all   and then
+    // put the row on screen, because the user acted on that row and expects to
+    // see where it went (see `openPinnedSection`, `revealThreadInSidebar`).
+    openPinnedSection(thread)
     const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
     upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
+    // The reopen above is synchronous, so the incoming list may be measured in
+    // the same task. A section that had to unfold mounts its rows a tick later,
+    // which the reveal's own retry covers.
+    await revealThreadInSidebar(updated, true)
   }
 
   async function handleDelete(thread: Thread): Promise<void> {
