@@ -80,32 +80,22 @@
         onHover={() => onOptionHover(option.id)}
       >
         {#snippet badge()}
-          {#if badges.activity || badges.error || badges.unread}
+          {#if badges.activity || badges.unread}
+            <!-- One container for every indicator this item carries, anchored at
+                 its top-right corner. Each indicator takes a row of its own: the
+                 rail is against the left edge of the window, so a wider row would
+                 grow left, past the edge, and out of the viewport. Stacking keeps
+                 the container no wider than its widest indicator, which fits
+                 inside the item, and the 4px overhang is the only part that
+                 reaches past the rail. -->
             <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
-              <!-- Every status that is not unread shares one row in the corner, so
-                   a family that is both working and failing shows both counts side
-                   by side instead of one hiding the other. Unread keeps the row
-                   under them, because it says somebody should look rather than
-                   what the work is doing. -->
-              {#if badges.activity || badges.error}
-                <span class="flex items-center gap-0.5">
-                  {#if badges.activity}
-                    <WorkingCountBadge
-                      icon={badges.activity.icon}
-                      count={badges.activity.count}
-                      label={badges.activity.label}
-                      tone={badges.activity.tone}
-                    />
-                  {/if}
-                  {#if badges.error}
-                    <WorkingCountBadge
-                      icon={badges.error.icon}
-                      count={badges.error.count}
-                      label={badges.error.label}
-                      tone={badges.error.tone}
-                    />
-                  {/if}
-                </span>
+              {#if badges.activity}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
+                />
               {/if}
               {#if badges.unread}
                 <WorkingCountBadge

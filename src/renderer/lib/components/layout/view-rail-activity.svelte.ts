@@ -39,14 +39,6 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 export interface ViewFamilyActivity {
   working: number
   attention: number
-  /**
-   * Threads that ended in failure, counted whatever the user has read.
-   *
-   * Its own group rather than part of attention: a failure is a total the strip
-   * reports, and a count that stayed out of the total until the thread was opened
-   * could not be one.
-   */
-  error: number
   retry: number
 }
 
@@ -72,8 +64,6 @@ export interface ViewBadge {
 export interface ViewRailBadges {
   activity: ViewBadge | null
   unread: ViewBadge | null
-  /** The family's failed threads, in the error tone, beside the activity pill. */
-  error: ViewBadge | null
   /** A browser surface behind this item is playing sound right now. */
   playing: boolean
 }
@@ -115,7 +105,7 @@ const subscribeToRetryClock = createSubscriber((update) => {
 })
 
 function emptyFamilyActivity(): ViewFamilyActivity {
-  return { working: 0, attention: 0, retry: 0, error: 0 }
+  return { working: 0, attention: 0, retry: 0 }
 }
 
 /** The family a rail view belongs to. Every project-mode view shares one badge. */
@@ -130,7 +120,7 @@ function plural(noun: string, count: number): string {
 }
 
 /** Tooltip/aria text naming every active group in the family, so a hidden
- *  attention, error or retry group is still reachable from the single pill. */
+ *  attention or retry group is still reachable from the single pill. */
 function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyActivity): string {
   const noun = FAMILY_NOUN[family]
   const parts: string[] = []
@@ -144,9 +134,6 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
       } attention`
     )
   }
-  if (activity.error > 0) {
-    parts.push(`${activity.error} ${plural(noun, activity.error)} failed`)
-  }
   if (activity.retry > 0) {
     parts.push(`${activity.retry} ${plural(noun, activity.retry)} waiting to retry`)
   }
@@ -154,28 +141,13 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
 }
 
 /**
- * A failure group's own pill: the error tone and the total that failed.
- *
- * It rides beside the activity pill rather than replacing it, so a family that is
- * working and has failures shows both instead of the failure hiding behind the
- * working count.
- */
-function errorBadgeFor(family: ContentThreadFamily, activity: ViewFamilyActivity): ViewBadge | null {
-  if (activity.error <= 0) return null
-  return {
-    tone: 'error',
-    count: activity.error,
-    label: `${activity.error} ${plural(FAMILY_NOUN[family], activity.error)} failed`,
-    icon: FAMILY_ICONS[family]
-  }
-}
-
-/**
  * Thread counts per family, feeding the activity badges on the view rail.
  *
  * Working threads wear the working tone; threads parked on `working-paused`
- * wear the retry tone; threads in `awaiting_approval` or `failed` wear the
- * attention tone (error-red when a failure is inside the family). A badge
+ * wear the retry tone; threads parked on the user (a permission, question or
+ * secret) wear the attention tone. A failure is deliberately absent: the rail
+ * carries what the family is doing, and the failed total lives on the row strip
+ * whose red count can show it without crowding the rail's corner. A badge
  * carries its count and never animates, because a running animation keeps the
  * compositor producing frames for as long as it runs, which a parked state can
  * hold open indefinitely. Orchestration children are folded into their
@@ -212,10 +184,6 @@ export class ViewRailActivity {
       }
       if (thread.status === 'working-paused') {
         bucket.retry += 1
-        continue
-      }
-      if (thread.status === 'failed') {
-        bucket.error += 1
         continue
       }
       if (thread.status === 'awaiting_approval') {
@@ -284,8 +252,7 @@ export class ViewRailActivity {
         activity.working += 1
         continue
       }
-      if (thread.status === 'failed') activity.error += 1
-      else if (thread.status === 'awaiting_approval') activity.attention += 1
+      if (thread.status === 'awaiting_approval') activity.attention += 1
       else if (thread.status === 'working-paused') activity.retry += 1
     }
     return activity
@@ -357,13 +324,12 @@ export function viewBadgesFor(
       activity:
         browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
       unread: null,
-      error: errorBadgeFor('chats', browserAssistantActivity),
       playing: audio.global
     }
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) {
-    return { activity: null, unread: null, error: null, playing: false }
+    return { activity: null, unread: null, playing: false }
   }
   // The project family shares one badge option, so its sound mark rides the same
   // option its activity badge does; Chats and Assistant own their single view.
@@ -387,7 +353,6 @@ export function viewBadgesFor(
       : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
-  const errorBadge = errorBadgeFor(family, activity)
   if (activity.working > 0) {
     return {
       activity: {
@@ -397,7 +362,6 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      error: errorBadge,
       playing
     }
   }
@@ -410,7 +374,6 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      error: errorBadge,
       playing
     }
   }
@@ -423,11 +386,10 @@ export function viewBadgesFor(
         icon
       },
       unread: unreadBadge,
-      error: errorBadge,
       playing
     }
   }
-  return { activity: null, unread: unreadBadge, error: errorBadge, playing }
+  return { activity: null, unread: unreadBadge, playing }
 }
 
 /**
