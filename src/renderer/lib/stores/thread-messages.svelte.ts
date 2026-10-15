@@ -9,7 +9,7 @@
  * pure merge rules in `thread-messages-merge.ts`, and streaming/event
  * application in `thread-messages-events.svelte.ts`.
  */
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -89,6 +89,16 @@ class ThreadMessagesStore {
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as AgentEvent | undefined
       if (event) this.events.handle(event)
+    })
+    // A sibling instance writes into the very mirror this cache holds, and this
+    // process receives none of those writes, so main names the threads that
+    // changed. A thread this window already cached is re-read from its tail
+    // (additive, so a live turn keeps what it has); a thread it never cached
+    // needs nothing here, because opening it takes the cold-load path that reads
+    // the truth anyway.
+    subscribeGuarded('thread:messagesChanged', (projectId: string, threadId: string) => {
+      if (!this.loaded(projectId, threadId)) return
+      void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
     })
   }
 
