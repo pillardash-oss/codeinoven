@@ -46,9 +46,16 @@
   let { code, artifactKey, projectId, threadId, picks, editingId, onEditClosed, onExit }: Props =
     $props()
 
-  let host: HTMLDivElement | null = null
-  let shadowRoot: ShadowRoot | null = null
-  let mounted = $state(false)
+  /**
+   * The surface and its isolated document.
+   *
+   * Both are reactive rather than plain locals: the pins and the open editor's
+   * anchor are derived from them, and a derived that read a plain variable would
+   * keep the empty answer it computed on the render pass before the attachment
+   * ran, never noticing that the artifact had been mounted underneath it.
+   */
+  let host = $state<HTMLDivElement | null>(null)
+  let shadowRoot = $state<ShadowRoot | null>(null)
   /** The element under the pointer, outlined while it would be picked. */
   let hoverName = $state<string | null>(null)
   /** The pick whose editor this surface opened by itself. */
@@ -64,16 +71,31 @@
     activeEditingId ? (picks.find((pick) => pick.id === activeEditingId) ?? null) : null
   )
 
-  /** Where the open editor anchors: its pin, re-measured as the layout moves. */
+  /**
+   * Where the open editor anchors: its pin, re-measured as the layout moves.
+   *
+   * The pin is the anchor of choice, but never the only one. A pick is made and
+   * its editor opens in the same frame, before the pin has been mounted and
+   * measured, so an anchor that waited for the pin would drop the editor for a
+   * pick the user had just made. The element the pick names stands in, and the
+   * surface itself after that, so a pick is always commentable.
+   */
   const editorAnchor = $derived.by(() => {
     void measureToken
     const pick = editingPick
     if (!pick) return null
     const pin = pinElements.get(pick.id)
-    if (!pin) return null
-    const rect = pin.getBoundingClientRect()
-    return { x: rect.left + rect.width / 2, y: rect.bottom }
+    if (pin) return anchorBelow(pin.getBoundingClientRect())
+    const root = shadowRoot
+    const element = root ? resolvePick(root, pick) : null
+    if (element) return anchorBelow(element.getBoundingClientRect())
+    const box = host?.getBoundingClientRect()
+    return box ? { x: box.left + box.width / 2, y: box.top + 48 } : null
   })
+
+  function anchorBelow(rect: DOMRect): { x: number; y: number } {
+    return { x: rect.left + rect.width / 2, y: rect.bottom }
+  }
 
   /**
    * Where each pick's pin belongs.
@@ -226,9 +248,20 @@
     hoverName = null
   }
 
+  /**
+   * The element a pick at this event takes.
+   *
+   * A click that reaches the surface without landing on a painted element (an
+   * artifact's own margin, a gap between its shapes) still means the artifact, so
+   * the SVG root stands in rather than the gesture doing nothing at all.
+   */
+  function pickTarget(event: Event, root: SVGSVGElement | null): SVGElement | null {
+    return targetUnderPointer(event) ?? root
+  }
+
   function handleClick(event: MouseEvent): void {
-    const root = shadowRoot?.querySelector('svg')
-    const target = targetUnderPointer(event)
+    const root = shadowRoot ? shadowRoot.querySelector<SVGSVGElement>('svg') : null
+    const target = pickTarget(event, root)
     if (!root || !target) return
     // The click is an inspection, not a click on the artifact: nothing inside the
     // SVG should react to it.
@@ -247,8 +280,8 @@
    */
   function handleSurfaceKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
-    const root = shadowRoot?.querySelector('svg')
-    const target = hoveredElement
+    const root = shadowRoot ? shadowRoot.querySelector<SVGSVGElement>('svg') : null
+    const target = hoveredElement ?? root
     if (!root || !target) return
     event.preventDefault()
     addPick(describeTarget(target, root))
@@ -340,7 +373,6 @@
   function mountInspector(node: HTMLDivElement): void {
     host = node
     shadowRoot = node.attachShadow({ mode: 'open' })
-    mounted = true
   }
 
   // The artifact's source and the app's theme can both change while the card is
@@ -350,7 +382,7 @@
     const root = shadowRoot
     const sheet = shadowSheet
     const theme = artifactThemeStyles()
-    if (!mounted || !root) return
+    if (!root) return
     root.innerHTML = `<style>${theme}${sheet}</style>${artifactMarkup()}`
   })
 

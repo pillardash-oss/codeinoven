@@ -82,6 +82,14 @@
    * commented on.
    */
   const viewerOpen = $derived(expanded || focusRequest !== null)
+  /**
+   * Only the expanded viewer ever draws the inspector.
+   *
+   * The inline card behind it would otherwise render a second pick surface, a
+   * second pin on the same element and a second comment editor for the same
+   * pick. The artifact at full size is where a pick is made, so the inline card
+   * stays a plain preview whenever the viewer is open.
+   */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
 
@@ -126,7 +134,7 @@
     <div class="[&>div]:rounded-none [&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if inspecting && annotationScope}
+  {:else if inspecting && annotationScope && fullscreen}
     <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
