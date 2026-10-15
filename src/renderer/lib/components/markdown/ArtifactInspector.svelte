@@ -448,7 +448,8 @@
    */
   const shadowSheet = $derived(`:host { display: block; height: 100%; }
 .cio-stage { position: relative; box-sizing: border-box; display: flex; height: 100%; align-items: center; justify-content: center; padding: 1.25rem; background: var(--color-app); }
-.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }`)
+.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }
+:host([data-inspecting]) .cio-stage, :host([data-inspecting]) svg, :host([data-inspecting]) svg * { cursor: pointer !important; }`)
 
   function artifactMarkup(): string {
     const template = document.createElement('template')
@@ -524,6 +525,7 @@
     <div
       class="h-full w-full overflow-hidden"
       data-artifact-inspector
+      data-inspecting={enabled ? '' : undefined}
       role={enabled ? 'application' : 'img'}
       aria-label={enabled
         ? 'Artifact element inspector: hover an element and click, or press Enter, to comment on it'
@@ -552,7 +554,7 @@
   <!-- The pins live in app DOM rather than inside the artifact: they are app
        controls (focusable, labelled, clickable), and the host never scrolls, so
        an app-space position stays on the element it points at. -->
-  {#each enabled ? pins : [] as pin (pin.id)}
+  {#each pins as pin (pin.id)}
     <button
       type="button"
       class="absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
@@ -583,7 +585,7 @@
   {/if}
 </div>
 
-{#if enabled && editingPick && editorAnchor}
+{#if editingPick && editorAnchor}
   <ResponseAnnotationComment
     x={editorAnchor.x}
     y={editorAnchor.y}
