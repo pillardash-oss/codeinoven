@@ -1,6 +1,6 @@
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-import { MessagesSquare, Workflow } from '@lucide/svelte'
+import { MessagesSquare } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
@@ -8,7 +8,7 @@ import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-import { getRoutineIcon } from '$lib/routine-icons'
+import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
 import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
 import { threadScopeBucket } from '$lib/threads/thread-scope'
 import {
@@ -255,10 +255,10 @@ export class ThreadSearchPaletteController {
         return {
           label: routine.name,
           ...(routine.color ? { color: routine.color } : {}),
-          ...(iconUri ? { iconUri } : { icon: Workflow })
+          ...(iconUri ? { iconUri } : { icon: RoutineDefaultIcon })
         }
       }
-      return { label: 'Assistant', icon: Workflow }
+      return { label: 'Assistant', icon: RoutineDefaultIcon }
     }
     const project = scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId)
     const iconUri = scopeState.projects.find(
@@ -302,7 +302,7 @@ export class ThreadSearchPaletteController {
           ...(routine.color ? { color: routine.color } : {})
         },
         showSourceBadge: false,
-        ...(iconUri ? { iconUri } : { icon: Workflow }),
+        ...(iconUri ? { iconUri } : { icon: RoutineDefaultIcon }),
         keywords: [routine.name, routine.description ?? ''].filter(Boolean)
       })
       targets.push([id, { routine }])

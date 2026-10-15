@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Workflow } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
 
@@ -62,7 +62,7 @@
   title="New routine"
   onclick={() => (open = true)}
 >
-  <Workflow size={15} strokeWidth={1.8} />
+  <AssistantIcon mark="routine" size={15} />
 </button>
 
 <Modal {open} {title} size="lg" onClose={() => (open = false)}>

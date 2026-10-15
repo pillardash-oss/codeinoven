@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, Search, X } from '@lucide/svelte'
+  import { AlertTriangle, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { routineIsScheduled, type Routine, type Thread } from '$shared/types'
   import { routineGap } from './assistant-view'
@@ -190,11 +191,11 @@
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectTask(task)}
               >
-                {#if task.assistantGettingStarted}
-                  <Hammer size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
-                {:else}
-                  <Clock1 size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
-                {/if}
+                <AssistantIcon
+                  mark={task.assistantGettingStarted ? 'how-to' : 'task'}
+                  size={14}
+                  class="shrink-0 text-muted"
+                />
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
                   >{task.title}</span
                 >
@@ -224,7 +225,7 @@
                       style="color: {routine.color ?? 'var(--color-muted)'}"
                     />
                   {:else}
-                    <Clock1 size={14} strokeWidth={1.8} class="text-muted" />
+                    <AssistantIcon mark="task" size={14} class="text-muted" />
                   {/if}
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"

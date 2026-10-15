@@ -5,17 +5,16 @@
     Ban,
     ChevronRight,
     Gauge,
-    Hammer,
     Maximize2,
     Pause,
     Pencil,
     Play,
     RotateCcw,
     ScrollText,
-    Workflow
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -811,7 +810,7 @@
 {#snippet noRoutineState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
-      <Workflow size={17} strokeWidth={1.6} class="text-dimmed" />
+      <AssistantIcon size={40} class="text-dimmed" />
     </span>
     <p class="text-[0.8125rem] font-medium text-foreground">Not part of a routine</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
@@ -1339,7 +1338,7 @@
       disabled={howToThreadBusy}
       onclick={() => void toggleHowToThread()}
     >
-      <Hammer size={12} strokeWidth={1.8} class="shrink-0" />
+      <AssistantIcon mark="how-to" size={14} class="shrink-0" />
       <span class="truncate">
         {howToThreadHidden ? 'Show how-to thread' : 'Hide how-to thread'}
       </span>

@@ -312,7 +312,7 @@
         {#if routineIcon}
           <img src={routineIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
         {:else}
-          <RoutineDefaultIcon size={14} strokeWidth={1.8} style="color: {color}" />
+          <RoutineDefaultIcon size={14} style="color: {color}" />
         {/if}
       </span>
       <span

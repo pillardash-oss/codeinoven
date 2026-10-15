@@ -868,7 +868,6 @@
             {:else if routineRoot}
               <RoutineDefaultIcon
                 size={14}
-                strokeWidth={1.8}
                 class="shrink-0"
                 style="color: {projectAccentColor ?? 'var(--color-primary)'}"
               />

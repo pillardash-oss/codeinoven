@@ -169,7 +169,6 @@
     {:else}
       <RoutineDefaultIcon
         size={13}
-        strokeWidth={1.8}
         style="color: {routineAccentColor(identity.routine)}"
       />
     {/if}

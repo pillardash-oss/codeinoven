@@ -125,7 +125,6 @@
           {:else}
             <RoutineDefaultIcon
               size={14}
-              strokeWidth={1.8}
               style="color: {headerAssistantRoutine
                 ? routineAccentColor(headerAssistantRoutine)
                 : 'var(--color-muted)'}"

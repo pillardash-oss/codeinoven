@@ -1,6 +1,6 @@
-import { Workflow } from '@lucide/svelte'
 import { getIconSvgDataUrl } from './project-svg-icons'
 import { getCustomSvgDataUrl } from '../../lib/custom-svg-tint'
+import AssistantRoutineIcon from './components/icons/AssistantRoutineIcon.svelte'
 
 /** Muted tint used when a routine declares no accent colour of its own. */
 export const ROUTINE_ICON_FALLBACK_COLOR = '#8b95a5'
@@ -11,8 +11,13 @@ export const ROUTINE_ICON_FALLBACK_COLOR = '#8b95a5'
  * A routine's name is often a whole sentence ("Check my slack messages every
  * morning and evening"), so surfaces never print that name where a routine icon
  * is expected: a routine always has a mark, by falling back to this one.
+ *
+ * It is the app's own assistant mark rather than a generic Lucide glyph, because
+ * every assistant surface falls back to it and the mark is what makes the
+ * assistant read as one place. The generic mark made it read as an unnamed
+ * module instead of the product's own helper.
  */
-export const RoutineDefaultIcon = Workflow
+export const RoutineDefaultIcon = AssistantRoutineIcon
 
 /** Minimal routine shape needed to resolve an icon or an accent colour. */
 export interface RoutineAppearanceSource {

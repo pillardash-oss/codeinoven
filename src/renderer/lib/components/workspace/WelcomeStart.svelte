@@ -1,17 +1,17 @@
 <script lang="ts">
   import {
-    Clock1,
     FolderGit2,
     FolderPlus,
     GraduationCap,
     MessageSquarePlus,
     PanelLeft,
-    Settings2,
-    Workflow
+    Settings2
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
+  import AssistantRoutineIcon from '$lib/components/icons/AssistantRoutineIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
 
   interface Props {
     /**
@@ -107,7 +107,7 @@
     if (onNewRoutine) {
       items.push({
         id: 'new-routine',
-        icon: Workflow,
+        icon: AssistantRoutineIcon,
         title: 'Start a new routine',
         description: 'A job that repeats, with a how-to the agent works from',
         run: () => onNewRoutine?.(),
@@ -117,7 +117,7 @@
     if (onNewTask) {
       items.push({
         id: 'new-task',
-        icon: Clock1,
+        icon: AssistantTaskIcon,
         title: 'Start a new task',
         description: 'One piece of work for the agent, with no schedule',
         run: () => onNewTask?.()

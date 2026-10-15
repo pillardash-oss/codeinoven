@@ -5,15 +5,13 @@
     ArrowRightLeft,
     CalendarClock,
     CalendarOff,
-    Clock1,
-    Hammer,
     Loader2,
     Pin,
-    RotateCcw
   } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -156,6 +154,9 @@
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
+
+  /** The assistant marks tint with the routine's accent, or the muted ink. */
+  const iconStyle = $derived(`color: ${color ?? 'var(--color-muted)'}`)
 
   /** Live-work flags, settled by the same run state the thread rows use so a
    *  stale persisted status cannot keep a spinner alive after the turn ended.
@@ -379,26 +380,16 @@
       {#if taskIcon}
         <img src={taskIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
       {:else if iconKey === 'how-to'}
-        <Hammer
+        <AssistantIcon
+          mark="how-to"
           size={14}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
+          style={iconStyle}
           aria-hidden="true"
         />
       {:else if iconKey === 'run'}
-        <RotateCcw
-          size={13}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
-          aria-hidden="true"
-        />
+        <AssistantIcon mark="run" size={14} style={iconStyle} aria-hidden="true" />
       {:else}
-        <Clock1
-          size={14}
-          strokeWidth={1.8}
-          style="color: {color ?? 'var(--color-muted)'}"
-          aria-hidden="true"
-        />
+        <AssistantIcon mark="task" size={14} style={iconStyle} aria-hidden="true" />
       {/if}
     </span>
 

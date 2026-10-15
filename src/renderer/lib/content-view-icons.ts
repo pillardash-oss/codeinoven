@@ -1,7 +1,8 @@
 import type { Thread } from '$shared/types'
-import { BotMessageSquare, MessagesCircle } from '@lucide/svelte'
+import { MessagesCircle } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import { contentThreadFamily, type ContentThreadFamily } from './content-view-threads'
+import AssistantIcon from './components/icons/AssistantIcon.svelte'
 
 /**
  * The mark of every content-view family that is not a user project.
@@ -11,10 +12,14 @@ import { contentThreadFamily, type ContentThreadFamily } from './content-view-th
  * (the Ctrl+Tab thread switcher) draws the same glyph the view switcher uses for
  * that view instead of leaving the slot blank. A project thread resolves its own
  * project icon and never needs these.
+ *
+ * The assistant uses its own mark rather than a Lucide glyph, so the assistant
+ * is recognisable from the icon alone wherever its container is named, and that
+ * mark is the same one every assistant surface falls back to.
  */
 export const CONTENT_FAMILY_ICONS: Record<Exclude<ContentThreadFamily, 'projects'>, Component> = {
   chats: MessagesCircle,
-  assistant: BotMessageSquare
+  assistant: AssistantIcon
 }
 
 /**

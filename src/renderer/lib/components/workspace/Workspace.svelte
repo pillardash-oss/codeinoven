@@ -110,7 +110,6 @@
     Bot,
     BrainCircuit,
     Bug,
-    Clock1,
     Cloud,
     FileDiff,
     FolderTree,
@@ -136,6 +135,7 @@
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
@@ -2634,7 +2634,7 @@
         },
         {
           id: 'new-task',
-          icon: Clock1,
+          icon: AssistantTaskIcon,
           ariaLabel: 'New task',
           title: 'New task',
           shortcut: keymapState.keysFor('assistant-new-task'),
