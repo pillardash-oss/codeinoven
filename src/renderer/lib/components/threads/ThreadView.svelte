@@ -6552,20 +6552,21 @@
     }
   })
   /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
-   *  When a fixed gutter (worker/provider/compaction card, no top padding) sits
-   *  above the composer the button straddles that card's top edge. The queued
-   *  message card and the in-composer image-descriptor card both start 8px
-   *  below the stack edge (pt-2), so they straddle slightly lower. With nothing
-   *  above the composer it keeps the original -2.75rem spot. */
+   *  The button is 1.75rem tall, so the first two spots centre it on the edge it
+   *  perches on: a fixed gutter (worker/provider/compaction card, no top padding)
+   *  puts that edge at the stack top, and the queued message card and the
+   *  in-composer image-descriptor card both start 8px below it (pt-2). With
+   *  nothing above the composer it floats clear of the top rule, its lower edge
+   *  0.5rem above it. Change the button's height and these three move with it. */
   const scrollButtonTop = $derived(
     assignmentWorkerAttentionItems.length > 0 ||
       (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
       compactionInterruptedNotice !== ''
-      ? '-1.125rem'
+      ? '-0.875rem'
       : ((queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread) ||
           (pendingImageDescriptorError !== null && !achievementAutonomous)
-        ? '-0.625rem'
-        : '-2.75rem'
+        ? '-0.375rem'
+        : '-2.25rem'
   )
 
   /** The mounted composer, used to focus the editor in place (no remount). */
@@ -13566,16 +13567,23 @@
         : 'shrink-0'}"
     >
       {#if userScrolledAway}
+        <!-- Bottom-anchored chrome, so it exists only while the reader is away
+             from the tail. Squared and bordered like every other control, and it
+             names what it does instead of showing a bare chevron in a pill. -->
         <button
           type="button"
-          class="absolute left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          class="group absolute left-1/2 z-40 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
           style:top={scrollButtonTop}
           title="Scroll to latest message"
           aria-label="Scroll to latest message"
           onclick={scrollToLatest}
           transition:fly={{ y: -8, duration: 140 }}
         >
-          <ChevronDown size={18} />
+          <ChevronDown
+            size={12}
+            class="shrink-0 text-muted transition-colors group-hover:text-foreground"
+          />
+          Latest
         </button>
       {/if}
       <div class="flex min-w-0 flex-col">
