@@ -174,11 +174,13 @@
   import {
     assistantDisplayText,
     connectionsFromPlan,
-    extractKnowledgeDraft,
     isAssistantConfirmation,
-    latestAssistantPlanDraft as latestAssistantPlanDraftIn,
     type AssistantPlanDraft
   } from '$lib/components/assistant/assistant-view'
+  import {
+    latestAssistantRecap,
+    assistantSetupRecapIssue
+  } from '$lib/components/assistant/assistant-recap'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -7234,9 +7236,9 @@
       plan: AssistantPlanDraft | null
     } | null => {
       if (!assistantMode || !assistantId || busy) return null
-      const draft = latestKnowledgeDraft()
+      const draft = latestAssistantRecap(messages, messageText)
       if (!draft) return null
-      const plan = latestAssistantPlanDraft()
+      const plan = draft.plan
       if (assistantKnowledgeComplete && !isAssistantRevision(draft, plan)) return null
       return { knowledge: draft.knowledge, plan }
     }
@@ -7321,33 +7323,6 @@
   }
 
   /**
-   * The knowledge the agent last drafted for this assistant, with the time it was
-   * written: the newest knowledge fenced block in the newest assistant message that
-   * carries one. The authoring contract asks for a `knowledge` fence, but a bare
-   * fence whose body starts with a `knowledge: <title>` line is accepted too. The
-   * time is what tells a revision from the authoring draft the app already saved.
-   */
-  function latestKnowledgeDraft(): { knowledge: string; at: number } | null {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (!message || message.role !== 'assistant') continue
-      const knowledge = extractKnowledgeDraft(messageText(message))
-      if (knowledge) return { knowledge, at: message.createdAt }
-    }
-    return null
-  }
-
-  /** The machine-readable assistant plan the agent last emitted, if any. */
-  function latestAssistantPlanDraft(): ReturnType<typeof latestAssistantPlanDraftIn> {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
-    }
-    return latestAssistantPlanDraftIn(assistantTexts)
-  }
-
-  /**
    * Keep the assistant's primary in step with the model the user is working on
    * while the knowledge is still being written. The primary is the model that
    * triggers the knowledge, so a model switched in the composer before the first
@@ -7402,8 +7377,8 @@
   /**
    * Commit the agent-drafted knowledge, schedule, and connections to the assistant
    * once the user agrees. Called by the recap card and by the `/save-knowledge`
-   * fallback. The plan block is optional: without it the knowledge is saved on its
-   * own and the existing schedule is left untouched.
+   * fallback. Initial setup requires valid settings. A knowledge-only revision
+   * preserves the saved schedule, connections and reporting agreement.
    */
   async function saveAssistantKnowledge(draftOverride?: {
     knowledge: string
@@ -7415,9 +7390,12 @@
       errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
     }
-    if (!assistantKnowledgeComplete && !draft.plan) {
+    const setupIssue = assistantKnowledgeComplete
+      ? null
+      : assistantSetupRecapIssue(assistant, draft.plan)
+    if (setupIssue) {
       await sendMessage(
-        'The application could not save this setup because the recap has no valid assistant settings. Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.',
+        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
         [],
         undefined,
         undefined,

@@ -988,8 +988,6 @@
     {:else if activeTab === 'assistant'}
       {#if !assistant}
         {@render noAssistantState()}
-      {:else if !knowledgeComplete}
-        {@render assistantEmptyState()}
       {:else}
         <div class="flex flex-col gap-1.5 p-3">
           {#if assistant.personality?.trim()}
@@ -1115,6 +1113,9 @@
               >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
             >
           </div>
+          {#if !knowledgeComplete}
+            {@render assistantEmptyState()}
+          {/if}
           {#each sections as section (section.id)}
             {@const folded = collapsed.has(section.id) && editingId !== section.id}
             <div class="border border-border">
