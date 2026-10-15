@@ -16,7 +16,7 @@
   {#each diffs as diff, diffIndex (`${diff.path}:${diffIndex}`)}
     {@const additions = diff.lines.filter((line) => line.kind === 'added').length}
     {@const deletions = diff.lines.filter((line) => line.kind === 'deleted').length}
-    <section class="overflow-hidden rounded-md border border-border bg-app">
+    <section class="overflow-hidden border border-border bg-app">
       <div class="flex h-8 items-center gap-2 border-b border-border px-2.5">
         <FileTypeIcon path={diff.path} size={13} />
         <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{diff.path}</span>

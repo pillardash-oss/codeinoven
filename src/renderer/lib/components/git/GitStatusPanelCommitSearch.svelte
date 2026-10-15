@@ -52,7 +52,7 @@
     />
     {#if query}
       <div
-        class="mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
+        class="mt-1 max-h-80 overflow-y-auto border border-border bg-surface p-1 shadow-xl"
         aria-live="polite"
       >
         {#if loading}
@@ -67,7 +67,7 @@
             <button
               type="button"
               class={[
-                'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                'flex w-full items-start gap-2 px-2.5 py-2 text-left transition-colors',
                 index === activeIndex
                   ? 'bg-primary/10 text-foreground'
                   : 'text-muted hover:bg-elevated'

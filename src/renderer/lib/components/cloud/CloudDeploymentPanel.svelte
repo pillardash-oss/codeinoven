@@ -640,7 +640,7 @@ ${fence}`
         {#each statusChips as chip (chip.value)}
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium transition-colors {statusFilter ===
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors {statusFilter ===
             chip.value
               ? 'bg-raised text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -651,7 +651,7 @@ ${fence}`
           >
             {#if chip.value !== 'all'}
               <span
-                class="h-1.5 w-1.5 shrink-0 rounded-full {chip.tone === 'danger'
+                class="h-1.5 w-1.5 shrink-0 {chip.tone === 'danger'
                   ? 'bg-danger'
                   : chip.tone === 'warning'
                     ? 'bg-warning'
@@ -673,14 +673,13 @@ ${fence}`
         {#each providerChips as chip (chip.kind)}
           <!-- Chip and its add action are siblings so neither button nests in the other. -->
           <div
-            class="flex h-6 shrink-0 items-center rounded-md transition-colors {providerFilter ===
-            chip.kind
+            class="flex h-6 shrink-0 items-center transition-colors {providerFilter === chip.kind
               ? 'bg-raised text-foreground'
               : 'text-muted hover:bg-elevated'}"
           >
             <button
               type="button"
-              class="flex h-6 cursor-pointer items-center gap-1 rounded-l-md pl-1.5 pr-1 text-[0.625rem] font-medium hover:text-foreground"
+              class="flex h-6 cursor-pointer items-center gap-1 pl-1.5 pr-1 text-[0.625rem] font-medium hover:text-foreground"
               title="Show only {chip.label} containers"
               aria-label="Show only {chip.label} containers"
               aria-pressed={providerFilter === chip.kind}
@@ -697,7 +696,7 @@ ${fence}`
             </button>
             <button
               type="button"
-              class="flex h-6 w-5 cursor-pointer items-center justify-center rounded-r-md text-dimmed hover:text-foreground"
+              class="flex h-6 w-5 cursor-pointer items-center justify-center text-dimmed hover:text-foreground"
               title="Add a {chip.label} container to monitor"
               aria-label="Add a {chip.label} container to monitor"
               onclick={() => openConfigSheet('container')}
@@ -723,7 +722,7 @@ ${fence}`
         {#snippet action()}
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => openConfigSheet('provider')}
           >
             Add provider
@@ -749,7 +748,7 @@ ${fence}`
           {#snippet action()}
             <button
               type="button"
-              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={() => openConfigSheet('provider', firstAccessErrorKind())}
             >
               Reconnect account
@@ -765,7 +764,7 @@ ${fence}`
           {#snippet action()}
             <button
               type="button"
-              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={() => openConfigSheet('container')}
             >
               Add container
@@ -779,7 +778,7 @@ ${fence}`
         <p class="text-[0.6875rem] font-medium text-foreground">No matching containers</p>
         <button
           type="button"
-          class="h-7 cursor-pointer rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+          class="h-7 cursor-pointer border border-border px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
           onclick={clearFilters}
         >
           Clear filters
@@ -810,7 +809,7 @@ ${fence}`
                 <p class="min-w-0 flex-1">{accessErrors[kind]}</p>
                 <button
                   type="button"
-                  class="shrink-0 cursor-pointer rounded-md bg-danger px-2 py-1 text-[0.5625rem] font-semibold text-white transition-opacity hover:opacity-90"
+                  class="shrink-0 cursor-pointer bg-danger px-2 py-1 text-[0.5625rem] font-semibold text-on-danger transition-opacity hover:opacity-90"
                   title="Reconnect the {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind
                   ]} account"
@@ -823,7 +822,7 @@ ${fence}`
                 </button>
                 <button
                   type="button"
-                  class="-m-0.5 shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-danger/10"
+                  class="-m-0.5 shrink-0 cursor-pointer p-0.5 transition-colors hover:bg-danger/10"
                   title="Dismiss {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind
                   ]} access error"
@@ -911,7 +910,7 @@ ${fence}`
                         {/if}
                         <button
                           type="button"
-                          class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-raised hover:text-foreground"
+                          class="flex h-6 w-6 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-raised hover:text-foreground"
                           title="Edit {container.label}"
                           aria-label="Edit {container.label}"
                           onclick={() => editContainer(container)}
@@ -920,7 +919,7 @@ ${fence}`
                         </button>
                         <button
                           type="button"
-                          class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                          class="flex h-6 w-6 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                           title="Remove {container.label}"
                           aria-label="Remove {container.label}"
                           onclick={() => requestRemoveContainer(container)}
@@ -950,7 +949,7 @@ ${fence}`
           autofocus
           placeholder="Search by name, id or project…"
           aria-label="Search containers"
-          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-6 w-full border border-border bg-elevated pl-6 pr-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           bind:value={searchQuery}
         />
       </div>
@@ -970,7 +969,7 @@ ${fence}`
       </span>
       <button
         type="button"
-        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
@@ -983,7 +982,7 @@ ${fence}`
         {#if configured && hasContainers}
           <button
             type="button"
-            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {searchOpen
+            class="flex h-7 w-7 cursor-pointer items-center justify-center transition-colors hover:bg-elevated hover:text-foreground {searchOpen
               ? 'bg-elevated text-foreground'
               : 'text-muted'}"
             title="Search containers by name, id or project"
@@ -997,7 +996,7 @@ ${fence}`
         {#if configured}
           <button
             type="button"
-            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-7 w-7 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Refresh deployment statuses now"
             aria-label="Refresh deployment statuses now"
             onclick={() => void refreshAll()}
@@ -1045,14 +1044,14 @@ ${fence}`
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="flex h-9 items-center justify-center rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center justify-center border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
           onclick={() => (deleteTarget = null)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
+          class="flex h-9 items-center justify-center gap-1.5 bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
           onclick={() => void confirmRemoveContainer()}
         >
           <Trash2 size={13} />

@@ -341,7 +341,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = task.title
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     event.dataTransfer.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -361,7 +361,7 @@
   <button
     type="button"
     data-thread-row={task.id}
-    class="group relative flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors {active
+    class="group relative flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors {active
       ? 'bg-selected'
       : 'hover:bg-elevated'}"
     {title}
@@ -462,14 +462,14 @@
        They sit beside the row button, never inside it: a menu trigger nested in
        a button is not a valid control tree. -->
   <span
-    class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center rounded-md px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
+    class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
       ? 'bg-selected'
       : 'bg-elevated'}"
   >
     {#if isForeignRun}
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-md text-info transition-colors hover:bg-info/15 disabled:opacity-40"
+        class="flex size-6 shrink-0 items-center justify-center text-info transition-colors hover:bg-info/15 disabled:opacity-40"
         title="Transfer this run to this instance"
         aria-label="Transfer this run to this instance"
         disabled={foreignTransfer?.pending ?? false}
@@ -485,7 +485,7 @@
     {#if !isRun && task.routineId && onToggleScheduled}
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-elevated {scheduled
+        class="flex size-6 shrink-0 items-center justify-center transition-colors hover:bg-elevated {scheduled
           ? 'text-muted'
           : 'text-dimmed'}"
         title={scheduled
@@ -551,7 +551,7 @@
       <input
         id={renameInputId}
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         bind:value={actionsMenu.renameValue}
       />
     </div>
@@ -560,7 +560,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={actionsMenu.cancelRename}
     >
       Cancel
@@ -568,7 +568,7 @@
     <button
       type="submit"
       form={renameFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       disabled={!actionsMenu.renameValue.trim()}
     >
       Save

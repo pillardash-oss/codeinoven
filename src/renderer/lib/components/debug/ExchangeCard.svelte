@@ -174,7 +174,7 @@
     <div class="flex flex-wrap gap-1 px-3 pb-2.5">
       {#if ex.status === 'error' && ex.error}
         <span
-          class="flex items-center gap-1 rounded bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
+          class="flex items-center gap-1 bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
         >
           <AlertTriangle size={9} />
           {ex.error}
@@ -182,7 +182,7 @@
       {/if}
       {#if ex.threadId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
+          class="bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Thread"
         >
           {shortId(ex.threadId)}
@@ -190,7 +190,7 @@
       {/if}
       {#if ex.sessionId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
+          class="bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Session"
         >
           S:{shortId(ex.sessionId)}
@@ -198,7 +198,7 @@
       {/if}
       {#if ex.events.length > 0}
         <span
-          class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
+          class="flex items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
         >
           <List size={9} />
           {eventSummary(ex.events)}
@@ -212,7 +212,7 @@
     <div class="space-y-1.5 px-3 pb-3">
       <!-- Request data -->
       {#if ex.data}
-        <details class="rounded-md border border-border">
+        <details class="border border-border">
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
@@ -229,7 +229,7 @@
 
       <!-- Response (only for non-starter calls where it's meaningful) -->
       {#if ex.response !== undefined}
-        <details class="rounded-md border border-border">
+        <details class="border border-border">
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-success hover:bg-elevated"
           >
@@ -246,7 +246,7 @@
 
       <!-- Events -->
       {#if ex.events.length > 0}
-        <details class="rounded-md border border-border" open>
+        <details class="border border-border" open>
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
@@ -254,7 +254,7 @@
           </summary>
           <div class="space-y-1 px-2 pb-2">
             {#each ex.events as ev (ev.id)}
-              <details class="rounded border border-border/50">
+              <details class="border border-border/50">
                 <summary
                   class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-[0.5625rem] {eventBadgeClass(
                     ev.type

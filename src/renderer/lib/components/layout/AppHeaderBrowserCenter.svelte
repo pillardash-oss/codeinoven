@@ -28,7 +28,7 @@
         {#if runtime.loading}
           <Loader2 size={13} class="animate-spin text-muted" />
         {:else if tab.favicon}
-          <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
         {:else}
           <Globe size={13} class="text-dimmed" />
         {/if}
@@ -52,7 +52,7 @@
       {#if runtime.audible || runtime.muted}
         <button
           type="button"
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated"
+          class="flex h-5 w-5 shrink-0 items-center justify-center text-accent transition-colors hover:bg-elevated"
           aria-pressed={runtime.muted}
           title={browserTabMuteLabel(runtime.muted)}
           aria-label={browserTabMuteLabel(runtime.muted)}

@@ -537,7 +537,7 @@
     <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show previous turn"
         title="Previous turn"
         disabled={controller.selectedIndex >= controller.turns.length - 1}
@@ -550,7 +550,7 @@
       </span>
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show next turn"
         title="Next turn"
         disabled={controller.selectedIndex <= 0}
@@ -562,15 +562,11 @@
   {/if}
 
   <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
-    <div
-      class="flex items-center rounded-md bg-elevated p-0.5"
-      role="group"
-      aria-label="Changes view"
-    >
+    <div class="flex items-center bg-elevated p-0.5" role="group" aria-label="Changes view">
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'diffs'
             ? 'bg-overlay text-foreground'
             : 'text-muted hover:text-foreground'
@@ -584,7 +580,7 @@
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'files'
             ? 'bg-overlay text-foreground'
             : 'text-muted hover:text-foreground'
@@ -600,7 +596,7 @@
     <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={13} />
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       aria-label="Refresh change history"
       title="Refresh changes"
       disabled={controller.loading}
@@ -617,7 +613,7 @@
         Loading changes
       </div>
     {:else if controller.error}
-      <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2">
+      <div class="border border-danger/20 bg-danger/10 px-3 py-2">
         <p class="text-[0.6875rem] leading-relaxed text-danger">{controller.error}</p>
       </div>
     {:else if controller.turns.length === 0}
@@ -642,7 +638,7 @@
             {/if}
             {#if checkpoint.failure}
               <p
-                class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
+                class="border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
               >
                 {checkpoint.failure}
               </p>
@@ -669,7 +665,7 @@
                 <section
                   data-reveal-path={fileDiff.path}
                   class={[
-                    'overflow-hidden rounded-md border transition-colors',
+                    'overflow-hidden border transition-colors',
                     controller.flashPath === fileDiff.path
                       ? 'border-primary bg-primary/5'
                       : 'border-border bg-surface'
@@ -711,7 +707,7 @@
                     {#if checkpoint.status !== 'active'}
                       <button
                         type="button"
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                         aria-label={`Open ${fileDiff.path} in the changes sidebar`}
                         title={`Open ${fileDiff.path} in the changes sidebar`}
                         onclick={() => void controller.openChange(checkpoint.id, fileDiff.path)}
@@ -720,7 +716,7 @@
                       </button>
                       <button
                         type="button"
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                         disabled={controller.restoringId !== null}
                         aria-label={undone
                           ? `Redo the changes to ${fileDiff.path}`
@@ -754,7 +750,7 @@
           </div>
         {:else}
           <div class="space-y-2">
-            <section class="rounded-lg border border-border bg-surface">
+            <section class="border border-border bg-surface">
               <div class="flex min-h-10 items-center gap-2 px-3 py-2">
                 <FileDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
@@ -766,7 +762,7 @@
                     </span>
                     {#if checkpoint.status === 'active'}
                       <span
-                        class="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
+                        class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
                       >
                         In progress
                       </span>
@@ -843,7 +839,7 @@
                       {#if checkpoint.status !== 'active'}
                         <button
                           type="button"
-                          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                           disabled={controller.restoringId !== null}
                           aria-label={undone
                             ? `Redo the changes to ${change.path}`
@@ -871,7 +867,7 @@
                     <div class="flex items-center gap-2 border-t border-border px-3 py-2">
                       <button
                         type="button"
-                        class="rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                        class="border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id ||
                           (controller.selections[checkpoint.id] ?? []).length === 0}
                         onclick={() => void controller.restoreSelected(checkpoint.id)}
@@ -880,7 +876,7 @@
                       </button>
                       <button
                         type="button"
-                        class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
+                        class="px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id}
                         onclick={() => controller.requestRestoreRun(checkpoint.id)}
                       >

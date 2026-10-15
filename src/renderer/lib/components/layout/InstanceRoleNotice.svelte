@@ -48,7 +48,7 @@
     </span>
     <button
       type="button"
-      class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 font-medium transition-colors hover:bg-info/15"
+      class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1 font-medium transition-colors hover:bg-info/15"
       title="Make this the main instance: scheduled work runs here and keeps running here after a restart"
       onclick={onTakeOver}
     >
@@ -57,7 +57,7 @@
     </button>
     <button
       type="button"
-      class="shrink-0 whitespace-nowrap rounded-md px-2 py-1 font-medium transition-colors hover:bg-info/15"
+      class="shrink-0 whitespace-nowrap px-2 py-1 font-medium transition-colors hover:bg-info/15"
       title="Bring the other CodeInOven window to the front"
       onclick={onOpenOwner}
     >
@@ -65,7 +65,7 @@
     </button>
     <button
       type="button"
-      class="shrink-0 whitespace-nowrap rounded-md px-2 py-1 font-medium transition-colors hover:bg-info/15"
+      class="shrink-0 whitespace-nowrap px-2 py-1 font-medium transition-colors hover:bg-info/15"
       title="Quit this CodeInOven window"
       onclick={onQuit}
     >

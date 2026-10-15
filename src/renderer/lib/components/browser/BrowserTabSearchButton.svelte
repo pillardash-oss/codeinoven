@@ -16,7 +16,7 @@
 
 <button
   type="button"
-  class="flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150 {open
+  class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {open
     ? 'bg-elevated text-foreground'
     : 'text-muted hover:bg-elevated hover:text-foreground'}"
   aria-label={open ? 'Close tab search' : 'Search browser tabs'}

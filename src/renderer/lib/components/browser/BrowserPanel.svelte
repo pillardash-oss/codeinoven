@@ -575,7 +575,7 @@
   <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
       disabled={!pageState.canGoBack}
       aria-label="Go back"
       title="Go back"
@@ -585,7 +585,7 @@
     </button>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
       disabled={!pageState.canGoForward}
       aria-label="Go forward"
       title="Go forward"
@@ -599,7 +599,7 @@
     {#if pageState.loading || pageState.url !== ''}
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
         title={pageState.loading ? 'Stop loading' : 'Reload page'}
         onclick={onReloadButton}
@@ -637,7 +637,7 @@
     />
     <button
       type="button"
-      class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Browser downloads"
       title="Browser downloads"
       onclick={openDownloadsMenu}
@@ -645,7 +645,7 @@
       <Download size={13} />
       {#if unfinishedDownloadCount > 0}
         <span
-          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
+          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
         >
           {unfinishedDownloadCount}
         </span>
@@ -654,7 +654,7 @@
     <button
       type="button"
       class={[
-        'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+        'relative flex h-7 shrink-0 items-center justify-center transition-colors',
         fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
         devToolsOpen
           ? 'bg-elevated text-foreground'
@@ -690,7 +690,7 @@
       <button
         type="button"
         class={[
-          'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+          'relative flex h-7 shrink-0 items-center justify-center transition-colors',
           fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
           inspectArmed
             ? 'bg-accent/15 text-accent'

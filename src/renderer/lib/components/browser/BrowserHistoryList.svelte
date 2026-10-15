@@ -97,7 +97,7 @@
 
 <div class="flex h-full min-h-0 flex-col">
   <div class="shrink-0 border-b border-border px-3 py-2">
-    <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+    <div class="flex items-center gap-1.5 bg-elevated px-2.5">
       <Search size={13} class="shrink-0 text-dimmed" />
       <input
         type="text"
@@ -112,7 +112,7 @@
       {#if query !== ''}
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Clear the history search"
           title="Clear search"
           onclick={clearSearch}

@@ -806,20 +806,20 @@
     {:else}
       <form id="utility-editor-form" class="space-y-4" onsubmit={saveUtility}>
         {#if editorError}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {editorError}
           </p>
         {/if}
 
         {#if isNative && nativeEntry?.kind === 'skill'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
+          <p class="border bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the skill file at <span class="font-mono"
               >{nativeEntry.source.kind === 'skill' ? nativeEntry.source.path : ''}</span
             >.
           </p>
         {/if}
         {#if isNative && nativeEntry?.kind === 'mcp'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
+          <p class="border bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the MCP server in
             <span class="font-mono">
               {nativeEntry.source.kind === 'mcp' ? nativeEntry.source.configPath : ''}
@@ -828,7 +828,7 @@
         {/if}
         {#if isAppOwned}
           <p
-            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
+            class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
           >
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
@@ -863,7 +863,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Name</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 required
                 disabled={isAppOwned}
                 bind:value={draft.name}
@@ -872,7 +872,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Description</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 disabled={isAppOwned}
                 bind:value={draft.description}
               />
@@ -890,7 +890,7 @@
               <label class="space-y-1 text-xs font-medium">
                 <span>Activation</span>
                 <select
-                  class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
+                  class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
                   bind:value={draft.activation}
                 >
                   <option value="on_demand">On demand</option>
@@ -901,7 +901,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Scope</span>
               <select
-                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                 value={draft.scopeLevel}
                 onchange={(event: Event) =>
                   chooseScopeLevel((event.currentTarget as HTMLSelectElement).value as ScopeLevel)}

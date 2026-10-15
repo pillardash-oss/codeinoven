@@ -244,7 +244,7 @@
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         aria-label="Go back"
         title="Go back"
         disabled={!navigationHistoryState.canGoBack}
@@ -253,7 +253,7 @@
         <ChevronLeft size={16} strokeWidth={1.8} />
       </button>
       <button
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         aria-label="Go forward"
         title="Go forward"
         disabled={!navigationHistoryState.canGoForward}
@@ -278,7 +278,7 @@
       <!-- Settings owns this slot while it is on screen: the per-view actions
            belong to the view that was here before. -->
       <button
-        class="flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150 {settingsUiState.searchOpen
+        class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:bg-elevated hover:text-foreground'}"
         aria-label="Search settings"

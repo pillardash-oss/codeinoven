@@ -58,7 +58,7 @@
     </p>
     <button
       type="button"
-      class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+      class="flex h-7 min-w-0 cursor-pointer items-center gap-1 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
       onclick={() => onAssignAgent(summary)}
     >
       <Bot size={12} class="shrink-0" />

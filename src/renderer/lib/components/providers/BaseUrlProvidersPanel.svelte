@@ -144,7 +144,7 @@
 
 <section class="space-y-4">
   {#if baseUrlProviderStore.error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {baseUrlProviderStore.error}
     </p>
   {/if}
@@ -160,7 +160,7 @@
           >
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
               aria-pressed={!harnessFilterActive}
@@ -173,7 +173,7 @@
             {#each filterHarnesses as harness (harness.id)}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+                class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
                   harness.id
                 )
                   ? 'border-primary bg-primary text-on-primary'
@@ -189,7 +189,7 @@
             {#if harnessFilterActive}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
                 title="Clear harness filter"
                 onclick={clearHarnessFilter}
               >
@@ -201,7 +201,7 @@
       </div>
       <div class="flex gap-2">
         <button
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Refresh base URL providers"
           disabled={baseUrlProviderStore.loading}
           onclick={() => void baseUrlProviderStore.load()}
@@ -209,7 +209,7 @@
           <RefreshCw size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
         </button>
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          class="flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
           title="Add base URL provider"
           onclick={openCreate}
         >
@@ -219,11 +219,11 @@
     </div>
 
     {#if baseUrlProviderStore.loading && baseUrlProviderStore.providers.length === 0}
-      <div class="rounded-xl border border-dashed p-6 text-center">
+      <div class="border border-dashed p-6 text-center">
         <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
       </div>
     {:else if baseUrlProviderStore.providers.length === 0}
-      <div class="rounded-xl border border-dashed p-5 text-center">
+      <div class="border border-dashed p-5 text-center">
         <Server size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No custom base URL providers yet.</p>
         <button class="mt-2 text-xs font-medium text-primary hover:underline" onclick={openCreate}>
@@ -231,7 +231,7 @@
         </button>
       </div>
     {:else if filteredGroups.length === 0}
-      <div class="rounded-xl border border-dashed p-5 text-center">
+      <div class="border border-dashed p-5 text-center">
         <ListFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No providers match the selected harnesses.</p>
         <button
@@ -242,7 +242,7 @@
         </button>
       </div>
     {:else}
-      <div class="overflow-hidden rounded-xl border bg-surface">
+      <div class="overflow-hidden border bg-surface">
         {#each filteredGroups as group (group[0].id)}
           {@const provider = group[0]}
           <div
@@ -252,7 +252,7 @@
               <div class="flex items-center gap-2">
                 <p class="truncate text-xs font-semibold">{provider.name}</p>
                 <span
-                  class="rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
+                  class="border border-border px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
                     ? 'bg-success/10 text-success'
                     : 'bg-raised text-dimmed'}"
                 >
@@ -262,7 +262,7 @@
               <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
                 {#each group as member (member.harnessId)}
                   <span
-                    class="flex items-center gap-1 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+                    class="flex items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
                     title={providerName(member.harnessId)}
                   >
                     <AgentIcon
@@ -284,7 +284,7 @@
             </p>
             <div class="flex items-center gap-1">
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Edit {provider.name}"
                 title="Edit {provider.name}"
                 onclick={() => openEdit(group)}
@@ -292,7 +292,7 @@
                 <Pencil size={13} />
               </button>
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 aria-label="Delete {provider.name}"
                 title="Delete {provider.name}"
                 onclick={() => (deleteTarget = group)}
@@ -314,14 +314,14 @@
 >
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={() => (deleteTarget = null)}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
       type="button"
       disabled={baseUrlProviderStore.saving}
       onclick={() => void removeProvider()}
@@ -334,7 +334,7 @@
   {/snippet}
 
   {#if editorError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {editorError}
     </p>
   {/if}

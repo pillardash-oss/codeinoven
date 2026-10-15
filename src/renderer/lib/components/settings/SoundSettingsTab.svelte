@@ -77,7 +77,7 @@
     </div>
     <button
       type="button"
-      class="flex h-8 w-8 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
+      class="flex h-8 w-8 items-center justify-center border bg-elevated text-muted hover:text-foreground"
       title="Refresh Sound settings"
       aria-label="Refresh Sound settings"
       onclick={() => void speech.load()}
@@ -87,13 +87,13 @@
   </div>
 
   {#if speech.error}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {speech.error}
     </p>
   {/if}
 
   <div
-    class="mb-6 flex items-center gap-1 rounded-lg border bg-surface p-1"
+    class="mb-6 flex items-center gap-1 border bg-surface p-1"
     role="tablist"
     aria-label="Sound settings sections"
     data-onboarding="sound-settings"
@@ -103,7 +103,7 @@
         type="button"
         role="tab"
         aria-selected={activeTab === tab.id}
-        class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {activeTab ===
+        class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {activeTab ===
         tab.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
@@ -133,12 +133,12 @@
         placeholder={activeTab === 'history'
           ? 'Search recording history…'
           : 'Search learned lessons…'}
-        class="w-full rounded-lg border bg-surface py-2 pl-9 pr-8 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+        class="w-full border bg-surface py-2 pl-9 pr-8 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
       />
       {#if searchQuery}
         <button
           type="button"
-          class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
+          class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
           title="Clear search"
           aria-label="Clear search"
           onclick={() => (searchQuery = '')}><X size={13} aria-hidden="true" /></button

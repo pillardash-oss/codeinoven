@@ -92,7 +92,7 @@
 >
   {#snippet details()}
     {#if job.result}
-      <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
+      <div class="space-y-1 border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
         {#if projectName}
           <p class="truncate">
             <span class="text-dimmed">Repository</span>

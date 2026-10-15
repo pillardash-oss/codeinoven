@@ -106,7 +106,7 @@
       <div class="relative">
         <button
           type="button"
-          class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {toneClass(
+          class="relative flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {toneClass(
             item
           )}"
           aria-label={item.label}
@@ -119,10 +119,10 @@
             <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
           {:else if item.appearance}
             {#if item.appearance.iconUrl}
-              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
             {:else}
               <span
-                class="h-3.5 w-3.5 rounded-full"
+                class="h-3.5 w-3.5"
                 style="background-color: {item.appearance.color}"
               ></span>
             {/if}
@@ -144,7 +144,7 @@
           {/if}
           {#if item.countBadge !== undefined}
             <span
-              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
+              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
               'working'
                 ? 'bg-thread-working text-on-primary ring-thread-working'
                 : 'bg-raised text-muted ring-border'}"

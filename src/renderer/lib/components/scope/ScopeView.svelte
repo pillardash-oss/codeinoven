@@ -312,7 +312,7 @@
       >
         <span>{actionError ?? scopeActions.error ?? scopeState.error}</span>
         <button
-          class="ml-auto rounded-md px-2 py-1 hover:bg-danger/10"
+          class="ml-auto px-2 py-1 hover:bg-danger/10"
           aria-label="Dismiss error"
           onclick={() => {
             actionError = null

@@ -95,7 +95,7 @@
         alt=""
         aria-hidden="true"
         draggable="false"
-        class="size-7 shrink-0 rounded-[0.375rem] object-cover"
+        class="size-7 shrink-0 object-cover"
       />
     {/if}
   </h1>

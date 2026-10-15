@@ -107,7 +107,7 @@
 <button
   type="button"
   class={[
-    'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+    'relative flex h-7 shrink-0 items-center justify-center transition-colors',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
     menuOpen ? 'bg-elevated text-foreground' : 'text-dimmed hover:bg-elevated hover:text-foreground'
   ]}
@@ -118,11 +118,11 @@
   onclick={(event) => void openMenu(event.currentTarget)}
 >
   {#if current && currentIcon}
-    <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+    <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
   {:else if usesProfileDefault}
     <Globe size={13} />
   {:else if current}
-    <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
+    <span class="h-2.5 w-2.5 shrink-0" style="background-color: {currentAccent}"
     ></span>
   {:else}
     <Boxes size={13} />

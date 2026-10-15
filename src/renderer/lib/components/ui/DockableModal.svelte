@@ -422,7 +422,7 @@
     <div
       class="fixed {layer === 'top'
         ? 'z-80'
-        : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl outline-none {minimized
+        : 'z-50'} flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
         ? 'invisible pointer-events-none'
         : 'pointer-events-auto'}"
       style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
@@ -479,7 +479,7 @@
             {@render headerActions()}
           {/if}
           <button
-            class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             data-modal-dismiss
             aria-label="Minimize"
             title="Minimize"
@@ -489,7 +489,7 @@
           </button>
           {#if closable}
             <button
-              class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
               data-modal-dismiss
               aria-label="Close"
               title="Close"

@@ -17,7 +17,7 @@
   <div class="flex items-start gap-3">
     <button
       type="button"
-      class="group relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-border bg-raised transition-shadow hover:shadow-md"
+      class="group relative h-16 w-24 shrink-0 overflow-hidden border border-border bg-raised"
       title={`Preview ${artifact.filename}`}
       aria-label={`Preview ${artifact.filename}`}
       onclick={() => onPreview(artifact)}
@@ -52,7 +52,7 @@
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-overlay hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
       title={`Reveal ${artifact.filename} in its folder`}
       aria-label={`Reveal ${artifact.filename} in its folder`}
       onclick={() => onReveal(artifact)}

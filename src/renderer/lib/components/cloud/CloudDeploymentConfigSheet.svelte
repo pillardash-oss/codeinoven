@@ -835,7 +835,7 @@
       <div class="flex shrink-0 items-center gap-2">
         <button
           type="button"
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center justify-center gap-1.5 border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
           onclick={onClose}
         >
           Cancel
@@ -843,7 +843,7 @@
         {#if mode === 'provider' && selectedKind === WORKING_KIND}
           <button
             type="button"
-            class="flex h-9 items-center justify-center gap-1.5 rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-9 items-center justify-center gap-1.5 border bg-elevated px-4 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             disabled={testing || saving}
             title="Verify the entered credentials without saving"
             aria-label="Test connection without saving"
@@ -857,7 +857,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           disabled={!canSave || saving}
           onclick={() => void (mode === 'provider' ? saveProvider() : saveContainer())}
         >
@@ -878,9 +878,7 @@
     </div>
   {/snippet}
 
-  <div
-    class="mb-4 flex items-center justify-between gap-3 rounded-lg border bg-elevated px-3 py-2.5"
-  >
+  <div class="mb-4 flex items-center justify-between gap-3 border bg-elevated px-3 py-2.5">
     <div class="min-w-0">
       <p class="text-xs font-medium">{mode === 'provider' ? 'Add provider' : 'Add container'}</p>
       <p class="text-[0.6875rem] text-muted">
@@ -911,7 +909,7 @@
           {@const isSelected = selectedKind === kind}
           <button
             type="button"
-            class="flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors {isSelected
+            class="flex w-full items-center justify-between gap-3 border px-3 py-2.5 text-left transition-colors {isSelected
               ? 'border-primary bg-raised'
               : 'hover:bg-raised'}"
             onclick={() => selectProvider(kind)}
@@ -945,10 +943,10 @@
       {#if selectedKind === WORKING_KIND}
         <div class="space-y-3">
           {#if hasProject}
-            <div class="flex items-center gap-2 rounded-lg border bg-elevated px-1 py-1">
+            <div class="flex items-center gap-2 border bg-elevated px-1 py-1">
               <button
                 type="button"
-                class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'create' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
+                class={`flex-1 px-3 py-1.5 text-xs font-medium ${createMode === 'create' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
                 onclick={() => {
                   createMode = 'create'
                   error = ''
@@ -958,7 +956,7 @@
               </button>
               <button
                 type="button"
-                class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'reuse' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
+                class={`flex-1 px-3 py-1.5 text-xs font-medium ${createMode === 'reuse' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
                 onclick={() => {
                   createMode = 'reuse'
                   error = ''
@@ -973,7 +971,7 @@
             <label class="block space-y-1 text-xs font-medium">
               <span>Account name</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
                 placeholder="e.g. Coolify   Personal or Coolify   Company"
                 autocomplete="off"
                 spellcheck="false"
@@ -983,7 +981,7 @@
             <label class="block space-y-1 text-xs font-medium">
               <span>Base URL</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
                 placeholder="https://coolify.internal"
                 autocomplete="off"
                 spellcheck="false"
@@ -996,7 +994,7 @@
             <label class="block space-y-1 text-xs font-medium">
               <span>API token</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
                 type="password"
                 placeholder="Coolify API token"
                 autocomplete="off"
@@ -1006,14 +1004,14 @@
             </label>
           {:else}
             {#if existingAccountsForKind.length === 0}
-              <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
+              <p class="border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                 No {PROVIDER_DISPLAY_NAMES[selectedKind]} accounts exist yet. Create one first.
               </p>
             {:else}
               <label class="block space-y-1 text-xs font-medium">
                 <span>{PROVIDER_DISPLAY_NAMES[selectedKind]} account</span>
                 <select
-                  class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                  class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                   bind:value={selectedExistingAccountId}
                 >
                   <option value="">Select an account</option>
@@ -1026,7 +1024,7 @@
                 <label class="block space-y-1 text-xs font-medium">
                   <span>API key</span>
                   <input
-                    class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+                    class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
                     type="password"
                     placeholder={cloudAccountsState.accountById(selectedExistingAccountId)
                       ?.configured
@@ -1052,7 +1050,7 @@
                 {@const account = cloudAccountsState.accountById(accountId)}
                 {#if account}
                   <div
-                    class="flex items-center justify-between gap-2 rounded-lg border bg-elevated px-3 py-1.5"
+                    class="flex items-center justify-between gap-2 border bg-elevated px-3 py-1.5"
                   >
                     <span class="min-w-0 truncate text-xs">{account.label}</span>
                     <span class="text-[0.625rem] text-dimmed">
@@ -1064,7 +1062,7 @@
                     {#if account.id !== config?.project.providerAccounts?.[selectedKind ?? 'coolify']?.activeAccountId}
                       <button
                         type="button"
-                        class="rounded text-[0.6875rem] font-medium text-primary hover:underline disabled:opacity-50"
+                        class="text-[0.6875rem] font-medium text-primary hover:underline disabled:opacity-50"
                         disabled={saving}
                         onclick={() => void setActive(selectedKind ?? 'coolify', account.id)}
                       >
@@ -1082,14 +1080,14 @@
   {:else}
     <div class="space-y-4">
       {#if !canAddContainer}
-        <div class="space-y-3 rounded-xl border bg-elevated px-4 py-6 text-center">
+        <div class="space-y-3 border bg-elevated px-4 py-6 text-center">
           <Cloud size={20} class="mx-auto text-dimmed" />
           <p class="text-xs text-muted">
             Attach a provider account first, then add a container to it.
           </p>
           <button
             type="button"
-            class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => (mode = 'provider')}
           >
             Add a provider
@@ -1099,7 +1097,7 @@
         <label class="block space-y-1 text-xs font-medium">
           <span>Provider</span>
           <select
-            class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+            class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
             bind:value={containerProviderKind}
             onchange={() => void onContainerProviderChange()}
           >
@@ -1115,7 +1113,7 @@
             <label class="block min-w-0 flex-1 space-y-1 text-xs font-medium">
               <span>{PROVIDER_DISPLAY_NAMES[containerProviderKind]} account</span>
               <select
-                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
                 bind:value={containerAccountId}
                 onchange={() => void loadAvailableContainers()}
               >
@@ -1132,7 +1130,7 @@
             {#if containerProviderKind === WORKING_KIND}
               <button
                 type="button"
-                class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-9 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
                 title="Create or attach another {PROVIDER_DISPLAY_NAMES[
                   containerProviderKind
                 ]} account, then continue adding containers"
@@ -1144,7 +1142,7 @@
             {/if}
           </div>
           {#if containerAccounts.length === 0}
-            <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
+            <p class="border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
               No {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account is attached to this project.
               Add one to browse its containers.
             </p>
@@ -1157,21 +1155,22 @@
               <Loader2 size={17} class="animate-spin text-dimmed" />
             </div>
           {:else if availableError}
-            <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            <p
+              class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+              role="alert"
+            >
               {availableError}
             </p>
           {:else}
             {#if containerId !== ''}
-              <div
-                class="flex items-center justify-between gap-2 rounded-lg border bg-elevated px-3 py-2"
-              >
+              <div class="flex items-center justify-between gap-2 border bg-elevated px-3 py-2">
                 <div class="min-w-0">
                   <p class="truncate text-xs font-medium">{containerLabel || containerId}</p>
                   <p class="truncate font-mono text-[0.625rem] text-dimmed">{containerId}</p>
                 </div>
                 <button
                   type="button"
-                  class="shrink-0 rounded px-2 py-1 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                  class="shrink-0 px-2 py-1 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
                   onclick={() => {
                     containerId = ''
                     containerLabel = ''
@@ -1187,7 +1186,7 @@
                   class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
                 />
                 <input
-                  class="h-9 w-full rounded-lg border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
+                  class="h-9 w-full border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
                   placeholder="Search your {PROVIDER_DISPLAY_NAMES[
                     containerProviderKind
                   ]} containers"
@@ -1197,12 +1196,12 @@
                 />
               </div>
               {#if availableContainers.length === 0}
-                <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
+                <p class="border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                   No containers were found on this account. Pick a different provider or add the
                   container manually below.
                 </p>
               {:else if filteredAvailable.length === 0}
-                <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
+                <p class="border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                   No containers match your search.
                 </p>
               {:else}
@@ -1212,7 +1211,7 @@
                   </p>
                   <button
                     type="button"
-                    class="rounded px-1.5 py-0.5 text-[0.625rem] font-medium text-primary hover:underline"
+                    class="px-1.5 py-0.5 text-[0.625rem] font-medium text-primary hover:underline"
                     onclick={() => {
                       if (selectedContainerIds.size === filteredAvailable.length) {
                         selectedContainerIds.clear()
@@ -1234,7 +1233,7 @@
                     {@const owner = ownerByContainerId.get(container.id)}
                     <button
                       type="button"
-                      class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors {selected
+                      class="flex w-full items-center justify-between gap-2 border px-3 py-2 text-left transition-colors {selected
                         ? 'border-primary bg-raised'
                         : 'hover:bg-overlay'}"
                       aria-pressed={selected}
@@ -1244,7 +1243,7 @@
                         <span class="flex items-center gap-1.5">
                           {#if container.project}
                             <span
-                              class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[0.5625rem] text-muted"
+                              class="shrink-0 border border-border bg-raised px-1 py-0.5 font-mono text-[0.5625rem] text-muted"
                             >
                               {container.project}
                             </span>
@@ -1267,7 +1266,9 @@
                   {/each}
                 </div>
                 {#if otherProjectOwners.length > 0}
-                  <p class="rounded-lg bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning">
+                  <p
+                    class="border border-warning/30 bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning"
+                  >
                     {otherProjectOwners.join(', ')}
                     {otherProjectOwners.length === 1 ? ' monitors' : ' monitor'} containers you selected.
                     Adding them here tracks them in this project too.
@@ -1289,7 +1290,7 @@
         <label class="block space-y-1 text-xs font-medium">
           <span>Container / resource ID</span>
           <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+            class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
             placeholder="e.g. the Coolify resource UUID"
             autocomplete="off"
             spellcheck="false"
@@ -1299,7 +1300,7 @@
         <label class="block space-y-1 text-xs font-medium">
           <span>Label</span>
           <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+            class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
             placeholder="e.g. API server (optional   defaults to the container name)"
             bind:value={containerLabel}
           />
@@ -1309,7 +1310,10 @@
   {/if}
 
   {#if testResult !== ''}
-    <p class="mt-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+    <p
+      class="mt-4 border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+      role="status"
+    >
       {testResult}
     </p>
   {/if}

@@ -133,7 +133,7 @@
           <span class="flex items-center gap-1.5">
             {#if markers.compacted}
               <span
-                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                class="flex items-center gap-1 border border-border bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase"
                 title="This step compacted earlier context."
               >
                 <Archive size={10} />
@@ -142,7 +142,7 @@
             {/if}
             {#if markers.subagentCount > 0}
               <span
-                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                class="flex items-center gap-1 border border-border bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase"
                 title={`This step delegated work to ${markers.subagentCount} sub-agent${
                   markers.subagentCount === 1 ? '' : 's'
                 }.`}
@@ -153,7 +153,7 @@
             {/if}
             {#if markers.codeMode}
               <span
-                class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+                class="flex items-center gap-1 border border-border bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase"
                 title="This step ran code-mode work."
               >
                 <CodeXml size={10} />

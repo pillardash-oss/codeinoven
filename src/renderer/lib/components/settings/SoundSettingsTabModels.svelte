@@ -160,7 +160,7 @@
 <div class="space-y-4">
   <!-- Model capability sub-tabs -->
   <div
-    class="flex items-center gap-1 rounded-lg border bg-surface p-1"
+    class="flex items-center gap-1 border bg-surface p-1"
     role="tablist"
     aria-label="Model categories"
   >
@@ -169,9 +169,9 @@
         type="button"
         role="tab"
         aria-selected={activeModelSubTab === sub.id}
-        class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab ===
+        class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab ===
         sub.id
-          ? 'bg-elevated text-foreground shadow-sm'
+          ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
         onclick={() => {
           activeModelSubTab = sub.id
@@ -189,7 +189,7 @@
     <span class="text-[0.6875rem] font-medium text-muted">Filter:</span>
     <button
       type="button"
-      class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === 'all'
+      class="border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === 'all'
         ? 'bg-primary text-on-primary border-primary'
         : 'bg-elevated text-muted border-border hover:text-foreground'}"
       onclick={() => (runtimeFilter = 'all')}>All</button
@@ -197,7 +197,7 @@
     {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
       <button
         type="button"
-        class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
+        class="border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
           ? 'bg-primary text-on-primary border-primary'
           : 'bg-elevated text-muted border-border hover:text-foreground'}"
         onclick={() => (runtimeFilter = rt)}>{runtimeBadge(rt)}</button
@@ -207,15 +207,15 @@
 
   <!-- One card, exactly like the Search models card: installed rows first
        (active on top), then the catalog models this device has not downloaded. -->
-  <div class="rounded-xl border bg-surface p-4">
-    <div class="mb-1 flex items-center justify-between gap-3">
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">
+  <div class="border bg-surface p-4">
+    <div class="mb-1 flex items-center justify-between gap-3 border-b border-border pb-2">
+      <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
         {activeSubTab.label} models
       </h3>
       <div class="flex items-center gap-1.5">
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
           title="Paste a filesystem path to a model"
           aria-label="Paste a {activeSubTab.label} model path"
           onclick={() => (pasteOpen = true)}
@@ -225,7 +225,7 @@
         </button>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
           title="Import a model from disk (.mlx, .gguf, or ONNX)"
           aria-label="Import a {activeSubTab.label} model"
           disabled={importing}
@@ -242,7 +242,7 @@
     </div>
 
     {#if installedRows.length === 0}
-      <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
+      <p class="border border-dashed px-3 py-2 text-xs text-dimmed">
         No {activeSubTab.label} model is installed. Download one below, or import your own.
       </p>
     {:else}
@@ -279,7 +279,7 @@
   {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
   <li class="flex items-center gap-3 py-2.5">
     <span
-      class="size-1.5 shrink-0 rounded-full {isActive
+      class="size-1.5 shrink-0 {isActive
         ? 'bg-primary'
         : row.installed.available
           ? 'bg-border-strong'
@@ -303,13 +303,13 @@
     </div>
     {#if isActive}
       <span
-        class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-medium text-primary"
+        class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
         >Active</span
       >
     {:else if row.installed.available}
       <button
         type="button"
-        class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+        class="shrink-0 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
         title="Use this model"
         aria-label="Use {label} for {activeSubTab.label}"
         onclick={() =>
@@ -324,7 +324,7 @@
     {/if}
     <button
       type="button"
-      class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+      class="flex size-7 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
       title="Remove {label}"
       aria-label="Remove {label}"
       onclick={() => removeInstalled(row)}
@@ -347,7 +347,7 @@
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p class="text-sm font-medium">{artifact.label}</p>
-          <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
+          <span class="border border-border bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
             >{runtimeBadge(artifact.runtime)} · {artifact.version}</span
           >
         </div>
@@ -370,7 +370,7 @@
       {#if canDownload}
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
           title={isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
           aria-label={isRetired ? `${artifact.label} is retired` : `Download ${artifact.label}`}
           disabled={isRetired}
@@ -410,14 +410,14 @@
       </div>
     {:else if download?.state === 'failed'}
       <div
-        class="mt-2.5 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
+        class="mt-2.5 flex items-start justify-between gap-2 border border-danger/20 bg-danger/5 px-3 py-2"
       >
         <p class="text-[0.6875rem] leading-snug text-danger">
           Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
         </p>
       </div>
     {:else if download?.state === 'cancelled'}
-      <p class="mt-2.5 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
+      <p class="mt-2.5 border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
         Download cancelled.
       </p>
     {/if}

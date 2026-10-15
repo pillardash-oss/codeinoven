@@ -138,7 +138,7 @@ function inlineChipHtml(reference: PromptProjectReference): string {
   // A real control, not decoration: the chip names a file the reader can jump
   // to. It carries the same `data-file-chip` path across the message render,
   // and MarkdownView + the citation context menu pick it up by delegation.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
 }
 
 function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
@@ -153,7 +153,7 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   const iconHtml = icon
     ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
     : ''
-  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
+  return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
 }
 
 export function inlineFileTagsForMessage(

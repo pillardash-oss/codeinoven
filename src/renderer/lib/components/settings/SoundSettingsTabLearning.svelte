@@ -29,8 +29,8 @@
   })
 </script>
 
-<section id="settings-block-sound-rules" class="rounded-xl border bg-surface p-4">
-  <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Learned lessons</h2>
+<section id="settings-block-sound-rules" class="border bg-surface p-4">
+  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Learned lessons</h2>
   <p class="mb-3 text-xs text-dimmed">
     After you edit a transcript before sending, the local instruct model compares what it heard with
     what you actually wrote and distills reusable style lessons word choices, punctuation habits,
@@ -61,7 +61,7 @@
         aria-label={`Toggle lesson ${lesson.instruction}`}
       /><button
         type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+        class="flex h-8 w-8 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
         title={`Delete lesson ${lesson.instruction}`}
         aria-label={`Delete lesson ${lesson.instruction}`}
         onclick={() =>

@@ -12734,7 +12734,7 @@
             <div class="flex justify-center pb-2">
               <button
                 type="button"
-                class="rounded-lg px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
+                class="px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
                 disabled={loadingOlderMessages}
                 onclick={() => void loadOlderMessages()}
               >
@@ -12756,7 +12756,7 @@
           )}
             <button
               type="button"
-              class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+              class="flex cursor-pointer items-center gap-1.5 border border-border bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
               title={action}
               aria-label={action}
               {onclick}
@@ -12905,7 +12905,7 @@
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
                       bind:value={editingText}
-                      class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
+                      class="w-full bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
@@ -12914,7 +12914,7 @@
                       data-voice-trigger-root
                     >
                       <button
-                        class="rounded-md px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                        class="px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         title="Discard the edit"
                         onclick={cancelEdit}
                       >
@@ -12928,7 +12928,7 @@
                         triggerPriority={8}
                       />
                       <button
-                        class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+                        class="bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
                         title="Send the edited message   replaces the conversation from here down"
                         disabled={busy || !editingText.trim()}
                         onclick={() => submitEditedMessage(msg)}
@@ -12959,16 +12959,16 @@
                     )}
                     <!-- The user's own message reads as a ledger row: only its
                          left edge is drawn, a 2px accent against the transcript,
-                         squared off on the left and rounded on the right. -->
+                         and every corner is square. -->
                     <div
-                      class="w-full rounded-r-lg border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
+                      class="w-full border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
                       {#if leftoverReferences.length}
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each leftoverReferences as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
+                              class="inline-flex max-w-full items-center gap-1.5 border border-border bg-elevated px-2 py-1 text-[0.75rem]"
                               title="Tagged {reference.kind}: {reference.path}"
                             >
                               {#if reference.kind === 'directory'}
@@ -12987,7 +12987,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each msg.references as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
+                              class="inline-flex max-w-full items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                               title={reference.comment
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
@@ -13126,7 +13126,7 @@
                       <div class="flex items-center gap-0.5">
                         {#if threadMessages.isSteerHeld(thread.projectId, conversationId, msg.id)}
                           <button
-                            class="rounded p-1 text-accent transition-colors hover:bg-elevated"
+                            class="p-1 text-accent transition-colors hover:bg-elevated"
                             aria-label="Undo steer   the message has not reached the agent yet"
                             title="Undo   the agent never receives a steered message that is undone"
                             onclick={() => void undoHeldSteer(msg)}
@@ -13135,7 +13135,7 @@
                           </button>
                         {/if}
                         <button
-                          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                          class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                           aria-label="Copy message"
                           title="Copy"
                           onclick={() => copyMessage(msg)}
@@ -13148,7 +13148,7 @@
                         </button>
                         {#if !explicitPresentation}
                           <button
-                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                            class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Edit message"
                             title="Edit   resend replaces the conversation from here down"
                             disabled={busy}
@@ -13157,7 +13157,7 @@
                             <Pencil size={12} />
                           </button>
                           <button
-                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                            class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Delete message"
                             title="Delete   removes the conversation up to this message"
                             disabled={busy}
@@ -13408,7 +13408,7 @@
                           <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                             <div class="flex shrink-0 items-center gap-0.5">
                               <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
                                 onclick={() => copyMessage(msg, turnClosingText?.text)}
@@ -13430,7 +13430,7 @@
                               />
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Continue this chat in a new thread"
                                   title="Continue in a new thread"
                                   disabled={continuingInThread}
@@ -13445,7 +13445,7 @@
                               {/if}
                               {#if controller?.kind !== 'temporary-chat'}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Fork thread from this message"
                                   title="Fork from here"
                                   disabled={forkingMessageId !== null}
@@ -13460,7 +13460,7 @@
                               {/if}
                               {#if chatMode && onContinueInProject}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Continue this chat in a project"
                                   title="Continue in a project"
                                   onclick={() => openContinueInProject()}
@@ -13469,7 +13469,7 @@
                                 </button>
                               {/if}
                               <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Export this conversation as a transcript"
                                 title="Export transcript"
                                 onclick={openTranscriptExport}
@@ -13875,7 +13875,7 @@
                         src={centeredProjectIconUrl}
                         alt=""
                         aria-hidden="true"
-                        class="size-7 rounded-[0.375rem] object-cover"
+                        class="size-7 object-cover"
                       />
                     {/if}
                     {chatMode ? 'Start a new chat' : (project?.name ?? 'New thread')}
@@ -14545,7 +14545,7 @@
                         {#each suggestedPrompts as prompt (prompt)}
                           <button
                             type="button"
-                            class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            class="border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                             onclick={() => composer?.setComposerText(prompt)}
                           >
                             {prompt}

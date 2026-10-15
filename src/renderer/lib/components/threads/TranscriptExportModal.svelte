@@ -35,7 +35,7 @@
       {chatMode ? 'to the temporary chat directory.' : 'inside the project’s .cio scratch space.'}
     </p>
 
-    <div class="flex items-start gap-3 rounded-xl border bg-elevated px-3 py-3">
+    <div class="flex items-start gap-3 border bg-elevated px-3 py-3">
       <Switch
         checked={includeTrace}
         onchange={(value) => (includeTrace = value)}
@@ -52,7 +52,7 @@
     </div>
 
     <p
-      class="flex items-start gap-1.5 rounded-lg bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
+      class="flex items-start gap-1.5 border border-border bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
     >
       <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
       The transcript is exported in the background on a worker thread   the app stays fully responsive
@@ -63,7 +63,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Cancel"
       disabled={busy}
       onclick={onClose}
@@ -72,7 +72,7 @@
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex items-center gap-1.5 bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
       title="Export the transcript in the background"
       disabled={busy}
       onclick={confirm}

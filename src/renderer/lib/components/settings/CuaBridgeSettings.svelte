@@ -210,14 +210,14 @@
 
 <div class="space-y-5 p-6 pb-24">
   {#if error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
 
-  <section class="rounded-2xl border bg-surface p-5">
+  <section class="border bg-surface p-5">
     <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex min-w-0 items-start gap-4">
         <div
-          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#2f80ed]"
+          class="flex h-12 w-12 shrink-0 items-center justify-center bg-[#2f80ed]"
           aria-hidden="true"
         >
           <img src={cuaLogoUrl} alt="" class="h-9 w-9" />
@@ -239,7 +239,7 @@
       {:else if status}
         <div class="flex shrink-0 items-center gap-2">
           <span
-            class="rounded-lg px-2.5 py-1 text-xs font-medium {status.enabled && status.ready
+            class="border border-border px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {status.enabled && status.ready
               ? 'bg-success/10 text-success'
               : status.installed && status.compatible
                 ? 'bg-warning/10 text-warning'
@@ -260,15 +260,15 @@
 
     {#if status}
       <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-xl bg-elevated px-3 py-2.5">
+        <div class="border bg-elevated px-3 py-2.5">
           <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Installed</p>
           <p class="mt-1 text-sm font-medium">{status.version ?? 'Not detected'}</p>
         </div>
-        <div class="rounded-xl bg-elevated px-3 py-2.5">
+        <div class="border bg-elevated px-3 py-2.5">
           <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Supported</p>
           <p class="mt-1 text-sm font-medium">{status.supportedVersionRange}</p>
         </div>
-        <div class="rounded-xl bg-elevated px-3 py-2.5">
+        <div class="border bg-elevated px-3 py-2.5">
           <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
             Permissions
           </p>
@@ -282,7 +282,7 @@
                   : 'Unknown'}
           </p>
         </div>
-        <div class="rounded-xl bg-elevated px-3 py-2.5">
+        <div class="border bg-elevated px-3 py-2.5">
           <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Daemon</p>
           <p class="mt-1 text-sm font-medium">
             {status.daemonRunning
@@ -296,7 +296,7 @@
 
       {#if status.detail}
         <div
-          class="mt-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+          class="mt-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
         >
           <AlertTriangle size={14} class="mt-0.5 shrink-0" />
           <span>{status.detail}</span>
@@ -307,7 +307,7 @@
         {#if !status.ready}
           <button
             type="button"
-            class="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-9 items-center gap-2 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
             title={status.downloadLabel}
             onclick={() => openStatusUrl('installUrl')}
           >
@@ -317,7 +317,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           disabled={loading}
           title="Refresh Cua Driver status"
           onclick={() => void loadStatus()}
@@ -326,7 +326,7 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the Cua Driver setup guide"
           onclick={() => openStatusUrl('documentationUrl')}
         >
@@ -334,7 +334,7 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the Cua source repository"
           onclick={() => openStatusUrl('repositoryUrl')}
         >
@@ -345,7 +345,7 @@
   </section>
 
   {#if status?.installed}
-    <section class="rounded-2xl border bg-surface p-5">
+    <section class="border bg-surface p-5">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 class="text-sm font-semibold">Driver updates</h2>
@@ -357,7 +357,7 @@
         </div>
         <button
           type="button"
-          class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 shrink-0 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           disabled={checkingUpdate || updating}
           title="Check Cua releases again"
           onclick={() => void checkForUpdates(true)}
@@ -378,7 +378,7 @@
         </div>
       {:else if updateProgress?.state === 'installed'}
         <div
-          class="mt-4 flex items-start gap-2 rounded-lg bg-success/10 px-3 py-2 text-xs text-success"
+          class="mt-4 flex items-start gap-2 bg-success/10 px-3 py-2 text-xs text-success"
         >
           <CheckCircle2 size={14} class="mt-0.5 shrink-0" />
           <span>
@@ -389,7 +389,7 @@
           </span>
         </div>
       {:else if updateProgress?.state === 'failed' || updateError}
-        <div class="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
+        <div class="mt-4 bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
           <div class="flex items-start gap-2">
             <AlertTriangle size={14} class="mt-0.5 shrink-0" />
             <span class="whitespace-pre-line break-words">
@@ -399,7 +399,7 @@
           <div class="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              class="flex h-8 items-center gap-2 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-8 items-center gap-2 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               title="Check Cua releases again"
               onclick={() => void checkForUpdates(true)}
             >
@@ -408,7 +408,7 @@
             {#if update?.updateAvailable}
               <button
                 type="button"
-                class="flex h-8 items-center gap-2 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                class="flex h-8 items-center gap-2 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
                 title={`Try updating Cua Driver to ${update.latestVersion} again`}
                 onclick={() => (confirmingUpdate = true)}
               >
@@ -419,7 +419,7 @@
         </div>
       {:else if update?.updateAvailable}
         <div
-          class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-elevated px-3 py-3"
+          class="mt-4 flex flex-wrap items-center justify-between gap-3 border bg-elevated px-3 py-3"
         >
           <div>
             <p class="text-sm font-medium">Cua {update.latestVersion} is available</p>
@@ -432,7 +432,7 @@
           <div class="flex shrink-0 flex-wrap items-center gap-2">
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+              class="flex h-9 items-center gap-2 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
               title={`Update Cua Driver to ${update.latestVersion}`}
               onclick={() => (confirmingUpdate = true)}
             >
@@ -441,7 +441,7 @@
             {#if update.releaseNotesUrl}
               <button
                 type="button"
-                class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium hover:bg-overlay"
+                class="flex h-9 items-center gap-1.5 border bg-surface px-3 text-xs font-medium hover:bg-overlay"
                 title={`Read the Cua ${update.latestVersion} release notes`}
                 onclick={openUpdateReleaseNotes}
               >
@@ -473,7 +473,7 @@
               </p>
             </div>
           </div>
-          <code class="mt-2 block select-all break-all rounded-lg bg-elevated px-3 py-2 text-xs">
+          <code class="mt-2 block select-all break-all border bg-elevated px-3 py-2 text-xs">
             {status.updateCommand}
           </code>
           <button
@@ -490,7 +490,7 @@
   {/if}
 
   {#if status && selectedInstallation}
-    <section class="rounded-xl border bg-surface p-4">
+    <section class="border bg-surface p-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 class="text-sm font-semibold">Installation in use</h3>
@@ -500,13 +500,13 @@
           </p>
         </div>
         <span
-          class="rounded-md bg-elevated px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
+          class="border border-border bg-elevated px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
         >
           Selected by CodeInOven
         </span>
       </div>
 
-      <code class="mt-3 block select-all break-all rounded-lg bg-elevated px-3 py-2 text-xs">
+      <code class="mt-3 block select-all break-all border bg-elevated px-3 py-2 text-xs">
         {selectedInstallation.path}
       </code>
       {#if selectedInstallation.path !== selectedInstallation.realPath}
@@ -524,7 +524,7 @@
       {/if}
 
       {#if !status.compatible}
-        <p class="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning">
+        <p class="mt-4 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning">
           This copy is older than the driver contract CodeInOven targets. Use Update in the Driver
           updates card above; if that cannot run, replace the installation by hand and refresh this
           page.
@@ -555,13 +555,13 @@
     </section>
   {/if}
 
-  <section class="rounded-xl border bg-surface p-4">
+  <section class="border bg-surface p-4">
     <h3 class="text-sm font-semibold">Set up this computer</h3>
     <ol class="mt-3 space-y-2">
       {#each setupSteps as step, index (step)}
         <li class="flex items-start gap-2.5 text-xs leading-relaxed text-muted">
           <span
-            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-elevated text-[0.625rem] font-semibold text-foreground"
+            class="flex h-5 w-5 shrink-0 items-center justify-center bg-elevated text-[0.625rem] font-semibold text-foreground"
             >{index + 1}</span
           >
           <span>{step}</span>
@@ -580,17 +580,17 @@
     {/if}
   </section>
 
-  <section class="rounded-xl border bg-surface p-4">
+  <section class="border bg-surface p-4">
     <h3 class="text-sm font-semibold">Thread permissions</h3>
     <div class="mt-3 grid gap-3 sm:grid-cols-2">
-      <div class="rounded-lg bg-elevated p-3">
+      <div class="border bg-elevated p-3">
         <p class="text-xs font-semibold">Auto Review</p>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Cua runs in standard mode. Routine desktop actions proceed; explicitly denied boundaries
           return to the thread for permission.
         </p>
       </div>
-      <div class="rounded-lg bg-elevated p-3">
+      <div class="border bg-elevated p-3">
         <p class="text-xs font-semibold">Full Access</p>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Cua runs in unrestricted mode with its required acknowledgement. Platform invariants and

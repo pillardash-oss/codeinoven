@@ -56,7 +56,7 @@ so the task manager tree has one node contract instead of several. -->
   <div class="flex items-center gap-3 px-5 py-2">
     <button
       type="button"
-      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-elevated"
+      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-elevated"
       aria-expanded={expanded}
       title="{expanded ? 'Collapse' : 'Expand'} {label}"
       aria-label="{expanded ? 'Collapse' : 'Expand'} {label}"

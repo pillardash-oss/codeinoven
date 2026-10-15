@@ -13,7 +13,7 @@
 </script>
 
 <button
-  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+  class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
   aria-label={title}
   {title}
   disabled={!scopeState.activeProjectId}

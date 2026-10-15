@@ -858,7 +858,7 @@
         {#snippet serviceRow(service: TaskManagerService)}
           <li class="flex items-start gap-3 px-5 py-3">
             <span
-              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
             >
               {#if service.kind === 'mcp'}
                 <Plug size={15} />
@@ -875,13 +875,13 @@
                 <p class="truncate text-sm font-semibold text-foreground">{service.name}</p>
                 {#if service.port !== null}
                   <span
-                    class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                    class="shrink-0 bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                   >
                     :{service.port}
                   </span>
                 {/if}
                 <span
-                  class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
+                  class="shrink-0 bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
                 >
                   {SERVICE_KIND_LABELS[service.kind]}
                 </span>
@@ -920,7 +920,7 @@
             <div class="mt-0.5 flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!service.stoppable || stopping}
                 title={service.stoppable
                   ? `Stop ${service.name}`
@@ -960,7 +960,7 @@
             >
               {#if harnessId}
                 <span
-                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
                 >
                   <AgentIcon agentId={harnessId} size={16} />
                 </span>
@@ -968,12 +968,12 @@
                 {@render projectIconTile(
                   process.projectId,
                   process.projectName ?? processName(process.command),
-                  'mt-0.5 h-8 w-8 rounded-lg',
+                  'mt-0.5 h-8 w-8',
                   'h-4 w-4'
                 )}
               {:else}
                 <span
-                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
                 >
                   <SquareTerminal size={15} />
                 </span>
@@ -985,7 +985,7 @@
                   </p>
                   {#if process.ports.length > 0}
                     <span
-                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                      class="shrink-0 bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                     >
                       :{process.ports[0]}
                       {#if process.ports.length > 1}
@@ -994,7 +994,7 @@
                     </span>
                   {/if}
                   <span
-                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
+                    class="shrink-0 bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
                     'app'
                       ? 'uppercase tracking-wide'
                       : ''}"
@@ -1036,7 +1036,7 @@
             <div class="mt-0.5 flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={process.ports.length === 0 || !process.projectId}
                 title={process.ports.length === 0
                   ? 'No port detected'
@@ -1050,7 +1050,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!process.projectId}
                 title={process.projectId
                   ? 'Open path in in-app terminal'
@@ -1062,7 +1062,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-8 w-8 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!process.threadId}
                 title={process.threadId
                   ? `Open the thread responsible for ${processName(process.command)}`
@@ -1129,7 +1129,7 @@
               {@render projectIconTile(
                 group.projectId ?? group.id,
                 group.projectName ?? group.label,
-                'h-6 w-6 rounded-md',
+                'h-6 w-6',
                 'h-4 w-4'
               )}
             {/snippet}
@@ -1156,7 +1156,7 @@
           is exactly the space they occupied. The filter stays applied   only
           its control is off screen. -->
           <div
-            class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-elevated px-2"
+            class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border border-border bg-elevated px-2"
           >
             <Search size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
             <input
@@ -1233,7 +1233,7 @@
           {#if filterProjectId}
             <button
               type="button"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              class="flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
               title="Clear the project filter"
               aria-label="Clear the project filter"
               onclick={() => setFilterProject(null)}
@@ -1254,7 +1254,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border transition-colors {searchOpen
+          class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {searchOpen
             ? 'bg-overlay text-foreground'
             : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
           aria-pressed={searchOpen}
@@ -1276,7 +1276,7 @@
       <div class="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-[width] hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-[width] hover:bg-overlay hover:text-foreground disabled:opacity-50"
           disabled={checking}
           title="Refresh running processes"
           aria-label="Refresh running processes"
@@ -1297,7 +1297,7 @@
         {#if selected.size > 0}
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             disabled={ending || forceEnding}
             title="Gracefully stop the selected processes"
             onclick={() => void endSelected()}
@@ -1315,7 +1315,7 @@
           </button>
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-8 items-center gap-1.5 bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
             disabled={ending || forceEnding}
             title="Force kill the selected processes"
             onclick={requestForceEnd}
@@ -1347,7 +1347,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 text-sm font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-3 text-sm font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
       disabled={forceEnding}
       title="Cancel"
       onclick={() => (forceEndTargets = [])}
@@ -1357,7 +1357,7 @@
     <button
       type="button"
       data-modal-primary
-      class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-1.5 bg-danger px-3 text-sm font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
       disabled={forceEnding}
       title="Force kill the selected processes"
       onclick={() => void confirmForceEnd()}

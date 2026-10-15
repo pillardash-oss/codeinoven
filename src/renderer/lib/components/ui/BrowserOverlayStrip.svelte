@@ -77,7 +77,7 @@
       {#if chrome.canGoBack}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Go back in page history"
           title="Go back"
           onclick={(event: MouseEvent) => actionAt('back', event)}
@@ -88,7 +88,7 @@
       {#if chrome.canGoForward}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Go forward in page history"
           title="Go forward"
           onclick={(event: MouseEvent) => actionAt('forward', event)}
@@ -99,7 +99,7 @@
       {#if chrome.loading || chrome.url !== ''}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={chrome.loading ? 'Stop loading' : 'Reload page'}
           title={chrome.loading ? 'Stop loading' : 'Reload page'}
           onclick={(event: MouseEvent) => actionAt(chrome.loading ? 'stop' : 'reload', event)}
@@ -111,12 +111,12 @@
           {/if}
         </button>
       {/if}
-      <div class="flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-elevated pr-0.5 pl-1.5">
+      <div class="flex min-w-0 flex-1 items-center gap-1 bg-elevated pr-0.5 pl-1.5">
         {#if chrome.url}
           <button
             type="button"
             class={[
-              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+              'flex h-5 w-5 shrink-0 items-center justify-center transition-colors hover:bg-overlay',
               chrome.secure ? 'text-success' : 'text-dimmed'
             ]}
             title={chrome.secure ? 'Site settings' : 'Connection is not secure'}
@@ -149,7 +149,7 @@
           <button
             type="button"
             class={[
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay disabled:opacity-60',
+              'flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay disabled:opacity-60',
               chrome.storeOffer.installed ? 'text-success' : 'text-primary'
             ]}
             disabled={chrome.storeOffer.installing && !chrome.storeOffer.installed}
@@ -169,7 +169,7 @@
         <button
           type="button"
           class={[
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+            'flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay',
             chrome.bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
           ]}
           disabled={chrome.url === ''}
@@ -187,13 +187,13 @@
   <ul class="min-h-0 flex-1 overflow-y-auto px-2 py-2" role="list">
     {#each strip.tabs as tab (tab.id)}
       <li
-        class="group flex items-center rounded-md {tab.active
+        class="group flex items-center {tab.active
           ? 'bg-elevated'
           : 'hover:bg-elevated'}"
       >
         <button
           type="button"
-          class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left"
+          class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
           title={tab.url || tab.label}
           aria-label={`Show ${tab.label}`}
           aria-current={tab.active ? 'page' : undefined}
@@ -207,7 +207,7 @@
             {#if tab.loading}
               <Loader2 size={13} class="animate-spin text-muted" />
             {:else if tab.icon}
-              <img src={tab.icon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+              <img src={tab.icon} alt="" class="h-4 w-4 object-contain" />
             {:else}
               <Globe size={12} class="text-dimmed" />
             {/if}
@@ -239,7 +239,7 @@
         </button>
         <button
           type="button"
-          class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground"
+          class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground"
           aria-label={`Close ${tab.label}`}
           title={`Close ${tab.label}`}
           onclick={() => onClose(tab.id)}

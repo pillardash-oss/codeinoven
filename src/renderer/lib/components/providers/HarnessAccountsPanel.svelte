@@ -391,12 +391,12 @@
         type="text"
         placeholder="Search accounts…"
         aria-label="Search accounts"
-        class="h-8 w-full rounded-lg border bg-elevated pl-8 pr-3 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
+        class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
       />
     </div>
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-8 items-center gap-1.5 border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Refresh accounts and usage"
       disabled={loading || refreshing}
       onclick={() => void refreshAll()}
@@ -418,7 +418,7 @@
     <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by harness">
       <button
         type="button"
-        class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
+        class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
           ? 'border-primary bg-primary text-on-primary'
           : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={!harnessFilterActive}
@@ -431,7 +431,7 @@
       {#each filterHarnesses as harness (harness.id)}
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+          class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
             harness.id
           )
             ? 'border-primary bg-primary text-on-primary'
@@ -447,7 +447,7 @@
       {#if harnessFilterActive}
         <button
           type="button"
-          class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+          class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
           title="Clear harness filter"
           onclick={clearHarnessFilter}
         >
@@ -458,7 +458,9 @@
   {/if}
 
   {#if error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {error}
+    </p>
   {/if}
 
   {#if loading}
@@ -474,12 +476,12 @@
       </p>
     </div>
   {:else if accounts.length === 0}
-    <div class="rounded-xl border border-dashed p-8 text-center">
+    <div class="border border-dashed p-8 text-center">
       <UserRound size={20} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-muted">No accounts have been created yet.</p>
     </div>
   {:else if filteredRows.length === 0}
-    <div class="rounded-xl border border-dashed p-8 text-center">
+    <div class="border border-dashed p-8 text-center">
       <ListFilter size={18} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-dimmed">
         {harnessFilterActive
@@ -529,7 +531,7 @@
                 <span class="truncate text-xs font-medium">{account.label}</span>
                 {#if account.isDefault}
                   <span
-                    class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
                     title="Default account for this provider"
                   >
                     Default
@@ -537,7 +539,7 @@
                 {/if}
                 {#if isCustomProviderRow(account)}
                   <span
-                    class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
                     title="Custom base URL provider"
                   >
                     Custom
@@ -573,7 +575,7 @@
             {#if hasSiblingAccounts(account) && !account.isDefault}
               <button
                 type="button"
-                class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
+                class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
                 title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 onclick={() => void setDefault(account)}
@@ -584,7 +586,7 @@
             {/if}
             <button
               type="button"
-              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="inline-flex items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               title={`Edit label for ${account.label}`}
               aria-label={`Edit label for ${account.label}`}
               onclick={() => openEdit(account)}
@@ -594,7 +596,7 @@
             </button>
             <button
               type="button"
-              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+              class="inline-flex items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
               title={`Disconnect ${account.label}`}
               aria-label={`Disconnect ${account.label}`}
               onclick={() => (disconnectTarget = account)}
@@ -613,14 +615,14 @@
   {#snippet footer()}
     <button
       type="button"
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       onclick={() => (editTarget = null)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="h-9 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="h-9 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={saving || editLabel.trim() === ''}
       onclick={() => void saveLabel()}
     >
@@ -636,7 +638,7 @@
       maxlength="80"
       autocomplete="off"
       autofocus
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
       onkeydown={(event: KeyboardEvent) => {
         if (event.key === 'Enter') void saveLabel()
       }}
@@ -652,14 +654,14 @@
   {#snippet footer()}
     <button
       type="button"
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       onclick={() => (disconnectTarget = null)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
       disabled={disconnecting}
       onclick={() => void disconnectAccount()}
     >

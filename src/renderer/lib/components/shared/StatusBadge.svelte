@@ -100,7 +100,7 @@
   </span>
 {:else}
   <span
-    class="{sizeClass} shrink-0 rounded-full {className}"
+    class="{sizeClass} shrink-0 {className}"
     style="background: {resolvedColor}"
     {role}
     aria-label={ariaLabel}

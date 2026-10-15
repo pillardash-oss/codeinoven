@@ -27,14 +27,14 @@
       <Bug size={14} class="text-muted" />
       <h2 class="text-xs font-semibold text-foreground">Debug</h2>
       {#if agentDebug.exchangeCount > 0}
-        <span class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] tabular-nums text-muted">
+        <span class="bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] tabular-nums text-muted">
           {agentDebug.exchangeCount}
         </span>
       {/if}
     </div>
     <div class="flex items-center gap-0.5">
       <button
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label={agentDebug.enabled ? 'Pause capturing' : 'Start capturing'}
         title={agentDebug.enabled ? 'Pause capturing' : 'Start capturing'}
         onclick={() => agentDebug.toggle()}
@@ -46,7 +46,7 @@
         {/if}
       </button>
       <button
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
         aria-label="Clear log"
         title="Clear log"
         disabled={agentDebug.exchangeCount === 0}
@@ -64,7 +64,7 @@
   <div class="shrink-0 border-b border-border px-3 py-2">
     <input
       type="text"
-      class="w-full rounded-md border bg-elevated px-2.5 py-1.5 text-xs text-foreground placeholder:text-dimmed outline-none focus:border-primary"
+      class="w-full border bg-elevated px-2.5 py-1.5 text-xs text-foreground placeholder:text-dimmed outline-none focus:border-primary"
       placeholder="Filter exchanges..."
       aria-label="Filter debug exchanges"
       bind:value={agentDebug.filterQuery}
@@ -75,12 +75,12 @@
   <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
     {#if agentDebug.enabled}
       <span class="flex items-center gap-1 text-[0.625rem] text-success">
-        <span class="h-1.5 w-1.5 rounded-full bg-success"></span>
+        <span class="h-1.5 w-1.5 bg-success"></span>
         Recording
       </span>
     {:else}
       <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-        <span class="h-1.5 w-1.5 rounded-full bg-dimmed"></span>
+        <span class="h-1.5 w-1.5 bg-dimmed"></span>
         Paused
       </span>
     {/if}
@@ -99,7 +99,7 @@
     <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
       <span class="shrink-0 text-[0.625rem] font-medium text-muted">Thread ID:</span>
       <span
-        class="min-w-0 flex-1 select-all break-all rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] leading-relaxed text-foreground"
+        class="min-w-0 flex-1 select-all break-all bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] leading-relaxed text-foreground"
         title={workspaceState.selectedThread.id}
       >
         {workspaceState.selectedThread.id}

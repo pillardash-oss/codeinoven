@@ -266,7 +266,9 @@
 >
   <header class="flex shrink-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5">
     <History size={12} class="shrink-0 text-accent" />
-    <span class="text-[0.6875rem] shrink-0 font-semibold text-foreground">History</span>
+    <span class="text-[0.6875rem] shrink-0 font-semibold tracking-wide text-dimmed uppercase"
+      >History</span
+    >
     {#if !history?.gitBacked}
       <EnumSelect
         compact
@@ -298,7 +300,7 @@
     />
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Close the history"
       aria-label="Close the history"
       onclick={onClose}
@@ -310,7 +312,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
     {#if error !== ''}
       <p
-        class="mb-1.5 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        class="mb-1.5 border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
         role="alert"
       >
         {error}
@@ -348,7 +350,7 @@
           <li>
             <button
               type="button"
-              class="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-elevated disabled:opacity-60 {current
+              class="flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated disabled:opacity-60 {current
                 ? 'bg-elevated'
                 : ''}"
               disabled={restoring !== '' || directory === '' || loading}
@@ -360,7 +362,7 @@
             >
               <span class="mt-0.5 flex w-3 shrink-0 flex-col items-center self-stretch">
                 <span
-                  class="block h-2 w-2 rounded-full {current
+                  class="block h-2 w-2 {current
                     ? 'bg-accent'
                     : ahead
                       ? 'border border-dashed border-dimmed'
@@ -385,7 +387,7 @@
                   </span>
                   {#if current}
                     <span
-                      class="shrink-0 rounded-full bg-accent/15 px-1.5 text-[0.5625rem] font-medium text-accent"
+                      class="shrink-0 bg-accent/15 px-1.5 text-[0.5625rem] font-medium text-accent"
                     >
                       Here
                     </span>

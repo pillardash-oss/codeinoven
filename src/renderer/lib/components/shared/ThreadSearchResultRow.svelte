@@ -174,7 +174,7 @@
 
 <button
   {@attach captureRowElement}
-  class="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors {selected
+  class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors {selected
     ? 'bg-selected'
     : 'hover:bg-elevated'}"
   title={thread.title}
@@ -199,7 +199,7 @@
           title={queuedBadge.label}
         />
       {:else}
-        <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
+        <span class="h-2 w-2 border border-border-strong bg-transparent"></span>
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">{thread.title}</span>

@@ -105,7 +105,7 @@
   })
 </script>
 
-<div class="rounded-lg border bg-elevated p-2">
+<div class="border bg-elevated p-2">
   <!-- One stable element: play() always targets the element carrying the src. -->
   <audio
     bind:this={audioEl}
@@ -125,7 +125,7 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
+        class="inline-flex items-center gap-1.5 border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
         title="Load and play recording with seek and download"
         aria-label="Play recording {attemptId}"
         disabled={preparing}
@@ -149,7 +149,7 @@
       <a
         href={url}
         download={downloadName || `recording-${attemptId}`}
-        class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground"
+        class="inline-flex items-center gap-1 border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground"
         title="Download recording"
         aria-label="Download recording {attemptId}"
       >

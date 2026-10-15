@@ -56,7 +56,7 @@
         </p>
         <button
           type="button"
-          class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
+          class="shrink-0 px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
           onclick={() => (amendMode = false)}
         >
           Cancel
@@ -66,7 +66,7 @@
     <div class="px-2 pt-2">
       <textarea
         bind:this={commitTextarea}
-        class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="min-h-11 w-full resize-none border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
         bind:value={commitMessage}
         onkeydown={onCommitMessageKeydown}></textarea>
@@ -75,7 +75,7 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+        class="flex h-7 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
         disabled={!commitMessage.trim() || commitBusy || (!amendMode && stagedCount === 0)}
         onclick={onCommitInline}
       >

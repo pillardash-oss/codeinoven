@@ -43,7 +43,7 @@
 
 <Popover.Root bind:open>
   <Popover.Trigger
-    class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+    class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
     aria-label="Add a reaction"
     title="Add a reaction"
   >
@@ -51,7 +51,7 @@
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content
-      class="z-50 flex items-center gap-0.5 rounded-lg border border-border bg-surface p-1 shadow-xl"
+      class="z-50 flex items-center gap-0.5 border border-border bg-surface p-1 shadow-xl"
       side="bottom"
       align="end"
       sideOffset={4}
@@ -64,7 +64,7 @@
       {#each reactionOptions() as option (option.content)}
         <button
           type="button"
-          class="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-base leading-none transition-colors hover:bg-elevated disabled:opacity-50 {mine.has(
+          class="flex size-7 shrink-0 cursor-pointer items-center justify-center text-base leading-none transition-colors hover:bg-elevated disabled:opacity-50 {mine.has(
             option.content
           )
             ? 'bg-primary/10'

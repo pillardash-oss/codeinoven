@@ -778,7 +778,7 @@ function pptxDeckToHtml(deck: PptxDeck): string | null {
   const html = [
     '<style>',
     '.pptx-deck{display:flex;flex-direction:column;gap:1.5rem;align-items:center;}',
-    '.pptx-slide{position:relative;width:100%;max-width:52rem;overflow:hidden;border-radius:.5rem;box-shadow:0 8px 30px rgb(0 0 0 / 18%);container-type:inline-size;background:#fff;}',
+    '.pptx-slide{position:relative;width:100%;max-width:52rem;overflow:hidden;box-shadow:0 8px 30px rgb(0 0 0 / 18%);container-type:inline-size;background:#fff;}',
     '.pptx-slide .pptx-bg{position:absolute;inset:0;background-size:cover;background-position:center;}',
     '.pptx-slide .pptx-shape{position:absolute;}',
     '.pptx-slide .pptx-shape img{width:100%;height:100%;object-fit:contain;display:block;}',

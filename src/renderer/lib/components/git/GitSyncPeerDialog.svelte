@@ -207,7 +207,7 @@
       correctable here.
     -->
     <div
-      class="flex rounded-lg border border-border bg-elevated p-0.5"
+      class="flex border border-border bg-elevated p-0.5"
       role="group"
       aria-label="Sync direction"
     >
@@ -215,7 +215,7 @@
         <button
           type="button"
           class={[
-            'flex-1 cursor-pointer rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+            'flex-1 cursor-pointer px-2 py-1.5 text-xs font-medium transition-colors',
             direction === choice.value
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'
@@ -245,7 +245,7 @@
         Reading the project's checkouts and branches…
       </div>
     {:else if loadError}
-      <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
+      <div class="border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
         <p class="text-xs font-semibold text-danger">The sync targets could not be read</p>
         <p class="mt-0.5 whitespace-pre-wrap break-words text-xs text-danger">{loadError}</p>
       </div>
@@ -257,7 +257,7 @@
           aria-hidden="true"
         />
         <input
-          class="w-full rounded-lg border border-border bg-elevated py-1.5 pr-2 pl-7 text-xs text-foreground outline-none focus:border-primary/50"
+          class="w-full border border-border bg-elevated py-1.5 pr-2 pl-7 text-xs text-foreground outline-none focus:border-primary/50"
           placeholder="Filter checkouts and branches"
           aria-label="Filter checkouts and branches"
           bind:value={query}
@@ -275,7 +275,7 @@
                 <button
                   type="button"
                   class={[
-                    'flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
+                    'flex w-full items-center gap-2 border px-2.5 py-2 text-left transition-colors',
                     entry.key === selectedKey
                       ? 'border-primary/40 bg-primary/10'
                       : 'border-transparent hover:bg-elevated',
@@ -329,7 +329,7 @@
     <div class="flex items-center justify-end gap-2">
       <button
         type="button"
-        class="cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer px-3 py-1.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
         disabled={busy}
         onclick={onClose}
       >
@@ -339,7 +339,7 @@
         <button
           type="button"
           class={[
-            'h-8 cursor-pointer rounded-lg px-3 text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-50',
+            'h-8 cursor-pointer px-3 text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-50',
             strategy.value === 'merge'
               ? 'bg-primary text-on-primary hover:bg-primary-hover'
               : 'border border-border text-foreground hover:bg-elevated'

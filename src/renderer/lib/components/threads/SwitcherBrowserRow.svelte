@@ -52,11 +52,11 @@
   <span class="flex w-full min-w-0 items-center gap-2">
     <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
       {#if customIconUrl}
-        <img src={customIconUrl} alt="" class="h-3.5 w-3.5 rounded-sm object-contain" />
+        <img src={customIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
       {:else if runtime.loading}
         <Loader2 size={13} class="animate-spin text-muted" />
       {:else if tab.favicon}
-        <img src={tab.favicon} alt="" class="h-3.5 w-3.5 rounded-sm object-contain" />
+        <img src={tab.favicon} alt="" class="h-3.5 w-3.5 object-contain" />
       {:else}
         <Globe size={13} class="text-muted" />
       {/if}
@@ -88,9 +88,9 @@
         aria-label={`In box ${box.name}`}
       >
         {#if boxIcon}
-          <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+          <img src={boxIcon} alt="" class="h-3 w-3 object-contain" />
         {:else}
-          <span class="h-2 w-2 rounded-full" style="background-color: {boxAccent}"></span>
+          <span class="h-2 w-2" style="background-color: {boxAccent}"></span>
         {/if}
       </span>
     {/if}

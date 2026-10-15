@@ -54,12 +54,12 @@
   const canRemove = $derived(!progressing)
   const percent = $derived(Math.min(100, Math.max(0, download.progress)))
   const actionButton = $derived(
-    `flex shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground ${
+    `flex shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground ${
       compact ? 'h-6 w-6' : 'h-7 w-7'
     }`
   )
   const cancelButton = $derived(
-    `flex shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-danger ${
+    `flex shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-danger ${
       compact ? 'h-6 w-6' : 'h-7 w-7'
     }`
   )
@@ -87,12 +87,12 @@
 <div
   class={compact
     ? 'flex flex-col gap-1.5 px-3 py-2'
-    : 'rounded-xl border border-border bg-elevated p-3'}
+    : 'border border-border bg-elevated p-3'}
 >
   <div class="flex items-start gap-3">
     {#if !compact}
       <div
-        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted"
       >
         <FileDown size={15} />
       </div>

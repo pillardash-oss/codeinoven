@@ -100,13 +100,13 @@
   function panelLayout(placement: ModalPlacement, fill: boolean): string {
     switch (placement) {
       case 'right':
-        return 'h-full w-full rounded-none border-l bg-surface'
+        return 'h-full w-full border-l bg-surface'
       case 'bottom':
-        return 'max-h-[90dvh] w-full rounded-t-2xl border-t bg-surface pb-[env(safe-area-inset-bottom)]'
+        return 'max-h-[90dvh] w-full border-t bg-surface pb-[env(safe-area-inset-bottom)]'
       case 'fullscreen':
-        return 'h-dvh w-dvw max-h-none max-w-none rounded-none'
+        return 'h-dvh w-dvw max-h-none max-w-none'
       default:
-        return `w-full max-h-full rounded-2xl border bg-surface ${fill ? 'h-full' : ''}`
+        return `w-full max-h-full border bg-surface ${fill ? 'h-full' : ''}`
     }
   }
 
@@ -514,7 +514,7 @@
                       {@render headerActions()}
                     {/if}
                     <Dialog.Close
-                      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       aria-label="Close"
                       title="Close"
                     >

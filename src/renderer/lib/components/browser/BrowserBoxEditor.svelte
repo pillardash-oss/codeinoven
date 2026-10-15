@@ -223,7 +223,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Name</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       placeholder="Work"
       maxlength={MAX_BROWSER_BOX_NAME_LENGTH}
       bind:value={name}
@@ -237,7 +237,7 @@
       {#if existing}
         <button
           type="button"
-          class="rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated"
+          class="px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated"
           title="Erase this box's cookies and site data, keeping the box"
           onclick={() => (confirmClear = true)}
         >
@@ -247,7 +247,7 @@
       {#if existing && !isDefaultBox}
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
           title="Delete this box. Its tabs close."
           onclick={() => (confirmDelete = true)}
         >
@@ -260,7 +260,7 @@
       {#if hasAppearance}
         <button
           type="button"
-          class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+          class="px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
           title="Reset appearance"
           onclick={resetAppearance}
         >
@@ -269,7 +269,7 @@
       {/if}
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={!canSave}
         title={existing ? 'Save this box' : 'Create this box'}
         onclick={save}
@@ -317,7 +317,7 @@
         {tabCount === 1 ? 'tab closes' : 'tabs close'} with it, because a tab cannot change boxes in place.
       {/if}
     </p>
-    <div class="mt-3 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+    <div class="mt-3 flex items-center justify-between gap-3 border px-3 py-2.5">
       <div class="min-w-0">
         <p class="text-sm text-foreground">Also erase its cookies and site data</p>
         <p class="mt-0.5 text-[0.6875rem] text-dimmed">

@@ -107,7 +107,7 @@
 
 <div class="space-y-4">
   {#if step === 'idle'}
-    <div class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5">
+    <div class="flex items-center justify-between gap-3 border bg-surface px-3 py-2.5">
       <div class="flex min-w-0 items-center gap-2">
         {#if authStatus?.state === 'authenticated'}
           <CheckCircle2 size={15} class="shrink-0 text-success" />
@@ -117,7 +117,7 @@
         <p class="truncate text-xs font-medium">{stateLabel(authStatus)}</p>
       </div>
       <button
-        class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
         title="Re-check {harness.name} sign-in status"
         disabled={checkingAuth}
         onclick={onCheckAuth}
@@ -127,7 +127,7 @@
       </button>
     </div>
     {#if authStatus?.accounts.length}
-      <div class="overflow-hidden rounded-xl border bg-surface">
+      <div class="overflow-hidden border bg-surface">
         <div
           class="border-b bg-elevated px-3 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
         >
@@ -145,7 +145,7 @@
                 >
                 {#if hiddenIds.includes(connected.providerId)}
                   <span
-                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
+                    class="shrink-0 border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
                     title="Hidden from the {harness.name} model picker by its own config"
                   >
                     Hidden
@@ -171,7 +171,7 @@
             {#if accountForConnected(connected)}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                class="flex h-7 items-center gap-1 px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                 title={`Disconnect ${accountForConnected(connected)?.label || connected.label}`}
                 onclick={() => onRequestDisconnect(accountForConnected(connected) ?? null)}
               >
@@ -185,27 +185,24 @@
   {/if}
 
   {#if actionError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {actionError}
     </p>
   {/if}
 
   {#if actionWarning}
-    <p
-      class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
-      role="alert"
-    >
+    <p class="border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
       {actionWarning}
     </p>
   {/if}
   {#if notice}
-    <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+    <p class="border border-success/30 bg-success/10 px-3 py-2 text-xs text-success" role="status">
       {notice}
     </p>
   {/if}
 
   {#if step === 'labeling' && authenticatedProvider}
-    <div class="space-y-3 rounded-xl border bg-surface p-4">
+    <div class="space-y-3 border bg-surface p-4">
       <div class="flex items-start gap-2">
         <CheckCircle2 size={16} class="mt-0.5 shrink-0 text-success" />
         <div>
@@ -219,7 +216,7 @@
       </div>
       <!-- svelte-ignore a11y_autofocus -->
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         placeholder={`${authenticatedProvider.name}-N`}
         maxlength="80"
         autocomplete="off"
@@ -232,7 +229,7 @@
     </div>
   {:else if step === 'running' && loginHandoff}
     <div class="space-y-2">
-      <div class="h-60 overflow-hidden rounded-xl border bg-app">
+      <div class="h-60 overflow-hidden border bg-app">
         <ProviderLoginTerminal
           {terminalId}
           command={loginHandoff.command}
@@ -251,7 +248,7 @@
       <div class="flex items-center justify-between gap-2">
         <p class="text-[0.6875rem] font-medium text-dimmed">Providers {harness.name} offers</p>
         <button
-          class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
+          class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
           type="button"
           onclick={onBackToList}
         >
@@ -265,7 +262,7 @@
         />
         <!-- svelte-ignore a11y_autofocus -->
         <input
-          class="h-9 w-full rounded-lg border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
+          class="h-9 w-full border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
           placeholder="Search providers"
           autocomplete="off"
           spellcheck="false"
@@ -279,11 +276,11 @@
           <Loader2 size={17} class="animate-spin text-dimmed" />
         </div>
       {:else if offeredError}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {offeredError}
         </p>
       {:else if filteredOffered.length === 0}
-        <div class="rounded-xl border border-dashed p-4 text-center">
+        <div class="border border-dashed p-4 text-center">
           <p class="text-xs text-muted">
             {offered.length === 0
               ? 'No connectable providers were found for this harness.'
@@ -295,7 +292,7 @@
           {#each filteredOffered as provider (provider.id)}
             <button
               type="button"
-              class="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors {selectedProvider?.id ===
+              class="flex items-center justify-between gap-2 border px-3 py-2 text-left transition-colors {selectedProvider?.id ===
               provider.id
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-surface text-foreground hover:bg-overlay'}"
@@ -318,7 +315,7 @@
               </span>
               {#if provider.authenticated}
                 <span
-                  class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
+                  class="shrink-0 border border-border bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
                 >
                   Connected
                 </span>
@@ -341,7 +338,7 @@
           type="password"
           autocomplete="off"
           spellcheck="false"
-          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+          class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
           placeholder="Paste the API key"
           bind:value={apiKey}
           autofocus
@@ -358,7 +355,7 @@
       {/snippet}
 
       {#if apiKeyEntry && selectedProvider}
-        <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
+        <div class="space-y-1.5 border border-primary/30 bg-primary/5 p-3">
           {#if oauth.loginId !== null}
             <ProviderSignInProgress {oauth} />
           {:else if selectedProviderIsOauth}
@@ -370,7 +367,7 @@
               pasting needed.
             </p>
             <button
-              class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               type="button"
               title="Sign in to {selectedProvider.name} in your browser"
               onclick={() => void oauth.start()}
@@ -383,7 +380,7 @@
             <div class="text-[0.6875rem] font-medium text-foreground text-center">
               Connect to {selectedProvider.name}
               <button
-                class="flex h-9 mx-auto mt-2 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                class="flex h-9 mx-auto mt-2 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                 type="button"
                 title="Connect to {selectedProvider.name}"
                 onclick={() => void oauth.start()}
@@ -396,7 +393,7 @@
       {/if}
     </div>
   {:else}
-    <div class="rounded-xl border border-dashed px-3 py-2.5">
+    <div class="border border-dashed px-3 py-2.5">
       {#if apiKeyEntry}
         <p class="text-[0.6875rem] text-muted">
           Click <strong class="font-medium text-foreground">Search providers</strong> below to

@@ -74,7 +74,7 @@
     aria-hidden="true"
   >
     <span
-      class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
+      class="mt-1.5 bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
       >{dropFolder ? `Drop into ${dropFolder || ''}` : 'Drop to import'}</span
     >
   </div>
@@ -111,7 +111,7 @@
   >
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
     title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
     disabled={treeBusy}
@@ -126,7 +126,7 @@
   <button
     type="button"
     class={[
-      'flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
+      'flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
       filterOpen ? 'bg-elevated text-foreground' : ''
     ]}
     aria-label="Search project files"
@@ -138,7 +138,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label="Refresh project files"
     title="Refresh files"
     disabled={rootLoading}

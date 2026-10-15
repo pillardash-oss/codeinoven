@@ -30,10 +30,8 @@
   const needsSetup = $derived(view.status === 'needs-setup' || view.status === 'incomplete')
 </script>
 
-<div class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2">
-  <span
-    class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
-  >
+<div class="flex items-start gap-2 border border-border px-2.5 py-2">
+  <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center bg-elevated text-muted">
     <KindIcon size={13} strokeWidth={1.8} />
   </span>
 
@@ -43,7 +41,7 @@
         {view.connection.label}
       </span>
       <span
-        class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
+        class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
       >
         {utilityKindLabel(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)}
       </span>
@@ -74,7 +72,7 @@
     {#if view.entry}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="View {view.connection.label} details"
         aria-label="View {view.connection.label} details"
         onclick={() => onView(view)}
@@ -85,7 +83,7 @@
     {#if needsSetup || view.status === 'disabled'}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Set up {view.connection.label}"
         aria-label="Set up {view.connection.label}"
         onclick={() => onSetup(view)}
@@ -95,7 +93,7 @@
     {/if}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Remove {view.connection.label} from this routine"
       aria-label="Remove {view.connection.label} from this routine"
       onclick={() => onRemove(view.connection)}

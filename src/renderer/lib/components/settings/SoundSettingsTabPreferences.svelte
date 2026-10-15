@@ -16,8 +16,8 @@
   }
 </script>
 
-<section id="settings-block-sound-cleanup" class="rounded-xl border bg-surface p-4">
-  <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Transcript cleanup</h2>
+<section id="settings-block-sound-cleanup" class="border bg-surface p-4">
+  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Transcript cleanup</h2>
   <div class="space-y-4">
     <div class="flex items-center justify-between gap-4">
       <div>
@@ -33,7 +33,7 @@
         aria-label="Toggle local transcript cleanup"
       />
     </div>
-    <div class="space-y-3 rounded-lg border bg-elevated/40 p-3">
+    <div class="space-y-3 border bg-elevated/40 p-3">
       <p class="text-xs font-medium text-muted">Cleanup behavior</p>
       <div class="flex items-center justify-between gap-4">
         <p class="text-xs text-dimmed">
@@ -89,7 +89,7 @@
       />
     </div>
     <select
-      class="w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+      class="w-full border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
       aria-label="Remote cleanup model source"
       disabled={!settings.remoteCleanupEnabled}
       value={settings.remoteCleanupSelection}
@@ -105,7 +105,7 @@
       <label class="block text-xs text-muted">
         Fixed model ID
         <input
-          class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+          class="mt-1 w-full border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
           type="text"
           value={settings.remoteCleanupModelId ?? ''}
           disabled={!settings.remoteCleanupEnabled}
@@ -121,7 +121,7 @@
   </div>
 </section>
 
-<section id="settings-block-sound-voice-shortcut" class="rounded-xl border bg-surface p-4">
+<section id="settings-block-sound-voice-shortcut" class="border bg-surface p-4">
   <div class="flex items-center justify-between gap-4">
     <div class="min-w-0">
       <p class="text-sm font-medium">Voice recording shortcut</p>
@@ -137,7 +137,7 @@
   </div>
 </section>
 
-<section id="settings-block-sound-voice-recording" class="rounded-xl border bg-surface p-4">
+<section id="settings-block-sound-voice-recording" class="border bg-surface p-4">
   <div class="flex items-center justify-between gap-4">
     <div>
       <p class="text-sm font-medium">Enable voice recording</p>
@@ -155,14 +155,14 @@
   </div>
 </section>
 
-<section id="settings-block-sound-memory" class="rounded-xl border bg-surface p-4">
-  <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Model memory</h2>
+<section id="settings-block-sound-memory" class="border bg-surface p-4">
+  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Model memory</h2>
   <div class="space-y-3">
     {#each unloadItems as item (item.key)}
       <label class="flex items-center justify-between gap-3 text-xs text-muted">
         {item.label}
         <select
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
+          class="border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
           aria-label={`${item.label} unload delay`}
           value={settings[item.key]}
           onchange={(event) =>
@@ -179,8 +179,8 @@
   </div>
 </section>
 
-<section id="settings-block-sound-cues" class="rounded-xl border bg-surface p-4">
-  <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Cues and playback</h2>
+<section id="settings-block-sound-cues" class="border bg-surface p-4">
+  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Cues and playback</h2>
   <div class="grid gap-3 sm:grid-cols-2">
     <Switch
       checked={settings.cues.listeningStarted}

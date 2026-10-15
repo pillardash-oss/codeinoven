@@ -20,7 +20,7 @@
 -->
 <div class="flex items-center gap-2 {className}">
   <div
-    class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-overlay"
+    class="h-1.5 min-w-0 flex-1 overflow-hidden bg-overlay"
     role="progressbar"
     aria-label={`Download progress for ${fileName}`}
     aria-valuenow={clamped}
@@ -28,7 +28,7 @@
     aria-valuemax={100}
   >
     <div
-      class="h-full rounded-full bg-primary transition-[width] duration-150"
+      class="h-full bg-primary transition-[width] duration-150"
       style={`width: ${clamped}%`}
     ></div>
   </div>

@@ -150,9 +150,7 @@
         A conflicted merge is a failed run that needs the user: the commits that
         arrived are on disk, and the paths below are what the Git panel shows.
       -->
-      <div
-        class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning"
-      >
+      <div class="border border-warning/30 bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning">
         <p class="font-medium">The merge hit conflicts ({job.conflictFiles.length})</p>
         <ul class="mt-1 max-h-24 list-inside list-disc overflow-y-auto">
           {#each job.conflictFiles.slice(0, 20) as file (file)}
@@ -163,7 +161,7 @@
     {/if}
 
     {#if job.result}
-      <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
+      <div class="space-y-1 border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
         <p class="flex min-w-0 items-center gap-1.5">
           <span class="shrink-0">Branch</span>
           <code class="truncate font-mono text-foreground">{job.result.branch}</code>

@@ -74,11 +74,11 @@
   $effect(() => () => clearTimeout(copiedTimer))
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 
   const triggerClass = $derived(
     [
-      'flex h-8 shrink-0 cursor-pointer items-center justify-center gap-0.5 rounded-lg px-1.5 transition-colors',
+      'flex h-8 shrink-0 cursor-pointer items-center justify-center gap-0.5 px-1.5 transition-colors',
       highlighted
         ? 'bg-primary/10 text-primary ring-1 ring-primary/40 hover:bg-primary/15'
         : 'text-muted hover:bg-elevated',
@@ -103,7 +103,7 @@
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
-      class="z-50 min-w-52 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+      class="z-50 min-w-52 overflow-hidden border border-border bg-surface p-1 shadow-xl"
       side="bottom"
       align="end"
       sideOffset={4}

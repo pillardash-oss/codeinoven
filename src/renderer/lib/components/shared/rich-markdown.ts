@@ -5,24 +5,24 @@ import {
 } from '$shared/mention-context'
 
 const INLINE_CODE_CLASS =
-  'rounded border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
+  'border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
 const INLINE_BADGE_CLASS =
-  'mx-0.5 inline-flex max-w-48 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-elevated px-1.5 py-0.5 align-baseline text-[0.85em] font-medium leading-none text-foreground'
+  'mx-0.5 inline-flex max-w-48 items-center gap-1 whitespace-nowrap border border-border bg-elevated px-1.5 py-0.5 align-baseline text-[0.85em] font-medium leading-none text-foreground'
 const INLINE_BADGE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0'
 const INLINE_BADGE_LABEL_CLASS = 'min-w-0 truncate'
 const LIST_CLASS = 'my-1 pl-5'
 const LIST_ITEM_CLASS = 'my-0.5'
 const PARAGRAPH_CLASS = 'mb-1 last:mb-0'
-const CODE_BLOCK_CLASS = 'group overflow-hidden rounded-lg border border-border bg-elevated'
+const CODE_BLOCK_CLASS = 'group overflow-hidden border border-border bg-elevated'
 const CODE_HEADER_CLASS = 'flex h-7 items-center justify-between border-b border-border px-3'
 const CODE_LANG_CLASS =
-  'code-lang-indicator font-mono text-[10px] uppercase tracking-wide text-dimmed outline-none'
+  'code-lang-indicator font-mono text-[0.625rem] uppercase tracking-wide text-dimmed outline-none'
 const CODE_CONTENT_CLASS =
   'overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground outline-none'
 const CODE_DELETE_BUTTON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>'
 const CODE_DELETE_BUTTON_CLASS =
-  'grid h-5 w-5 place-items-center rounded text-dimmed opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-surface hover:text-foreground focus:opacity-100 focus:outline-none'
+  'grid h-5 w-5 place-items-center text-dimmed opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-surface hover:text-foreground focus:opacity-100 focus:outline-none'
 const CODE_DELETE_BUTTON_HTML = `<button type="button" data-editor-codeblock-delete="true" title="Delete code block" aria-label="Delete code block" class="${CODE_DELETE_BUTTON_CLASS}">${CODE_DELETE_BUTTON_SVG}</button>`
 
 function escapeHtml(value: string): string {

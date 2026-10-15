@@ -191,29 +191,29 @@
   </div>
 
   {#if error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
   {#if actionNotice}
-    <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+    <p class="bg-success/10 px-3 py-2 text-xs text-success" role="status">
       {actionNotice}
     </p>
   {/if}
 
   {#if loading && gateways.length === 0}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface p-4 text-xs text-muted">
+    <div class="flex items-center gap-2 border bg-surface p-4 text-xs text-muted">
       <Loader2 size={14} class="animate-spin" />
       Inspecting gateways…
     </div>
   {:else}
     {#each gateways as gateway (gateway.pluginId)}
       {@const busy = busyPluginId === gateway.pluginId}
-      <section class="rounded-xl border bg-surface p-4">
+      <section class="border bg-surface p-4">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <h2 class="text-base font-semibold">{gateway.adapterName}</h2>
               <span
-                class="rounded-lg px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {lifecycleClass(
+                class="border border-border px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {lifecycleClass(
                   gateway.lifecycle
                 )}"
               >
@@ -239,17 +239,17 @@
         </div>
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Port</p>
             <p class="mt-1 text-sm font-medium tabular-nums">
               {gateway.port ?? ' '}
             </p>
           </div>
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Models</p>
             <p class="mt-1 text-sm font-medium tabular-nums">{gateway.modelCount}</p>
           </div>
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Version</p>
             <p class="mt-1 text-sm font-medium">
               {gateway.installedVersion ?? gateway.availableVersion}
@@ -259,7 +259,7 @@
 
         {#if gateway.detail}
           <div
-            class="mt-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+            class="mt-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
           >
             <AlertTriangle size={14} class="mt-0.5 shrink-0" />
             <span class="break-all">{gateway.detail}</span>
@@ -283,7 +283,7 @@
           {#if gateway.lifecycle === 'ready'}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={busy}
               title="Stop the {gateway.adapterName} gateway"
               onclick={() => void stopGateway(gateway.pluginId)}
@@ -294,7 +294,7 @@
           {:else if gateway.enabled}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-9 items-center gap-2 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={busy}
               title="Install if needed and start the {gateway.adapterName} gateway"
               onclick={() => void startGateway(gateway.pluginId)}
@@ -309,7 +309,7 @@
           {/if}
           <button
             type="button"
-            class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             disabled={busy || gateway.lifecycle !== 'ready'}
             title="Re-fetch the model catalog from the running gateway"
             onclick={() => void refreshCatalog(gateway.pluginId)}
@@ -320,7 +320,7 @@
           {#if gateway.dashboardUrl && gateway.lifecycle === 'ready'}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
               title="Open the {gateway.adapterName} dashboard"
               onclick={() => openDashboard(gateway.dashboardUrl ?? '')}
             >
@@ -331,7 +331,7 @@
           {#if gateway.installedVersion !== undefined}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={busy}
               title="Copy the provisioned dashboard password"
               onclick={() => void copyDashboardPassword(gateway.pluginId)}
@@ -343,7 +343,7 @@
           {#if hasUpdate(gateway)}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/15 disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border border-primary/40 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/15 disabled:opacity-50"
               disabled={busy}
               title="Reinstall at version {gateway.availableVersion}"
               onclick={() => (updateTarget = gateway)}
@@ -356,7 +356,7 @@
             {#if gateway.lifecycle !== 'not_installed'}
               <button
                 type="button"
-                class="ml-auto flex h-9 items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                class="ml-auto flex h-9 items-center gap-2 border border-danger/30 bg-danger/5 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
                 disabled={busy}
                 title="Uninstall the {gateway.adapterName} gateway and remove its data"
                 onclick={() => (uninstallTarget = gateway)}
@@ -397,7 +397,7 @@
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
         title="Keep the gateway installed"
         onclick={() => (uninstallTarget = null)}
       >
@@ -405,7 +405,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-danger px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-danger px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Confirm uninstalling the gateway"
         disabled={busyPluginId === uninstallTarget?.pluginId}
         onclick={() => {
@@ -444,7 +444,7 @@
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
         title="Skip this update"
         onclick={() => (updateTarget = null)}
       >
@@ -452,7 +452,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Confirm updating the gateway"
         disabled={busyPluginId === updateTarget?.pluginId}
         onclick={() => {

@@ -212,7 +212,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     event.dataTransfer?.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -336,7 +336,7 @@
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span
-          class="shrink-0 rounded-full px-1.5 py-px text-[0.5rem] tracking-wide uppercase {scheduled
+          class="shrink-0 border border-border px-1.5 py-px text-[0.5rem] tracking-wide uppercase {scheduled
             ? 'bg-elevated text-dimmed'
             : 'bg-elevated text-accent'}"
           title={scheduled
@@ -391,7 +391,7 @@
        hover surface) instead of reserving space, so the title truncates at the
        full row width and only gets covered while the actions are visible. -->
   <span
-    class="pointer-events-none absolute inset-y-1 right-1.5 z-10 flex items-center gap-0.5 rounded-md bg-elevated px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+    class="pointer-events-none absolute inset-y-1 right-1.5 z-10 flex items-center gap-0.5 bg-elevated px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
   >
     <SidebarSearchControl
       open={searchOpen}
@@ -404,7 +404,7 @@
     />
     <button
       type="button"
-      class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
       aria-label="New task in {routine.name}"
       title="New task"
       onclick={() => onCreateTask(routine)}
@@ -413,7 +413,7 @@
     </button>
     <DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
       <DropdownMenu.Trigger
-        class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+        class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
         aria-label="Options for {routine.name}"
         title="Routine options"
         oncontextmenu={(event: MouseEvent) => event.preventDefault()}
@@ -426,17 +426,17 @@
           align="end"
           sideOffset={4}
           collisionPadding={8}
-          class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+          class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
         >
           <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onOpenHowTo(routine)}
           >
             <Hammer size={14} class="text-muted" />
             How to
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onEdit(routine)}
           >
             <Pencil size={14} class="text-muted" />
@@ -445,7 +445,7 @@
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           {#if scheduled}
             <DropdownMenu.Item
-              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+              class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
               onSelect={() => (skipConfirm = 'next')}
             >
               <SkipForward size={14} class="text-muted" />
@@ -453,7 +453,7 @@
             </DropdownMenu.Item>
             {#if hasRunsToday}
               <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                 onSelect={() => (skipConfirm = 'today')}
               >
                 <CalendarDays size={14} class="text-muted" />
@@ -462,7 +462,7 @@
             {/if}
           {/if}
           <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onTogglePin(routine)}
           >
             {#if routine.pinned}
@@ -475,7 +475,7 @@
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
             onSelect={() => onDelete(routine)}
           >
             <Trash2 size={14} />

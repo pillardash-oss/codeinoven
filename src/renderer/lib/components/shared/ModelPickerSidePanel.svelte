@@ -246,7 +246,7 @@
   <div class="border-b px-2.5 py-1.5" {@attach watchPickerHost}>
     <Popover.Root bind:open>
       <Popover.Trigger
-        class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={rowTitle}
         aria-label={rowTitle}
         onkeydown={onPanelKeydown}
@@ -267,7 +267,7 @@
               and the panel shows the selection in full.
             -->
             <span
-              class="flex items-center gap-1 rounded bg-raised px-1 py-px text-[0.5625rem] font-medium text-primary"
+              class="flex items-center gap-1 bg-raised px-1 py-px text-[0.5625rem] font-medium text-primary"
               title={`Model list narrowed to ${filter.label}`}
             >
               <ListFilter size={10} />
@@ -298,7 +298,7 @@
             band, so at full height it spans the picker exactly.
           -->
           <div
-            class="absolute inset-x-0 flex flex-col overflow-hidden rounded-xl border bg-surface shadow-lg {hostBox
+            class="absolute inset-x-0 flex flex-col overflow-hidden border bg-surface shadow-lg {hostBox
               ? ''
               : 'max-h-80'}"
             role="dialog"
@@ -345,7 +345,7 @@
         <button
           type="button"
           data-picker-entry
-          class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {!filter.active
+          class="flex h-6 items-center gap-1 border px-2 text-[0.625rem] font-medium transition-colors {!filter.active
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
           aria-pressed={!filter.active}
@@ -359,7 +359,7 @@
           <button
             type="button"
             data-picker-entry
-            class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {option.unavailable
+            class="flex h-6 items-center gap-1 border px-2 text-[0.625rem] font-medium transition-colors {option.unavailable
               ? 'cursor-not-allowed border-border bg-elevated text-dimmed opacity-50'
               : filter.selected.has(option.id)
                 ? 'border-primary bg-primary text-on-primary'

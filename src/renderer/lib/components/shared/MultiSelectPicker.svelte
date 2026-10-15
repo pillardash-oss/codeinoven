@@ -217,8 +217,8 @@
   <button
     type="button"
     class={compact
-      ? `flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
-      : `flex w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      ? `flex h-7 items-center gap-1.5 border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
+      : `flex w-full items-center gap-2 border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     aria-label={ariaLabel}
     title={ariaLabel}
     aria-expanded={open}
@@ -228,7 +228,7 @@
     <span class="flex -space-x-1.5" aria-hidden="true">
       {#each selectedOptions.slice(0, 3) as option (option.id)}
         <span
-          class="flex h-5 w-5 items-center justify-center overflow-hidden rounded border bg-raised text-dimmed"
+          class="flex h-5 w-5 items-center justify-center overflow-hidden border bg-raised text-dimmed"
           style:border-color={option.color}
         >
           {#if option.iconUrl}
@@ -243,14 +243,14 @@
             <Icon size={11} />
           {:else}
             <span
-              class="h-2 w-2 rounded-full"
+              class="h-2 w-2"
               style:background-color={option.color ?? 'currentColor'}
             ></span>
           {/if}
         </span>
       {/each}
       {#if selectedOptions.length === 0}
-        <span class="flex h-5 w-5 items-center justify-center rounded border bg-raised text-dimmed">
+        <span class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed">
           <ListFilter size={11} />
         </span>
       {/if}
@@ -268,7 +268,7 @@
   {#if open}
     <div
       {@attach trackMenu}
-      class="absolute bottom-full end-0 z-10 mb-1 flex min-w-64 flex-col overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
+      class="absolute bottom-full end-0 z-10 mb-1 flex min-w-64 flex-col overflow-hidden border border-border bg-surface p-1 shadow-lg"
     >
       <div class="relative mx-1 mb-1 mt-0.5 shrink-0">
         <input
@@ -276,7 +276,7 @@
           placeholder={searchPlaceholder}
           aria-label={searchPlaceholder}
           bind:value={search}
-          class="w-full rounded-md border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
+          class="w-full border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
           oninput={refitMenu}
           onkeydown={handleSearchKeydown}
         />
@@ -291,7 +291,7 @@
           <button
             type="button"
             aria-pressed={selectedIds.length === 0}
-            class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
             onkeydown={handleOptionKeydown}
             onclick={() => onSelectionChange([])}
           >
@@ -309,13 +309,13 @@
               type="button"
               aria-pressed={selectedIdSet.has(option.id)}
               title={option.description ?? option.label}
-              class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+              class="flex w-full items-center gap-2 px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
               onkeydown={handleOptionKeydown}
               onclick={() => toggle(option.id)}
             >
               {#if option.color}
                 <span
-                  class="w-0.5 shrink-0 self-stretch rounded-full"
+                  class="w-0.5 shrink-0 self-stretch"
                   style:background-color={option.color}
                 ></span>
               {/if}
@@ -323,7 +323,7 @@
                 <img
                   src={option.iconUrl}
                   alt=""
-                  class="h-4 w-4 shrink-0 rounded object-contain"
+                  class="h-4 w-4 shrink-0 object-contain"
                   onerror={hideBrokenIcon}
                 />
               {:else if option.icon}

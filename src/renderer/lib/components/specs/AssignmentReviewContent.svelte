@@ -482,7 +482,7 @@
     <div class="mt-3 flex gap-2 overflow-x-auto pb-1" aria-label="Anchored comments">
       {#each sectionAnnotations as annotation (annotation.id)}
         <button
-          class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
+          class="max-w-64 shrink-0 border border-border bg-surface px-3 py-2 text-left hover:bg-elevated"
           title="Open anchored comment"
           onclick={() => onOpenAnnotation?.(annotation)}
         >
@@ -518,7 +518,7 @@
     {/if}
     <EditableMarkdown
       {readOnly}
-      class="rounded-lg px-2 py-1 text-lg font-semibold text-foreground outline-none focus:bg-surface"
+      class="px-2 py-1 text-lg font-semibold text-foreground outline-none focus:bg-surface"
       text={content.title}
       fallback="Untitled assignment"
       ariaLabel="Assignment title"
@@ -527,14 +527,14 @@
     <h3 class="text-sm font-semibold uppercase tracking-wide text-dimmed">TL;DR</h3>
     <EditableMarkdown
       {readOnly}
-      class="rounded-lg px-2 py-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
+      class="px-2 py-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
       text={content.summary}
       fallback="No assignment TL;DR."
       ariaLabel="Assignment TL;DR"
       onChange={(value) => update({ ...content, summary: value })}
     />
     <div
-      class="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-elevated/50 px-3 py-2"
+      class="flex flex-wrap items-center justify-between gap-2 border border-border bg-elevated/50 px-3 py-2"
     >
       <div class="min-w-0">
         <p class="text-xs font-semibold text-foreground">Workers run in</p>
@@ -576,7 +576,7 @@
         {/if}
       </div>
     {/if}
-    <div class="rounded-lg border bg-elevated/50 p-2">
+    <div class="border border-border bg-elevated/50 p-2">
       <MarkdownView text={graphMarkdown()} />
     </div>
     {@render AnnotationBubbles('graph')}
@@ -692,7 +692,7 @@
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
-            class="scroll-mt-5 space-y-2 rounded-lg border bg-surface p-3"
+            class="scroll-mt-5 space-y-2 border border-border bg-surface p-3"
             title={`${task.title} · ${task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')}`}
           >
             <div class="flex items-start gap-2">
@@ -727,7 +727,7 @@
               {#if taskThread && onOpenTaskThread}
                 <button
                   type="button"
-                  class="shrink-0 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="shrink-0 border border-border bg-overlay px-1.5 py-0.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title={`Open the ${taskThread.title} thread`}
                   aria-label={`Open the ${taskThread.title} thread`}
                   onclick={() => onOpenTaskThread?.(taskThread.id)}
@@ -736,7 +736,7 @@
                 </button>
               {:else}
                 <span
-                  class="shrink-0 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
+                  class="shrink-0 border border-border bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
                   title={taskThread
                     ? undefined
                     : task.workerName
@@ -749,7 +749,7 @@
               {/if}
               {#if workerScopeName}
                 <span
-                  class="flex shrink-0 items-center gap-1 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
+                  class="flex shrink-0 items-center gap-1 border border-border bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
                   title={`This worker runs in its own scope: ${workerScopeName}`}
                   aria-label={`This worker runs in its own scope: ${workerScopeName}`}
                 >
@@ -759,7 +759,7 @@
               {/if}
               {#if displayedReworkCycle}
                 <span
-                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
+                  class="bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
                 >
                   Rework {displayedReworkCycle} · Assignment v{task.workAssignmentVersion ??
                     assignmentVersion ??
@@ -775,7 +775,7 @@
               ariaLabel={`Description for ${task.title}`}
               onChange={(value) => updateTaskText(task.id, 'description', value)}
             />
-            <details class="rounded-md bg-elevated/60 px-2 py-1.5">
+            <details class="border border-border bg-elevated/60 px-2 py-1.5">
               <summary class="cursor-pointer text-[0.625rem] font-semibold uppercase text-dimmed">
                 Worker prompt
               </summary>

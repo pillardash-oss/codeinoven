@@ -48,9 +48,7 @@
   onDestroy(clearRetryTimer)
 </script>
 
-<div
-  class="group relative block max-w-full overflow-hidden rounded-lg border border-border bg-elevated transition-shadow hover:shadow-md"
->
+<div class="group relative block max-w-full overflow-hidden border border-border bg-elevated">
   <!-- The picture and its expand affordance live in one box sized to the
        picture rather than to the card. The card fills the message column, so a
        narrow picture would otherwise leave a wider box behind it. -->

@@ -25,15 +25,13 @@
 
 <TimelineRailItem>
   {#snippet gutter()}
-    <span
-      class="flex size-5 shrink-0 items-center justify-center rounded-full bg-elevated text-dimmed"
-    >
+    <span class="flex size-5 shrink-0 items-center justify-center bg-elevated text-dimmed">
       <ChevronDown size={12} class="shrink-0" aria-hidden="true" />
     </span>
   {/snippet}
   <button
     type="button"
-    class="cursor-pointer rounded-md px-1.5 py-0.5 text-left text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="cursor-pointer px-1.5 py-0.5 text-left text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-expanded="false"
     title="Show the {hidden} items this history hides"
     onclick={onExpand}

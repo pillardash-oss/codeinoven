@@ -301,7 +301,7 @@
     oncontextmenu={(event: MouseEvent) => openMenu(event, bookmark.id)}
   >
     {#if dropTargetId === bookmark.id && dropPosition === 'before'}
-      <span class="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded bg-primary"></span>
+      <span class="pointer-events-none absolute inset-x-1 top-0 h-0.5 bg-primary"></span>
     {/if}
     <BrowserLibraryRow
       title={bookmark.title}
@@ -318,7 +318,7 @@
           onOpenChange={(open) => (menuOpenId = open ? bookmark.id : null)}
         >
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100 data-[state=open]:bg-elevated data-[state=open]:text-foreground data-[state=open]:opacity-100"
+            class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100 data-[state=open]:bg-elevated data-[state=open]:text-foreground data-[state=open]:opacity-100"
             aria-label={`Options for ${bookmark.title}`}
             title="Bookmark options"
             oncontextmenu={(event: MouseEvent) => event.preventDefault()}
@@ -331,7 +331,7 @@
               align="end"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 w-52 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+              class="z-50 w-52 overflow-hidden border bg-surface p-1 shadow-lg"
             >
               <p
                 class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
@@ -339,7 +339,7 @@
                 {bookmark.title}
               </p>
               <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                 onSelect={() => (expandedId = bookmark.id)}
               >
                 <Pencil size={13} class="shrink-0 text-muted" />
@@ -347,17 +347,17 @@
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
                 <DropdownMenu.SubTrigger
-                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[state=open]:bg-elevated"
+                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[state=open]:bg-elevated"
                 >
                   <FolderPlus size={13} class="shrink-0 text-muted" />
                   Move to group
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.SubContent
-                  class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                  class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
                   sideOffset={4}
                 >
                   <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
+                    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
                     disabled={bookmark.groupId === null}
                     onSelect={() => browserBookmarks.moveToGroup(bookmark.id, null)}
                   >
@@ -365,12 +365,12 @@
                   </DropdownMenu.Item>
                   {#each groups as group (group.id)}
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
+                      class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
                       disabled={bookmark.groupId === group.id}
                       onSelect={() => browserBookmarks.moveToGroup(bookmark.id, group.id)}
                     >
                       <span
-                        class="h-2 w-2 shrink-0 rounded-full"
+                        class="h-2 w-2 shrink-0"
                         style:background-color={browserBookmarkGroupAccent(group)}
                       ></span>
                       <span class="truncate">{group.name}</span>
@@ -378,7 +378,7 @@
                   {/each}
                   <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
                   <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                     onSelect={() => {
                       expandedId = null
                       openCreatePage(bookmark.id)
@@ -390,7 +390,7 @@
                 </DropdownMenu.SubContent>
               </DropdownMenu.Sub>
               <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
                 disabled={rowIndex <= 0}
                 onSelect={() => moveUp(bookmark)}
               >
@@ -398,7 +398,7 @@
                 Move up
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[disabled]:opacity-40"
                 disabled={rowIndex === mates.length - 1}
                 onSelect={() => moveDown(bookmark)}
               >
@@ -407,7 +407,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                 onSelect={() => (removingId = bookmark.id)}
               >
                 <Trash2 size={13} />
@@ -419,7 +419,7 @@
         <button
           type="button"
           class={[
-            'flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+            'flex h-6 w-6 items-center justify-center text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
             expanded ? 'opacity-100' : 'opacity-0'
           ]}
           title={expanded ? `Hide the editor for ${bookmark.title}` : `Edit ${bookmark.title}`}
@@ -439,14 +439,14 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         id="bookmark-editor-{bookmark.id}"
-        class="mb-1 rounded-lg border p-3"
+        class="mb-1 border p-3"
         oncontextmenu={(event: MouseEvent) => event.stopPropagation()}
       >
         <BrowserBookmarkEditor bookmarkId={bookmark.id} onSaved={() => (expandedId = null)} />
       </div>
     {/if}
     {#if dropTargetId === bookmark.id && dropPosition === 'after'}
-      <span class="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded bg-primary"></span>
+      <span class="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 bg-primary"></span>
     {/if}
   </li>
 {/snippet}
@@ -457,7 +457,7 @@
       <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to bookmarks"
           aria-label="Back to bookmarks"
           onclick={closeCreatePage}
@@ -476,7 +476,7 @@
     </div>
   {:else}
     <div class="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
-      <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+      <div class="flex items-center gap-1.5 bg-elevated px-2.5">
         <Search size={13} class="shrink-0 text-dimmed" />
         <input
           type="text"
@@ -490,7 +490,7 @@
         {#if query !== ''}
           <button
             type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
             aria-label="Clear the bookmark search"
             title="Clear search"
             onclick={() => (query = '')}
@@ -501,7 +501,7 @@
       </div>
       <button
         type="button"
-        class="flex w-full items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex w-full items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Create a group for bookmarks"
         aria-label="Create a group for bookmarks"
         onclick={() => openCreatePage()}
@@ -534,7 +534,7 @@
           {@const collapsed = collapsedGroupIds.has(group.id)}
           <li class="mb-1">
             <div
-              class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
+              class="flex items-center gap-1 px-1.5 py-1 transition-colors {groupDropTargetId ===
               group.id
                 ? 'ring-1 ring-info'
                 : ''}"
@@ -567,11 +567,11 @@
                   <img
                     src={groupIconUrl}
                     alt=""
-                    class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                    class="h-3.5 w-3.5 shrink-0 object-contain"
                     draggable="false"
                   />
                 {:else}
-                  <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
+                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"
                   ></span>
                 {/if}
                 <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
@@ -583,7 +583,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground"
                 title={`Edit ${group.name}`}
                 aria-label={`Edit ${group.name}`}
                 onclick={() => toggleGroupEditor(group.id)}
@@ -592,7 +592,7 @@
               </button>
             </div>
             {#if expandedGroupId === group.id}
-              <div class="mb-1 rounded-lg border p-3" transition:slide={{ duration: 150 }}>
+              <div class="mb-1 border p-3" transition:slide={{ duration: 150 }}>
                 <BrowserBookmarkGroupEditor
                   {group}
                   onSaved={() => (expandedGroupId = null)}
@@ -663,9 +663,9 @@
 {#snippet BookmarkIcon({ bookmark }: { bookmark: BrowserBookmark })}
   {@const iconUrl = browserBookmarkIconUrl(bookmark, browserBookmarks.iconUrl(bookmark.id))}
   {#if iconUrl}
-    <img src={iconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+    <img src={iconUrl} alt="" class="h-4 w-4 object-contain" />
   {:else if bookmark.favicon}
-    <img src={bookmark.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+    <img src={bookmark.favicon} alt="" class="h-4 w-4 object-contain" />
   {:else}
     <Globe size={12} class="text-dimmed" />
   {/if}

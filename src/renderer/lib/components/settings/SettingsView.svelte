@@ -627,7 +627,7 @@
       <div class="flex items-center px-2 py-1.5">
         <button
           type="button"
-          class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 flex-1 items-center gap-2 px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Exit settings"
           aria-label="Exit settings"
           onclick={onBack}
@@ -650,7 +650,7 @@
             Configure {APP_NAME} appearance and defaults.
           </p>
           {#if error}
-            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
@@ -658,8 +658,8 @@
 
         <div class="space-y-4">
           <!-- Appearance -->
-          <div id="settings-block-general-appearance" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-appearance" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
               Appearance
             </h3>
             <div class="flex items-center justify-between">
@@ -667,13 +667,13 @@
                 <p class="text-sm font-medium">Theme</p>
                 <p class="text-xs leading-relaxed text-dimmed">Follow the system or pick a mode</p>
               </div>
-              <div class="flex items-center gap-0.5 rounded-lg border bg-elevated p-0.5">
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
                 {#each themeOptions as option (option.id)}
                   {@const Icon = option.icon}
                   <button
-                    class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {config.theme ===
+                    class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {config.theme ===
                     option.id
-                      ? 'bg-surface text-foreground shadow-sm'
+                      ? 'bg-surface text-foreground'
                       : 'text-muted hover:text-foreground'}"
                     aria-pressed={config.theme === option.id}
                     disabled={!settingsReady}
@@ -692,7 +692,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.fontFamily}
                 disabled={!settingsReady}
                 aria-label="App font"
@@ -737,7 +737,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.fontWeight}
                 disabled={!settingsReady}
                 aria-label="Font weight"
@@ -759,7 +759,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.zoomLevel}
                 disabled={!settingsReady}
                 aria-label="Interface zoom"
@@ -778,8 +778,8 @@
           </div>
 
           <!-- Notifications -->
-          <div id="settings-block-general-notifications" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-notifications" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
               Notifications
             </h3>
             <div class="flex items-center justify-between gap-4">
@@ -800,7 +800,7 @@
                 {/if}
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
                   <div
-                    class="mt-3 flex items-start justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2"
+                    class="mt-3 flex items-start justify-between gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
                     role="alert"
                   >
                     <div class="flex items-start gap-2">
@@ -815,7 +815,7 @@
                       </div>
                     </div>
                     <button
-                      class="flex shrink-0 items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
+                      class="flex shrink-0 items-center gap-1.5 border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
                       title="Open System Settings to allow notifications for {APP_NAME}"
                       onclick={openNotificationSettings}
                     >
@@ -836,7 +836,7 @@
                 {/if}
               </div>
               <button
-                class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                 disabled={notificationTestBusy}
                 title="Request permission and send a test system notification"
                 onclick={() => void testSystemNotification()}
@@ -891,8 +891,8 @@
 
           <!-- Browser -->
           <!-- Power -->
-          <div id="settings-block-general-power" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>
+          <div id="settings-block-general-power" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Power</h3>
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
@@ -911,8 +911,8 @@
           </div>
 
           <!-- Recovery -->
-          <div id="settings-block-general-recovery" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Recovery</h3>
+          <div id="settings-block-general-recovery" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Recovery</h3>
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -950,8 +950,8 @@
           </div>
 
           <!-- Git -->
-          <div id="settings-block-general-git" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
+          <div id="settings-block-general-git" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Git</h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -961,7 +961,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.defaultMergeMethod}
                   disabled={!settingsReady}
                   aria-label="Default merge method"
@@ -983,7 +983,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.defaultPullStrategy}
                   disabled={!settingsReady}
                   aria-label="Default pull strategy"
@@ -1006,7 +1006,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min="10"
                     max="5000"
@@ -1029,7 +1029,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
                     max={MAX_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
@@ -1046,8 +1046,8 @@
           </div>
 
           <!-- Threads -->
-          <div id="settings-block-general-threads" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Threads</h3>
+          <div id="settings-block-general-threads" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Threads</h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -1057,7 +1057,7 @@
                   </p>
                 </div>
                 <input
-                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium outline-none focus:border-primary disabled:opacity-50"
                   type="number"
                   min="1"
                   max="1000"
@@ -1077,7 +1077,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.slashCommandMode}
                   disabled={!settingsReady}
                   aria-label="Slash command behavior"
@@ -1100,7 +1100,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min="10"
                     max="3600"
@@ -1121,7 +1121,7 @@
                   </p>
                 </div>
                 <input
-                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                  class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                   type="number"
                   min="1"
                   max="10"
@@ -1155,7 +1155,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
                   disabled={!settingsReady || config.backgroundMode === 'off'}
                   aria-label="Background mode"
@@ -1209,7 +1209,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_BACKGROUND_WAKE_LEAD_MS / 1_000}
                     max={MAX_BACKGROUND_WAKE_LEAD_MS / 1_000}
@@ -1226,8 +1226,8 @@
           </div>
 
           <!-- CIO Cleanup -->
-          <div id="settings-block-general-cio-cleanup" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-cio-cleanup" class="border bg-surface p-4">
+            <h3 class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
               CIO Cleanup
             </h3>
             <p class="mb-3 text-xs leading-relaxed text-dimmed">
@@ -1245,7 +1245,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_CIO_CLEANUP_RETENTION_DAYS}
                     max={MAX_CIO_CLEANUP_RETENTION_DAYS}
@@ -1267,7 +1267,7 @@
                 </div>
                 <button
                   type="button"
-                  class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex h-9 shrink-0 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   title="Run CIO Cleanup now"
                   disabled={!settingsReady || cioCleanupStore.state.running}
                   onclick={() => void cioCleanupStore.runNow()}
@@ -1337,7 +1337,7 @@
             video pack.
           </p>
           {#if error}
-            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
@@ -1476,7 +1476,7 @@
           <div class="mt-5 flex items-center gap-2">
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
               data-external-url={WEBSITE_URL}
               onclick={() => void openInBrowser(WEBSITE_URL, 'global')}
@@ -1486,7 +1486,7 @@
             </button>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
               data-external-url={GITHUB_URL}
               onclick={() => void openInBrowser(GITHUB_URL, 'global')}
@@ -1496,7 +1496,7 @@
             </button>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
               data-external-url={X_URL}
               onclick={() => void openInBrowser(X_URL, 'global')}
@@ -1516,8 +1516,8 @@
           </div>
         </div>
 
-        <div id="settings-block-about-updates" class="mt-4 rounded-xl border bg-surface p-4">
-          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Updates</h3>
+        <div id="settings-block-about-updates" class="mt-4 border bg-surface p-4">
+          <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Updates</h3>
 
           <!-- Update status -->
           {#if updaterState.status.state === 'checking'}
@@ -1567,7 +1567,7 @@
               </span>
               <button
                 type="button"
-                class="shrink-0 whitespace-nowrap rounded border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
+                class="shrink-0 whitespace-nowrap border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
                 title="Show what the update is waiting on, and offer to stop it and install now"
                 onclick={openUpdateBlockersModal}
               >
@@ -1647,7 +1647,7 @@
               </div>
               <div class="flex flex-wrap items-center gap-2">
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   disabled={updaterState.status.state === 'checking' || !settingsReady}
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
@@ -1661,7 +1661,7 @@
 
                 {#if updaterState.status.state === 'available'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                    class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
@@ -1672,7 +1672,7 @@
 
                 {#if updaterState.status.state === 'downloaded'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                    class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
                     title="Restart and install update"
                     onclick={() => void updaterState.installUpdate()}
                   >
@@ -1687,22 +1687,22 @@
 
         <!-- Storage + Diagnostics sit side by side and stack on narrow screens -->
         <div class="mt-4 grid gap-4 md:grid-cols-2">
-          <div id="settings-block-about-storage" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
+          <div id="settings-block-about-storage" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Storage</h3>
             <p class="text-sm font-medium">Data directory</p>
             <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
               Projects, threads, and history are stored here.
             </p>
             <div class="mt-3 flex flex-wrap items-center gap-2">
               <span
-                class="min-w-0 truncate rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+                class="min-w-0 truncate border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
                 title="~/.config/{ORG_SLUG}/{APP_SLUG}"
               >
                 ~/.config/{ORG_SLUG}/{APP_SLUG}
               </span>
               <button
                 type="button"
-                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
                 title="Open the data directory in the file manager"
                 onclick={() => void openDataDirectory()}
               >
@@ -1712,8 +1712,8 @@
             </div>
           </div>
 
-          <div id="settings-block-about-diagnostics" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-about-diagnostics" class="border bg-surface p-4">
+            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
               Diagnostics
             </h3>
             <p class="text-sm font-medium">Export failure report</p>
@@ -1724,7 +1724,7 @@
               <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">{diagnosticsResult}</p>
             {/if}
             <button
-              class="mt-3 flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="mt-3 flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={diagnosticsBusy}
               title="Export a redacted diagnostics report"
               onclick={() => void exportDiagnostics()}
@@ -1783,7 +1783,7 @@
     <div class="space-y-3 text-sm text-muted">
       <p>
         Nightly builds are bleeding-edge prereleases generated from the
-        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
+        <code class="bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
           >nightly</code
         >
         branch. They ship continuously so you can try the latest changes early.
@@ -1803,7 +1803,7 @@
     </div>
     {#snippet footer()}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         title="Keep receiving stable updates"
         onclick={() => {
           nightlyModalOpen = false
@@ -1812,7 +1812,7 @@
         Cancel
       </button>
       <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Enroll in nightly builds"
         disabled={channelBusy}
         onclick={() => void setChannel('nightly')}

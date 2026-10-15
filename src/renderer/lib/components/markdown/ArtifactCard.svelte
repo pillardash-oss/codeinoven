@@ -131,7 +131,7 @@
 
 {#snippet artifactBody(fullscreen = false)}
   {#if showSource && !fullscreen}
-    <div class="[&>div]:rounded-none [&>div]:border-0 [&>div]:border-t">
+    <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
   {:else if inspecting && annotationScope && fullscreen}
@@ -160,19 +160,19 @@
   {/if}
 {/snippet}
 
-<div class="overflow-hidden rounded-lg border bg-elevated" data-artifact-key={artifactKey}>
+<div class="overflow-hidden border bg-elevated" data-artifact-key={artifactKey}>
   <div class="flex h-8 items-center justify-between border-b px-2">
     <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">{label}</span>
     <div class="flex items-center gap-0.5">
       <div
-        class="mr-1 flex items-center rounded-md border border-border"
+        class="mr-1 flex items-center border border-border"
         role="group"
         aria-label="{label} view"
       >
         <button
           type="button"
           class={[
-            'rounded-l-md px-2 py-1 text-[0.625rem] font-medium transition-colors',
+            'px-2 py-1 text-[0.625rem] font-medium transition-colors',
             !showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
           ]}
           aria-pressed={!showSource}
@@ -184,7 +184,7 @@
         <button
           type="button"
           class={[
-            'rounded-r-md px-2 py-1 text-[0.625rem] font-medium transition-colors',
+            'px-2 py-1 text-[0.625rem] font-medium transition-colors',
             showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
           ]}
           aria-pressed={showSource}
@@ -195,7 +195,7 @@
         </button>
       </div>
       <button
-        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label={wrapToggleLabel(wrapped)}
         title={wrapToggleLabel(wrapped)}
         aria-pressed={wrapped}
@@ -204,7 +204,7 @@
         <WrapText size={13} class={wrapped ? 'text-primary' : ''} />
       </button>
       <button
-        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Copy {label} source"
         title="Copy {label} source"
         onclick={() => void copySource()}
@@ -216,7 +216,7 @@
         {/if}
       </button>
       <button
-        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Expand {label}"
         title="Expand {label}"
         onclick={() => (expanded = true)}
@@ -234,7 +234,7 @@
     type="button"
     data-modal-primary
     class={[
-      'flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors',
+      'flex h-7 items-center gap-1.5 border px-2.5 text-xs font-medium transition-colors',
       inspecting
         ? 'border-accent bg-accent/10 text-accent'
         : 'text-muted hover:bg-elevated hover:text-foreground'

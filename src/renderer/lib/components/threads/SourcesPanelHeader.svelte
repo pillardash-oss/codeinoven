@@ -114,15 +114,15 @@
   </div>
 
   <div
-    class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto rounded-lg border bg-elevated p-0.5"
+    class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto border bg-elevated p-0.5"
     role="tablist"
     aria-label="Sources sections"
   >
     <button
       type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+      class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors {section ===
       'sources'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={section === 'sources'}
@@ -133,9 +133,9 @@
     </button>
     <button
       type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+      class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors {section ===
       'processes'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={section === 'processes'}
@@ -147,9 +147,9 @@
     </button>
     <button
       type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+      class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors {section ===
       'artifacts'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={section === 'artifacts'}
@@ -162,9 +162,9 @@
     </button>
     <button
       type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+      class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors {section ===
       'contexts'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={section === 'contexts'}
@@ -184,15 +184,15 @@
 
   {#if section === 'contexts'}
     <div
-      class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto rounded-lg border bg-elevated p-0.5"
+      class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto border bg-elevated p-0.5"
       role="tablist"
       aria-label="Context sections"
     >
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
+        class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
         'mcps'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         role="tab"
         aria-selected={contextSection === 'mcps'}
@@ -203,9 +203,9 @@
       </button>
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
+        class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
         'skills'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         role="tab"
         aria-selected={contextSection === 'skills'}
@@ -216,9 +216,9 @@
       </button>
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
+        class="flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
         'memory'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         role="tab"
         aria-selected={contextSection === 'memory'}
@@ -236,15 +236,14 @@
 
   {#if (section === 'contexts' && contextSection === 'mcps') || (section === 'contexts' && contextSection === 'skills')}
     <div
-      class="mt-3 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+      class="mt-3 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
       role="group"
       aria-label="Filter by origin"
     >
       <button
         type="button"
-        class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
-        'all'
-          ? 'bg-surface text-foreground shadow-sm'
+        class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter === 'all'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         aria-pressed={originFilter === 'all'}
         title="Show capabilities from every source"
@@ -254,9 +253,9 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
+        class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
         'application'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         aria-pressed={originFilter === 'application'}
         title="Show CodeInOven-managed capabilities"
@@ -266,9 +265,8 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
-        'global'
-          ? 'bg-surface text-foreground shadow-sm'
+        class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter === 'global'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         aria-pressed={originFilter === 'global'}
         title="Show global capabilities available to every harness"
@@ -278,9 +276,9 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
+        class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
         'harness'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         aria-pressed={originFilter === 'harness'}
         title={`Show capabilities from ${harnessName ?? 'this harness'}`}
@@ -296,7 +294,7 @@
       />
       <span class="sr-only">Search {contextSection === 'mcps' ? 'MCP servers' : 'skills'}</span>
       <input
-        class="h-8 w-full rounded-lg border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
+        class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
         type="search"
         placeholder={contextSection === 'mcps' ? 'Search MCP servers' : 'Search skills'}
         bind:value={searchQuery}
@@ -308,10 +306,10 @@
     <div class="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Filter sources by kind">
       <button
         type="button"
-        class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+        class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
         'all'
-          ? 'bg-primary/15 text-primary'
-          : 'bg-raised text-muted hover:text-foreground'}"
+          ? 'border-primary/30 bg-primary/15 text-primary'
+          : 'border-border bg-raised text-muted hover:text-foreground'}"
         aria-pressed={sourceFilter === 'all'}
         title="Show every kind of source"
         onclick={() => onToggleSourceFilter('all')}
@@ -320,10 +318,10 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+        class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
         'attachment'
-          ? 'bg-primary/15 text-primary'
-          : 'bg-raised text-muted hover:text-foreground'}"
+          ? 'border-primary/30 bg-primary/15 text-primary'
+          : 'border-border bg-raised text-muted hover:text-foreground'}"
         aria-pressed={sourceFilter === 'attachment'}
         title="Show only attached files"
         onclick={() => onToggleSourceFilter('attachment')}
@@ -332,10 +330,10 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+        class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
         'web'
-          ? 'bg-primary/15 text-primary'
-          : 'bg-raised text-muted hover:text-foreground'}"
+          ? 'border-primary/30 bg-primary/15 text-primary'
+          : 'border-border bg-raised text-muted hover:text-foreground'}"
         aria-pressed={sourceFilter === 'web'}
         title="Show only websites cited or fetched by the agent"
         onclick={() => onToggleSourceFilter('web')}
@@ -344,10 +342,10 @@
       </button>
       <button
         type="button"
-        class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+        class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
         'generated-image'
-          ? 'bg-primary/15 text-primary'
-          : 'bg-raised text-muted hover:text-foreground'}"
+          ? 'border-primary/30 bg-primary/15 text-primary'
+          : 'border-border bg-raised text-muted hover:text-foreground'}"
         aria-pressed={sourceFilter === 'generated-image'}
         title="Show only generated images"
         onclick={() => onToggleSourceFilter('generated-image')}
@@ -357,10 +355,10 @@
       {#if citationCount > 0}
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
           'file-citation'
-            ? 'bg-primary/15 text-primary'
-            : 'bg-raised text-muted hover:text-foreground'}"
+            ? 'border-primary/30 bg-primary/15 text-primary'
+            : 'border-border bg-raised text-muted hover:text-foreground'}"
           aria-pressed={sourceFilter === 'file-citation'}
           title="Show only files cited by the agent"
           onclick={() => onToggleSourceFilter('file-citation')}
@@ -371,10 +369,10 @@
       {#if sectionCount > 0}
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide tabular-nums uppercase transition-colors {sourceFilter ===
           'section'
-            ? 'bg-primary/15 text-primary'
-            : 'bg-raised text-muted hover:text-foreground'}"
+            ? 'border-primary/30 bg-primary/15 text-primary'
+            : 'border-border bg-raised text-muted hover:text-foreground'}"
           aria-pressed={sourceFilter === 'section'}
           title="Show only conversation sections referenced by the agent"
           onclick={() => onToggleSourceFilter('section')}
@@ -389,7 +387,7 @@
     <div class="mt-3 flex items-center gap-2">
       <button
         type="button"
-        class="inline-flex h-8 w-28 items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+        class="inline-flex h-8 w-28 items-center justify-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
         disabled={processesRefreshing || processesLoading}
         title="Refresh running processes"
         onclick={onRefreshProcesses}
@@ -404,7 +402,7 @@
       {#if processCount > 0}
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+          class="inline-flex h-8 items-center gap-1.5 border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
           disabled={stoppingAll}
           title="Stop all processes running for this task"
           onclick={onStopAllProcesses}

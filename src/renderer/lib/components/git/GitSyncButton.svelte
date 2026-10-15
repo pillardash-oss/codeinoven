@@ -32,7 +32,7 @@
 -->
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-raised"
+    class="flex h-6 shrink-0 items-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-raised"
     disabled={blocked}
     title="Sync this checkout with another branch or worktree"
     aria-label="Sync this checkout with another branch or worktree"
@@ -51,7 +51,7 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+      class="z-50 w-60 overflow-hidden border border-border bg-surface py-1 shadow-xl"
     >
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from')}>
         <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />

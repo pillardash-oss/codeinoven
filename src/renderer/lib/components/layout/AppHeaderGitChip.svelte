@@ -57,7 +57,7 @@
 <!-- Git status chip   only when a thread is open in a project view -->
 <button
   class={[
-    'relative flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 transition-colors duration-150',
+    'relative flex h-8 max-w-40 items-center gap-1.5 px-2 transition-colors duration-150',
     gitState.activePrConflictCount > 0
       ? 'text-danger hover:bg-danger/10'
       : gitState.conflicted.length > 0
@@ -87,16 +87,16 @@
   {/if}
   {#if gitState.conflicted.length > 0}
     <span
-      class="shrink-0 rounded-full bg-warning px-1.5 text-[0.5625rem] font-semibold tabular-nums text-on-primary"
+      class="shrink-0 bg-warning px-1.5 text-[0.5625rem] font-semibold tabular-nums text-on-primary"
     >
       {gitState.conflicted.length}
     </span>
   {:else if gitState.status && !gitState.clean}
-    <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>
+    <span class="h-1.5 w-1.5 shrink-0 bg-warning"></span>
   {/if}
   {#if gitState.activePrConflictCount > 0}
     <span
-      class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
+      class="flex shrink-0 items-center gap-0.5 bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
       title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
     >
       <GitPullRequest size={9} class="shrink-0" />
@@ -105,7 +105,7 @@
   {/if}
   {#if gitState.stashes.length > 0}
     <span
-      class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
+      class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
       title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
     >
       <Archive size={8} class="shrink-0" />

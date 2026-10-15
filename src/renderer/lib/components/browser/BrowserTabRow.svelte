@@ -370,11 +370,11 @@
   >
     <span class="flex h-4 w-4 shrink-0 items-center justify-center">
       {#if customIconUrl}
-        <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+        <img src={customIconUrl} alt="" class="h-4 w-4 object-contain" />
       {:else if runtime.loading}
         <Loader2 size={13} class="animate-spin text-muted" />
       {:else if tab.favicon}
-        <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+        <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
       {:else}
         <Globe size={12} class="text-dimmed" />
       {/if}
@@ -414,9 +414,9 @@
         aria-label={`In box ${box.name}`}
       >
         {#if boxIcon}
-          <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+          <img src={boxIcon} alt="" class="h-3 w-3 object-contain" />
         {:else}
-          <span class="h-2.5 w-2.5 rounded-full" style="background-color: {boxAccent}"></span>
+          <span class="h-2.5 w-2.5" style="background-color: {boxAccent}"></span>
         {/if}
       </span>
     {/if}
@@ -462,7 +462,7 @@
     {#if runtime.audible || runtime.muted}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
+        class="flex h-6 w-6 items-center justify-center text-accent transition-colors hover:bg-overlay"
         aria-pressed={runtime.muted}
         title={browserTabMuteLabel(runtime.muted)}
         aria-label={browserTabMuteLabel(runtime.muted)}
@@ -489,7 +489,7 @@
     {/if}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+      class="flex h-6 w-6 items-center justify-center text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
       aria-label={`Close ${label}`}
       title={`Close ${label}`}
       onclick={closeTab}

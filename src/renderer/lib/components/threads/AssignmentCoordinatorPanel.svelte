@@ -99,15 +99,15 @@
   }
 
   function statusClass(status: AssignmentTaskStatus): string {
-    if (status === 'completed') return 'bg-success/10 text-success'
+    if (status === 'completed') return 'border-success/30 bg-success/10 text-success'
     if (status === 'failed' || status === 'attention' || status === 'stopped') {
-      return 'bg-danger/10 text-danger'
+      return 'border-danger/30 bg-danger/10 text-danger'
     }
-    if (status === 'blocked') return 'bg-warning/10 text-warning'
+    if (status === 'blocked') return 'border-warning/30 bg-warning/10 text-warning'
     if (['running', 'reported', 'auditing', 'rework'].includes(status)) {
-      return 'bg-info/10 text-info'
+      return 'border-info/30 bg-info/10 text-info'
     }
-    return 'bg-elevated text-muted'
+    return 'border-border bg-elevated text-muted'
   }
 
   function workerLabel(task: AssignmentTask): string {
@@ -212,7 +212,7 @@
     <div class="mt-3 flex gap-2">
       <button
         type="button"
-        class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+        class="flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
         title="Open the complete Assignment in Spec Studio"
         onclick={onOpenAssignment}
       >
@@ -227,7 +227,7 @@
       {#if assignment.status === 'stopped'}
         <button
           type="button"
-          class="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+          class="flex items-center justify-center gap-1.5 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
           title="Resume this Assignment"
           disabled={resumeBusy}
           onclick={() => void resumeStoppedAssignment()}
@@ -242,7 +242,7 @@
       {:else if !finalComplete}
         <button
           type="button"
-          class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
+          class="flex items-center justify-center gap-1.5 border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
           title="Stop the Sr. Engineer, workers, and auditor"
           aria-label="Stop the Sr. Engineer, workers, and auditor"
           onclick={() => (showStopConfirmation = true)}
@@ -254,7 +254,7 @@
       {#if auditWorkAvailable && onOpenAuditWork}
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Open the Assignment audit work"
           onclick={onOpenAuditWork}
         >
@@ -264,7 +264,7 @@
       {#if reportAvailable && !finalComplete && onViewReport}
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Open the latest audit report in Audit Studio"
           onclick={onViewReport}
         >
@@ -288,11 +288,8 @@
         </div>
         <p class="text-xs font-medium tabular-nums text-muted">{progress}%</p>
       </div>
-      <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-elevated">
-        <div
-          class="h-full rounded-full bg-primary transition-[width]"
-          style:width={`${progress}%`}
-        ></div>
+      <div class="mt-3 h-1.5 overflow-hidden bg-elevated">
+        <div class="h-full bg-primary transition-[width]" style:width={`${progress}%`}></div>
       </div>
       <div class="mt-3 grid grid-cols-5 gap-1 text-center">
         <div>
@@ -332,7 +329,7 @@
         </div>
         <button
           type="button"
-          class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="mt-3 flex h-8 w-full items-center justify-center gap-2 border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Ask the Sr. Engineer to review blockers and continue coordination"
           onclick={onResume}
         >
@@ -371,7 +368,7 @@
             linkedWorker !== undefined && !workerReportsToCoordinator(linkedWorker.settings)}
           <button
             type="button"
-            class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
+            class="flex w-full items-start justify-between gap-2 border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
               ? 'border-primary bg-elevated'
               : ['attention', 'failed', 'stopped'].includes(task.status)
                 ? 'border-danger bg-danger/5'
@@ -388,7 +385,7 @@
                 >
                 {#if reworkCycle}
                   <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
+                    class="shrink-0 border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-warning uppercase"
                   >
                     Rework {reworkCycle}
                   </span>
@@ -404,7 +401,7 @@
                 </span>
                 {#if reportingOff}
                   <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
+                    class="shrink-0 border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-warning uppercase"
                   >
                     Not reporting
                   </span>
@@ -418,7 +415,7 @@
             </span>
             {#if !(reportingOff && linkedWorker)}
               <span
-                class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
+                class="shrink-0 border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase {statusClass(
                   task.status
                 )}"
               >
@@ -439,7 +436,7 @@
              on again and the worker submits its report. -->
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
           title="Switch reporting back on and ask this worker to report its finished work to the Sr. Engineer"
           aria-label="Report this worker's finished work to the Sr. Engineer"
           disabled={reportBusy}
@@ -457,7 +454,7 @@
       {#if onBackToCoordinator}
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
           title="Back to the Sr. Engineer thread that owns this Assignment"
           aria-label="Back to the Sr. Engineer thread that owns this Assignment"
           onclick={onBackToCoordinator}
@@ -491,7 +488,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       disabled={stopBusy}
       onclick={() => (showStopConfirmation = false)}
     >
@@ -499,7 +496,7 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={stopBusy}
       onclick={() => void confirmStop()}
     >

@@ -175,7 +175,7 @@
       </p>
       <button
         type="button"
-        class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -227,7 +227,7 @@
         {#if permissionMissing}
           <button
             type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={onSignIn}
           >
             Sign in to GitHub
@@ -235,7 +235,7 @@
         {:else}
           <button
             type="button"
-            class="h-8 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+            class="h-8 border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void load(true)}
           >
             Try again
@@ -289,7 +289,7 @@
                       </p>
                       <span
                         class={[
-                          'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
+                          'shrink-0 px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
                           runTone(run)
                         ]}
                       >
@@ -345,7 +345,7 @@
                       </p>
                       <span
                         class={[
-                          'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
+                          'shrink-0 px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
                           deploymentTone(deployment)
                         ]}
                       >

@@ -275,7 +275,7 @@
         <div class="flex items-center gap-2">
           <Popover.Root bind:open={marketplacesOpen}>
             <Popover.Trigger
-              class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               title="Manage plugin sources"
               aria-label="Manage plugin sources"
             >
@@ -288,7 +288,7 @@
                 sideOffset={8}
                 collisionPadding={16}
                 align="end"
-                class="z-50 w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-surface shadow-lg"
+                class="z-50 w-96 max-w-[calc(100vw-2rem)] overflow-hidden border bg-surface shadow-lg"
                 aria-label="Plugin sources"
               >
                 <div class="max-h-64 overflow-y-auto px-3 py-2">
@@ -306,7 +306,7 @@
                         </div>
                         <button
                           type="button"
-                          class="flex size-7 shrink-0 items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-danger"
+                          class="flex size-7 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-danger"
                           onclick={() => {
                             marketplacesOpen = false
                             marketplaceRemoveTarget = marketplace
@@ -324,7 +324,7 @@
                   <label class="block text-[0.6875rem] font-medium text-muted">
                     Add a GitHub source
                     <input
-                      class="mt-1 h-8 w-full rounded-md border bg-app px-2.5 text-xs text-foreground"
+                      class="mt-1 h-8 w-full border bg-app px-2.5 text-xs text-foreground"
                       bind:value={marketUrl}
                       placeholder="owner/repository"
                       autocomplete="off"
@@ -333,7 +333,7 @@
                   <label class="block text-[0.6875rem] font-medium text-muted">
                     Catalog format
                     <select
-                      class="mt-1 h-8 w-full rounded-md border bg-app px-2.5 text-xs text-foreground"
+                      class="mt-1 h-8 w-full border bg-app px-2.5 text-xs text-foreground"
                       bind:value={platform}
                     >
                       <option value="codex">Codex catalog</option>
@@ -341,7 +341,7 @@
                     </select>
                   </label>
                   <button
-                    class="flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
+                    class="flex h-8 w-full items-center justify-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
                     type="submit"
                     disabled={busyId === 'add-source' || !marketUrl.trim()}
                   >
@@ -356,7 +356,7 @@
             </Popover.Portal>
           </Popover.Root>
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             title="Refresh every plugin source"
             aria-label="Refresh every plugin source"
@@ -379,7 +379,7 @@
             class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
           />
           <input
-            class="h-10 w-full rounded-xl border bg-surface pl-9 pr-9 text-sm outline-none transition-colors focus:border-primary"
+            class="h-10 w-full border bg-surface pl-9 pr-9 text-sm outline-none transition-colors focus:border-primary"
             type="search"
             minlength="2"
             placeholder="Search by plugin, publisher, or repository"
@@ -388,7 +388,7 @@
           {#if searchQuery}
             <button
               type="button"
-              class="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground"
+              class="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground"
               title="Clear search"
               aria-label="Clear search"
               onclick={() => void clearSearch()}
@@ -398,7 +398,7 @@
           {/if}
         </label>
         <button
-          class="flex h-10 items-center gap-1.5 rounded-xl bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-10 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           disabled={loading || query.trim().length < 2}
         >
@@ -408,12 +408,12 @@
       </form>
 
       <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b pb-3">
-        <div class="flex items-center gap-1 rounded-lg bg-elevated p-0.5" role="tablist">
+        <div class="flex items-center gap-1 border bg-elevated p-0.5" role="tablist">
           {#each VIEWS as item (item.id)}
             <button
-              class="flex h-8 items-center rounded-md px-3 text-xs font-medium transition-colors {view ===
+              class="flex h-8 items-center px-3 text-xs font-medium transition-colors {view ===
                 item.id && !searchQuery
-                ? 'bg-surface text-foreground shadow-sm'
+                ? 'bg-surface text-foreground'
                 : 'text-muted hover:text-foreground'}"
               type="button"
               role="tab"
@@ -432,7 +432,7 @@
       </div>
 
       {#if error}
-        <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
@@ -440,12 +440,12 @@
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-24">
       {#if loading}
-        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
+        <div class="mt-2 border border-dashed p-10 text-center">
           <Loader2 size={20} class="mx-auto animate-spin text-dimmed" />
           <p class="mt-2 text-xs text-dimmed">Loading plugins…</p>
         </div>
       {:else if entries.length === 0}
-        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
+        <div class="mt-2 border border-dashed p-10 text-center">
           <Search size={20} class="mx-auto text-dimmed" />
           <p class="mt-2 text-sm font-medium">
             {view === 'bookmarks'
@@ -458,7 +458,7 @@
           </p>
         </div>
       {:else}
-        <ul class="divide-y rounded-xl border bg-surface" aria-label="Plugins">
+        <ul class="divide-y border bg-surface" aria-label="Plugins">
           {#each entries as entry (entry.id)}
             <li class="flex items-center gap-1 pr-2 transition-colors hover:bg-elevated">
               <button
@@ -470,7 +470,7 @@
                 onclick={() => onOpenPlugin(entry.id)}
               >
                 <span
-                  class="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-elevated text-[0.6875rem] font-semibold uppercase text-muted"
+                  class="flex size-9 shrink-0 items-center justify-center overflow-hidden border bg-elevated text-[0.6875rem] font-semibold uppercase text-muted"
                 >
                   {#if iconFor(entry.id)}<img
                       src={iconFor(entry.id)}
@@ -483,7 +483,7 @@
                     <span class="truncate text-sm font-semibold">{entry.displayName}</span>
                     {#if entry.installed}
                       <span
-                        class="shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-emerald-600"
+                        class="shrink-0 border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-emerald-600"
                       >
                         {entry.updateAvailable ? 'Update' : 'Installed'}
                       </span>
@@ -499,7 +499,7 @@
               </button>
               <button
                 type="button"
-                class="flex size-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
+                class="flex size-8 shrink-0 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
                 onclick={() => void toggleBookmark(entry)}
                 title={entry.bookmarked
                   ? `Remove bookmark for ${entry.displayName}`
@@ -514,7 +514,7 @@
               {#if entry.installed}
                 <button
                   type="button"
-                  class="h-8 shrink-0 rounded-md border px-3 text-xs hover:bg-elevated"
+                  class="h-8 shrink-0 border px-3 text-xs hover:bg-elevated"
                   onclick={() => onOpenPlugin(entry.id)}
                   title={`Open ${entry.displayName}`}
                   aria-label={`Open ${entry.displayName}`}
@@ -524,7 +524,7 @@
               {:else}
                 <button
                   type="button"
-                  class="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
+                  class="flex h-8 shrink-0 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"
                   onclick={() => void install(entry)}
                   disabled={busyId === entry.id || !entry.supported}
                   title={entry.supported
@@ -546,7 +546,7 @@
           <div class="flex justify-center py-4">
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-4 text-sm hover:bg-overlay disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border bg-elevated px-4 text-sm hover:bg-overlay disabled:opacity-50"
               onclick={() => void loadMore()}
               disabled={loadingMore}
             >

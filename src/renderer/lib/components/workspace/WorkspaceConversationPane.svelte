@@ -113,7 +113,7 @@
           {#snippet failed(_error: unknown, reset: () => void)}
             <div class="flex h-full min-h-0 items-center justify-center px-6">
               <div
-                class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
+                class="w-full max-w-md border border-danger/30 bg-surface px-5 py-4"
                 role="alert"
               >
                 <p class="text-sm font-semibold text-foreground">
@@ -124,7 +124,7 @@
                 </p>
                 <button
                   type="button"
-                  class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+                  class="mt-4 bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
                   onclick={reset}
                 >
                   Reload conversation

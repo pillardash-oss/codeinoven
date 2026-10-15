@@ -27,7 +27,7 @@
 </script>
 
 <span
-  class="shrink-0 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted"
+  class="shrink-0 border border-border px-1.5 text-[0.5625rem] font-medium uppercase tracking-wide text-muted"
   {title}
 >
   {label}

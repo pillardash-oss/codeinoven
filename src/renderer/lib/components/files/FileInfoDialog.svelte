@@ -79,7 +79,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onClear}
     >
       Close

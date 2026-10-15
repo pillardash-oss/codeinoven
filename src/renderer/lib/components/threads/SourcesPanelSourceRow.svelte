@@ -36,32 +36,28 @@
     {#if source.kind === 'web'}
       {@const favicon = source.url ? faviconState.faviconFor(source.url) : null}
       <span
-        class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-raised {favicon
+        class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden bg-raised {favicon
           ? ''
           : 'text-muted'}"
       >
         {#if favicon}
-          <img src={favicon} alt="" class="h-5 w-5 rounded-sm object-contain" />
+          <img src={favicon} alt="" class="h-5 w-5 object-contain" />
         {:else}
           <GlobeCode size={15} />
         {/if}
       </span>
     {:else if source.kind === 'file-citation'}
-      <span
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-      >
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary">
         <FileText size={15} />
       </span>
     {:else if source.kind === 'section'}
-      <span
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-      >
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary">
         <Hash size={15} />
       </span>
     {:else if isImageSource(source)}
       <button
         type="button"
-        class="h-8 w-8 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-raised"
+        class="h-8 w-8 shrink-0 cursor-pointer overflow-hidden bg-raised"
         aria-label={`Preview ${source.title}`}
         title={`Preview ${source.title}`}
         onclick={() => onPreviewImage(source)}
@@ -75,9 +71,7 @@
         />
       </button>
     {:else}
-      <span
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
-      >
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted">
         <FileText size={15} />
       </span>
     {/if}

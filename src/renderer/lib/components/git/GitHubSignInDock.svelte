@@ -63,10 +63,10 @@
 >
   {#snippet dock()}
     <DockRow {storageKey} label="Move docked GitHub sign-in">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={restoreLabel}
           aria-label={restoreLabel}
           onclick={() => githubSignIn.expand()}
@@ -91,7 +91,7 @@
         <span class="h-5 w-px bg-border"></span>
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dismissLabel}
           title={dismissLabel}
           onclick={() => githubSignIn.close()}

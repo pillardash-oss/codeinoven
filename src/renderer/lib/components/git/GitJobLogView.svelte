@@ -10,7 +10,7 @@
     /** The job's failed steps, so its steps can be matched to the log's own sections. */
     failedSteps?: readonly string[]
     /**
-     * Padding and decoration for the pane (`rounded-md bg-black/5 p-2`). The log
+     * Padding and decoration for the pane (`bg-black/5 p-2 dark:bg-black/30`). The log
      * brings its own height budget and scroll, and its own utility is emitted after
      * any named one, so a `max-h-*` passed here would not take effect.
      */
@@ -57,7 +57,7 @@
 {#snippet logLine(entry: JobLogLine)}
   {#if entry.kind === 'omitted'}
     <p
-      class="my-1 rounded border border-dashed border-border px-2 py-1 text-center text-[0.5625rem] text-dimmed"
+      class="my-1 border border-dashed border-border px-2 py-1 text-center text-[0.5625rem] text-dimmed"
     >
       {entry.text}
     </p>
@@ -90,7 +90,9 @@
       Loading log…
     </div>
   {:else if error}
-    <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">{error}</p>
+    <p class="border border-danger/20 bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">
+      {error}
+    </p>
   {:else if log && grouped}
     <!--
       One row per step, the way GitHub presents a job: the failure is the thing
@@ -99,7 +101,7 @@
     <div class="flex flex-col gap-1 font-mono text-[0.5625rem] leading-relaxed text-muted">
       {#each sections as section (section.id)}
         {@const open = isOpen(section)}
-        <div class="overflow-hidden rounded-md border border-border/60">
+        <div class="overflow-hidden border border-border/60">
           <button
             type="button"
             class="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left transition-colors hover:bg-elevated {section.failed

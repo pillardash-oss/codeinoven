@@ -38,7 +38,7 @@
       {@const label = option?.label ?? group.content}
       <button
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2 text-[0.625rem] tabular-nums disabled:opacity-60 {group.viewerHasReacted
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border px-2 text-[0.625rem] tabular-nums disabled:opacity-60 {group.viewerHasReacted
           ? 'border-primary/40 bg-primary/10 text-foreground'
           : 'border-border text-muted hover:bg-elevated hover:text-foreground'}"
         title={reactionTooltip(group, gitState.githubViewerLogin)}

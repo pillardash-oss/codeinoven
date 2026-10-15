@@ -125,7 +125,7 @@
   }
 </script>
 
-<section id="settings-block-design-work-folders" class="rounded-xl border bg-surface p-4">
+<section id="settings-block-design-work-folders" class="border bg-surface p-4">
   <h2 class="text-sm font-semibold">Work folders</h2>
   <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
     Where designs and videos are saved, relative to each project. Point a folder at somewhere the
@@ -144,7 +144,7 @@
         <input
           id={`work-root-${row.kind}`}
           name={row.kind}
-          class="h-9 min-w-0 flex-1 rounded-lg border bg-elevated px-2.5 font-mono text-sm outline-none focus:border-primary disabled:opacity-50"
+          class="h-9 min-w-0 flex-1 border bg-elevated px-2.5 font-mono text-sm outline-none focus:border-primary disabled:opacity-50"
           value={configured[row.kind]}
           placeholder={DEFAULT_WORK_ROOTS[row.kind]}
           spellcheck="false"
@@ -154,7 +154,7 @@
         />
         <button
           type="submit"
-          class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 shrink-0 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           {disabled}
           title={`Save the ${row.label.toLowerCase()}`}
         >
@@ -165,7 +165,7 @@
         </button>
         <button
           type="button"
-          class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          class="flex h-9 shrink-0 items-center gap-1.5 border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
           disabled={disabled || configured[row.kind] === DEFAULT_WORK_ROOTS[row.kind]}
           title={`Put new ${row.label.toLowerCase().replace(' folder', 's')} back in ${DEFAULT_WORK_ROOTS[row.kind]}, and move the ones already there`}
           onclick={() => void applyRoot(row.kind, DEFAULT_WORK_ROOTS[row.kind])}
@@ -181,8 +181,8 @@
   {/each}
 
   {#if error !== ''}
-    <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {:else if notice !== ''}
-    <p class="mt-3 rounded-lg bg-elevated px-3 py-2 text-xs text-muted" role="status">{notice}</p>
+    <p class="mt-3 border bg-elevated px-3 py-2 text-xs text-muted" role="status">{notice}</p>
   {/if}
 </section>

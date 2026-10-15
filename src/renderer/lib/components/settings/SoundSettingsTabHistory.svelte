@@ -54,10 +54,10 @@
   }
 </script>
 
-<section id="settings-block-sound-history" class="rounded-xl border bg-surface p-4">
-  <div class="mb-3 flex items-center justify-between gap-3">
+<section id="settings-block-sound-history" class="border bg-surface p-4">
+  <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
     <div>
-      <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Recording history</h2>
+      <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Recording history</h2>
       <p class="mt-1 text-[0.6875rem] text-dimmed">
         Every success and failure counts toward retention. Audio, raw transcript, and cleaned
         transcript are kept per attempt. Oldest attempts are evicted first at the limit.
@@ -65,7 +65,7 @@
     </div>
     <label class="flex items-center gap-2 text-xs text-muted"
       >Keep <input
-        class="w-16 rounded-lg border bg-elevated px-2 py-1 text-right"
+        class="w-16 border bg-elevated px-2 py-1 text-right"
         type="number"
         min="1"
         max="500"
@@ -109,7 +109,7 @@
             {@const retryState = retryStatusOf(attempt.id)}
             <button
               type="button"
-              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated disabled:opacity-40"
+              class="flex h-8 w-8 shrink-0 items-center justify-center text-muted hover:bg-elevated disabled:opacity-40"
               title={retryState === 'running'
                 ? 'Transcribing'
                 : retryState === 'done'
@@ -136,7 +136,7 @@
           <HistoryTranscriptCopyMenu {attempt} highlighted={retryStatusOf(attempt.id) === 'done'} />
           <button
             type="button"
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+            class="flex h-8 w-8 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
             title="Delete recording attempt"
             aria-label="Delete recording attempt"
             onclick={() =>

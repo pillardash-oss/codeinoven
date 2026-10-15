@@ -28,6 +28,9 @@
   let color = $derived(bucket?.color ?? pickColorForSeed(bucket?.id ?? label))
   /** Washed-out tint of the scope colour. */
   let wash = $derived(`color-mix(in srgb, ${color} 16%, var(--color-raised))`)
+  /** The chip's 1px rule: the scope's own colour mixed into the border token, so
+   *  a square chip keeps a defined edge without a hardcoded colour. */
+  let edge = $derived(`color-mix(in srgb, ${color} 45%, var(--color-border))`)
 </script>
 
 <!-- `min-w-0` is what lets the badge give up room: without it the badge keeps its
@@ -50,11 +53,12 @@
   </code>
 {:else}
   <code
-    class="flex min-w-0 items-center gap-1 rounded-md bg-raised font-mono font-normal text-foreground {size ===
+    class="flex min-w-0 items-center gap-1 border bg-raised font-mono font-normal text-foreground {size ===
     'xs'
       ? 'px-1.5 py-0.5 text-[0.625rem]'
       : 'px-2.5 py-1 text-xs'}"
     style:background-color={wash}
+    style:border-color={edge}
   >
     {#if bucket?.pinned}
       <span

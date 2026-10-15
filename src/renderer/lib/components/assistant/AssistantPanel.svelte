@@ -721,21 +721,21 @@
           {entry.label}
           {#if entry.id === 'issues' && issueCount > 0}
             <span
-              class="tabular-nums rounded-full px-1 text-[0.5625rem]"
+              class="border border-border tabular-nums px-1 text-[0.5625rem]"
               style="color: var(--color-missed); background: color-mix(in srgb, var(--color-missed) 16%, transparent)"
             >
               {issueCount}
             </span>
           {/if}
           {#if activeTab === entry.id}
-            <span class="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full bg-primary"></span>
+            <span class="absolute inset-x-1.5 bottom-0 h-[2px] bg-primary"></span>
           {/if}
         </button>
       {/each}
     </div>
     <button
       type="button"
-      class="my-1 flex w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="my-1 flex w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open in full screen"
       aria-label="Open in full screen"
       onclick={() => (fullscreen = true)}
@@ -751,7 +751,7 @@
   target: AssistantPanelTab
   warn?: boolean
 })}
-  <div class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2">
+  <div class="flex items-start gap-2 border border-border px-2.5 py-2">
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-1.5">
         <span class="text-[0.75rem] text-foreground">{args.title}</span>
@@ -771,7 +771,7 @@
     </div>
     <button
       type="button"
-      class="flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex shrink-0 items-center gap-0.5 px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open {args.title}"
       aria-label="Open {args.title}"
       onclick={() => (panelTab = args.target)}
@@ -784,9 +784,7 @@
 
 {#snippet routineEmptyState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
-    <span
-      class="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-elevated"
-    >
+    <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
       <ScrollText size={17} strokeWidth={1.6} class="text-dimmed" />
     </span>
     <p class="text-[0.8125rem] font-medium text-foreground">No how-to yet</p>
@@ -797,7 +795,7 @@
   </div>
   {#if gettingStartedCheckpoint}
     <div class="px-3 pb-3">
-      <div class="rounded-lg border border-border bg-elevated p-2.5">
+      <div class="border border-border bg-elevated p-2.5">
         <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Agreed so far</p>
         <p class="mb-1.5 text-[0.625rem] leading-relaxed text-dimmed">
           What you and the agent have agreed for this routine so far.
@@ -812,9 +810,7 @@
 
 {#snippet noRoutineState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
-    <span
-      class="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-elevated"
-    >
+    <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
       <Workflow size={17} strokeWidth={1.6} class="text-dimmed" />
     </span>
     <p class="text-[0.8125rem] font-medium text-foreground">Not part of a routine</p>
@@ -865,7 +861,7 @@
         {#if routine}
           <button
             type="button"
-            class="flex items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left text-[0.75rem] transition-colors hover:bg-elevated"
+            class="flex items-center gap-2 border border-border px-2.5 py-2 text-left text-[0.75rem] transition-colors hover:bg-elevated"
             title={routine.paused ? 'Resume this routine' : 'Pause this routine'}
             aria-label={routine.paused ? 'Resume this routine' : 'Pause this routine'}
             onclick={() => void togglePaused()}
@@ -881,11 +877,11 @@
             {/if}
           </button>
 
-          <div class="flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+          <div class="flex flex-col gap-2 border border-border px-2.5 py-2">
             <div class="flex items-center gap-2">
               <button
                 type="button"
-                class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                class="flex shrink-0 items-center gap-1.5 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
                 title="Run this routine now, even while paused"
                 aria-label="Run this routine now"
                 disabled={running || !howToComplete}
@@ -967,7 +963,7 @@
         <div class="flex flex-col gap-1.5 p-3">
           {#if routine.description?.trim()}
             <p
-              class="mb-1 rounded-lg bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
+              class="mb-1 bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
               title="Your own note about this routine, never sent to the agent"
             >
               {routine.description}
@@ -977,7 +973,7 @@
             Schedule: {scheduleLabel}
           </p>
 
-          <div class="mb-1 flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+          <div class="mb-1 flex flex-col gap-2 border border-border px-2.5 py-2">
             <div class="flex items-center gap-1.5">
               <span class="text-[0.75rem] text-foreground">Reporting</span>
               {#if !deliveryReady}
@@ -1011,7 +1007,7 @@
                 {#if routine.delivery}
                   <button
                     type="button"
-                    class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     title="Clear the delivery channel"
                     aria-label="Clear the delivery channel"
                     onclick={clearDelivery}
@@ -1024,7 +1020,7 @@
               {#if routine.delivery && routine.delivery.channel !== 'in-app'}
                 <input
                   type="text"
-                  class="w-full rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                  class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
                   placeholder="Destination: a chat, a channel, an address"
                   aria-label="Delivery destination"
                   title="The concrete destination, for example #eng-alerts"
@@ -1066,7 +1062,7 @@
               {#if routine.priority}
                 <button
                   type="button"
-                  class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                   title="Clear the priority"
                   aria-label="Clear the priority"
                   onclick={clearPriority}
@@ -1078,7 +1074,7 @@
           </div>
           {#each sections as section (section.id)}
             {@const folded = collapsed.has(section.id) && editingId !== section.id}
-            <div class="rounded-lg border border-border">
+            <div class="border border-border">
               <div class="flex items-center gap-1.5 px-2.5 py-1.5">
                 <button
                   type="button"
@@ -1101,7 +1097,7 @@
                 {#if editingId !== section.id}
                   <button
                     type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     title="Edit {section.title}"
                     aria-label="Edit {section.title}"
                     onclick={() => startEdit(section)}
@@ -1125,20 +1121,20 @@
                     ariaLabel="Edit {section.title}"
                     autofocus
                     onSubmit={() => void saveSection(section.id)}
-                    containerClass="rounded-md border border-border bg-surface"
+                    containerClass="border border-border bg-surface"
                     class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                   />
                   <div class="mt-1.5 flex justify-end gap-1.5">
                     <button
                       type="button"
-                      class="rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       onclick={cancelEdit}
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
-                      class="rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                      class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
                       onclick={() => void saveSection(section.id)}
                     >
                       Save
@@ -1210,7 +1206,7 @@
           {:else}
             <div class="flex flex-col gap-1.5">
               {#each missedRuns as run (run.id)}
-                <div class="rounded-lg border border-border p-2.5">
+                <div class="border border-border p-2.5">
                   <div class="flex items-center gap-2">
                     <AlertTriangle size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
                     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
@@ -1223,14 +1219,14 @@
                   <div class="mt-2 flex justify-end gap-1.5">
                     <button
                       type="button"
-                      class="rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       onclick={() => void dismissRun(run.id)}
                     >
                       Dismiss
                     </button>
                     <button
                       type="button"
-                      class="flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                      class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
                       onclick={() => void runNow(run)}
                     >
                       <RotateCcw size={12} strokeWidth={1.8} />
@@ -1252,7 +1248,7 @@
               {#each runIssues as issue (issue.id)}
                 <button
                   type="button"
-                  class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                  class="flex items-start gap-2 border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
                   title="Open {issue.task.title}"
                   aria-label="Open {issue.task.title}"
                   onclick={() => onOpenTask(issue.task)}
@@ -1292,7 +1288,7 @@
                 {#if thread}
                   <button
                     type="button"
-                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                    class="flex items-start gap-2 border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
                     title="Open this run"
                     aria-label="Open unattended run for {runTaskTitle(run)}"
                     onclick={() => onOpenTask(thread)}
@@ -1301,7 +1297,7 @@
                   </button>
                 {:else}
                   <div
-                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2"
+                    class="flex items-start gap-2 border border-border px-2.5 py-2"
                     title="The run's thread was deleted; this record is the evidence it ran"
                   >
                     {@render backgroundRunRowBody(run, null)}
@@ -1311,7 +1307,7 @@
               {#if backgroundRuns.length > TASK_RUN_PREVIEW}
                 <button
                   type="button"
-                  class="self-start rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="self-start px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title={showAllBackgroundRuns ? 'Show fewer runs' : 'Show every recorded run'}
                   aria-label={showAllBackgroundRuns
                     ? 'Show fewer runs'

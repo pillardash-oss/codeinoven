@@ -59,7 +59,7 @@ export function resolveThreadHoverPopoverSize(): { width: number; height: number
  * rendered box and the placement maths read the same value.
  */
 export const THREAD_HOVER_POPOVER_SURFACE_CLASS =
-  'fixed z-60 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg'
+  'fixed z-60 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto border bg-surface p-3 shadow-lg'
 
 /** Inline position and width for the popover surface. */
 export function threadHoverPopoverStyle(x: number, y: number): string {

@@ -161,7 +161,7 @@
 {#if mode === 'dropdown'}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
       data-shortcut={keymapState.keysFor('nav-new-project').join(',')}
@@ -174,10 +174,10 @@
         align="end"
         sideOffset={6}
         collisionPadding={8}
-        class="z-60 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+        class="z-60 w-44 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Add a folder from this device"
           onSelect={() => void addLocalFolder()}
         >
@@ -185,7 +185,7 @@
           Local Folder
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Add a project on one of your Ovens"
           onSelect={addOvenProject}
         >
@@ -193,7 +193,7 @@
           Remote Oven
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Clone a Git repository"
           onSelect={addGitCloneProject}
         >
@@ -209,7 +209,7 @@
     <div class="grid gap-2">
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Add a folder from this device"
         onclick={() => void addLocalFolder()}
       >
@@ -221,7 +221,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Add a project on one of your Ovens"
         onclick={addOvenProject}
       >
@@ -233,7 +233,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Clone a Git repository"
         onclick={addGitCloneProject}
       >
@@ -257,7 +257,7 @@
 
 <Modal open={showTrackingModal} title="Set Up Change Tracking" onClose={closeTrackingModal}>
   <div class="space-y-4">
-    <div class="flex gap-3 rounded-xl border bg-elevated p-3">
+    <div class="flex gap-3 border bg-elevated p-3">
       <AlertTriangle size={18} class="mt-0.5 shrink-0 text-warning" />
       <div>
         <p class="text-sm font-medium">
@@ -273,14 +273,14 @@
     </div>
 
     <p
-      class="truncate rounded-lg bg-raised px-3 py-2 font-mono text-xs text-muted"
+      class="truncate bg-raised px-3 py-2 font-mono text-xs text-muted"
       title={pendingProjectFolder}
     >
       {pendingProjectFolder}
     </p>
 
     {#if trackingSetupError}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger">
         {trackingSetupError}
       </p>
     {/if}
@@ -288,7 +288,7 @@
     <div class="grid gap-2 sm:grid-cols-2">
       <button
         type="button"
-        class="flex items-start gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-elevated disabled:opacity-50"
+        class="flex items-start gap-2 border p-3 text-left transition-colors hover:bg-elevated disabled:opacity-50"
         disabled={trackingSetupBusy}
         title="Track changes with {APP_NAME} file snapshots"
         onclick={() => void createProjectWithManualTracking()}
@@ -302,7 +302,7 @@
 
       <button
         type="button"
-        class="flex items-start gap-2 rounded-xl bg-primary p-3 text-left text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-start gap-2 bg-primary p-3 text-left text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={trackingSetupBusy || repositoryPreflight?.status === 'git_unavailable'}
         title="Initialize a Git repository in this folder"
         onclick={() => void initializeGitAndCreateProject()}
@@ -323,7 +323,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       disabled={trackingSetupBusy}
       title="Cancel"
       onclick={closeTrackingModal}

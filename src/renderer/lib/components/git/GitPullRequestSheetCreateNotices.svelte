@@ -23,10 +23,7 @@
 </script>
 
 {#if createError && createErrorIsNoCommits && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
-  <div
-    class="flex items-start gap-2 rounded-lg border border-border bg-elevated px-3 py-2.5"
-    role="status"
-  >
+  <div class="flex items-start gap-2 border border-border bg-elevated px-3 py-2.5" role="status">
     <Info size={14} class="mt-0.5 shrink-0 text-dimmed" />
     <div class="min-w-0 flex-1">
       <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
@@ -43,7 +40,7 @@
     />
   </div>
 {:else if createError && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
-  <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
+  <div class="border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
     <div class="flex items-start gap-2">
       <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />
       <div class="min-w-0 flex-1">

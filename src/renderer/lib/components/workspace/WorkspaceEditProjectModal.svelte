@@ -97,7 +97,7 @@
         <input
           id="edit-project-name"
           type="text"
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+          class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
           bind:value={dialogs.editProjectName}
         />
       </div>
@@ -110,7 +110,7 @@
         <input
           id="edit-project-path"
           type="text"
-          class="w-full rounded-lg border bg-raised px-3 py-2 text-sm text-dimmed"
+          class="w-full border bg-raised px-3 py-2 text-sm text-dimmed"
           value={dialogs.editProject.path}
           readonly
         />
@@ -124,7 +124,7 @@
         {#if hasAppearance}
           <button
             type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
             title="Reset appearance"
             onclick={resetProjectAppearance}
           >
@@ -134,7 +134,7 @@
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+            class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
             title="Cancel"
             onclick={() => (dialogs.showEditModal = false)}
           >
@@ -143,7 +143,7 @@
           <button
             type="submit"
             form="edit-project-form"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
             disabled={!dialogs.editProjectName.trim()}
             title="Save project settings"
           >

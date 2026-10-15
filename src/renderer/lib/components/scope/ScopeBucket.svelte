@@ -118,7 +118,7 @@
 </script>
 
 <section
-  class="relative flex w-full min-w-0 flex-col rounded-xl border {isArchived
+  class="relative flex w-full min-w-0 flex-col border {isArchived
     ? 'border-border bg-elevated/40'
     : 'bg-surface'} {bucket.collapsed ? 'h-10' : fill ? 'h-full' : 'h-120'} {scopeDropPosition
     ? 'ring-2 ring-primary/30'
@@ -131,12 +131,12 @@
   ondrop={handleScopeDrop}
 >
   <div
-    class="sticky top-0 z-40 flex h-10 shrink-0 items-center rounded-t-xl {isArchived
+    class="sticky top-0 z-40 flex h-10 shrink-0 items-center border-b border-border {isArchived
       ? 'bg-elevated/40'
       : 'bg-surface'} px-3"
   >
     <button
-      class="mr-1 flex h-7 w-5 shrink-0 cursor-grab items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground active:cursor-grabbing"
+      class="mr-1 flex h-7 w-5 shrink-0 cursor-grab items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground active:cursor-grabbing"
       aria-label="Move {bucket.name}"
       title="Drag to move scope"
       draggable="true"
@@ -146,7 +146,7 @@
       <GripVertical size={13} />
     </button>
     <button
-      class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-elevated"
+      class="flex min-w-0 flex-1 items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-elevated"
       aria-expanded={!bucket.collapsed}
       title="{bucket.collapsed ? 'Expand' : 'Collapse'} {bucket.name}"
       onclick={onToggle}
@@ -189,7 +189,7 @@
       {/if}
       {#if bucket.root.kind === 'worktree'}
         <span
-          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
+          class="flex shrink-0 items-center gap-1 border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
           <FolderTree size={9} class="text-warning" />
@@ -201,7 +201,7 @@
 
     {#if unhealthy}
       <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-warning transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-warning transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Worktree problem in {bucket.name}: {healthDetail}. {repairable
           ? 'Click to repair.'
           : ''}"
@@ -215,7 +215,7 @@
     {/if}
 
     <button
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New thread in {bucket.name}"
       title="New thread in {bucket.name}"
       onclick={onCreateThread}

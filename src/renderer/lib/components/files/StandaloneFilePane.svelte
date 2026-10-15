@@ -242,7 +242,7 @@
   <button
     type="button"
     class={[
-      'flex h-6 w-6 items-center justify-center rounded transition-colors',
+      'flex h-6 w-6 items-center justify-center transition-colors',
       activeView === 'source'
         ? 'bg-overlay text-foreground'
         : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -258,7 +258,7 @@
     <button
       type="button"
       class={[
-        'flex h-6 w-6 items-center justify-center rounded transition-colors',
+        'flex h-6 w-6 items-center justify-center transition-colors',
         activeView === 'preview'
           ? 'bg-overlay text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -273,7 +273,7 @@
   {/if}
   {#if dirty}
     <span
-      class="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+      class="ml-1 h-1.5 w-1.5 shrink-0 bg-accent"
       role="status"
       title="Unsaved changes"
       aria-label="Unsaved changes"
@@ -282,7 +282,7 @@
   {#if session && beautifyLabel && activeView === 'source'}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={`Beautify ${beautifyLabel}`}
       title={`Beautify ${beautifyLabel}`}
       onclick={beautifySource}
@@ -293,7 +293,7 @@
   {#if session}
     <button
       type="button"
-      class="ml-1 flex h-6 items-center gap-1 rounded px-1.5 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-dimmed"
+      class="ml-1 flex h-6 items-center gap-1 px-1.5 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-dimmed"
       aria-label={`Save ${name}`}
       title={session.error ? `Save ${name} (last attempt failed)` : `Save ${name}`}
       disabled={!dirty || session.saving}
@@ -309,7 +309,7 @@
   {/if}
   <button
     type="button"
-    class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+    class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
     aria-label="Reload the file from disk"
     title="Reload from disk"
     disabled={loading}
@@ -319,7 +319,7 @@
   </button>
   <button
     type="button"
-    class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Show in file manager"
     title="Show in file manager"
     onclick={() => void revealInFileManager()}
@@ -336,7 +336,7 @@
     {#if !binaryPreview}
       <button
         type="button"
-        class="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+        class="shrink-0 border border-border px-1.5 py-0.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
         title="Reload the disk version, discarding this draft"
         onclick={reload}
       >
@@ -411,7 +411,7 @@
     </div>
     <button
       type="button"
-      class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
+      class="border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
       onclick={() => void revealInFileManager()}
     >
       Show in file manager

@@ -91,7 +91,7 @@
        instead of a button nested inside a button. -->
   <button
     type="button"
-    class="absolute inset-0 cursor-pointer rounded-sm"
+    class="absolute inset-0 cursor-pointer"
     aria-expanded={open}
     aria-label={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
     title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
@@ -119,7 +119,7 @@
       <span class="relative z-10 flex items-center gap-1.5">
         {#if hasCompaction}
           <span
-            class="flex items-center gap-1 rounded-md bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
+            class="flex items-center gap-1 bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
             title="This trace includes compacted context. Forking from here restores the compaction summary."
             aria-label="Compacted context. Forking from here restores the compaction summary."
           >

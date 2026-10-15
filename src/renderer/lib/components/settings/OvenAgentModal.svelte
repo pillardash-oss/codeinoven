@@ -204,7 +204,7 @@
 >
   {#if error}
     <p
-      class="mb-4 flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
+      class="mb-4 flex items-start gap-2 bg-danger/10 px-3 py-2 text-xs text-danger"
       role="alert"
     >
       <AlertTriangle size={14} class="mt-0.5 shrink-0" />
@@ -225,12 +225,12 @@
 
       <div class="flex items-center gap-2">
         <code
-          class="min-w-0 flex-1 truncate rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
+          class="min-w-0 flex-1 truncate border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
           >{startCommand}</code
         >
         <button
           type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
           disabled={copying}
           onclick={() => void copyCommand()}
         >
@@ -244,7 +244,7 @@
       <label class="flex items-center gap-2 text-xs text-muted">
         <span>SSH port on the machine</span>
         <input
-          class="w-20 rounded-lg border bg-elevated px-2 py-1 text-foreground"
+          class="w-20 border bg-elevated px-2 py-1 text-foreground"
           type="text"
           inputmode="numeric"
           spellcheck="false"
@@ -271,7 +271,7 @@
       </header>
 
       <textarea
-        class="h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
+        class="h-24 w-full resize-y border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
         placeholder="codeinoven-oven-agent-v1:…"
         spellcheck="false"
         aria-label="Registration code"
@@ -280,7 +280,7 @@
 
       <button
         type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
         disabled={!code.trim() || previewing}
         onclick={() => void checkCode()}
       >
@@ -291,7 +291,7 @@
       </button>
 
       {#if preview}
-        <div class="space-y-3 rounded-lg border bg-elevated/40 p-3 text-xs">
+        <div class="space-y-3 border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
             {#if preview.identityPresent}
               <CheckCircle2 size={14} class="text-success" />
@@ -320,7 +320,7 @@
             <label class="space-y-1">
               <span class="text-muted">Address this computer uses</span>
               <input
-                class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
+                class="w-full border bg-elevated px-3 py-2 text-foreground"
                 type="text"
                 spellcheck="false"
                 autocomplete="off"
@@ -332,7 +332,7 @@
             <label class="space-y-1">
               <span class="text-muted">SSH port</span>
               <input
-                class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
+                class="w-full border bg-elevated px-3 py-2 text-foreground"
                 type="number"
                 min="1"
                 max="65535"
@@ -369,7 +369,7 @@
 
           {#if testResult}
             <p
-              class="rounded-md px-2 py-1 {testResult.state === 'connected'
+              class="px-2 py-1 {testResult.state === 'connected'
                 ? 'bg-success/10 text-success'
                 : 'bg-danger/10 text-danger'}"
               role={testResult.state === 'connected' ? 'status' : 'alert'}
@@ -389,7 +389,7 @@
               {#each preview.addresses as address (address)}
                 <button
                   type="button"
-                  class="rounded-md border px-2 py-1 font-mono transition-colors {host === address
+                  class="border px-2 py-1 font-mono transition-colors {host === address
                     ? 'border-primary bg-primary/10 text-foreground'
                     : 'bg-elevated text-muted hover:text-foreground'}"
                   aria-pressed={host === address}
@@ -434,7 +434,7 @@
         {#if preview}
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
             disabled={testing}
             onclick={() => void testConnection()}
           >
@@ -447,13 +447,13 @@
         <button
           type="button"
           data-modal-dismiss
-          class="h-8 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+          class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
           onclick={close}>Close</button
         >
         {#if preview}
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
             disabled={registering || testing}
             onclick={() => void register()}
           >

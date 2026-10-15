@@ -1989,7 +1989,7 @@
     {#if showExpandControl}
       <button
         type="button"
-        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         transition:fade={{ duration: motionDuration(140) }}
         aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
         aria-pressed={expansion.maximized}
@@ -2142,7 +2142,7 @@
     {#if usageCreditsCommandId}
       <button
         type="button"
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Switch to API usage credits"
         title="Switch this session to pay-as-you-go API usage credits"
         onclick={runUsageCredits}
@@ -2170,7 +2170,7 @@
            - Stop confirmation pending:   "Stop?" danger label -->
       <button
         type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
+        class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors {pendingStop
           ? 'bg-danger text-on-danger hover:bg-danger-hover'
           : canStop
             ? 'bg-danger/10 text-danger hover:bg-danger/20'
@@ -2228,7 +2228,7 @@
          composer so only its lower band shows. Its top padding is what holds the
          segments clear of the composer's lower edge. -->
     <div
-      class="composer-shoe-card flex min-w-0 items-center justify-center rounded-xs border border-border bg-surface px-0.5 pt-1.5 pb-1"
+      class="composer-shoe-card flex min-w-0 items-center justify-center border border-border bg-surface px-0.5 pt-1.5 pb-1"
     >
       <ComposerShoe
         bind:this={shoeComponent}

@@ -6,7 +6,7 @@
 
 <button
   type="button"
-  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+  class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
   aria-expanded={expanded}
   {title}
   aria-label={title}

@@ -21,7 +21,7 @@
   type="button"
   {title}
   aria-label={title}
-  class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+  class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
   onclick={handleClick}
 >
   {#if diffLayoutState.layout === 'vertical'}

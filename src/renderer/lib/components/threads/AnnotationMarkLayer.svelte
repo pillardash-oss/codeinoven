@@ -375,7 +375,7 @@
     {@const number = referenceLabelNumber(mark.label, index)}
     <button
       type="button"
-      class="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
+      class="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
       style:left={`${badge.x * 100}%`}
       style:top={`${badge.y * 100}%`}
       style:width={`${MARK_BADGE_SIZE}px`}
@@ -404,7 +404,7 @@
 <div class="absolute top-1.5 right-1.5 z-40 flex items-center gap-1">
   {#if armed}
     <span
-      class="rounded bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white"
+      class="bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white"
       aria-live="polite"
     >
       {hint}
@@ -412,14 +412,14 @@
   {/if}
   <button
     type="button"
-    class="relative flex h-7 w-7 items-center justify-center rounded-md border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
+    class="relative flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
     title="Annotation pen: colour and stroke width"
     aria-label="Annotation pen: colour and stroke width"
     onclick={() => (penOpen = true)}
   >
     <Palette size={13} />
     <span
-      class="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border border-white"
+      class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
       style:background-color={annotationTool.color}
       aria-hidden="true"
     ></span>
@@ -427,7 +427,7 @@
   <button
     type="button"
     class={[
-      'flex h-7 w-7 items-center justify-center rounded-md border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white',
+      'flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white',
       armed ? 'opacity-100' : 'opacity-60 hover:opacity-100'
     ]}
     aria-pressed={armed}
@@ -497,7 +497,7 @@
       class="w-full"
       bind:value={annotationTool.strokeWidth}
     />
-    <div class="mt-3 flex h-10 items-center rounded-md border bg-elevated px-2">
+    <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
       <svg viewBox="0 0 120 40" class="h-full w-full" aria-hidden="true" preserveAspectRatio="none">
         <line
           x1="6"

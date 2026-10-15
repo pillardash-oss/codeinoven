@@ -370,7 +370,7 @@
         aria-selected={entryKey === highlightedKey}
         data-entry-index={index}
         data-native-dock-key={entryKey}
-        class="w-full cursor-pointer overflow-hidden rounded-lg text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
+        class="w-full cursor-pointer overflow-hidden text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
         title={entryTitle(entry)}
         onpointerenter={(event) => {
           // Native presentation owns pointer selection. Only a failed native

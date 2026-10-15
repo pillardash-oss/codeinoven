@@ -49,7 +49,7 @@
     <DockRow storageKey={STORAGE_KEY} label="Move docked export progress">
       <button
         type="button"
-        class="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground shadow-lg"
+        class="flex items-center gap-2 border border-border bg-surface px-3 py-2 text-sm text-foreground shadow-lg"
         title="Show export progress"
         aria-label="Show export progress"
         onclick={() => (state.minimized = false)}
@@ -103,7 +103,7 @@
       -->
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => (state.minimized = true)}
       >
         Dock
@@ -111,7 +111,7 @@
     {:else if state.result}
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+        class="px-3 py-2 text-sm text-muted hover:bg-elevated"
         data-modal-dismiss
         onclick={() => (state.minimized = true)}
       >
@@ -119,7 +119,7 @@
       </button>
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={copyPath}
       >
         Copy path
@@ -127,7 +127,7 @@
     {:else}
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => (state.open = false)}
       >
         Close

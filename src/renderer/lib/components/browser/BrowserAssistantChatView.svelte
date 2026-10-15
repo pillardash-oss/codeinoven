@@ -87,7 +87,7 @@
             alt=""
             aria-hidden="true"
             draggable="false"
-            class="size-5 shrink-0 rounded-sm object-contain"
+            class="size-5 shrink-0 object-contain"
           />
         {:else}
           <Globe size={18} class="shrink-0 text-dimmed" aria-hidden="true" />

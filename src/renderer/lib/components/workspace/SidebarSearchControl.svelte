@@ -37,8 +37,8 @@
 
   const triggerClass = $derived(
     size === 'md'
-      ? 'flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
-      : 'flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground'
+      ? 'flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
+      : 'flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground'
   )
 
   const focusSearchInput: Attachment<HTMLInputElement> = (element) => {
@@ -59,7 +59,7 @@
       sideOffset={8}
       collisionPadding={16}
       onInteractOutside={(e) => e.preventDefault()}
-      class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1.5 shadow-lg"
+      class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
       aria-label={ariaLabel}
     >
       <div class="flex items-center gap-1.5">
@@ -67,7 +67,7 @@
         <input
           {@attach focusSearchInput}
           type="text"
-          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+          class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
           {placeholder}
           value={query}
           oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}
@@ -75,7 +75,7 @@
         {#if query}
           <button
             type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={() => {
@@ -88,7 +88,7 @@
         {/if}
         <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
         <Popover.Close
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Close search"
           title="Close search"
         >

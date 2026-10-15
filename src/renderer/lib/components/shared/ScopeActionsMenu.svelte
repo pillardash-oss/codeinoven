@@ -40,7 +40,7 @@
     bucket,
     actions,
     trigger,
-    triggerClass = 'flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground',
+    triggerClass = 'flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground',
     triggerTitle = 'Scope actions'
   }: Props = $props()
 
@@ -249,12 +249,12 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 max-h-80 w-52 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-80 w-52 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
     >
       {#each items as item (item.label)}
         {@const Icon = item.icon}
         <DropdownMenu.Item
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-60"
+          class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-60"
           textValue={item.label}
           title={item.disabledReason}
           disabled={Boolean(item.disabledReason)}

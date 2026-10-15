@@ -121,7 +121,7 @@
 {#if utility === null}
   <p class="text-xs text-muted">Save this MCP server before authorizing it.</p>
 {:else if utility.kind === 'mcp' && utility.config.transport !== 'stdio'}
-  <fieldset class="space-y-3 rounded-xl border p-3">
+  <fieldset class="space-y-3 border p-3">
     <legend class="px-1 text-xs font-semibold">MCP authorization</legend>
 
     <div class="flex items-start justify-between gap-3">
@@ -181,7 +181,7 @@
         {#if authorizing}
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             disabled={!oauth.busy}
             onclick={() => void oauth.cancel()}
           >
@@ -190,7 +190,7 @@
         {:else if oauth.status.secureStorageAvailable}
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
             disabled={oauth.busy}
             onclick={() => void oauth.authorize()}
           >
@@ -200,7 +200,7 @@
         {#if canDisconnect}
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
             disabled={oauth.busy}
             onclick={() => (oauth.confirmDisconnect = true)}
           >
@@ -209,7 +209,7 @@
         {/if}
       </div>
 
-      <details class="rounded-lg border bg-surface">
+      <details class="border bg-surface">
         <summary
           class="cursor-pointer px-3 py-2 text-[0.6875rem] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
@@ -223,7 +223,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Client ID</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
                 autocomplete="off"
                 bind:value={oauth.clientId}
               />
@@ -231,7 +231,7 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Client secret</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
                 type="password"
                 autocomplete="off"
                 placeholder="Stored only when provided"
@@ -242,7 +242,7 @@
           <label class="block space-y-1 text-xs font-medium">
             <span>Scopes</span>
             <input
-              class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+              class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
               placeholder="Space-separated; defaults to the server's own list"
               bind:value={oauth.scope}
             />

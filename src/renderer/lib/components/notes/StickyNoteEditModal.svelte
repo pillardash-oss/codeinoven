@@ -111,7 +111,7 @@
       </label>
       <input
         id={`sticky-note-title-${noteId}`}
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         type="text"
         maxlength="120"
         value={title}
@@ -157,7 +157,7 @@
     <div class="flex w-full items-center justify-between">
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+        class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
         title="Reset note appearance"
         onclick={resetAppearance}
       >
@@ -167,7 +167,7 @@
         <button
           type="button"
           data-modal-dismiss
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
           title="Cancel"
           onclick={onClose}
         >
@@ -176,7 +176,7 @@
         <button
           type="button"
           data-modal-primary
-          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           title="Apply sticky note changes"
           disabled={saving || title.trim() === ''}
           onclick={() => void save()}

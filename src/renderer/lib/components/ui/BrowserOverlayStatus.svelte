@@ -21,7 +21,7 @@
   link's own address.
 -->
 <div
-  class="pointer-events-none absolute z-10 truncate rounded-md border bg-surface px-2 py-1 text-xs text-foreground shadow-md"
+  class="pointer-events-none absolute z-10 truncate border bg-surface px-2 py-1 text-xs text-foreground shadow-md"
   style:left="{status.left}px"
   style:bottom="{status.bottom}px"
   style:max-width="calc(100% - {status.left}px - 0.5rem)"

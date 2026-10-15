@@ -591,7 +591,7 @@
   {#snippet actions()}
     {#if readOnly && auditActive && !finalComplete && onOpenAuditWork}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
+        class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
         title="Open the Assignment audit work"
         onclick={onOpenAuditWork}
       >
@@ -599,7 +599,7 @@
       </button>
     {:else if !readOnly}
       <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
         disabled={busy || !validation.valid}
         title="Sign off this assignment and create worker tasks"
         onclick={() => void signOff()}
@@ -612,7 +612,7 @@
 
   {#snippet sidebarExtra()}
     <div class="border-t p-3">
-      <div class="flex items-center justify-between gap-2">
+      <div class="flex items-center justify-between gap-2 border-b border-border pb-1.5">
         <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Assignment checks
         </p>
@@ -626,14 +626,14 @@
       </div>
       <div class="mt-2 space-y-1.5">
         {#each validation.issues as issue (`${issue.code}:${issue.path}`)}
-          <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
+          <div class="border border-danger/30 bg-danger/10 px-2.5 py-2">
             <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
             <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed" title={issue.path}>
               {issue.path}
             </p>
           </div>
         {:else}
-          <div class="flex items-center gap-2 rounded-lg border border-dashed px-2.5 py-3">
+          <div class="flex items-center gap-2 border border-dashed px-2.5 py-3">
             <Check size={13} class="text-primary" />
             <p class="text-[0.6875rem] text-dimmed">Ready to assign.</p>
           </div>
@@ -655,7 +655,7 @@
   {#snippet markers()}
     {#each annotationMarkers as marker (marker.annotation.id)}
       <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
+        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
         style:left={compactViewport.matches ? undefined : `${marker.x}px`}
         style:top={`${marker.y}px`}
         data-assignment-annotation-marker={marker.annotation.id}

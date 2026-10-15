@@ -114,7 +114,7 @@
     {#if unread.length > 1}
       <button
         type="button"
-        class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="shrink-0 px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Dismiss all decisions"
         title="Dismiss all decisions"
         onclick={dismissAll}
@@ -152,7 +152,7 @@
               </div>
               <button
                 type="button"
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Open the thread this decision belongs to"
                 title="Open the thread this decision belongs to"
                 disabled={busyId === item.id}
@@ -162,7 +162,7 @@
               </button>
               <button
                 type="button"
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Dismiss this decision"
                 title="Dismiss this decision"
                 onclick={() => dismiss(item)}
@@ -173,9 +173,11 @@
 
             <div class="flex flex-col gap-2">
               {#each item.entries as entry, entryIndex (entryIndex)}
-                <div class="rounded-lg border border-border bg-surface px-2.5 py-2">
+                <div class="border border-border bg-surface px-2.5 py-2">
                   {#if entry.header}
-                    <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+                    <p
+                      class="mb-1.5 border-b border-border pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+                    >
                       {entry.header}
                     </p>
                   {/if}

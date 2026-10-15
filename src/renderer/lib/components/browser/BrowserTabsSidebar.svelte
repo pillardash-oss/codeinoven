@@ -633,7 +633,7 @@
       {#if runtime?.canGoBack}
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Go back in page history"
           title="Go back"
           onclick={() => activeTab && void invoke('browser:goBack', activeTab.id).catch(() => {})}
@@ -644,7 +644,7 @@
       {#if runtime?.canGoForward}
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Go forward in page history"
           title="Go forward"
           onclick={() =>
@@ -660,7 +660,7 @@
       {#if activeTab && (runtime?.loading || activeTab.url)}
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={runtime?.loading ? 'Stop loading' : 'Reload page'}
           title={runtime?.loading ? 'Stop loading' : 'Reload page'}
           onclick={reloadActiveTab}
@@ -673,12 +673,12 @@
           {/if}
         </button>
       {/if}
-      <div class="flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-elevated pr-0.5 pl-1.5">
+      <div class="flex min-w-0 flex-1 items-center gap-1 bg-elevated pr-0.5 pl-1.5">
         {#if activeTab?.url}
           <button
             type="button"
             class={[
-              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+              'flex h-5 w-5 shrink-0 items-center justify-center transition-colors hover:bg-overlay',
               secure ? 'text-success' : 'text-dimmed'
             ]}
             title={secure ? 'Site settings' : 'Connection is not secure'}
@@ -720,7 +720,7 @@
           <button
             type="button"
             class={[
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay disabled:opacity-60',
+              'flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay disabled:opacity-60',
               storeOffer.installed ? 'text-success' : 'text-primary'
             ]}
             disabled={storeOfferInstall !== null && !storeOffer.installed}
@@ -740,7 +740,7 @@
         <button
           type="button"
           class={[
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+            'flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay',
             bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
           ]}
           disabled={address === ''}
@@ -761,7 +761,7 @@
          attachment takes the caret, with no focus effect. -->
     {#key globalBrowser.tabSearchFocusRequest}
       <div class="shrink-0 px-3 py-2">
-        <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+        <div class="flex items-center gap-1.5 bg-elevated px-2.5">
           <Search size={13} class="shrink-0 text-dimmed" />
           <input
             {@attach attachSearchInput}
@@ -781,7 +781,7 @@
           {#if query !== '' || searchGroupId !== null}
             <button
               type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
               aria-label="Clear tab search"
               title="Clear search"
               onclick={() => globalBrowser.clearTabSearch()}
@@ -883,11 +883,11 @@
                   <img
                     src={iconUrl}
                     alt=""
-                    class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                    class="h-3.5 w-3.5 shrink-0 object-contain"
                     draggable="false"
                   />
                 {:else}
-                  <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
+                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"
                   ></span>
                 {/if}
                 <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
@@ -907,7 +907,7 @@
                   {#snippet trigger()}
                     <button
                       type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground"
                       aria-label={`New tab in ${group.name}`}
                       title={`New tab in ${group.name}`}
                       onclick={() => newTab(group.id)}
@@ -918,7 +918,7 @@
                 </BrowserNewTabMenu>
                 <button
                   type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground"
                   aria-label={`Search in ${group.name}`}
                   title={`Search in ${group.name}`}
                   onclick={() => scopeSearch(group.id)}
@@ -927,7 +927,7 @@
                 </button>
                 <button
                   type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground {group.pinned
+                  class="flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay hover:text-foreground {group.pinned
                     ? 'text-accent'
                     : 'text-muted'}"
                   aria-label={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
@@ -943,7 +943,7 @@
                 </button>
                 <button
                   type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-overlay hover:text-foreground"
                   aria-label={`Edit ${group.name}`}
                   title={`Edit ${group.name}`}
                   onclick={() => (editorGroupId = group.id)}

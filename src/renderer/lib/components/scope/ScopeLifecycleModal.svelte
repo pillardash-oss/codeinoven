@@ -137,7 +137,7 @@
                   : 'This project deletion will also remove its managed worktrees.'}
         </p>
         {#if (preflight.dirtyFiles.length ?? 0) > 0}
-          <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+          <div class="border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
             <p class="font-medium">Dirty files ({preflight.dirtyFiles.length})</p>
             <ul class="mt-1 max-h-28 list-inside list-disc overflow-y-auto">
               {#each preflight.dirtyFiles.slice(0, 20) as file (file)}
@@ -147,17 +147,17 @@
           </div>
         {/if}
         {#if (preflight.unpushedCommits ?? 0) > 0}
-          <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+          <div class="border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
             {preflight.unpushedCommits} unpushed commit(s) are not reachable from any remote.
           </div>
         {/if}
         {#if preflight.hasActiveProcesses}
-          <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+          <div class="border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
             Active agent processes are still running in this scope.
           </div>
         {/if}
         {#if forceNeeded}
-          <div class="flex items-center justify-between gap-2 rounded-lg border bg-elevated p-3">
+          <div class="flex items-center justify-between gap-2 border bg-elevated p-3">
             <span class="text-xs text-muted">Force removal despite dirty/unpushed work</span>
             <Switch
               checked={secondConfirm}

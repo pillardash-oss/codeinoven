@@ -130,7 +130,7 @@
       : `Project: ${identity.project?.name ?? 'none'}`}
   >
     {#if identity.project?.iconUrl}
-      <img src={identity.project.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded" />
+      <img src={identity.project.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0" />
     {:else}
       <Folder
         size={13}
@@ -218,7 +218,7 @@
     }}
   >
     {#if pageFavicon}
-      <img src={pageFavicon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-xs object-contain" />
+      <img src={pageFavicon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
     {:else}
       <Globe size={13} class="shrink-0 text-dimmed" />
     {/if}

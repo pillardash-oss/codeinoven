@@ -438,7 +438,7 @@
           onclick={() => (reportMenuOpen = false)}
         ></button>
         <div
-          class="absolute bottom-full right-0 z-40 mb-1.5 w-60 rounded-xl border bg-surface p-1.5 shadow-lg"
+          class="absolute bottom-full right-0 z-40 mb-1.5 w-60 border bg-surface p-1.5 shadow-lg"
           role="menu"
           aria-label="Worker reporting"
         >
@@ -452,7 +452,7 @@
           </p>
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
+            class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
               ? 'font-medium text-success'
               : 'text-muted'}"
             title="Report to the Sr. Engineer when the task is done"
@@ -466,7 +466,7 @@
           </button>
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
+            class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
               ? 'text-muted'
               : 'font-bold text-warning'}"
             title="Never report to the Sr. Engineer, so no review or audit is triggered"

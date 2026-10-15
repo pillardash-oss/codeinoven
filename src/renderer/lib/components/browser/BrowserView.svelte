@@ -405,7 +405,7 @@
           <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
           <button
             type="button"
-            class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
             title="Open a new browser tab"
             onclick={() => {
               globalBrowser.openNewTabAddress()

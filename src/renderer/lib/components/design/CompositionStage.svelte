@@ -192,9 +192,7 @@
   })
 </script>
 
-<div
-  class="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-surface"
->
+<div class="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-surface">
   <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={placed} />
   <div
     {@attach attachHost}

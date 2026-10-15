@@ -413,7 +413,7 @@
   <button
     bind:this={buttonEl}
     type="button"
-    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
+    class="relative flex h-8 w-8 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
     'blocked'
       ? 'opacity-60'
       : ''} {className}"

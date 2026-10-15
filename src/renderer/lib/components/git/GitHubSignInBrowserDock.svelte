@@ -62,7 +62,7 @@
       -->
       <button
         type="button"
-        class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 py-1 transition-colors hover:border-muted"
+        class="flex shrink-0 cursor-pointer items-center gap-1.5 border border-border bg-elevated px-2.5 py-1 transition-colors hover:border-muted"
         title="Copy the code to paste into the GitHub page"
         aria-label="Copy the device code"
         onclick={() => void githubSignIn.copyCode()}
@@ -108,7 +108,7 @@
 
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={detailsLabel}
       title={detailsLabel}
       onclick={() => (collapsed ? githubSignIn.expand() : githubSignIn.minimize())}
@@ -121,7 +121,7 @@
     </button>
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={dismissLabel}
       title={dismissLabel}
       onclick={() => githubSignIn.close()}

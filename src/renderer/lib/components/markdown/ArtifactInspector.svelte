@@ -363,7 +363,7 @@
   const shadowSheet = $derived(`:host { display: block; height: 100%; }
 .cio-stage { position: relative; box-sizing: border-box; display: flex; height: 100%; align-items: center; justify-content: center; padding: 1.25rem; background: var(--color-app); }
 .cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }
-.cio-outline { position: absolute; pointer-events: none; border: 1.5px solid var(--color-accent); border-radius: 2px; background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
+.cio-outline { position: absolute; pointer-events: none; border: 1.5px solid var(--color-accent); background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
 .cio-outline[hidden] { display: none; }`)
 
   function artifactMarkup(): string {
@@ -419,7 +419,7 @@
   {#each pins as pin (pin.id)}
     <button
       type="button"
-      class="absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
+      class="absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
       style:left={`${pin.x}px`}
       style:top={`${pin.y}px`}
       title={pin.hasComment

@@ -645,7 +645,7 @@
   {#snippet actions()}
     {#if workflowActionsVisible}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
+        class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
         disabled={busy || reviewSubmitting}
         title="Send rework notes to the primary agent"
         onclick={() => (reviewOpen = true)}
@@ -654,7 +654,7 @@
       </button>
       {#if !reviewStarted}
         <button
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+          class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy}
           title="Complete this audit without rework notes"
           onclick={onComplete}
@@ -672,7 +672,7 @@
           Additional instructions for the primary agent
           <RichMarkdownEditor
             bind:this={reviewNotesEditor}
-            class="mt-1 min-h-14 w-full rounded-lg border bg-elevated px-3 py-2 text-xs"
+            class="mt-1 min-h-14 w-full border border-border bg-elevated px-3 py-2 text-xs"
             bind:value={reviewNotes}
             placeholder="Optional rework instructions"
             ariaLabel="Audit rework instructions"
@@ -680,7 +680,7 @@
           />
         </label>
         <button
-          class="rounded-lg px-3 py-2 text-xs text-muted"
+          class="px-3 py-2 text-xs text-muted"
           disabled={reviewSubmitting}
           title="Discard rework notes"
           onclick={() => (reviewOpen = false)}
@@ -694,7 +694,7 @@
           disabled={busy || reviewSubmitting}
         />
         <button
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+          class="bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy || reviewSubmitting}
           title="Send review notes to the primary agent"
           onclick={() => void submitReview()}
@@ -714,13 +714,13 @@
         {#if severityFindings.length}
           <div class="py-0.5">
             <div class="flex items-center gap-1.5 px-2 py-1 text-[0.625rem] font-semibold capitalize">
-              <span class="h-1.5 w-1.5 rounded-full {severityDotClass(severity)}"></span>
+              <span class="h-1.5 w-1.5 {severityDotClass(severity)}"></span>
               <span class={severityTextClass(severity)}>{severity}</span>
               <span class="ml-auto text-dimmed">{severityFindings.length}</span>
             </div>
             {#each severityFindings as finding (finding.id)}
               <button
-                class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[0.625rem] text-muted hover:bg-elevated hover:text-foreground"
+                class="flex w-full items-baseline gap-1.5 px-2 py-1 text-left text-[0.625rem] text-muted hover:bg-elevated hover:text-foreground"
                 title={finding.title}
                 onclick={() => void scrollToFinding(finding.id)}
               >
@@ -748,7 +748,7 @@
     {#each annotationMarkers as marker (marker.annotation.id)}
       <button
         data-audit-annotation-marker={marker.annotation.id}
-        class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
+        class="absolute z-10 grid h-7 w-7 place-items-center border bg-surface text-info shadow-sm hover:bg-elevated"
         style:left={compactViewport.matches
           ? undefined
           : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
@@ -765,7 +765,7 @@
       <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
         {#if draft.evidenceValidation === 'partial'}
           <div
-            class="rounded-xl border border-warning/40 bg-warning/10 p-4"
+            class="border border-warning/40 bg-warning/10 p-4"
             role="alert"
             aria-label="Evidence partially validated"
           >
@@ -803,7 +803,7 @@
                   <EditableMarkdown
                     text={finding.title}
                     readOnly={!workflowActionsVisible}
-                    class="min-w-0 flex-1 rounded-md px-1 text-base font-semibold outline-none focus:bg-surface"
+                    class="min-w-0 flex-1 px-1 text-base font-semibold outline-none focus:bg-surface"
                     ariaLabel={`Finding ${index + 1} title`}
                     onChange={(value) => {
                       finding.title = value
@@ -820,7 +820,7 @@
                   {/if}
                   {#if workflowActionsVisible && severityEditingId === finding.id}
                     <select
-                      class="rounded-md border bg-elevated px-2 py-1 text-xs"
+                      class="border border-border bg-elevated px-2 py-1 text-xs"
                       bind:value={finding.severity}
                       onchange={() => {
                         changed()
@@ -835,7 +835,7 @@
                     </select>
                   {:else if workflowActionsVisible}
                     <button
-                      class="rounded-md px-2 py-1 text-xs font-medium capitalize hover:opacity-80 {severityClass(
+                      class="px-2 py-1 text-xs font-medium capitalize hover:opacity-80 {severityClass(
                         finding.severity
                       )}"
                       title={`Edit finding severity: ${finding.severity}`}
@@ -847,7 +847,7 @@
                     <!-- Read-only views (older versions, review-complete reports) still show the
                         severity badge; only the edit affordance is gated on workflow actions. -->
                     <span
-                      class="rounded-md px-2 py-1 text-xs font-medium capitalize {severityClass(
+                      class="px-2 py-1 text-xs font-medium capitalize {severityClass(
                         finding.severity
                       )}"
                       title={`Finding severity: ${finding.severity}`}
@@ -857,7 +857,7 @@
                   {/if}
                   {#if workflowActionsVisible}
                     <button
-                      class="rounded-md p-1 text-muted hover:bg-danger/10 hover:text-danger"
+                      class="p-1 text-muted hover:bg-danger/10 hover:text-danger"
                       title={`Remove finding ${index + 1}`}
                       aria-label={`Remove finding ${index + 1}`}
                       onclick={() => {
@@ -872,7 +872,7 @@
                 <EditableMarkdown
                   text={finding.description}
                   readOnly={!workflowActionsVisible}
-                  class="audit-markdown w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+                  class="audit-markdown w-full whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
                   ariaLabel={`Finding ${index + 1} description`}
                   onChange={(value) => {
                     finding.description = value
@@ -886,7 +886,7 @@
                   <EditableMarkdown
                     text={finding.evidence}
                     readOnly={!workflowActionsVisible}
-                    class="audit-markdown whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+                    class="audit-markdown whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
                     ariaLabel={`Finding ${index + 1} evidence`}
                     onChange={(value) => {
                       finding.evidence = value
@@ -900,7 +900,7 @@
           {#if workflowActionsVisible}
             <div class="mt-3">
               <button
-                class="flex items-center gap-1 rounded-lg border bg-elevated px-3 py-2 text-xs"
+                class="flex items-center gap-1 border border-border bg-elevated px-3 py-2 text-xs"
                 onclick={addFinding}
               >
                 <Plus size={13} /> Add finding
@@ -968,7 +968,7 @@
                             {check.kind}
                           </span>
                           <span
-                            class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
+                            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
                           >
                             {check.status.replace('_', ' ')}
                           </span>
@@ -1164,7 +1164,7 @@
     <EditableMarkdown
       text={draft.content[key]}
       readOnly={!workflowActionsVisible}
-      class="audit-markdown mt-3 w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+      class="audit-markdown mt-3 w-full whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
       ariaLabel={title}
       onChange={(value) => {
         draft.content[key] = value
@@ -1183,7 +1183,7 @@
     <div class="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="Section annotations">
       {#each props.annotations as annotation (annotation.id)}
         <button
-          class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
+          class="max-w-64 shrink-0 border border-border bg-surface px-3 py-2 text-left hover:bg-elevated"
           title="Open annotation"
           onclick={() => void props.onOpen(annotation)}
         >

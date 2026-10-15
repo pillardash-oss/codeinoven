@@ -165,7 +165,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     e.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -883,7 +883,7 @@
         />
       {:else}
         <span
-          class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+          class="h-2 w-2 border border-border-strong bg-transparent"
           aria-label={threadState}
           title={threadState}
         ></span>
@@ -892,7 +892,7 @@
     <span
       role="button"
       tabindex={-1}
-      class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
+      class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"
       aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
@@ -923,7 +923,7 @@
   >
     <span class="flex w-full min-w-0 items-center gap-2">
       {#if projectIconUrl}
-        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
       {:else if projectIconGlyph}
         {@const ContainerIcon = projectIconGlyph}
         <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
@@ -944,7 +944,7 @@
           />
         {:else}
           <span
-            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+            class="h-2 w-2 border border-border-strong bg-transparent"
             aria-label={threadState}
             title={threadState}
           ></span>
@@ -1112,7 +1112,7 @@
       <span class="flex w-full min-w-0 items-center gap-2">
         <!-- Project icon -->
         {#if projectIconUrl}
-          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
         {:else if projectIconGlyph}
           {@const ContainerIcon = projectIconGlyph}
           <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
@@ -1262,7 +1262,7 @@
           {#if projectIconUrl || projectIconGlyph}
             <span class="flex h-4 w-4 shrink-0 items-center justify-center">
               {#if projectIconUrl}
-                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 rounded object-contain" />
+                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
               {:else if projectIconGlyph}
                 {@const ContainerIcon = projectIconGlyph}
                 <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
@@ -1470,9 +1470,7 @@
 </div>
 
 {#if actionsMenu.renameError}
-  <div
-    class="fixed bottom-4 right-4 z-60 rounded-lg bg-danger px-4 py-2 text-sm text-white shadow-lg"
-  >
+  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-white shadow-lg">
     {actionsMenu.renameError}
   </div>
 {/if}
@@ -1493,7 +1491,7 @@
       <input
         id="thread-rename-input"
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         bind:value={actionsMenu.renameValue}
         oninput={() => onRenameInputChange?.(thread)}
       />
@@ -1503,7 +1501,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={actionsMenu.cancelRename}
     >
       Cancel
@@ -1511,7 +1509,7 @@
     <button
       type="submit"
       form={renameThreadFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       disabled={!actionsMenu.renameValue.trim()}
     >
       Save

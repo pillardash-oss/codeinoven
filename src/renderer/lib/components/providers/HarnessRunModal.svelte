@@ -125,9 +125,9 @@
 >
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked harness tasks">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
-          class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Show all harness tasks"
           title="Show all harness tasks"
           onclick={() => store.expandAll()}
@@ -137,27 +137,24 @@
         <span class="h-5 w-px bg-border"></span>
         {#each visibleRuns as run (run.terminalId)}
           <button
-            class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-elevated"
+            class="relative flex h-8 w-8 items-center justify-center transition-colors hover:bg-elevated"
             title={dockTitle(run)}
             aria-label={dockTitle(run)}
             onclick={() => store.focusRun(run.harnessId)}
           >
             <AgentIcon agentId={run.harnessId} label={run.harnessName} size={16} />
             {#if run.exitCode === undefined}
-              <span
-                class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-info"
-                aria-hidden="true"
-              ></span>
+              <span class="absolute -right-0.5 -top-0.5 h-2 w-2 bg-info" aria-hidden="true"></span>
             {:else if run.exitCode === 0}
               <CheckCircle2
                 size={10}
-                class="absolute -right-1 -top-1 rounded-full bg-surface text-success"
+                class="absolute -right-1 -top-1 bg-surface text-success"
                 aria-hidden="true"
               />
             {:else}
               <XCircle
                 size={10}
-                class="absolute -right-1 -top-1 rounded-full bg-surface text-danger"
+                class="absolute -right-1 -top-1 bg-surface text-danger"
                 aria-hidden="true"
               />
             {/if}
@@ -165,7 +162,7 @@
         {/each}
         {#if overflowCount > 0}
           <span
-            class="flex h-6 min-w-6 items-center justify-center rounded-full bg-elevated px-1.5 font-mono text-[0.625rem] font-semibold text-muted"
+            class="flex h-6 min-w-6 items-center justify-center border border-border bg-raised px-1.5 font-mono text-[0.625rem] font-semibold tabular-nums text-muted"
             title={overflowTitle(overflowCount)}
             aria-label={overflowTitle(overflowCount)}
           >
@@ -175,7 +172,7 @@
         {#if store.hasFinished}
           <span class="h-5 w-px bg-border"></span>
           <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Close tasks"
             title="Close tasks"
             onclick={() => store.close()}
@@ -193,7 +190,7 @@
     <div class="space-y-3">
       {#each store.runs as run (run.terminalId)}
         <div
-          class="overflow-hidden rounded-xl border bg-surface transition-shadow {run.harnessId ===
+          class="overflow-hidden border bg-surface transition-shadow {run.harnessId ===
           store.focusedHarnessId
             ? 'ring-1 ring-primary'
             : ''}"
@@ -213,7 +210,7 @@
             {:else if run.exitCode === undefined}
               <div class="flex shrink-0 items-center gap-2">
                 <button
-                  class="rounded px-2 py-1 text-xs text-danger hover:bg-elevated"
+                  class="px-2 py-1 text-xs text-danger hover:bg-elevated"
                   title={stopArmed === run.terminalId
                     ? 'Click again to stop this process'
                     : 'Stop this process'}

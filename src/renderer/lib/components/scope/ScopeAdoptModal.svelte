@@ -115,14 +115,14 @@
       <div class="flex items-center gap-2">
         <input
           id={inputId}
-          class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
+          class="w-full border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
           placeholder="/absolute/path/to/existing-worktree"
           bind:value={sourcePath}
           onchange={() => void detect()}
         />
         <button
           type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs text-muted hover:bg-overlay"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-xs text-muted hover:bg-overlay"
           onclick={() => void pickFolder()}
         >
           <FolderInput size={12} />
@@ -133,7 +133,7 @@
 
     {#if preview}
       {#if preview.adoptable}
-        <div class="rounded-lg border bg-overlay p-3 text-xs leading-relaxed text-muted">
+        <div class="border bg-overlay p-3 text-xs leading-relaxed text-muted">
           <p>
             Branch <code class="text-foreground">{preview.branch}</code> at
             <code class="text-dimmed">{preview.path}</code>
@@ -145,7 +145,7 @@
         </Switch>
       {:else}
         <div
-          class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+          class="flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
           role="status"
         >
           <TriangleAlert size={13} class="mt-0.5 shrink-0" />
@@ -162,14 +162,14 @@
   {#snippet footer()}
     <button
       type="button"
-      class="mr-auto rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+      class="mr-auto px-3 py-2 text-sm text-muted hover:bg-elevated"
       onclick={close}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted hover:bg-overlay disabled:opacity-50"
+      class="flex items-center gap-1.5 border bg-elevated px-3 py-2 text-sm text-muted hover:bg-overlay disabled:opacity-50"
       disabled={!sourcePath.trim() || detecting}
       onclick={() => void detect()}
     >
@@ -181,7 +181,7 @@
     <button
       type="submit"
       form={`${componentId}-adopt-form`}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={!canSubmit}
     >
       Adopt

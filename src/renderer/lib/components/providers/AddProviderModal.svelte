@@ -603,12 +603,12 @@
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked provider sign-in">
       <div
-        class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+        class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
         data-region="provider-sign-in-dock"
       >
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={dockRestoreLabel}
           aria-label={dockRestoreLabel}
           onclick={() => (oauth.docked = false)}
@@ -633,7 +633,7 @@
         <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dockDismissLabel}
           title={dockDismissLabel}
           onclick={() => void closeModal()}
@@ -666,11 +666,11 @@
     />
   {/snippet}
 
-  <div class="mb-4 flex gap-1 rounded-lg bg-elevated p-1">
+  <div class="mb-4 flex gap-1 border border-border bg-elevated p-1">
     <button
-      class="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors {tab ===
+      class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
       'connect'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       type="button"
       onclick={() => (tab = 'connect')}
@@ -679,9 +679,9 @@
     </button>
     {#if canAddCustom}
       <button
-        class="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors {tab ===
+        class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
         'custom'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         type="button"
         onclick={() => (tab = 'custom')}

@@ -165,13 +165,13 @@
       </label>
       <input
         id={`${componentId}-name`}
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground"
         placeholder="Feature"
         bind:value={name}
       />
     </div>
 
-    <div class="rounded-lg border bg-overlay p-3">
+    <div class="border bg-overlay p-3">
       <Switch bind:checked={isolated} label="Isolated Git worktree">
         <span class="text-xs font-medium text-foreground">Isolated Git worktree</span>
       </Switch>
@@ -195,7 +195,7 @@
             <div class="relative min-w-0 flex-1">
               <select
                 id={`${componentId}-base-branch`}
-                class="h-7 w-full cursor-pointer rounded-md border bg-elevated px-2 pr-7 font-mono text-xs text-foreground outline-none focus:border-primary disabled:cursor-wait disabled:opacity-60"
+                class="h-7 w-full cursor-pointer border bg-elevated px-2 pr-7 font-mono text-xs text-foreground outline-none focus:border-primary disabled:cursor-wait disabled:opacity-60"
                 title="Local branch the worktree forks from"
                 bind:value={baseBranch}
                 disabled={branchesLoading || localBranches.length === 0}
@@ -243,7 +243,7 @@
             </p>
             {#if sourceInfo.dirtyFiles.length > 0}
               <div
-                class="mt-1.5 flex items-start gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
+                class="mt-1.5 flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
                 role="status"
               >
                 <TriangleAlert size={13} class="mt-0.5 shrink-0" />
@@ -269,7 +269,7 @@
     </div>
 
     {#if isolated}
-      <div class="rounded-lg border bg-overlay p-3">
+      <div class="border bg-overlay p-3">
         <Switch bind:checked={runSetup} label="Run setup scripts">
           <span class="text-xs font-medium text-foreground">Run setup scripts</span>
         </Switch>
@@ -318,17 +318,13 @@
   </form>
 
   {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
-      onclick={onClose}
-    >
+    <button type="button" class="px-3 py-2 text-sm text-muted hover:bg-elevated" onclick={onClose}>
       Cancel
     </button>
     <button
       type="submit"
       form={formId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={!name.trim() || (isolated && (branchesLoading || !baseBranch))}
     >
       Create

@@ -94,7 +94,7 @@
   <button
     type="button"
     class={[
-      'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
+      'flex h-6 w-6 items-center justify-center transition-colors disabled:opacity-30',
       activeTab.view === 'diff'
         ? 'bg-overlay text-foreground'
         : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -111,7 +111,7 @@
     <button
       type="button"
       class={[
-        'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
+        'flex h-6 w-6 items-center justify-center transition-colors disabled:opacity-30',
         activeTab.view === 'annotate'
           ? 'bg-overlay text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -131,7 +131,7 @@
     <button
       type="button"
       class={[
-        'flex h-6 w-6 items-center justify-center rounded transition-colors',
+        'flex h-6 w-6 items-center justify-center transition-colors',
         activeTab.view === 'preview'
           ? 'bg-overlay text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -147,7 +147,7 @@
   <button
     type="button"
     class={[
-      'flex h-6 w-6 items-center justify-center rounded transition-colors',
+      'flex h-6 w-6 items-center justify-center transition-colors',
       activeTab.view === 'source'
         ? 'bg-overlay text-foreground'
         : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -201,7 +201,7 @@
   {#if showSaveButton}
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+      class="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
       disabled={saveDisabled}
       aria-label={saveLabel}
       title={saveTitle ?? saveLabel}

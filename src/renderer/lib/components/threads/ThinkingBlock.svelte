@@ -94,7 +94,7 @@
         <span class="flex-1"></span>
       {/if}
       {#if active}
-        <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-info animate-pulse"></span>
+        <span class="h-1.5 w-1.5 shrink-0 bg-info animate-pulse"></span>
       {/if}
       <ChevronRight
         size={12}

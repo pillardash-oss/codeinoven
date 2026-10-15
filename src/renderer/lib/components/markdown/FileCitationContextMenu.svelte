@@ -74,7 +74,7 @@
   let openInEditor = $state(false)
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
   const dangerItemClass = `${itemClass} text-danger data-[highlighted]:bg-danger/10`
 
   function citationFromLink(link: HTMLAnchorElement): CitationTarget | null {
@@ -292,7 +292,7 @@
       collisionPadding={12}
       sticky="always"
       updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
     >
       {#if pendingTarget}
         <ContextMenu.Item class={itemClass} onSelect={openInApp}>
@@ -316,7 +316,7 @@
               <ContextMenu.SubContent
                 avoidCollisions
                 collisionPadding={12}
-                class="z-50 max-h-[calc(100vh-1.5rem)] min-w-40 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+                class="z-50 max-h-[calc(100vh-1.5rem)] min-w-40 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
               >
                 {#if editors.length === 0}
                   <ContextMenu.Item class={itemClass} disabled>No editors found</ContextMenu.Item>

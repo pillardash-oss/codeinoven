@@ -70,7 +70,7 @@
   <div
     role="group"
     aria-label={ariaLabel}
-    class="flex overflow-hidden rounded-lg border border-border bg-elevated {className}"
+    class="flex overflow-hidden border border-border bg-elevated {className}"
   >
     {#each options as option (option.id)}
       <button
@@ -92,7 +92,7 @@
 {:else}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex w-full items-center gap-2 rounded-lg border border-border bg-elevated px-2.5 {compact
+      class="flex w-full items-center gap-2 border border-border bg-elevated px-2.5 {compact
         ? 'h-7 py-0'
         : 'py-1.5'} text-left text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
       aria-label={ariaLabel}
@@ -104,10 +104,10 @@
           <img
             src={selected.iconUrl}
             alt=""
-            class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+            class="h-3.5 w-3.5 shrink-0 object-contain"
           />
         {:else if selected?.accent}
-          <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {selected.accent}"
+          <span class="h-2 w-2 shrink-0" style="background-color: {selected.accent}"
           ></span>
         {/if}
         <span
@@ -127,11 +127,11 @@
         align="start"
         sideOffset={6}
         collisionPadding={8}
-        class="z-60 w-[var(--bits-dropdown-menu-anchor-width)] rounded-xl border border-border bg-surface p-1 shadow-lg"
+        class="z-60 w-[var(--bits-dropdown-menu-anchor-width)] border border-border bg-surface p-1 shadow-lg"
       >
         {#each options as option (option.id)}
           <DropdownMenu.Item
-            class="flex items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+            class="flex items-start gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
             textValue={option.label}
             onSelect={() => onChange(option.id)}
           >
@@ -139,11 +139,11 @@
               <img
                 src={option.iconUrl}
                 alt=""
-                class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                class="mt-0.5 h-3.5 w-3.5 shrink-0 object-contain"
               />
             {:else if option.accent}
               <span
-                class="mt-0.5 h-2 w-2 shrink-0 rounded-full"
+                class="mt-0.5 h-2 w-2 shrink-0"
                 style="background-color: {option.accent}"
               ></span>
             {/if}

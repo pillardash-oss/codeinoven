@@ -217,14 +217,14 @@
     bind:value={name}
     maxlength={MODEL_PROFILE_NAME_MAX_LENGTH}
     type="text"
-    class="min-w-0 flex-auto rounded-lg bg-transparent px-2 py-1.5 text-[0.6875rem] text-foreground outline-none ring-1 ring-border"
+    class="min-w-0 flex-auto bg-transparent px-2 py-1.5 text-[0.6875rem] text-foreground outline-none ring-1 ring-border"
     placeholder={copy.label}
     aria-label={copy.label}
     onkeydown={onNameKeydown}
   />
   <button
     type="button"
-    class="shrink-0 rounded px-1.5 py-1 text-[0.6875rem] text-primary transition-colors hover:bg-elevated disabled:opacity-40"
+    class="shrink-0 px-1.5 py-1 text-[0.6875rem] text-primary transition-colors hover:bg-elevated disabled:opacity-40"
     title={copy.save}
     aria-label={copy.save}
     disabled={!name.trim()}
@@ -234,7 +234,7 @@
   </button>
   <button
     type="button"
-    class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     title={copy.cancel}
     aria-label={copy.cancel}
     onclick={cancelNaming}
@@ -261,7 +261,7 @@
       <button
         type="button"
         data-picker-entry
-        class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium text-primary transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
         title={atCapacity
           ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
           : 'Save the current harness, model, thinking level, speed, and permissions as a profile'}
@@ -300,7 +300,7 @@
             <button
               type="button"
               data-picker-entry
-              class={`flex min-w-0 flex-auto items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
+              class={`flex min-w-0 flex-auto items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
               title={titleFor(profile, display)}
               aria-pressed={isActive}
               onclick={() => onApply(profile)}
@@ -348,7 +348,7 @@
             -->
             <button
               type="button"
-              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              class="flex size-5 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
               title={`Rename the ${profile.name} profile`}
               aria-label={`Rename the ${profile.name} profile`}
               onclick={() => beginRename(profile)}
@@ -362,7 +362,7 @@
             -->
             <button
               type="button"
-              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+              class="flex size-5 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
               title={`Delete the ${profile.name} profile`}
               aria-label={`Delete the ${profile.name} profile`}
               onclick={() => onRequestDelete(profile)}
@@ -382,7 +382,7 @@
       </p>
       <button
         type="button"
-        class="mt-1 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+        class="mt-1 inline-flex h-7 items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         title="Save the current harness, model, thinking level, speed, and permissions as a profile"
         aria-label="Save the current model setup as a profile"
         disabled={atCapacity}

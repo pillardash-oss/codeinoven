@@ -101,7 +101,7 @@
         />
         <button
           type="button"
-          class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={query ? 'Clear message search' : 'Close message search'}
           title={query ? 'Clear message search' : 'Close message search'}
           onclick={() => {
@@ -130,7 +130,7 @@
       {#if !searching}
         <button
           type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Search messages"
           title="Search messages"
           onclick={() => void openSearch()}
@@ -139,7 +139,7 @@
         </button>
         <button
           type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Close history panel"
           title="Close history panel"
           onclick={onClose}
@@ -153,11 +153,11 @@
     {#each visibleMessages as { message, originalIndex } (message.id)}
       <div role="listitem" class="group/msg">
         <div
-          class="flex items-center gap-0.5 rounded-lg pr-1 transition-colors group-hover/msg:bg-elevated"
+          class="flex items-center gap-0.5 pr-1 transition-colors group-hover/msg:bg-elevated"
         >
           <button
             type="button"
-            class="min-h-9 flex-1 truncate rounded-lg px-2.5 py-2 text-left text-sm text-muted transition-colors group-hover/msg:text-foreground"
+            class="min-h-9 flex-1 truncate px-2.5 py-2 text-left text-sm text-muted transition-colors group-hover/msg:text-foreground"
             title={message.content}
             onclick={() => onSelect(message.id)}
           >
@@ -166,7 +166,7 @@
           </button>
           <button
             type="button"
-            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            class="shrink-0 p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Fork the conversation from this message"
             title="Fork from this message"
             disabled={busy || forkingId !== null}
@@ -181,7 +181,7 @@
           {#if originalIndex > 0}
             <button
               type="button"
-              class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+              class="shrink-0 p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Delete this message and everything before it"
               title="Delete up (this message and everything before)"
               disabled={busy}
@@ -192,7 +192,7 @@
           {/if}
           <button
             type="button"
-            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+            class="shrink-0 p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Delete just this message and its work trace"
             title="Delete just this message"
             disabled={busy}
@@ -203,7 +203,7 @@
           {#if originalIndex < messages.length - 1}
             <button
               type="button"
-              class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+              class="shrink-0 p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Delete this message and everything after it"
               title="Delete down (this message and everything after)"
               disabled={busy}

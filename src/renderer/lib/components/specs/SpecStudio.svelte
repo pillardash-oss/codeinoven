@@ -823,7 +823,7 @@
       {/if}
       {#if !implementationAuditRunning}
         <button
-          class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+          class="flex-1 border border-border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
           disabled={busy}
           title="Mark this implementation complete without an audit"
           onclick={() => void onMarkImplementationComplete?.()}
@@ -832,7 +832,7 @@
         </button>
       {/if}
       <button
-        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        class="flex flex-1 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
         disabled={busy}
         title={implementationAuditReady
           ? 'Open the implementation audit'
@@ -850,7 +850,7 @@
       </button>
     {:else if canDecide}
       <button
-        class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+        class="flex-1 border border-border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
         disabled={busy}
         title="Review this specification with the agent"
         onclick={() => {
@@ -867,7 +867,7 @@
     {/if}
     {#if isLatestVersion && assignmentMode}
       <button
-        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        class="flex flex-1 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
         disabled={busy || (!assignmentAvailable && !currentValidation.valid)}
         title={assignmentAvailable
           ? 'Open the Assignment'
@@ -879,7 +879,7 @@
       </button>
     {:else if canDecide}
       <button
-        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        class="flex flex-1 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
         disabled={busy || !currentValidation.valid}
         title="Sign off and implement this specification"
         onclick={() => {
@@ -904,7 +904,7 @@
           Additional notes
           <RichMarkdownEditor
             bind:this={decisionNotesEditor}
-            class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
+            class="mt-1 min-h-14 w-full resize-y border border-border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder="Additional notes"
             ariaLabel="Additional notes"
@@ -913,7 +913,7 @@
         </label>
         <div class="flex shrink-0 items-center gap-2">
           <button
-            class="flex-1 rounded-lg px-3 py-2 text-xs text-muted max-md:h-10 md:flex-none hover:bg-overlay"
+            class="flex-1 px-3 py-2 text-xs text-muted max-md:h-10 md:flex-none hover:bg-overlay"
             title="Cancel"
             onclick={() => (pendingAction = null)}
           >
@@ -926,7 +926,7 @@
             disabled={busy}
           />
           <button
-            class="flex-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none disabled:opacity-50"
+            class="flex-1 bg-primary px-3 py-2 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none disabled:opacity-50"
             disabled={busy || (pendingAction === 'implement' && !currentValidation.valid)}
             title={`${pendingAction === 'review' ? 'Review' : 'Implement'} with these notes`}
             onclick={() => pendingAction && void submitAction(pendingAction, additionalNotes)}
@@ -940,7 +940,7 @@
 
   {#snippet sidebarExtra()}
     <div class="shrink-0 border-t p-3">
-      <div class="flex items-center justify-between gap-2">
+      <div class="flex items-center justify-between gap-2 border-b border-border pb-1.5">
         <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Validation gaps
         </p>
@@ -954,7 +954,7 @@
       </div>
       <div class="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
         {#each selectedSectionIssues as issue (`${issue.code}:${issue.path}`)}
-          <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
+          <div class="border border-danger/30 bg-danger/10 px-2.5 py-2">
             <div class="flex items-start gap-2">
               <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
               <div class="min-w-0 flex-1">
@@ -974,7 +974,7 @@
                 </button>
               </div>
               <button
-                class="shrink-0 rounded-md p-1 text-dimmed hover:bg-surface hover:text-foreground disabled:opacity-50"
+                class="shrink-0 p-1 text-dimmed hover:bg-surface hover:text-foreground disabled:opacity-50"
                 disabled={busy || savePending}
                 title="Dismiss this validation issue as a false positive"
                 aria-label={`Dismiss validation issue: ${issue.message}`}
@@ -985,9 +985,7 @@
             </div>
           </div>
         {:else}
-          <p
-            class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed"
-          >
+          <p class="border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed">
             This section has no validation gaps.
           </p>
         {/each}
@@ -1008,7 +1006,7 @@
   {#snippet markers()}
     {#each annotationMarkers as marker (marker.annotation.id)}
       <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
+        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
         style:left={compactViewport.matches ? undefined : `${marker.x}px`}
         style:top={`${marker.y}px`}
         data-spec-annotation-marker={marker.annotation.id}

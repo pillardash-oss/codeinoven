@@ -50,12 +50,12 @@
 
 <div
   class={variant === 'panel'
-    ? 'space-y-2 rounded-xl border bg-raised p-3'
+    ? 'space-y-2 border bg-raised p-3'
     : 'mt-2 flex flex-wrap items-center gap-2'}
 >
   <button
     type="button"
-    class="flex items-center gap-1.5 rounded-lg border bg-elevated font-medium hover:bg-overlay disabled:opacity-50 {variant ===
+    class="flex items-center gap-1.5 border bg-elevated font-medium hover:bg-overlay disabled:opacity-50 {variant ===
     'panel'
       ? 'h-9 px-3 text-xs'
       : 'h-7 px-2.5 text-[0.6875rem]'}"
@@ -115,7 +115,7 @@
         </p>
       {/if}
       {#if result.ok}
-        <details class="rounded-lg border bg-surface">
+        <details class="border bg-surface">
           <summary
             class="cursor-pointer px-3 py-2 text-[0.6875rem] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >

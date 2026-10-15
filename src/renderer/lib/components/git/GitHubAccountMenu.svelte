@@ -72,12 +72,12 @@
 {#if github.connected}
   <DropdownMenu.Root bind:open>
     <DropdownMenu.Trigger
-      class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+      class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
       title="GitHub account   {activeName}{activeLogin ? ` (@${activeLogin})` : ''}"
       aria-label={activeLogin ? `GitHub account for ${activeLogin}` : 'GitHub account'}
     >
       {#if user?.avatarUrl}
-        <img src={user.avatarUrl} alt="" class="h-5 w-5 rounded-full bg-elevated" />
+        <img src={user.avatarUrl} alt="" class="h-5 w-5 bg-elevated" />
       {:else}
         <VendorIcon name="GitHub" size={14} />
       {/if}
@@ -89,15 +89,13 @@
         align="start"
         sideOffset={4}
         collisionPadding={8}
-        class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+        class="z-50 w-60 overflow-hidden border border-border bg-surface shadow-xl"
       >
         <div class="flex items-center gap-2 border-b border-border px-3 py-2">
           {#if user?.avatarUrl}
-            <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 rounded-full bg-elevated" />
+            <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 bg-elevated" />
           {:else}
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated"
-            >
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center bg-elevated">
               <VendorIcon name="GitHub" size={14} />
             </span>
           {/if}
@@ -213,7 +211,7 @@
 {:else if github.configured}
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     title="Sign in to GitHub"
     aria-label="Sign in to GitHub"
     onclick={onSignIn}

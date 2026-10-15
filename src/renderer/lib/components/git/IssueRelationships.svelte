@@ -87,7 +87,7 @@
   {#if canLink}
     <button
       type="button"
-      class="flex h-5 cursor-pointer items-center gap-0.5 rounded-full border border-dashed border-border px-1.5 text-[0.5625rem] font-medium text-dimmed transition-colors hover:border-primary hover:text-primary"
+      class="flex h-5 cursor-pointer items-center gap-0.5 border border-dashed border-border px-1.5 text-[0.5625rem] font-medium text-dimmed transition-colors hover:border-primary hover:text-primary"
       title={label}
       aria-label={label}
       onclick={() => onAdd(mode)}
@@ -107,7 +107,7 @@
       reader is not acting on stays a chip.
     -->
     <div
-      class="group flex h-5 max-w-full items-center rounded-full border border-border pl-1.5 pr-1 text-[0.5625rem] font-medium transition-colors hover:bg-elevated"
+      class="group flex h-5 max-w-full items-center border border-border pl-1.5 pr-1 text-[0.5625rem] font-medium transition-colors hover:bg-elevated"
     >
       <button
         type="button"
@@ -124,7 +124,7 @@
       {#if removable(item)}
         <button
           type="button"
-          class="ml-0.5 flex size-3.5 shrink-0 cursor-pointer items-center justify-center rounded-full text-dimmed opacity-0 transition-opacity hover:bg-danger/15 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+          class="ml-0.5 flex size-3.5 shrink-0 cursor-pointer items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-danger/15 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
           title="Unlink {item.repository}#{item.number}"
           aria-label="Unlink {item.repository}#{item.number}"
           onclick={() => onRemove(mode, item)}
@@ -154,7 +154,7 @@
   </div>
 {/snippet}
 
-<div class="mt-2 rounded-lg border border-border bg-surface/40 px-2.5 py-2">
+<div class="mt-2 border border-border bg-surface/40 px-2.5 py-2">
   <div class="flex items-center gap-1.5">
     <ListTree size={10} class="text-dimmed" />
     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">

@@ -80,7 +80,7 @@ rather than leaving a line sliced in half. -->
   {#if showToggle}
     <button
       type="button"
-      class="mt-1 rounded-md text-xs font-medium text-muted transition-colors hover:text-foreground"
+      class="mt-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
       aria-expanded={expanded}
       aria-label={collapsed ? `Show the full ${label}` : `Fold the ${label}`}
       title={collapsed ? `Show the full ${label}` : `Fold the ${label}`}

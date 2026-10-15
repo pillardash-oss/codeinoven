@@ -328,7 +328,7 @@
     <span class="min-w-0 flex-1 truncate text-xs text-text-muted" title={tab?.url}>{tab?.url}</span>
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Copy current Peek address"
       aria-label="Copy current Peek address"
       disabled={!tab?.url}
@@ -337,7 +337,7 @@
 
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Expand this Peek into a dedicated tab"
       aria-label="Expand this Peek into a dedicated tab"
       data-modal-primary
@@ -345,7 +345,7 @@
     >
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Close this Peek"
       aria-label="Close this Peek"
       onclick={() => globalBrowser.closePeek()}><X size={16} /></button
@@ -397,7 +397,7 @@
         {@attach attachShell}
         inert
         aria-hidden="true"
-        class="pointer-events-none fixed z-70 flex flex-col origin-top-left overflow-hidden rounded-2xl border bg-app shadow-xl will-change-transform"
+        class="pointer-events-none fixed z-70 flex flex-col origin-top-left overflow-hidden border bg-app shadow-xl will-change-transform"
         style={shellStyle}
       >
         {@render peekControls()}

@@ -23,6 +23,10 @@
   right: 6px !important;
   left: auto !important;
   transform: none !important;
+  /* svelte-sonner draws this button as a `border-radius: 50%` circle. The app
+     has one corner shape, so it is stated here for every toast rather than
+     only the status ones. */
+  border-radius: 0 !important;
 }
 
 [data-close-button] > * {
@@ -64,16 +68,22 @@
   flex: 1 1 100% !important;
   margin-top: 4px !important;
   justify-content: center !important;
+  border-radius: 0 !important;
 }
 
 /* ─── Normal toasts ─────────────────────────────────────────────────────── */
+/* The corner of every card. svelte-sonner resolves the card's own
+   `border-radius` from this variable (8px by default), so the app's right angle
+   is stated once, here, instead of being chased property by property. */
 [data-sonner-toaster][data-sonner-theme='light'] {
+  --border-radius: 0 !important;
   --normal-bg: var(--color-surface) !important;
   --normal-border: var(--color-border) !important;
   --normal-text: var(--color-foreground) !important;
 }
 
 [data-sonner-toaster][data-sonner-theme='dark'] {
+  --border-radius: 0 !important;
   --normal-bg: var(--color-surface) !important;
   --normal-border: var(--color-border) !important;
   --normal-text: var(--color-foreground) !important;
@@ -148,7 +158,6 @@
 [data-sonner-toast][data-type='info'] [data-close-button] {
   color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
   background: color-mix(in srgb, var(--status) 10%, transparent) !important;
-  border-radius: 999px !important;
   width: 1.25rem !important;
   height: 1.25rem !important;
   display: grid !important;
@@ -163,7 +172,6 @@
 [data-sonner-toast] [data-icon] {
   background: color-mix(in srgb, var(--status, var(--color-muted)) 22%, transparent);
   color: var(--status, var(--color-muted));
-  border-radius: 999px;
   width: 1.75rem;
   height: 1.75rem;
   display: grid;
@@ -171,6 +179,12 @@
   flex-shrink: 0;
   align-self: flex-start;
   margin-top: 1px;
+}
+
+/* A loading toast draws three bars inside that chip and svelte-sonner rounds
+   each one. The chip is a right angle now, so its contents are. */
+.sonner-loading-bar {
+  border-radius: 0 !important;
 }
 
 /* A plain card's icon is the app's own mark, not one of sonner's status glyphs:

@@ -61,7 +61,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
 
-  const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
+  const fieldClass = 'w-full border bg-elevated px-3 py-2 text-sm text-foreground'
 
   interface Props {
     /** Open the app's own harness settings, where Local harnesses are managed. */
@@ -900,21 +900,21 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
         onclick={() => (agentOpen = true)}
       >
         <Terminal size={14} /> Add via agent
       </button>
       <button
         type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => openEditor()}
       >
         <Plus size={14} /> New Oven
       </button>
     </div>
   </div>
-  {#if error}<p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+  {#if error}<p class="mb-4 bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
       {error}
     </p>{/if}
   {#if !ovenState}
@@ -932,7 +932,7 @@
         {@const harnessRows = availableHarnesses(harnessInventory)}
         {@const configured = configuredFor(oven, harnessRows)}
         <div
-          class="relative rounded-xl"
+          class="relative"
           id={`oven-row-${oven.id}`}
           role="listitem"
           draggable={canDragOven(oven)}
@@ -943,7 +943,7 @@
         >
           {#if dropTarget?.id === oven.id}
             <span
-              class={'pointer-events-none absolute inset-x-0 h-0.5 rounded-full bg-primary ' +
+              class={'pointer-events-none absolute inset-x-0 h-0.5 bg-primary ' +
                 (dropTarget.position === 'before' ? 'top-0' : 'bottom-0')}
               aria-hidden="true"
             ></span>
@@ -967,7 +967,7 @@
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="truncate text-sm font-semibold">{oven.name}</span>
                     {#if ovenState.defaultOvenId === oven.id}<span
-                        class="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary"
+                        class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
                         >Default</span
                       >{/if}
                     <SettingsStatusBadge
@@ -1010,7 +1010,7 @@
                     </SettingsStatusBadge>
                     {#each harnessRows.filter((row) => row.installed) as row (row.harnessId)}
                       <span
-                        class="flex items-center gap-1 rounded-lg bg-elevated p-1"
+                        class="flex items-center gap-1 border border-border bg-elevated p-1"
                         title={`${row.name}${
                           row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
                         }${
@@ -1033,7 +1033,7 @@
                 {#if oven.id === LOCAL_OVEN_ID}
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
                     disabled={Boolean(busy)}
                     onclick={onOpenHarnessSettings}
                   >
@@ -1042,7 +1042,7 @@
                   {#if ovenState?.defaultOvenId !== oven.id}
                     <button
                       type="button"
-                      class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                      class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
                       disabled={Boolean(busy)}
                       onclick={() => void setDefaultOven(oven.id)}
                     >
@@ -1052,7 +1052,7 @@
                 {:else}
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
                     disabled={Boolean(busy)}
                     onclick={() => void openOvenSetup(oven)}
                   >
@@ -1126,11 +1126,11 @@
                         {bytes(specs.diskAvailableBytes)} available
                       </dd>
                       <dd
-                        class="h-1 overflow-hidden rounded-full bg-elevated"
+                        class="h-1 overflow-hidden bg-elevated"
                         title={usedPercent.toFixed(0) + '% storage used'}
                       >
                         <div
-                          class="h-full rounded-full bg-primary"
+                          class="h-full bg-primary"
                           style:width={usedPercent + '%'}
                         ></div>
                       </dd>
@@ -1178,8 +1178,8 @@
                         {#each harnessRows as row (row.harnessId)}
                           <span
                             class={row.installed
-                              ? 'flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5'
-                              : 'flex items-center gap-0.5 rounded-lg border border-border py-0.5 pr-0.5 pl-1.5 opacity-50'}
+                              ? 'flex items-center gap-0.5 bg-elevated py-0.5 pr-0.5 pl-1.5'
+                              : 'flex items-center gap-0.5 border border-border py-0.5 pr-0.5 pl-1.5 opacity-50'}
                             title={`${row.name}${
                               row.item?.installedVersion ? ` ${row.item.installedVersion}` : ''
                             }${row.installed ? '' : ' · not installed'}${
@@ -1301,7 +1301,7 @@
         {#each ['ubuntu@', 'root@', 'SSH alias'] as preset (preset)}
           <button
             type="button"
-            class="rounded-lg border px-2 py-1 text-xs hover:bg-elevated"
+            class="border px-2 py-1 text-xs hover:bg-elevated"
             onclick={() => (address = preset === 'SSH alias' ? '' : preset)}
             >{preset === 'SSH alias' ? preset : `ssh ${preset}ip`}</button
           >
@@ -1368,7 +1368,7 @@
         >
         <button
           type="button"
-          class="rounded-lg border px-3 py-2 text-sm"
+          class="border px-3 py-2 text-sm"
           onclick={() => void pickIdentity()}>Choose private-key file</button
         >
         {#if identityValidation}<p class="text-xs text-muted" role="status">
@@ -1437,7 +1437,7 @@
         {#if hasAppearance}
           <button
             type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+            class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
             title="Reset appearance"
             disabled={Boolean(busy)}
             onclick={resetAppearance}
@@ -1447,7 +1447,7 @@
         {:else}<span></span>{/if}
         <button
           type="button"
-          class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
+          class="border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
           disabled={Boolean(busy)}
           onclick={() => void testConnection()}
           >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
@@ -1457,7 +1457,7 @@
         <button
           type="button"
           data-modal-dismiss
-          class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated"
+          class="border px-3 py-2 text-sm hover:bg-elevated"
           disabled={Boolean(busy)}
           onclick={closeEditor}>Cancel</button
         >
@@ -1465,7 +1465,7 @@
           type="submit"
           form="oven-editor"
           data-modal-primary
-          class="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
+          class="flex items-center gap-2 bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
           disabled={Boolean(busy)}
           >{#if busy === 'save'}<Loader2 size={14} class="animate-spin" />{/if}Save Oven</button
         >

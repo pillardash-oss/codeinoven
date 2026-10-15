@@ -135,7 +135,7 @@
 </script>
 
 {#snippet bankedResetRow(resets: AgentBankedResets)}
-  <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
+  <div transition:slide={{ duration: 250 }} class="border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
       <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
@@ -156,7 +156,7 @@
     </div>
     <button
       type="button"
-      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       title="Redeem one banked reset   this immediately resets your usage windows"
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
@@ -168,7 +168,7 @@
 {/snippet}
 
 {#snippet modelRows(models: HarnessModelUsage[])}
-  <div class="rounded-md border border-border bg-app/40 p-2">
+  <div class="border border-border bg-app/40 p-2">
     <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
       Models used
     </p>
@@ -186,7 +186,7 @@
           <span class="truncate font-medium text-foreground">{model.modelId}</span>
           {#if model.thinkingLevel}
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1 py-0.5 text-[0.5625rem] capitalize text-muted"
+              class="flex shrink-0 items-center gap-1 border border-border bg-elevated px-1 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
               title={`Thinking level: ${model.thinkingLevel}`}
               aria-label={`Thinking level: ${model.thinkingLevel}`}
             >
@@ -210,10 +210,10 @@
   {@const collapsed = collapsedHarnesses.has(key)}
   {@const icon = getAgentIcon(entry.harnessId)}
   {@const name = icon?.name ?? entry.harnessId}
-  <div class="overflow-hidden rounded-lg border border-border bg-elevated">
+  <div class="overflow-hidden border border-border bg-elevated">
     <button
       type="button"
-      class="flex h-9 w-full items-center gap-1.5 rounded-lg px-2 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      class="flex h-9 w-full items-center gap-1.5 px-2 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
       aria-expanded={!collapsed}
       title={collapsed ? `Expand ${name} quota` : `Collapse ${name} quota`}
       onclick={() => toggleHarness(key)}
@@ -261,12 +261,12 @@
 {#snippet usageDetail()}
   {#if refreshing}
     <div
-      class="mb-3 h-0.5 overflow-hidden rounded-full bg-overlay"
+      class="mb-3 h-0.5 overflow-hidden bg-overlay"
       role="progressbar"
       aria-label="Fetching live usage"
       aria-valuetext="Fetching live usage"
     >
-      <div class="usage-loading-bar h-full w-1/3 rounded-full bg-info"></div>
+      <div class="usage-loading-bar h-full w-1/3 bg-info"></div>
     </div>
   {/if}
   <div class="flex items-start justify-between gap-3">
@@ -278,7 +278,9 @@
     </div>
     <div class="flex items-center gap-2">
       {#if usage && creditsLabel(usage)}
-        <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted">
+        <span
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase tabular-nums"
+        >
           {creditsLabel(usage)}
         </span>
       {/if}
@@ -356,7 +358,7 @@
       </span>
     </div>
     <div
-      class="h-1.5 overflow-hidden rounded-full bg-overlay"
+      class="h-1.5 overflow-hidden bg-overlay"
       role="progressbar"
       aria-label={usage?.contextEstimated ? 'Estimated context used' : 'Context used'}
       aria-valuemin="0"
@@ -364,7 +366,7 @@
       aria-valuenow={Math.round(boundedPercent ?? 0)}
     >
       <div
-        class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`}
+        class={`h-full ${fillClass} transition-[width] duration-700 ease-out`}
         style={`width: ${boundedPercent}%`}
       ></div>
     </div>
@@ -394,7 +396,7 @@
 
     <button
       type="button"
-      class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-3 flex h-8 w-full items-center justify-center gap-2 border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       disabled={!canCompact || compacting}
       title={canCompact
         ? 'Summarize older work to free context'
@@ -439,7 +441,7 @@
   </button>
 
   <div
-    class="invisible absolute bottom-full right-0 z-40 mb-1.5 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+    class="invisible absolute bottom-full right-0 z-40 mb-1.5 w-72 border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
     role="dialog"
     aria-label="Context and provider usage"
   >

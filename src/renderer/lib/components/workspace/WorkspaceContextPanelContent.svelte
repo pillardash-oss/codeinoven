@@ -340,7 +340,7 @@
               {#snippet action()}
                 <button
                   type="button"
-                  class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+                  class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
                   onclick={onDismissCoordinator}
                 >
                   Close panel

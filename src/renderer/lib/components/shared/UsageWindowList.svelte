@@ -89,7 +89,7 @@
       </div>
       {#if percent !== undefined}
         <div
-          class="h-1.5 overflow-hidden rounded-full bg-overlay"
+          class="h-1.5 overflow-hidden bg-overlay"
           role="progressbar"
           aria-label={`${limit.label} usage`}
           aria-valuemin="0"
@@ -97,7 +97,7 @@
           aria-valuenow={Math.round(percent)}
         >
           <div
-            class="h-full rounded-full bg-info transition-[width] duration-700 ease-out"
+            class="h-full bg-info transition-[width] duration-700 ease-out"
             style={`width: ${percent}%`}
           ></div>
         </div>

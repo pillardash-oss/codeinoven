@@ -156,7 +156,7 @@
   const rowTitleClass =
     'min-w-0 flex-1 cursor-pointer truncate text-left text-[0.6875rem] leading-snug transition-colors'
   const rowActionClass =
-    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
+    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
 </script>
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
@@ -178,7 +178,7 @@
           type="button"
           role="tab"
           aria-selected={githubNotifications.tab === tab.id}
-          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
+          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium transition-colors {githubNotifications.tab ===
           tab.id
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:text-foreground'}"
@@ -240,7 +240,7 @@
       {#snippet action()}
         <button
           type="button"
-          class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+          class="cursor-pointer bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
           onclick={onSignIn}
         >
           Sign in
@@ -261,7 +261,7 @@
       </p>
       <button
         type="button"
-        class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+        class="cursor-pointer bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -298,15 +298,13 @@
           {#each group.items as item (item.id)}
             {@const SubjectIcon = subjectIcon(item.subjectType)}
             <div
-              class="group relative flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
+              class="group relative flex items-start gap-2 px-2 py-1.5 transition-colors hover:bg-elevated {item.unread
                 ? 'bg-primary/5'
                 : ''}"
               data-notification-id={item.id}
             >
               <span
-                class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full {item.unread
-                  ? 'bg-primary'
-                  : 'bg-transparent'}"
+                class="mt-1.5 h-1.5 w-1.5 shrink-0 {item.unread ? 'bg-primary' : 'bg-transparent'}"
                 aria-hidden="true"
               ></span>
               {#if item.actorLogin}
@@ -412,7 +410,7 @@
         <div class="flex justify-center px-2 py-2">
           <button
             type="button"
-            class="cursor-pointer rounded-md border border-border px-3 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            class="cursor-pointer border border-border px-3 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
             disabled={githubNotifications.loadingMore}
             onclick={() => void githubNotifications.loadMore()}
           >

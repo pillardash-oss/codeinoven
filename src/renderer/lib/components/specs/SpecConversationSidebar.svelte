@@ -7,8 +7,8 @@
 
 <div class="flex min-h-full flex-col gap-2" aria-label="Spec conversation">
   {#each workspaceState.specAgentResponses as response (response.id)}
-    <article class="rounded-lg border bg-elevated px-3 py-2.5">
-      <div class="mb-2 flex items-center justify-between gap-2">
+    <article class="border border-border bg-elevated px-3 py-2.5">
+      <div class="mb-2 flex items-center justify-between gap-2 border-b border-border pb-1.5">
         <span
           class="flex min-w-0 items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
         >

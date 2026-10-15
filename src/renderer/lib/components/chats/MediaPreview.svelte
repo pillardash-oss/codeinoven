@@ -121,7 +121,7 @@
     {#if revealable}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
         aria-label={`Reveal path of ${filename}`}
         title="Reveal path"
         onclick={revealFromButton}
@@ -132,7 +132,7 @@
     <a
       href={src}
       download={filename}
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
       aria-label={downloadLabel}
       title={downloadLabel}
     >
@@ -140,7 +140,7 @@
     </a>
     <button
       type="button"
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
       aria-label="Close preview"
       title="Close (Esc)"
       onclick={onClose}
@@ -178,7 +178,7 @@
           {src}
           controls
           preload="metadata"
-          class="w-full max-w-xl rounded-lg shadow-2xl"
+          class="w-full max-w-xl shadow-2xl"
           onerror={mediaError}
         ></audio>
       {:else}

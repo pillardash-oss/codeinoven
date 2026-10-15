@@ -44,7 +44,7 @@
       </div>
 
       {#if request.consequences.length > 0}
-        <ul class="space-y-1.5 rounded-lg border border-border bg-raised p-3 text-xs text-muted">
+        <ul class="space-y-1.5 border border-border bg-raised p-3 text-xs text-muted">
           {#each request.consequences as consequence (consequence)}
             <li>{consequence}</li>
           {/each}

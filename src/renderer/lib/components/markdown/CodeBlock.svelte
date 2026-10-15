@@ -53,7 +53,7 @@
   }
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-elevated">
+<div class="overflow-hidden border bg-elevated">
   {#if !hideHeader}
     <div class="flex h-7 items-center justify-between border-b px-3">
       <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed"
@@ -61,7 +61,7 @@
       >
       <div class="flex items-center gap-1">
         <button
-          class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="flex items-center p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label={wrapToggleLabel(wrapped)}
           title={wrapToggleLabel(wrapped)}
           aria-pressed={wrapped}
@@ -70,7 +70,7 @@
           <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
         </button>
         <button
-          class="flex items-center gap-1 rounded p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="flex items-center gap-1 p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Copy code"
           title="Copy code"
           onclick={() => void copy()}

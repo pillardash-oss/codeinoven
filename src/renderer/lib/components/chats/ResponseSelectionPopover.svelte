@@ -44,7 +44,7 @@
 ></button>
 
 <div
-  class="fixed z-50 flex max-w-[calc(100vw-24px)] items-center gap-1 rounded-xl border border-border bg-surface p-1 shadow-lg"
+  class="fixed z-50 flex max-w-[calc(100vw-24px)] items-center gap-1 border border-border bg-surface p-1 shadow-lg"
   style:left={`${x}px`}
   style:top={`${y}px`}
   role="toolbar"
@@ -52,7 +52,7 @@
 >
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+    class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
     title="Reference this selection in your next message"
     onclick={onAdd}
   >
@@ -62,7 +62,7 @@
   {#if onElaborate}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Explain this selection in a temporary read-only chat"
       onclick={onElaborate}
     >
@@ -73,7 +73,7 @@
   {#if onQuickChat}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Start a temporary read-only chat with this selection"
       onclick={onQuickChat}
     >
@@ -84,7 +84,7 @@
   {#if onNewThread}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Start a new thread with this selection already in the composer"
       onclick={onNewThread}
     >

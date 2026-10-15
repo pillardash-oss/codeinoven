@@ -94,7 +94,7 @@
 <div class="flex min-w-0">
   <Popover.Root bind:open>
     <Popover.Trigger
-      class="flex min-w-0 cursor-pointer items-center gap-1 rounded-md transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40"
+      class="flex min-w-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40"
       aria-label={`Worker scope: ${triggerLabel}`}
       title={`Worker scope: ${triggerLabel}`}
       {disabled}

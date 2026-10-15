@@ -307,7 +307,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     e.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -427,7 +427,7 @@
         />
       {:else}
         <span
-          class="h-2.5 w-2.5 shrink-0 rounded-full bg-muted"
+          class="h-2.5 w-2.5 shrink-0 bg-muted"
           style={presentation.color ? `background-color: ${presentation.color}` : ''}
         ></span>
       {/if}
@@ -567,7 +567,7 @@
           <input
             use:focusRenameInput
             value={renameValue ?? ''}
-            class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
+            class="h-6 min-w-0 flex-1 border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
             aria-label={`Rename ${tab.title}`}
             oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
             onkeydown={(event) => {
@@ -601,7 +601,7 @@
         {/if}
         {#if dirtyFileTabIds.has(tab.id)}
           <span
-            class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            class="h-1.5 w-1.5 shrink-0 bg-accent"
             role="status"
             aria-label="Unsaved changes"
             title="Unsaved changes"
@@ -610,7 +610,7 @@
       </button>
       <button
         type="button"
-        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label={closeLabel(tab)}
         title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
@@ -665,7 +665,7 @@
           {#if siblingTabs.length > 1}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-6 shrink-0 items-center gap-0.5 px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Switch to another open panel"
                 title="Switch open panel"
               >
@@ -677,11 +677,11 @@
                   side="bottom"
                   align="start"
                   sideOffset={6}
-                  class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+                  class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
                 >
                   {#each siblingTabs as tab (tab.id)}
                     <DropdownMenu.Item
-                      class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
+                      class="flex items-center gap-2 px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
                       textValue={titleFor(tab)}
                       onSelect={() => onSelect(tab.id)}
                     >
@@ -707,7 +707,7 @@
             {#if onNewBrowser}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another browser tab"
                 title="New browser tab"
                 onclick={() => onNewBrowser?.()}
@@ -717,7 +717,7 @@
             {/if}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Fullscreen"
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
@@ -728,7 +728,7 @@
             {#if onNewTerminal}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another terminal"
                 title="New terminal"
                 onclick={onNewTerminal}
@@ -739,7 +739,7 @@
             {#if placement === 'bottom' && onTerminalDockToggle}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Hide terminal dock"
                 title="Hide terminal dock"
                 onclick={onTerminalDockToggle}
@@ -749,7 +749,7 @@
             {/if}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Fullscreen"
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
@@ -758,7 +758,7 @@
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label={placement === 'bottom'
                 ? 'Move terminal to the right'
                 : 'Move terminal to the bottom'}
@@ -776,7 +776,7 @@
           {:else if activeTab}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label={popupMode ? 'Close all popups' : `Close ${activeTab.title}`}
               title={popupMode ? 'Close all popup windows' : 'Close panel'}
               onclick={() => (popupMode ? onClosePopups?.() : onClose(activeTab.id))}

@@ -83,7 +83,7 @@
 
 <Popover.Root bind:open>
   <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     aria-label="Search routines, tasks and runs"
     title="Search routines, tasks and runs"
   >
@@ -96,7 +96,7 @@
       align="start"
       sideOffset={6}
       collisionPadding={8}
-      class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1.5 shadow-lg"
+      class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
       aria-label="Search routines, tasks and runs"
     >
       <div class="flex items-center gap-1.5">
@@ -104,14 +104,14 @@
         <input
           {@attach focusInput}
           type="text"
-          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+          class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
           placeholder="Search routines, tasks and runs…"
           bind:value={query}
         />
         {#if query}
           <button
             type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={() => {
@@ -131,14 +131,16 @@
       {:else if trimmed.length > 0}
         <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
           {#if routineResults.length > 0}
-            <div class="px-2 py-1 text-[0.5625rem] font-medium uppercase tracking-wide text-dimmed">
+            <div
+              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+            >
               Routines
             </div>
             {#each routineResults as routine (routine.id)}
               {@const icon = routineIcon(routine)}
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectRoutine(routine)}
               >
                 <span class="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -156,7 +158,7 @@
                 >
                 {#if !routineIsScheduled(routine)}
                   <span
-                    class="shrink-0 rounded-full bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
+                    class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
                     title="This routine runs only when you ask it to"
                   >
                     Unscheduled
@@ -177,13 +179,15 @@
             {/each}
           {/if}
           {#if taskResults.length > 0}
-            <div class="px-2 py-1 text-[0.5625rem] font-medium uppercase tracking-wide text-dimmed">
+            <div
+              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+            >
               Tasks
             </div>
             {#each taskResults as task (task.id)}
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectTask(task)}
               >
                 {#if task.assistantGettingStarted}
@@ -198,7 +202,9 @@
             {/each}
           {/if}
           {#if runResults.length > 0}
-            <div class="px-2 py-1 text-[0.5625rem] font-medium uppercase tracking-wide text-dimmed">
+            <div
+              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+            >
               Runs
             </div>
             {#each runResults as run (run.id)}
@@ -206,7 +212,7 @@
               {@const icon = runIcon(run)}
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectTask(run)}
               >
                 <span class="flex h-4 w-4 shrink-0 items-center justify-center">

@@ -106,7 +106,7 @@
     {#if !isFolded && hidden > 0}
       <button
         type="button"
-        class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        class="shrink-0 px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
         title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
         onclick={(e: MouseEvent) => {
           e.stopPropagation()

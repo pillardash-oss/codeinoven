@@ -202,9 +202,9 @@
   >
     {#snippet dock()}
       <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked clone task">
-        <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+        <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
           <button
-            class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Show clone task"
             title="Show clone task"
             onclick={handleExpand}
@@ -212,13 +212,13 @@
             Clone
           </button>
           <span class="h-5 w-px bg-border"></span>
-          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-elevated">
+          <span class="flex h-8 w-8 items-center justify-center bg-elevated">
             <GitBranch size={14} class="text-muted" />
           </span>
           {#if exitCode !== undefined}
             <span class="h-5 w-px bg-border"></span>
             <button
-              class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Close clone task"
               title="Close clone task"
               onclick={handleDockClose}
@@ -231,7 +231,7 @@
     {/snippet}
 
     <div class="space-y-3">
-      <div class="overflow-hidden rounded-xl border bg-surface">
+      <div class="overflow-hidden border bg-surface">
         <div class="flex items-center justify-between gap-3 border-b px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
             <GitBranch size={14} class="shrink-0 text-muted" />
@@ -266,7 +266,7 @@
         </div>
       </div>
       {#if error}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
+        <p class="bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
       {/if}
       <p class="text-[0.6875rem] text-dimmed">
         {exitCode === undefined
@@ -291,7 +291,7 @@
         <input
           id="git-clone-url"
           type="text"
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+          class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
           placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git"
           bind:value={gitUrl}
           autocomplete="off"
@@ -307,7 +307,7 @@
           <input
             id="git-clone-dest"
             type="text"
-            class="flex-1 rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+            class="flex-1 border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
             placeholder="~/ .config/pillardash/codeinoven/projects-gh/<repo>"
             bind:value={destination}
             oninput={() => (userEditedDestination = true)}
@@ -316,7 +316,7 @@
           />
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-2 text-sm text-foreground transition-colors hover:bg-elevated"
+            class="flex items-center gap-1.5 border bg-surface px-3 py-2 text-sm text-foreground transition-colors hover:bg-elevated"
             title="Choose destination folder"
             aria-label="Choose destination folder"
             onclick={() => void pickDestination()}
@@ -333,14 +333,14 @@
         {/if}
       </div>
       {#if error}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
+        <p class="bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
       {/if}
     </form>
 
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+        class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
         title="Cancel"
         onclick={handleClose}
       >
@@ -348,7 +348,7 @@
       </button>
       <button
         type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={busy || !gitUrl.trim() || !destination.trim()}
         title="Clone repository"
         onclick={() => void startClone()}

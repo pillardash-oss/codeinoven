@@ -167,14 +167,14 @@
 
 {#snippet dirActions(node: TreeNode)}
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), false)}
   >
     <Check size={12} class="text-success" />
     Stage all
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), true)}
   >
     <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
@@ -182,21 +182,21 @@
   </ContextMenu.Item>
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStashPaths(allPathsFor(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
     Stash directory…
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onIgnorePaths([node.path])}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
     Add directory to gitignore
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
     onSelect={() => onDiscardPaths(allPathsFor(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
@@ -207,14 +207,14 @@
 {#snippet fileActions(change: GitFileChange)}
   {#if change.status === 'conflicted'}
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onResolveConflict?.(change.path)}
     >
       <GitMerge size={12} class="text-warning" />
       Resolve conflict…
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onOpenInEditor(change.path)}
     >
       <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
@@ -222,7 +222,7 @@
     </ContextMenu.Item>
   {:else}
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onToggleStage(change)}
     >
       {#if change.staged}
@@ -235,14 +235,14 @@
     </ContextMenu.Item>
     <ContextMenu.Separator class="my-1 h-px bg-border" />
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onStashPaths([change.path])}
     >
       <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
       Stash file…
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onOpenInEditor(change.path)}
     >
       <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
@@ -250,14 +250,14 @@
     </ContextMenu.Item>
     <ContextMenu.Separator class="my-1 h-px bg-border" />
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onIgnorePaths([change.path])}
     >
       <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
       Add to gitignore
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
       onSelect={() => onDiscardPaths([change.path])}
     >
       <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
@@ -355,7 +355,7 @@
     </ContextMenu.Trigger>
     <ContextMenu.Portal>
       <ContextMenu.Content
-        class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+        class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
         side="bottom"
         align="start"
         sideOffset={4}
@@ -449,7 +449,7 @@
     </ContextMenu.Trigger>
     <ContextMenu.Portal>
       <ContextMenu.Content
-        class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+        class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
         side="bottom"
         align="start"
         sideOffset={4}
@@ -475,7 +475,7 @@
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-  <div class="overflow-hidden rounded-lg border border-border bg-surface">
+  <div class="overflow-hidden border border-border bg-surface">
     <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
       {#if !isConflicts}
         <span

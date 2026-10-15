@@ -80,7 +80,7 @@
   }
 </script>
 
-<section class="mt-4 rounded-xl border bg-surface" aria-labelledby="worker-names-heading">
+<section class="mt-4 border bg-surface" aria-labelledby="worker-names-heading">
   <div class="flex items-start justify-between gap-4 p-4">
     <div>
       <h2 id="worker-names-heading" class="text-sm font-semibold">Worker name pool</h2>
@@ -91,7 +91,7 @@
     {#if !editing}
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         title="Edit the worker name pool"
         aria-label="Edit the worker name pool"
         disabled={!settingsReady || loading}
@@ -146,7 +146,7 @@
       <p class="mt-1 text-xs text-muted">Use a JSON array containing one string per worker name.</p>
       <textarea
         id="worker-names-json"
-        class="mt-3 min-h-56 w-full resize-y rounded-lg border bg-elevated p-3 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary"
+        class="mt-3 min-h-56 w-full resize-y border bg-elevated p-3 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary"
         bind:value={draft}
         spellcheck="false"></textarea>
       <div class="mt-3 flex items-center justify-between gap-3">
@@ -158,7 +158,7 @@
         <div class="flex gap-2">
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-elevated"
+            class="flex items-center gap-1.5 border px-3 py-1.5 text-xs hover:bg-elevated"
             title="Cancel editing worker names"
             aria-label="Cancel editing worker names"
             onclick={cancelEditing}
@@ -166,7 +166,7 @@
           >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-elevated"
+            class="flex items-center gap-1.5 border px-3 py-1.5 text-xs hover:bg-elevated"
             title="Reset custom JSON to the defaults"
             aria-label="Reset custom JSON to the defaults"
             onclick={() => (draft = JSON.stringify(settings.defaults, null, 2))}
@@ -174,7 +174,7 @@
           >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs text-on-primary hover:bg-primary-hover disabled:opacity-50"
             title="Save custom worker names"
             aria-label="Save custom worker names"
             onclick={() => void save()}

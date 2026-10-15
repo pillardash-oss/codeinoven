@@ -291,7 +291,6 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-border-strong);
-  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -414,7 +413,6 @@ body {
   vertical-align: -0.125em;
   display: inline-block;
   object-fit: contain;
-  border-radius: 2px;
   max-width: 1em;
 }
 
@@ -429,7 +427,6 @@ body {
 .markdown-body :not(pre) > code {
   background: var(--color-elevated);
   border: 1px solid var(--color-border);
-  border-radius: 4px;
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -496,13 +493,19 @@ body {
   width: 100%;
   min-width: max-content;
   border-collapse: collapse;
+  border: 1px solid var(--color-border);
   font-size: 0.9em;
 }
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid var(--color-border);
-  padding: 0.35em 0.6em;
+  /* Rules run across the table, never between cells. The app's own tables
+     (`ui/DataTable.svelte`) draw one border per row and none per column, so
+     a markdown table and a native one read as the same object instead of two
+     languages in one surface. */
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.375em 0.6em;
   text-align: left;
   /* Cells may wrap long tokens inside their own column (GitHub-style):
      the table's min-width: max-content guarantees each column its natural
@@ -512,9 +515,22 @@ body {
   word-break: normal;
 }
 
+/* The table's own bottom border is the last row's rule; a second one under it
+   would double the line. */
+.markdown-body tr:last-child > th,
+.markdown-body tr:last-child > td {
+  border-bottom: 0;
+}
+
 .markdown-body th {
+  /* The header band: an uppercase micro-label on the raised surface, ruled off
+     from the body by a stronger line than the row rules below it. */
   background: var(--color-elevated);
+  border-bottom-color: var(--color-border-strong);
+  color: var(--color-muted);
   font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
 }
 
 /* ─── Table controls (wrap, column resize) ──────────────────────────────── */
@@ -534,7 +550,6 @@ body {
   align-items: center;
   gap: 0.125rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
   background: var(--color-elevated);
   padding: 0.0625rem;
 }
@@ -542,7 +557,6 @@ body {
 .markdown-body .md-table-control {
   display: flex;
   align-items: center;
-  border-radius: 0.25rem;
   color: var(--color-dimmed);
   padding: 0.1875rem;
   transition:
@@ -600,9 +614,11 @@ body {
   user-select: none;
 }
 
-/* The drag target sits over the column's right padding, ending exactly on the
-   border, so it is the border the reader grabs   and so the cell's own
-   `overflow: hidden` (resize mode) can never clip it. */
+/* The drag target sits over the column's right padding, flush with the column
+   edge the reader drags   and so the cell's own `overflow: hidden` (resize
+   mode) can never clip it. The strip paints its own hover line, which is what
+   the reader aims at now that columns are separated by space rather than by a
+   rule. */
 .markdown-body .md-col-resizer {
   position: absolute;
   inset-block: 0;
@@ -671,7 +687,6 @@ body {
      around. */
   display: inline-block;
   max-width: 100%;
-  border-radius: 8px;
 }
 
 /*
@@ -711,7 +726,6 @@ body {
   gap: 0.375rem;
   overflow: hidden;
   border: 1px dashed var(--color-border);
-  border-radius: 8px;
   padding: 0.25rem 0.5rem;
   color: var(--color-text-dimmed);
   font-size: 0.75em;
@@ -729,7 +743,6 @@ body {
    requests). `<details>` collapsibles are the common case in PR templates. */
 .markdown-body details {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   padding: 0.5em 0.75em;
 }
 
@@ -1039,7 +1052,6 @@ html body vite-error-overlay {
 .cm-jump-line {
   outline: 1.5px solid transparent;
   outline-offset: -1px;
-  border-radius: 3px;
   animation: reveal-flash-outline 0.7s ease-in-out 3;
 }
 

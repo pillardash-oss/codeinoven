@@ -20,7 +20,7 @@
 
 {#if variant === 'chip'}
   <span
-    class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+    class="flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
     {title}
     aria-label={title}
   >

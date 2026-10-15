@@ -44,7 +44,7 @@
   )
 </script>
 
-<div class="rounded-lg border bg-elevated/50 px-3 py-2.5">
+<div class="border bg-elevated/50 px-3 py-2.5">
   <div class="flex items-center gap-2">
     {#if working}
       <Loader2 size={13} class="shrink-0 animate-spin text-dimmed" />
@@ -58,9 +58,9 @@
     {PHASE_LABELS[install.phase]}{install.detail ? ` · ${install.detail}` : ''}
   </p>
   {#if install.totalBytes > 0}
-    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-overlay">
+    <div class="mt-2 h-1.5 w-full overflow-hidden bg-overlay">
       <div
-        class="h-full rounded-full bg-primary transition-[width] duration-150"
+        class="h-full bg-primary transition-[width] duration-150"
         style="width: {progressPercent}%"
       ></div>
     </div>

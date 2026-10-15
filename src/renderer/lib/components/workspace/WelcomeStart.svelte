@@ -218,11 +218,11 @@
     {#each actions as action (action.id)}
       <button
         type="button"
-        class="group flex w-full items-center gap-3.5 rounded-xl px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+        class="group flex w-full items-center gap-3.5 px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
         onclick={action.run}
       >
         <span
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+          class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors
             {action.highlight
             ? 'bg-primary/10 group-hover:bg-primary/20'
             : 'bg-elevated group-hover:bg-overlay'}"

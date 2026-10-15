@@ -362,7 +362,7 @@ body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:.875
 header{position:sticky;top:0;z-index:2;background:var(--surface);border-bottom:1px solid var(--border);
   padding:.75rem 1rem .7rem}
 .crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;font-size:.8125rem;min-height:1.25rem}
-.crumbs a{color:var(--muted);text-decoration:none;border-radius:.25rem;padding:.05rem .3rem}
+.crumbs a{color:var(--muted);text-decoration:none;padding:.05rem .3rem}
 .crumbs a:hover{background:var(--hover);color:var(--fg)}
 .crumbs .sep{color:var(--dim)}
 .crumbs .current{color:var(--fg);font-weight:600;padding:.05rem .3rem}
@@ -370,14 +370,14 @@ header{position:sticky;top:0;z-index:2;background:var(--surface);border-bottom:1
   overflow-wrap:anywhere}
 .tools{display:flex;align-items:center;gap:.6rem;margin-top:.6rem}
 .tools input{flex:1 1 auto;min-width:8rem;max-width:26rem;height:1.75rem;padding:0 .5rem;
-  border:1px solid var(--border);border-radius:.375rem;background:var(--bg);color:var(--fg);
+  border:1px solid var(--border);background:var(--bg);color:var(--fg);
   font-family:var(--font);font-size:.8125rem}
 .tools input:focus{outline:none;border-color:var(--accent)}
 .count{font-size:.6875rem;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 main{padding:.5rem 1rem 1.5rem}
 ul.rows{list-style:none;margin:0;padding:0}
 .row{display:grid;grid-template-columns:1rem minmax(0,1fr) 4.5rem 9rem;align-items:center;
-  gap:.75rem;padding:.3rem .4rem;border-radius:.375rem;color:var(--fg);text-decoration:none}
+  gap:.75rem;padding:.3rem .4rem;color:var(--fg);text-decoration:none}
 .row:hover{background:var(--hover)}
 .row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .row.parent{grid-template-columns:1rem minmax(0,1fr);color:var(--muted);margin-bottom:.3rem}
@@ -389,7 +389,7 @@ li[data-name$=".html"] .icon,li[data-name$=".htm"] .icon{stroke:var(--accent)}
 .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .row.parent .label{font-weight:400}
 .badge{flex:0 0 auto;font-size:.625rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
-  color:var(--accent);background:var(--badge-bg);border-radius:999px;padding:.05rem .4rem}
+  color:var(--accent);background:var(--badge-bg);padding:.05rem .4rem}
 .size,.when{font-size:.6875rem;color:var(--dim);font-variant-numeric:tabular-nums;text-align:right;
   white-space:nowrap}
 .notice{margin:1rem 0 0;font-size:.8125rem;color:var(--muted)}

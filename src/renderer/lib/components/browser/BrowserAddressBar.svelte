@@ -250,7 +250,7 @@
   {#if url !== ''}
     <button
       type="button"
-      class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title={secure ? 'Site settings' : 'Connection is not secure'}
       aria-label={secure ? 'Site settings' : 'Connection is not secure'}
       aria-haspopup="menu"
@@ -269,7 +269,7 @@
     type="text"
     role="combobox"
     class={[
-      'h-7 w-full rounded-lg border border-border bg-elevated text-xs text-foreground outline-none transition-colors placeholder:text-dimmed',
+      'h-7 w-full border border-border bg-elevated text-xs text-foreground outline-none transition-colors placeholder:text-dimmed',
       fieldPadding
     ]}
     placeholder="Search or enter an address"
@@ -298,7 +298,7 @@
   {#if loading}
     <span
       role="img"
-      class="pointer-events-none absolute inset-y-px right-px flex w-7 items-center justify-center rounded-r-md bg-elevated"
+      class="pointer-events-none absolute inset-y-px right-px flex w-7 items-center justify-center bg-elevated"
       title="Loading page"
       aria-label="Loading page"
     >
@@ -308,7 +308,7 @@
   {#if drawerVisible}
     <div
       {@attach trackBrowserOcclusion}
-      class="absolute top-full right-0 left-0 z-20 mt-1 max-h-[min(16rem,50vh)] overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-lg"
+      class="absolute top-full right-0 left-0 z-20 mt-1 max-h-[min(16rem,50vh)] overflow-y-auto border border-border bg-surface p-1.5 shadow-lg"
     >
       <BrowserHistorySuggestions
         {listId}

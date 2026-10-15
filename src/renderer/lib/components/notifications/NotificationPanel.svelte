@@ -513,7 +513,7 @@
     ? `Hide ${stackFrames ? 'stack trace' : 'details'}`
     : `Show ${stackFrames ? 'stack trace' : 'details'}`}
   <button
-    class="mt-1.5 flex items-center gap-1 rounded px-1 py-0.5 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-raised hover:text-foreground"
+    class="mt-1.5 flex items-center gap-1 px-1 py-0.5 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-raised hover:text-foreground"
     aria-expanded={expanded}
     aria-label={label}
     title={label}
@@ -530,7 +530,7 @@
   </button>
   {#if expanded}
     <pre
-      class="mt-1 max-h-40 select-text overflow-auto rounded border border-border bg-overlay p-2 font-mono text-[0.6875rem] leading-relaxed break-all whitespace-pre-wrap text-muted">{details}</pre>
+      class="mt-1 max-h-40 select-text overflow-auto border border-border bg-overlay p-2 font-mono text-[0.6875rem] leading-relaxed break-all whitespace-pre-wrap text-muted">{details}</pre>
   {/if}
 {/snippet}
 
@@ -576,7 +576,7 @@
             <span>Chat</span>
           {:else}
             <span
-              class="h-1.5 w-1.5 shrink-0 rounded-full"
+              class="h-1.5 w-1.5 shrink-0"
               style="background: {n.projectColor ?? 'var(--color-border)'}"
               role="presentation"
             ></span>
@@ -607,7 +607,7 @@
     </div>
     {#if n.kind === 'error'}
       <button
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Copy error details and stack trace"
         title="Copy error details"
         onclick={(e: MouseEvent) => {
@@ -623,7 +623,7 @@
       </button>
     {/if}
     <button
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
       aria-label="Dismiss notification"
       title="Dismiss"
       onclick={(e: MouseEvent) => {
@@ -660,7 +660,7 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <button
-        class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
+        class="px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
         aria-label="Dismiss missed run"
         title="Dismiss"
         onclick={() => void dismissMissedRun(run.id)}
@@ -668,7 +668,7 @@
         Dismiss
       </button>
       <button
-        class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+        class="flex items-center gap-1 bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
         aria-label="Run missed task now"
         title="Run now"
         onclick={() => void runMissedRunNow(run.id)}
@@ -677,7 +677,7 @@
         Run now
       </button>
       <button
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Open task"
         title="Open task"
         onclick={() => void openMissedRun(run.threadId)}
@@ -734,7 +734,7 @@
     <div class="flex shrink-0 items-start px-1.5 pt-2">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
         title="Dismiss"
         onclick={() => void dismissBackgroundRun(run.runThreadId)}
@@ -774,7 +774,7 @@
     <div class="ml-auto pb-1.5">
       {#if showDismissAll}
         <button
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}
           title={showingAppErrors ? 'Dismiss all errors' : 'Dismiss all'}
           onclick={dismissAll}
@@ -792,7 +792,7 @@
         {@const count = subCount(notificationPanelState.topTab, sub)}
         {@const active = notificationPanelState.subFilter === sub}
         <button
-          class="flex items-center gap-1.5 rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
+          class="flex items-center gap-1.5 px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:bg-raised hover:text-foreground'}"
           aria-label={`Show ${subFilterLabels[sub]} notifications`}
@@ -837,7 +837,7 @@
               )}"
             >
               <span
-                class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                class="mt-1.5 h-1.5 w-1.5 shrink-0"
                 style="background: {e.kind === 'error'
                   ? 'var(--color-danger)'
                   : 'var(--color-warning)'}"
@@ -873,7 +873,7 @@
               </div>
               <div class="flex shrink-0 items-center gap-0.5">
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
                   aria-label={hasUsefulDetails(e.message, e.details)
                     ? `Copy app error and stack trace: ${e.message}`
                     : `Copy app error: ${e.message}`}
@@ -890,7 +890,7 @@
                   {/if}
                 </button>
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
                   aria-label="Dismiss app error"
                   title="Dismiss"
                   onclick={(ev: MouseEvent) => {
@@ -916,7 +916,7 @@
           <Bell size={20} class="text-dimmed" />
           <p class="text-xs text-muted">Nothing matches this filter</p>
           <button
-            class="rounded px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Clear the assistant filters"
             aria-label="Clear the assistant filters"
             onclick={resetAssistantFilters}
@@ -928,7 +928,7 @@
         <div class="space-y-1 p-1.5">
           {#each assistantSections as section (section.key)}
             {@const collapsed = collapsedAssistantSections.has(section.key)}
-            <div class="overflow-hidden rounded-md border border-border bg-surface">
+            <div class="overflow-hidden border border-border bg-surface">
               <button
                 type="button"
                 class="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
@@ -941,7 +941,8 @@
                   size={12}
                   class="shrink-0 text-dimmed transition-transform {collapsed ? '-rotate-90' : ''}"
                 />
-                <span class="truncate text-[0.6875rem] font-semibold text-foreground"
+                <span
+                  class="truncate text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed"
                   >{section.label}</span
                 >
                 <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed"

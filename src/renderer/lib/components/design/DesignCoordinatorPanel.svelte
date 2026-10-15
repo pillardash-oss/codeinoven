@@ -997,7 +997,7 @@
         editor, so the one thing this asks for is the pack, in one click, rather
         than explaining a setting the user would have to go and find.
       -->
-      <div class="mb-2 shrink-0 rounded-xl border border-border bg-surface p-3">
+      <div class="mb-2 shrink-0 border border-border bg-surface p-3">
         <div class="flex items-center gap-1.5">
           <Download size={13} class="text-accent" aria-hidden="true" />
           <span class="text-xs font-semibold text-foreground">
@@ -1011,7 +1011,7 @@
         </p>
         <button
           type="button"
-          class="mt-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
+          class="mt-2 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
           title="Open Design and video settings to install the optional video pack"
           aria-label="Open Design and video settings to install the optional video pack"
           onclick={() => workspaceState.navigateToSettings?.('design')}
@@ -1033,7 +1033,7 @@
       <CompositionStage tab={liveTab} />
     {:else if !playable}
       <div
-        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-border bg-elevated text-dimmed"
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
       >
         <ImageOff size={16} />
         <span class="px-4 text-center text-[0.6875rem]">
@@ -1049,7 +1049,7 @@
         the browser, because the browser is not where this board plays.
       -->
       <div
-        class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-app"
+        class="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-app"
         aria-label={`${nounTitle} preview`}
       >
         {#if exportPath}
@@ -1092,7 +1092,7 @@
           </span>
           <button
             type="button"
-            class="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            class="shrink-0 border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
             title={`Open the ${noun} preview again`}
             aria-label={`Open the ${noun} preview again`}
             disabled={composing !== ''}
@@ -1117,7 +1117,7 @@
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
         <button
           type="button"
-          class="group relative block w-full overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {onScreen
+          class="group relative block w-full overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
             ? 'border-accent/60'
             : 'border-border'}"
           title={cardLabel}
@@ -1158,11 +1158,9 @@
         </button>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content
-          class="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-        >
+        <ContextMenu.Content class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg">
           <ContextMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
             onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
           >
             <Copy size={13} class="shrink-0 text-muted" />
@@ -1171,7 +1169,7 @@
           {#if !video}
             {#each DESIGN_EXPORT_FORMATS as format (format)}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => startExport(screen.entry, format)}
                 >Export screen as {format.toUpperCase()}</ContextMenu.Item
               >
@@ -1195,7 +1193,7 @@
     {@const Icon = input.icon}
     <button
       type="button"
-      class="group relative block overflow-hidden rounded-md border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
+      class="group relative block overflow-hidden border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
       title={input.label}
       aria-label={input.label}
       disabled={!input.ready || input.busy}
@@ -1246,7 +1244,7 @@
         -->
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
             title="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
             aria-label="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
           >
@@ -1259,7 +1257,7 @@
             </span>
             {#if !video && designScreens.length > 0}
               <span
-                class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+                class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
               >
                 {designScreens.length}
               </span>
@@ -1277,7 +1275,7 @@
               align="start"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 max-h-72 w-64 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
               aria-label={listLabel}
             >
               <DropdownMenu.RadioGroup
@@ -1293,17 +1291,17 @@
                       : updated === '' || created === updated
                         ? created
                         : `${created} · ${updated}`}
-                  <div class="flex items-center gap-0.5 rounded-lg pr-0.5">
+                  <div class="flex items-center gap-0.5 pr-0.5">
                     <DropdownMenu.RadioItem
                       value={item.directory}
-                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                       title={designTooltip(item)}
                     >
                       <WorkIcon size={12} class="shrink-0 text-dimmed" />
                       <span class="min-w-0 flex-1 truncate">{item.name}</span>
                       {#if item.creatorThreadId === threadId}
                         <span
-                          class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                          class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
                         >
                           Current
                         </span>
@@ -1324,7 +1322,7 @@
                     </DropdownMenu.RadioItem>
                     <button
                       type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       title={`Copy the path of ${item.name}`}
                       aria-label={`Copy the path of ${item.name}`}
                       onclick={(event) => {
@@ -1351,7 +1349,7 @@
         </span>
         {#if !video && designScreens.length > 0}
           <span
-            class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+            class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
           >
             {designScreens.length}
           </span>
@@ -1362,7 +1360,7 @@
         {#if video && tabId !== ''}
           <button
             type="button"
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
               ? 'text-accent'
               : ''}"
             aria-pressed={tabRuntime.muted}
@@ -1379,7 +1377,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={!canRevealCreator}
           title={revealLabel}
           aria-label={revealLabel}
@@ -1399,7 +1397,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
+          class="flex h-6 w-6 items-center justify-center transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
             ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:text-foreground'}"
           disabled={selected.directory === ''}
@@ -1412,7 +1410,7 @@
         </button>
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={galleryBusy || selected.directory === ''}
           title={refreshLabel}
           aria-label={refreshLabel}
@@ -1426,7 +1424,7 @@
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title={`${nounTitle} options`}
             aria-label={`${nounTitle} options`}
           >
@@ -1438,17 +1436,17 @@
               align="end"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
             >
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={refreshBoard}
               >
                 <RefreshCw size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={selected.directory === ''}
                 onSelect={() => void copyDesignPath(selected.directory)}
               >
@@ -1457,7 +1455,7 @@
               </DropdownMenu.Item>
               {#if video}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={selected.directory === '' ||
                     videoJobs.some((job) => job.state === 'running')}
                   onSelect={() => void exportVideo()}
@@ -1468,7 +1466,7 @@
               {/if}
               {#if !video}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('contract')}
                 >
@@ -1476,25 +1474,25 @@
                   Generate DESIGN.md
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('critique')}
                   >Review design quality</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('reference')}
                   >Extract brand from reference</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('tweaks')}
                   >Add live controls</DropdownMenu.Item
                 >
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
                   onSelect={() =>
                     void openInBrowser(
@@ -1503,7 +1501,7 @@
                 >
                 {#each DESIGN_EXPORT_FORMATS as format (format)}
                   <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                     disabled={selected.directory === ''}
                     onSelect={() => startExport(null, format)}
                     >Export design as {format.toUpperCase()}</DropdownMenu.Item
@@ -1512,7 +1510,7 @@
               {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('create')}
                 >
@@ -1522,7 +1520,7 @@
               {/if}
               {#if !video && canvasRead && !liveReady}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('live')}
                 >
@@ -1532,7 +1530,7 @@
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={selected.directory === ''}
                 onSelect={() => (historyOpen = !historyOpen)}
               >
@@ -1540,14 +1538,14 @@
                 {historyOpen ? 'Hide history' : 'Show history'}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={beginEditRoot}
               >
                 <Pencil size={13} class="shrink-0 text-muted" />
                 Change save path
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={rootIsDefault || rootBusy}
                 onSelect={() => void applyRoot(defaultRoot)}
               >
@@ -1559,7 +1557,7 @@
         </DropdownMenu.Root>
         <button
           type="button"
-          class="ml-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+          class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={opening || selected.directory === ''}
           title={`Show this ${noun} in the in-app browser`}
           aria-label={`Show this ${noun} in the in-app browser`}
@@ -1577,7 +1575,7 @@
     {#if editingRoot}
       <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
         <input
-          class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
+          class="h-6 min-w-0 flex-1 border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
           bind:value={rootDraft}
           placeholder={defaultRoot}
           aria-label={`Folder new ${noun}s are saved in, relative to the project`}
@@ -1594,7 +1592,7 @@
         />
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-accent transition-colors hover:bg-elevated disabled:opacity-40"
           disabled={rootBusy || rootDraft.trim() === ''}
           title={`Save this ${noun} folder`}
           aria-label={`Save this ${noun} folder`}
@@ -1608,7 +1606,7 @@
         </button>
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Cancel"
           aria-label="Cancel changing the save path"
           onclick={cancelEditRoot}
@@ -1639,7 +1637,7 @@
       {#snippet action()}
         <button
           type="button"
-          class="ml-auto flex shrink-0 items-center gap-1 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+          class="ml-auto flex shrink-0 items-center gap-1 border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
           disabled={canvasBusy !== ''}
           title="Ask the agent to bring the Screen Canvas up to date with the screens"
           aria-label="Ask the agent to sync the Screen Canvas"
@@ -1659,7 +1657,7 @@
   <div class="flex min-h-0 flex-1 flex-col">
     {#if error !== '' || compositionError !== ''}
       <p
-        class="mx-2.5 mt-2 shrink-0 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        class="mx-2.5 mt-2 shrink-0 border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
         role="alert"
       >
         {error !== '' ? error : compositionError}
@@ -1698,7 +1696,7 @@
       <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
         {#if video}
           <div
-            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
           >
             <ImageOff size={16} />
             <span class="px-4 text-center text-[0.6875rem]">
@@ -1707,7 +1705,7 @@
           </div>
         {:else if gallery.length === 0}
           <div
-            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
           >
             {#if galleryBusy}
               <LoaderCircle size={16} class="animate-spin" />

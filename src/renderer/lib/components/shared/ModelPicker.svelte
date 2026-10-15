@@ -498,10 +498,10 @@
    *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+      ? 'flex w-full min-w-0 items-center border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? `flex min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay ${fullWidth ? 'w-full' : ''}`
-        : `flex min-w-0 items-center rounded-lg transition-colors hover:bg-elevated ${fullWidth ? 'w-full' : ''}`
+        ? `flex min-w-0 items-center border bg-elevated transition-colors hover:bg-overlay ${fullWidth ? 'w-full' : ''}`
+        : `flex min-w-0 items-center transition-colors hover:bg-elevated ${fullWidth ? 'w-full' : ''}`
   )
   let modelButtonClasses = $derived(
     variant === 'field'
@@ -725,7 +725,7 @@
         <span class="min-w-0 flex-auto truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
           <span
-            class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
+            class={`shrink-0 px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
               selectedPeak.state === 'peak'
                 ? 'bg-amber-500/15 text-amber-500'
                 : 'bg-green-500/15 text-green-500'
@@ -740,7 +740,7 @@
       {#if supportsThinking}
         <DropdownMenu.Root bind:open={thinkingMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Thinking level: ${currentThinkingLabel}`}
             title="Thinking level"
             {disabled}
@@ -755,12 +755,12 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
                 {@const active = thinkingLevel === preset.id}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                  class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
                     ? 'text-primary'
                     : ''}"
                   title={preset.description ?? `Set thinking to ${preset.label}`}
@@ -808,7 +808,7 @@
       {#if showAccountPicker}
         <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
             title="Account"
             {disabled}
@@ -823,7 +823,7 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 border border-border bg-surface p-1 shadow-xl"
             >
               {#if accountLoading}
                 <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
@@ -831,7 +831,7 @@
                 {#each providerAccounts as account (account.id)}
                   {@const active = account.id === effectiveAccountId}
                   <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                    class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
                       ? 'text-primary'
                       : ''}"
                     title={`Use ${account.label}`}
@@ -847,7 +847,7 @@
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
                     {#if account.isDefault}
                       <span
-                        class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                        class="shrink-0 bg-raised px-1 text-[0.625rem] font-medium text-muted"
                         title="Default account for this provider"
                       >
                         Default
@@ -855,7 +855,7 @@
                     {:else if providerAccounts.length > 1}
                       <button
                         type="button"
-                        class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-accent"
+                        class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-accent"
                         title={`Set ${account.label} as the default account for this provider`}
                         aria-label={`Set ${account.label} as the default account for this provider`}
                         onclick={(event) => {
@@ -881,7 +881,7 @@
           is truncated to the same width the menu trigger uses.
         -->
         <span
-          class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
           title={`Account: ${soleAccountLabel}`}
           aria-label={`Account: ${soleAccountLabel}`}
         >
@@ -905,7 +905,7 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-90 flex w-72 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-90 flex w-72 flex-col overflow-hidden border bg-surface shadow-lg"
         style="max-height: min(calc(22.75rem + 3px), var(--bits-popover-content-available-height))"
         onOpenAutoFocus={(event) => {
           event.preventDefault()

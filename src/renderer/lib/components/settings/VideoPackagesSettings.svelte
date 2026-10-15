@@ -35,8 +35,8 @@
   }
 </script>
 
-<div id="settings-block-design-video-packages" class="rounded-xl border bg-surface p-4">
-  <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Video pack</h3>
+<div id="settings-block-design-video-packages" class="border bg-surface p-4">
+  <h3 class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Video pack</h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
     Background removal on the GPU is the only video operation the base install does not cover. It
     needs a separate pack of matting libraries, downloaded once into this app's own folder. Probe,
@@ -45,7 +45,7 @@
   </p>
 
   {#if packages.error}
-    <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {packages.error}
     </p>
   {/if}
@@ -65,7 +65,7 @@
     </div>
   {:else if pack?.installed}
     <div
-      class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-elevated/40 p-3"
+      class="mt-3 flex flex-wrap items-center justify-between gap-3 border border-border bg-elevated/40 p-3"
     >
       <div class="min-w-0">
         <p class="text-xs font-medium text-foreground">Installed</p>
@@ -75,7 +75,7 @@
       </div>
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
         title="Remove the video pack and its downloaded model weights"
         aria-label="Remove the video pack and its downloaded model weights"
         onclick={() => (pendingRemove = true)}
@@ -87,7 +87,7 @@
     <div class="mt-3 flex flex-wrap items-center gap-3">
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         disabled={!pack}
         title="Download and install the optional video pack"
         aria-label="Install the optional video pack"
@@ -107,7 +107,7 @@
   {/if}
 
   {#if failure}
-    <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {failure}
     </p>
   {/if}

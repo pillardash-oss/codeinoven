@@ -53,7 +53,7 @@
     <span> {line.lead}</span>
     {#if line.label}
       <span
-        class="mx-1 inline-block max-w-[14ch] truncate rounded-full px-1.5 py-0.5 align-middle text-[0.5625rem] font-medium leading-none"
+        class="mx-1 inline-block max-w-[14ch] truncate px-1.5 py-0.5 align-middle text-[0.5625rem] font-medium leading-none"
         style={prLabelStyle(line.label.color)}
       >
         {line.label.name}

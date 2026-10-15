@@ -274,7 +274,7 @@
             Input
           </p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{inputJson}</pre>
+            class="max-h-40 overflow-auto bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{inputJson}</pre>
         </div>
       {/if}
       {#if displayDiffs.length === 0 && part.state.output}
@@ -286,7 +286,7 @@
             <LongTextBlock text={giantOutput} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
           {:else}
             <pre
-              class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
+              class="max-h-40 overflow-auto bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
                 .state.output}</pre>
           {/if}
         </div>
@@ -300,7 +300,7 @@
             <LongTextBlock text={giantError} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
           {:else}
             <pre
-              class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
+              class="max-h-40 overflow-auto bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
                 .state.error}</pre>
           {/if}
         </div>

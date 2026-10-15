@@ -54,7 +54,7 @@
 </script>
 
 <div
-  class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+  class="fixed z-50 w-96 border border-border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
   role="dialog"
   aria-label={dialogLabel}
   {@attach draggablePopover({
@@ -77,7 +77,7 @@
   {#if canAnnotate}
     <RichMarkdownEditor
       bind:this={editor}
-      class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
+      class="mt-2 min-h-16 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
       bind:value={body}
       placeholder="Leave your review note…"
       ariaLabel={editorLabel}
@@ -90,7 +90,7 @@
     {/if}
     <div class="ml-auto flex items-center gap-1.5">
       <button
-        class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
+        class="px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
         title="Cancel annotation"
         onclick={onCancel}>Cancel</button
       >
@@ -102,7 +102,7 @@
           disabled={busy}
         />
         <button
-          class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+          class="bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy || !body.trim()}
           title="Add annotation"
           onclick={onSubmit}>Comment</button

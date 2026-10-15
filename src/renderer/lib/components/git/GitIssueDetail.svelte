@@ -368,7 +368,7 @@
       {#if onBack}
         <button
           type="button"
-          class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to issues"
           aria-label="Back to issues"
           onclick={onBack}
@@ -377,7 +377,7 @@
         </button>
       {/if}
       <span
-        class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold {issueStateToneClass(
+        class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {issueStateToneClass(
           subject
         )}"
       >
@@ -388,7 +388,7 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this issue on GitHub"
         aria-label="Open this issue on GitHub"
         onclick={() => onOpenInBrowser(subject)}
@@ -400,7 +400,7 @@
     <div class="flex flex-wrap items-center gap-1">
       <button
         type="button"
-        class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-primary/10 px-2 text-[0.625rem] font-medium text-primary transition-colors hover:bg-primary/20"
+        class="flex h-6 cursor-pointer items-center gap-1 bg-primary/10 px-2 text-[0.625rem] font-medium text-primary transition-colors hover:bg-primary/20"
         title="Open a new agent thread seeded with this issue"
         onclick={() => onWorkOn(subject)}
       >
@@ -410,7 +410,7 @@
       {#if onCreatePr}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Open a pull request prefilled to close this issue"
           onclick={() => onCreatePr?.(subject)}
         >
@@ -421,7 +421,7 @@
       {#if subject.state === 'open'}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10"
           title="Close this issue"
           onclick={() => onRequestClose(subject)}
         >
@@ -431,7 +431,7 @@
       {:else}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Reopen this issue"
           onclick={() => onReopen(subject)}
         >
@@ -454,7 +454,7 @@
         {#each subject.labels ?? [] as label (label.name)}
           <button
             type="button"
-            class="max-w-[14ch] cursor-pointer truncate rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none transition-opacity hover:opacity-80"
+            class="max-w-[14ch] cursor-pointer truncate px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none transition-opacity hover:opacity-80"
             style={prLabelStyle(label.color)}
             title="Edit labels"
             onclick={() => onEditMetadata('labels', subject)}
@@ -464,7 +464,7 @@
         {/each}
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Edit labels"
           onclick={() => onEditMetadata('labels', subject)}
         >
@@ -473,7 +473,7 @@
         </button>
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Edit assignees"
           onclick={() => onEditMetadata('assignees', subject)}
         >
@@ -486,7 +486,7 @@
         </button>
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Set milestone"
           onclick={() => onEditMetadata('milestone', subject)}
         >
@@ -514,7 +514,7 @@
       />
 
       <!-- The issue body, rendered as the author wrote it. -->
-      <div class="mt-2 rounded-lg border border-border bg-surface/60">
+      <div class="mt-2 border border-border bg-surface/60">
         <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
           <PrAvatar login={subject.authorLogin} avatarUrl={subject.authorAvatarUrl} />
           <span class="text-[0.625rem] font-medium text-foreground"
@@ -577,7 +577,7 @@
             {#snippet gutter()}
               <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
             {/snippet}
-            <div class="rounded-lg border border-border bg-surface/60">
+            <div class="border border-border bg-surface/60">
               <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
                 <span class="text-[0.625rem] font-medium text-foreground"
                   >{githubDisplayLogin(comment.authorLogin)}</span
@@ -603,7 +603,7 @@
                   {#if editingId === comment.id}
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       onclick={() => {
                         editingId = null
                         editingBody = ''
@@ -613,7 +613,7 @@
                     </button>
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                      class="flex h-5 cursor-pointer items-center bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                       disabled={busyCommentId || editingBody.trim().length === 0}
                       onclick={() => void saveEdit()}
                     >
@@ -622,7 +622,7 @@
                   {:else}
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       title="Edit your comment"
                       onclick={() => {
                         editingId = comment.id
@@ -633,7 +633,7 @@
                     </button>
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
                       title="Delete your comment"
                       onclick={() => (confirmingDelete = comment)}
                     >
@@ -645,7 +645,7 @@
               {#if editingId === comment.id}
                 <div class="px-2.5 py-2">
                   <textarea
-                    class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
+                    class="min-h-24 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
                     aria-label="Edit comment"
                     bind:value={editingBody}></textarea>
                 </div>
@@ -708,7 +708,7 @@
   {#if !loading}
     <div class="shrink-0 border-t border-border bg-surface/60 p-2">
       <textarea
-        class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="min-h-20 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Leave a comment…"
         aria-label="Comment on this issue"
         bind:value={draft}
@@ -717,7 +717,7 @@
         <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           disabled={posting || draft.trim().length === 0}
           onclick={() => void submitComment()}
         >

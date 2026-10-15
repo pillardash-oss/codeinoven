@@ -295,7 +295,7 @@
 {/snippet}
 
 <article
-  class={['overflow-hidden bg-surface', framed && 'rounded-lg border border-border']}
+  class={['overflow-hidden bg-surface', framed && 'border border-border']}
   data-entry-url={entry.url}
 >
   <header
@@ -325,7 +325,7 @@
           <BotBadge />
         {/if}
         {#if badge}
-          <span class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {badge.class}">
+          <span class="shrink-0 px-1.5 py-px text-[0.5625rem] font-medium {badge.class}">
             {badge.label}
           </span>
         {/if}
@@ -357,7 +357,7 @@
     {#if !editing && entry.body.trim()}
       <button
         type="button"
-        class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
+        class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
         aria-expanded={!folded}
         aria-label={folded ? `Expand ${displayLogin}'s comment` : `Fold ${displayLogin}'s comment`}
         title={folded ? 'Show this comment' : 'Fold this comment'}
@@ -378,7 +378,7 @@
     {#if !editing}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+          class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
           aria-label="Actions for {displayLogin}'s comment"
           title="Comment actions"
         >
@@ -386,7 +386,7 @@
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            class="z-50 min-w-52 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            class="z-50 min-w-52 overflow-hidden border border-border bg-surface p-1 shadow-xl"
             side="bottom"
             align="end"
             sideOffset={4}
@@ -436,7 +436,7 @@
          plainer textarea. -->
     <div class="p-2">
       <RichMarkdownEditor
-        class="max-h-72 overflow-y-auto rounded-lg border border-border bg-elevated px-2.5 py-2"
+        class="max-h-72 overflow-y-auto border border-border bg-elevated px-2.5 py-2"
         bind:value={editBody}
         placeholder="Edit this comment…"
         ariaLabel="Edit comment"
@@ -445,7 +445,7 @@
       <div class="mt-1.5 flex items-center justify-end gap-1.5">
         <button
           type="button"
-          class="h-7 cursor-pointer rounded-lg border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
+          class="h-7 cursor-pointer border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
           title="Discard this edit"
           onclick={cancelEdit}
         >
@@ -453,7 +453,7 @@
         </button>
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
+          class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
           title="Save this comment"
           disabled={!editBody.trim() || savingComment}
           onclick={() => void saveEdit()}

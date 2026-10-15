@@ -70,8 +70,8 @@
   }
 </script>
 
-<div id="settings-block-browser-prototype-cdn" class="rounded-xl border bg-surface p-4">
-  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Prototype previews</h3>
+<div id="settings-block-browser-prototype-cdn" class="border bg-surface p-4">
+  <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Prototype previews</h3>
   <div class="flex items-center justify-between gap-4">
     <div>
       <p class="text-sm font-medium">Allow external CDNs</p>
@@ -94,7 +94,7 @@
         <ul class="mt-1.5 flex flex-wrap gap-1.5">
           {#each builtInOrigins as origin (origin)}
             <li
-              class="rounded-md border bg-elevated px-2 py-1 font-mono text-xs text-muted"
+              class="border bg-elevated px-2 py-1 font-mono text-xs text-muted"
               title={`${origin} is approved by ${APP_NAME}`}
             >
               {origin}
@@ -108,11 +108,11 @@
           <p class="text-xs font-medium text-muted">Your CDNs</p>
           <ul class="mt-1.5 flex flex-wrap gap-1.5">
             {#each userOrigins as origin (origin)}
-              <li class="flex items-center gap-1 rounded-md border bg-elevated py-1 pl-2 pr-1">
+              <li class="flex items-center gap-1 border bg-elevated py-1 pl-2 pr-1">
                 <span class="font-mono text-xs text-foreground">{origin}</span>
                 <button
                   type="button"
-                  class="rounded p-0.5 text-muted hover:bg-overlay hover:text-foreground disabled:opacity-50"
+                  class="p-0.5 text-muted hover:bg-overlay hover:text-foreground disabled:opacity-50"
                   title={`Remove ${origin} from approved prototype CDNs`}
                   aria-label={`Remove ${origin} from approved prototype CDNs`}
                   disabled={!settingsReady}
@@ -129,7 +129,7 @@
       <form class="flex items-center gap-2" onsubmit={submitAdd}>
         <input
           type="text"
-          class="h-9 min-w-0 flex-1 rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+          class="h-9 min-w-0 flex-1 border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
           placeholder="cdn.example.com"
           aria-label="CDN origin to approve for prototype previews"
           bind:value={candidate}
@@ -137,7 +137,7 @@
         />
         <button
           type="submit"
-          class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium outline-none hover:bg-overlay focus:border-primary disabled:opacity-50"
+          class="flex h-9 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium outline-none hover:bg-overlay focus:border-primary disabled:opacity-50"
           title="Approve this CDN for prototype previews"
           aria-label="Approve this CDN for prototype previews"
           disabled={!settingsReady || !canAdd}

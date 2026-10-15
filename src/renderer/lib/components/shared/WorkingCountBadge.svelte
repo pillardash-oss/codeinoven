@@ -41,22 +41,32 @@
   })
 
   let display = $derived(count > max ? `${max}+` : String(count))
+  /** A colour indicator is its own mark, so it carries no box: the swatches are
+   *  the state, and a border, a fill, a padding and a shadow around them only
+   *  added noise to the rail. A counted badge keeps its box, because there the
+   *  count is the mark and the box is what makes it legible over the glyph. */
+  let colorOnly = $derived(Boolean(colors?.length))
 </script>
 
 {#if count > 0}
   {@const Icon = icon}
+  <!-- A host anchors this badge's corner with an overhang, which a 14px box can
+       afford and a 6px bare mark cannot: left as-is the mark drifts into the
+       gutter between two rail entries and stops saying which entry it belongs
+       to. The mark therefore cancels the overhang to sit just inside its own
+       entry's corner, 2px in from each edge. -->
   <span
-    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px rounded-full border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colors?.length
-      ? ''
-      : toneClass} {className}"
+    class="flex items-center gap-px text-[0.5625rem] font-semibold tabular-nums {colorOnly
+      ? 'mt-1.5 mr-1.5'
+      : `h-3.5 min-w-3.5 justify-center border border-border bg-elevated px-1 shadow-sm ${toneClass}`} {className}"
     role="status"
     aria-label={label}
     title={label}
   >
-    {#if colors?.length}
+    {#if colorOnly}
       <span class="flex items-center gap-px" aria-hidden="true">
         {#each colors as accent (accent)}
-          <span class="h-1.5 w-1.5 rounded-full" style:background={accent}></span>
+          <span class="h-1.5 w-1.5" style:background={accent}></span>
         {/each}
       </span>
       <span class="sr-only">{display}</span>

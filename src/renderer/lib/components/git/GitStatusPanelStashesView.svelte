@@ -60,7 +60,7 @@
           <p class="mt-1 text-[0.625rem] text-dimmed">This stash has no changes.</p>
         </div>
       {:else}
-        <div class="overflow-hidden rounded-lg border border-border bg-surface">
+        <div class="overflow-hidden border border-border bg-surface">
           <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
             <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
               Changed files
@@ -86,14 +86,14 @@
       {/if}
     </div>
   {:else}
-    <div class="overflow-hidden rounded-lg border border-border bg-surface">
+    <div class="overflow-hidden border border-border bg-surface">
       {#each stashes as stash (stash.id)}
         <div
           class="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-elevated/40"
         >
           <button
             type="button"
-            class="flex min-w-0 flex-1 items-center gap-2 rounded text-left transition-colors hover:text-foreground"
+            class="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:text-foreground"
             title="View changes in stash {stash.id}"
             aria-label="View changes in stash {stash.id}"
             onclick={() => onSelectStash(stash)}
@@ -116,7 +116,7 @@
           </button>
           <button
             type="button"
-            class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            class="shrink-0 border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
             disabled={stashOpBusy}
             title="Restore stash {stash.id} into the working tree"
             onclick={() => onPopStash(stash.id)}
@@ -125,7 +125,7 @@
           </button>
           <button
             type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+            class="flex h-6 w-6 shrink-0 items-center justify-center border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
             disabled={stashOpBusy}
             title="Discard stash {stash.id}"
             aria-label="Discard stash {stash.id}"

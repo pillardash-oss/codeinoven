@@ -63,7 +63,7 @@
   role="listbox"
   aria-label="Slash actions"
 >
-  <div class="flex items-center justify-between px-2 py-1">
+  <div class="flex items-center justify-between border-b border-border px-2 py-1">
     <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `Actions matching “${query}”` : 'Available actions'}
     </p>
@@ -75,7 +75,9 @@
   {:else}
     {#each groups as group (group.category)}
       <div role="group" aria-label={categoryLabel(group.category)}>
-        <p class="px-2 pb-1 pt-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+        <p
+          class="border-b border-border px-2 pb-1 pt-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
+        >
           {categoryLabel(group.category)}
         </p>
 

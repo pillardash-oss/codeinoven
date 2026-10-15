@@ -70,10 +70,10 @@
   }: Props = $props()
 
   const itemClass =
-    'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+    'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   const btnClass =
-    'flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
 
   let open = $state(false)
 
@@ -154,7 +154,7 @@
         sideOffset={5}
         avoidCollisions
         collisionPadding={10}
-        class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+        class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
           <RefreshCw size={13} class="text-muted" />

@@ -54,7 +54,7 @@
     </span>
     <button
       type="button"
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Dock this file into a floating panel"
       title="Dock"
       onclick={() => standaloneFiles.dock()}
@@ -63,7 +63,7 @@
     </button>
     <button
       type="button"
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={active ? `Close ${active.name}` : 'Close the file viewer'}
       title="Close the file viewer"
       onclick={() => {

@@ -348,7 +348,7 @@
           >
             Delegated by parent
           </p>
-          <div class="rounded-xl rounded-br-sm bg-elevated px-3 py-2.5 text-xs text-foreground">
+          <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
             <MarkdownView text={tab.activity.prompt} />
           </div>
         </div>
@@ -375,7 +375,7 @@
 
       {#each userMessages as message (message.id)}
         <div class="ml-auto max-w-[90%]">
-          <div class="rounded-xl rounded-br-sm bg-elevated px-3 py-2.5 text-xs text-foreground">
+          <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
             {#each textParts(message) as part (part.id)}
               <MarkdownView text={part.text} />
             {/each}

@@ -177,7 +177,7 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
     title={currentBranch ? `Switch branch (${currentBranch})` : 'Switch branch'}
     aria-label={currentBranch ? `Switch branch, currently ${currentBranch}` : 'Switch branch'}
@@ -207,7 +207,7 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-60 overflow-hidden rounded-xl border bg-surface shadow-xl"
+      class="z-50 w-60 overflow-hidden border bg-surface shadow-xl"
     >
       <!-- Origin -->
       {#if primaryRemote}
@@ -223,7 +223,7 @@
           {#if onReplaceOrigin}
             <button
               type="button"
-              class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="shrink-0 cursor-pointer px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title="Replace origin ({primaryRemote.name})"
               onclick={onReplaceOrigin}
             >
@@ -245,7 +245,7 @@
       {/if}
 
       <div class="border-b border-border px-3 py-2">
-        <div class="flex items-center gap-2 rounded-lg bg-elevated px-2 py-1">
+        <div class="flex items-center gap-2 border border-border bg-elevated px-2 py-1">
           <Search size={12} class="shrink-0 text-dimmed" />
           <input
             class="min-w-0 flex-1 bg-transparent font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
@@ -266,7 +266,8 @@
             <div
               class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch)}
-              onkeydown={(e: KeyboardEvent) => keymapState.matches('ui-activate', e) && handleSelect(branch)}
+              onkeydown={(e: KeyboardEvent) =>
+                keymapState.matches('ui-activate', e) && handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
@@ -288,7 +289,7 @@
               {:else if onDelete}
                 <button
                   type="button"
-                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                  class="shrink-0 cursor-pointer p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                   title="Delete branch {branch.name}"
                   aria-label="Delete branch {branch.name}"
                   onclick={(e: MouseEvent) => handleDelete(e, branch.name)}
@@ -323,7 +324,7 @@
                 </span>
               {/if}
               <span
-                class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
+                class="shrink-0 bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
               >
                 worktree
               </span>
@@ -369,14 +370,14 @@
         {#if creating}
           <div class="flex items-center gap-1.5">
             <input
-              class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              class="min-w-0 flex-1 border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder="new-feature"
               bind:value={newBranchName}
               onkeydown={handleKeydown}
             />
             <button
               type="button"
-              class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="shrink-0 cursor-pointer bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={!newBranchName.trim()}
               onclick={handleCreate}
             >

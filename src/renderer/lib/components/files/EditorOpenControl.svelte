@@ -42,7 +42,7 @@
   }
 </script>
 
-<div class="flex h-7 items-stretch overflow-hidden rounded border border-border bg-elevated">
+<div class="flex h-7 items-stretch overflow-hidden border border-border bg-elevated">
   <button
     type="button"
     class="flex min-w-0 items-center gap-1.5 px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
@@ -75,14 +75,16 @@
         side="bottom"
         align="end"
         sideOffset={6}
-        class="z-50 w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+        class="z-50 w-48 overflow-hidden border border-border bg-surface p-1 shadow-lg"
       >
-        <p class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed">
+        <p
+          class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
+        >
           Open file in
         </p>
         {#each availableEditors as editor (editor.id)}
           <DropdownMenu.Item
-            class="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+            class="flex items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
             textValue={editor.name}
             onSelect={() => void selectAndOpen(editor.id)}
           >

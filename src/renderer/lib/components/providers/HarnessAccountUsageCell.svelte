@@ -109,9 +109,9 @@
       {@render noLimitsMessage()}
     {:else}
       <div class="space-y-1.5" aria-hidden="true">
-        <div class="h-2 w-28 animate-pulse rounded-full bg-overlay"></div>
-        <div class="h-1.5 w-40 animate-pulse rounded-full bg-overlay"></div>
-        <div class="h-2 w-20 animate-pulse rounded-full bg-overlay"></div>
+        <div class="h-2 w-28 animate-pulse bg-overlay"></div>
+        <div class="h-1.5 w-40 animate-pulse bg-overlay"></div>
+        <div class="h-2 w-20 animate-pulse bg-overlay"></div>
       </div>
       <span class="sr-only">Checking usage for {account.label}</span>
     {/if}

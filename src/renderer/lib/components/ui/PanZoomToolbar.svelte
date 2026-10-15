@@ -14,13 +14,13 @@
 
 <div
   class={[
-    'flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
+    'flex items-center gap-0.5 border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
     className
   ]}
 >
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Zoom out"
     title="Zoom out"
     disabled={panZoom.zoom <= panZoom.min}
@@ -33,7 +33,7 @@
   </span>
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Zoom in"
     title="Zoom in"
     disabled={panZoom.zoom >= panZoom.max}
@@ -44,7 +44,7 @@
   <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Reset zoom and pan"
     title="Reset zoom and pan"
     disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}

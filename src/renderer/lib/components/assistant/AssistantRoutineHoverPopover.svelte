@@ -90,7 +90,7 @@
       {#if incomplete || missed || attention}
         <AlertTriangle size={12} style="color: {statusColor}" />
       {:else}
-        <span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {statusColor}"></span>
+        <span class="h-1.5 w-1.5 shrink-0" style="background: {statusColor}"></span>
       {/if}
       <span class="min-w-0 break-words" style="color: {statusColor}">{statusLabel}</span>
     </dd>

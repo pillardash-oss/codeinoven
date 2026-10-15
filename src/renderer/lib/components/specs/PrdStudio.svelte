@@ -241,7 +241,7 @@
   {#snippet actions()}
     {#if canEdit}
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-thread-spec px-2.5 text-xs font-medium text-foreground disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 bg-thread-spec px-2.5 text-xs font-medium text-foreground disabled:opacity-50"
         disabled={busy}
         title="Finalize this PRD"
         onclick={() => void onFinalize()}
@@ -252,7 +252,7 @@
     {#if onNextStep && canEdit}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || nextStepBusy}
           title="Choose what to build next from this PRD"
         >
@@ -266,10 +266,10 @@
             sideOffset={4}
             collisionPadding={8}
             strategy="fixed"
-            class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            class="z-50 w-52 border border-border bg-surface p-1 shadow-lg"
           >
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+              class="flex cursor-pointer items-center justify-between gap-3 px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
               title="Generate an implementation-ready Spec from this PRD"
               disabled={nextStepBusy}
               onSelect={() => {
@@ -299,7 +299,7 @@
     />
   {/snippet}
 
-  <article class="rounded-2xl border bg-surface p-6 shadow-sm">
+  <article class="border border-border bg-surface p-6">
     <section id="prd-section-summary" data-prd-section="summary" class="scroll-mt-5">
       <input
         class="w-full bg-transparent text-2xl font-semibold text-foreground outline-none"
@@ -312,7 +312,7 @@
         }}
       />
       <textarea
-        class="mt-3 min-h-20 w-full resize-y rounded-lg bg-raised p-3 text-sm leading-6 text-muted outline-none focus:ring-1 focus:ring-thread-spec"
+        class="mt-3 min-h-20 w-full resize-y border border-border bg-raised p-3 text-sm leading-6 text-muted outline-none focus:ring-1 focus:ring-thread-spec"
         value={content.summary}
         aria-label="PRD summary"
         disabled={!canEdit}
@@ -330,7 +330,7 @@
       >
         <h2 class="text-sm font-semibold text-foreground">{section.title}</h2>
         <textarea
-          class="mt-2 min-h-28 w-full resize-y rounded-lg bg-raised p-3 text-sm leading-6 text-foreground outline-none focus:ring-1 focus:ring-thread-spec"
+          class="mt-2 min-h-28 w-full resize-y border border-border bg-raised p-3 text-sm leading-6 text-foreground outline-none focus:ring-1 focus:ring-thread-spec"
           value={section.markdown}
           aria-label={section.title}
           disabled={!canEdit}
@@ -339,7 +339,7 @@
           <div class="mt-2 flex gap-2 overflow-x-auto pb-1" aria-label={`${section.title} comments`}>
             {#each annotationsForSection(section.id) as annotation (annotation.id)}
               <button
-                class="max-w-64 shrink-0 rounded-xl border bg-elevated px-3 py-2 text-left hover:bg-overlay"
+                class="max-w-64 shrink-0 border border-border bg-elevated px-3 py-2 text-left hover:bg-overlay"
                 title="Open comment"
                 onclick={() => void openAnnotation(annotation)}
               >
@@ -354,7 +354,7 @@
         {#if canEdit}
           <div class="mt-2 flex items-start gap-2">
             <textarea
-              class="min-h-16 flex-1 resize-y rounded-lg border bg-surface p-2.5 text-xs leading-5 text-foreground outline-none focus:ring-1 focus:ring-thread-spec"
+              class="min-h-16 flex-1 resize-y border border-border bg-surface p-2.5 text-xs leading-5 text-foreground outline-none focus:ring-1 focus:ring-thread-spec"
               value={annotationDrafts[section.id] ?? ''}
               aria-label={`Add comment to ${section.title}`}
               placeholder="Add review comment"
@@ -367,7 +367,7 @@
               }}></textarea>
             <button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-lg border text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              class="flex h-8 w-8 items-center justify-center border border-border text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
               title={`Add comment to ${section.title}`}
               aria-label={`Add comment to ${section.title}`}
               disabled={busy || !(annotationDrafts[section.id] ?? '').trim()}

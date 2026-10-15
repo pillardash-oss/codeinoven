@@ -47,7 +47,7 @@
 
 {#if recoveryNotice}
   <div
-    class="flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/5 px-3 py-2.5"
+    class="flex items-start gap-2.5 border border-success/25 bg-success/5 px-3 py-2.5"
     role="status"
     aria-live="polite"
   >
@@ -63,7 +63,7 @@
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Dismiss sub-agent recovery notice"
       title="Dismiss sub-agent recovery notice"
       onclick={onDismissRecovery}
@@ -74,7 +74,7 @@
 {/if}
 
 {#if actionError && !noticeDismissals.isDismissed(actionErrorId, actionErrorCondition)}
-  <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
+  <div class="border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
     <div class="flex items-start gap-2.5">
       <div class="min-w-0 flex-1">
         <p class="text-xs font-medium text-danger">Sub-agent action failed</p>

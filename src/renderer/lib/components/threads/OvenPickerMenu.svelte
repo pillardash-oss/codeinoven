@@ -143,8 +143,7 @@
     type="button"
     class={variant === 'segment'
       ? 'group flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50'
-      : 'flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted hover:bg-elevated disabled:opacity-50'}
-    style={variant === 'chip' ? 'border-radius: 0.375rem !important' : undefined}
+      : 'flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase hover:bg-elevated disabled:opacity-50'}
     title={label}
     aria-haspopup="menu"
     aria-expanded={editor}
@@ -222,7 +221,7 @@
             aria-checked={oven.id === selectedId}
             data-oven-row={oven.id}
             onkeydown={(event) => rowKeydown(event, index)}
-            class="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
+            class="mt-1 flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
             disabled={busy || saving}
             title={`Use ${oven.name}`}
             onclick={() => void choose(oven.id)}
@@ -249,7 +248,7 @@
                 {#if inventory?.length}
                   {#each inventory.slice(0, 4) as item (item.harnessId)}
                     <span
-                      class="flex items-center rounded bg-elevated p-0.5"
+                      class="flex items-center bg-elevated p-0.5"
                       title={item.installedVersion
                         ? `${item.command} ${item.installedVersion}`
                         : item.command}
@@ -261,7 +260,7 @@
                   {#each probes[oven.id].harnesses
                     .filter((entry) => entry.path)
                     .slice(0, 4) as entry (entry.command)}
-                    <span class="flex items-center rounded bg-elevated p-0.5" title={entry.command}>
+                    <span class="flex items-center bg-elevated p-0.5" title={entry.command}>
                       <AgentIcon
                         agentId={ovenHarnessIdForCommand(entry.command) ?? entry.command}
                         label={entry.command}

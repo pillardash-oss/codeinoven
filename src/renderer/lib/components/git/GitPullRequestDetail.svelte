@@ -741,7 +741,7 @@
         {#if onFullscreen}
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Open in full screen"
             aria-label="Open in full screen"
             onclick={onFullscreen}
@@ -751,7 +751,7 @@
         {/if}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
           title="Refresh pull request"
           aria-label="Refresh pull request"
           disabled={gitState.isBusy('pr-detail')}
@@ -761,7 +761,7 @@
         </button>
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Open pull request on GitHub"
           aria-label="Open pull request on GitHub"
           data-external-url={summary.url}
@@ -839,7 +839,7 @@
       <p class="min-w-0 flex-1 break-words">{gitState.error}</p>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-danger/10"
+        class="flex h-6 w-6 shrink-0 items-center justify-center hover:bg-danger/10"
         title="Dismiss Git error"
         aria-label="Dismiss Git error"
         onclick={() => (gitState.error = null)}
@@ -866,7 +866,7 @@
       <button
         type="button"
         class={[
-          'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.625rem] font-medium transition-colors',
+          'flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[0.625rem] font-medium transition-colors',
           tab === entry.id ? 'bg-elevated text-foreground' : 'text-muted hover:text-foreground'
         ]}
         aria-current={tab === entry.id}
@@ -895,7 +895,7 @@
     -->
     <button
       type="button"
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
         ? 'border-primary bg-primary/10 text-foreground'
         : 'border-border text-foreground hover:bg-elevated'}"
       aria-expanded={composerOpen}
@@ -917,7 +917,7 @@
   -->
   <button
     type="button"
-    class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-danger/30 px-2.5 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {variant ===
+    class="flex h-7 cursor-pointer items-center gap-1 border border-danger/30 px-2.5 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {variant ===
     'fullscreen'
       ? 'w-full justify-center'
       : 'shrink-0'}"
@@ -938,7 +938,7 @@
   {#if draft}
     <button
       type="button"
-      class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
+      class="flex h-7 cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
       'fullscreen'
         ? 'w-full justify-center'
         : 'shrink-0'}"
@@ -959,13 +959,14 @@
       outline (the EditorOpenControl split-button pattern) rather than a bare
       <select>.
 
-      The wrapper is `rounded-xs` because every button in the app is rounded by
-      `:where(button) { border-radius: 2px !important }` in app.css. A larger
-      radius on this wrapper made the one primary action in the panel the only
-      control with pill corners: the outside has to match the halves it clips.
+      The wrapper carries no radius of its own: every button in the app takes the
+      2px control chamfer from `:where(button) { border-radius: 2px !important }`
+      in app.css, so the outside matches the halves it clips. A larger radius on
+      this wrapper is what once made the one primary action in the panel the only
+      control with pill corners.
     -->
     <div
-      class="flex h-7 min-w-0 items-stretch overflow-hidden rounded-xs {variant === 'fullscreen'
+      class="flex h-7 min-w-0 items-stretch overflow-hidden {variant === 'fullscreen'
         ? 'w-full'
         : 'shrink'}"
     >
@@ -1002,7 +1003,7 @@
             side="top"
             align="end"
             sideOffset={6}
-            class="z-90 w-40 overflow-hidden rounded-lg border-border bg-surface p-1 shadow-lg"
+            class="z-90 w-40 overflow-hidden border-border bg-surface p-1 shadow-lg"
           >
             <p
               class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
@@ -1011,7 +1012,7 @@
             </p>
             {#each mergeMethods as option (option.id)}
               <DropdownMenu.Item
-                class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+                class="flex cursor-pointer items-center justify-between gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
                 onSelect={() => (method = option.id)}
               >
                 {option.label}
@@ -1140,13 +1141,12 @@
       Two clusters on one row: the verdicts on the left, where a review reads
       left to right, and the plain comment on the right, where the submit action
       belongs. The verdicts share one outline (the join reads as one control); the
-      comment is its own button. Both are `rounded-xs` because every button in the
-      app is pinned to 2px by `:where(button) { border-radius: 2px !important }`
-      in app.css, and a wrapper with a larger radius is what made these read as
-      pill-shaped.
+      comment is its own button. Both take the app's 2px control chamfer from
+      `:where(button) { border-radius: 2px !important }` in app.css, and a wrapper
+      with a larger radius is what once made these read as pill-shaped.
     -->
     <div class="flex items-stretch gap-2 px-3 py-2.5">
-      <div class="flex h-8 min-w-0 items-stretch overflow-hidden rounded-xs border border-border">
+      <div class="flex h-8 min-w-0 items-stretch overflow-hidden border border-border">
         <button
           type="button"
           class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 px-2 text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
@@ -1177,7 +1177,7 @@
       <span class="min-w-0 flex-1"></span>
       <button
         type="button"
-        class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-xs bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+        class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
         title={hasBody ? 'Post this as a comment' : 'Write something first'}
         disabled={posting || !hasBody}
         onclick={() => void postComment()}
@@ -1203,7 +1203,7 @@
     -->
   <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
     {#if open && detail?.mergeable === false}
-      <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
+      <div class="mb-2 border border-warning/30 bg-warning/10 px-3 py-2.5">
         <div class="flex items-center gap-1.5">
           <TriangleAlert size={13} class="shrink-0 text-warning" />
           <p class="text-[0.625rem] font-semibold text-warning">
@@ -1217,7 +1217,7 @@
         <div class="mt-2 flex items-center gap-1.5">
           <button
             type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
             title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
             disabled={resolving}
             onclick={() => (resolveConfirm = true)}
@@ -1231,7 +1231,7 @@
           </button>
           <button
             type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
             title="Have an agent resolve the conflicts and push the fix"
             onclick={() => onResolveWithAgent?.(summary)}
           >
@@ -1284,7 +1284,7 @@
         <span class="flex-1"></span>
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          class="flex h-7 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
           title="Reopen this pull request"
           disabled={reopening}
           onclick={() => void reopen()}

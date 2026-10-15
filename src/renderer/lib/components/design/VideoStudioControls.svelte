@@ -171,14 +171,11 @@
       panel = null
     }
   }}
-  class="mb-3 rounded-xl border border-border bg-surface p-3"
+  class="mb-3 border border-border bg-surface p-3"
   aria-label="Composition settings"
 >
   {#if error}
-    <p
-      class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-xs text-danger"
-      role="alert"
-    >
+    <p class="mb-2 border border-danger/20 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">
       {error}
     </p>
   {/if}
@@ -202,7 +199,7 @@
           {#if dirty}
             <button
               type="submit"
-              class="flex h-7 shrink-0 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-7 shrink-0 items-center bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             >
               Save changes
             </button>
@@ -224,7 +221,7 @@
             {:else if control.kind === 'color'}
               <input
                 id={`video-${control.key}`}
-                class="h-7 w-12 shrink-0 cursor-pointer rounded-md border border-border bg-elevated p-0.5"
+                class="h-7 w-12 shrink-0 cursor-pointer border border-border bg-elevated p-0.5"
                 type="color"
                 value={String(control.value)}
                 title={control.label}
@@ -234,7 +231,7 @@
             {:else}
               <input
                 id={`video-${control.key}`}
-                class="h-7 w-28 shrink-0 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                class="h-7 w-28 shrink-0 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
                 type={control.kind === 'number' ? 'number' : 'text'}
                 value={String(control.value)}
                 min={control.min}
@@ -255,7 +252,7 @@
           <div class="border-t border-border pt-2">
             <button
               type="button"
-              class="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-muted transition-colors hover:text-foreground"
+              class="flex w-full items-center justify-between gap-2 py-1 text-xs text-muted transition-colors hover:text-foreground"
               aria-expanded={captionsOpen}
               title={`Captions, ${studio.captions.length} in this composition`}
               aria-label={`Captions, ${studio.captions.length} in this composition`}
@@ -273,7 +270,7 @@
               />
             </button>
             {#if captionsOpen}
-              <div class="mt-1 space-y-2 rounded-lg border border-border bg-app p-2">
+              <div class="mt-1 space-y-2 border border-border bg-app p-2">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-xs text-muted">Style</span>
                   <EnumSelect
@@ -296,7 +293,7 @@
                     <label class="block text-xs text-muted">
                       Caption at {caption.start.toFixed(2)}s
                       <textarea
-                        class="mt-1 w-full rounded-md border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
+                        class="mt-1 w-full border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
                         rows="2"
                         bind:value={caption.text}
                         oninput={() => {
@@ -309,7 +306,7 @@
                         Start
                         <input
                           type="number"
-                          class="h-7 w-20 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                          class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
                           min="0"
                           step="0.01"
                           bind:value={caption.start}
@@ -323,7 +320,7 @@
                         End
                         <input
                           type="number"
-                          class="h-7 w-20 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                          class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
                           min="0"
                           step="0.01"
                           bind:value={caption.end}
@@ -340,7 +337,7 @@
                   <div class="flex items-center justify-between gap-2 border-t border-border pt-2">
                     <button
                       type="button"
-                      class="h-7 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      class="h-7 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                       disabled={captionPage === 0}
                       onclick={() => {
                         captionPage -= 1
@@ -356,7 +353,7 @@
                     </span>
                     <button
                       type="button"
-                      class="h-7 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      class="h-7 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                       disabled={(captionPage + 1) * 25 >= studio.captions.length}
                       onclick={() => {
                         captionPage += 1
@@ -374,7 +371,7 @@
           <div class="border-t border-border pt-2">
             <button
               type="button"
-              class="flex w-full items-center justify-between gap-2 rounded-md py-1 text-xs text-muted transition-colors hover:text-foreground"
+              class="flex w-full items-center justify-between gap-2 py-1 text-xs text-muted transition-colors hover:text-foreground"
               aria-expanded={tracksOpen}
               title={`Audio tracks, ${studio.audioTracks.length} in this composition`}
               aria-label={`Audio tracks, ${studio.audioTracks.length} in this composition`}
@@ -392,7 +389,7 @@
               />
             </button>
             {#if tracksOpen}
-              <div class="mt-1 space-y-2 rounded-lg border border-border bg-app p-2">
+              <div class="mt-1 space-y-2 border border-border bg-app p-2">
                 {#each studio.audioTracks as track (track)}
                   <div class="space-y-1.5 border-t border-border pt-2 first:border-t-0 first:pt-0">
                     <p class="truncate font-mono text-[0.625rem] text-muted" title={track.source}>
@@ -407,7 +404,7 @@
                           {field}
                           <input
                             type="number"
-                            class="h-7 w-16 rounded-md border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                            class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
                             min="0"
                             step="0.01"
                             bind:value={track[key]}
@@ -428,7 +425,7 @@
     </form>
   {/if}
   {#each jobs as job (job.id)}
-    <div class="mt-2 space-y-1 rounded-lg border border-border bg-app p-2">
+    <div class="mt-2 space-y-1 border border-border bg-app p-2">
       <div class="flex items-center justify-between gap-2 text-xs">
         <span class="min-w-0 truncate">
           {labels[job.operation] ?? 'Video processing'}

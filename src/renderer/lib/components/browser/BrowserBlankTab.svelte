@@ -189,7 +189,7 @@
       submit()
     }}
   >
-    <div class="flex items-center gap-1.5 rounded-xl border border-border bg-elevated p-1.5 pl-3.5">
+    <div class="flex items-center gap-1.5 border border-border bg-elevated p-1.5 pl-3.5">
       <label for={listId} class="sr-only">Search or enter an address</label>
       <input
         id={listId}
@@ -214,7 +214,7 @@
       />
       <button
         type="submit"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+        class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
         disabled={draft.trim() === ''}
         aria-label="Open address"
         title="Open address"
@@ -224,7 +224,7 @@
     </div>
     {#if drawerVisible}
       <div
-        class="absolute top-full right-0 left-0 z-20 mt-1.5 max-h-60 overflow-y-auto rounded-xl border border-border bg-surface p-1.5 text-left shadow-lg"
+        class="absolute top-full right-0 left-0 z-20 mt-1.5 max-h-60 overflow-y-auto border border-border bg-surface p-1.5 text-left shadow-lg"
       >
         <BrowserHistorySuggestions
           {listId}
@@ -248,7 +248,7 @@
         <button
           type="button"
           class={[
-            'flex w-20 shrink-0 flex-col items-center gap-1 rounded-xl px-2 py-2.5 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated',
+            'flex w-20 shrink-0 flex-col items-center gap-1 px-2 py-2.5 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated',
             active ? 'bg-elevated' : ''
           ]}
           aria-label={active ? `${option.name}, current box` : `Reopen this tab in ${option.name}`}
@@ -258,12 +258,12 @@
         >
           <span class="flex h-8 w-8 items-center justify-center" aria-hidden="true">
             {#if iconUrl}
-              <img src={iconUrl} alt="" class="h-6 w-6 rounded-md object-contain" />
+              <img src={iconUrl} alt="" class="h-6 w-6 object-contain" />
             {:else if option.box?.id === DEFAULT_BOX_ID}
               <Globe size={20} class="text-dimmed" />
             {:else if option.box}
               <span
-                class="h-2.5 w-2.5 rounded-full"
+                class="h-2.5 w-2.5"
                 style:background-color={browserAppearanceAccent(option.box)}
               ></span>
             {:else}

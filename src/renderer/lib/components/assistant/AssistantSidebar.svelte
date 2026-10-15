@@ -466,7 +466,7 @@
       {#if runs.length > TASK_RUN_PREVIEW}
         <button
           type="button"
-          class="flex w-full items-center rounded-md px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex w-full items-center px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-expanded={expandedRuns.has(key)}
           onclick={() => toggleRuns(key)}
         >
@@ -613,7 +613,7 @@
 
       {#if standaloneTasks.length > 0}
         <div
-          class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+          class="mt-2 mb-1 border-b border-border px-2 pb-1 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
         >
           Tasks
         </div>

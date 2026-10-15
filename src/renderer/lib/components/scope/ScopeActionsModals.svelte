@@ -38,7 +38,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted hover:bg-elevated"
       onclick={() => (actions.editTarget = null)}
     >
       Cancel
@@ -46,7 +46,7 @@
     <button
       type="submit"
       form={editFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={!actions.editName.trim() || scopeState.saving}
     >
       Save
@@ -81,7 +81,7 @@
       </label>
       <input
         id={`${componentId}-edit-scope-name`}
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground"
         bind:value={actions.editName}
       />
     </div>
@@ -96,14 +96,14 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted hover:bg-elevated"
       onclick={() => (actions.deleteTarget = null)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger hover:bg-danger-hover disabled:cursor-default disabled:opacity-50"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger hover:bg-danger-hover disabled:cursor-default disabled:opacity-50"
       disabled={removing}
       onclick={() => actions.confirmDelete()}
     >
@@ -124,7 +124,7 @@
     Removing it runs in the dock, so you can keep working while it finishes.
   </p>
 
-  <div class="mt-4 flex items-center justify-between rounded-lg border bg-elevated/50 px-3 py-2.5">
+  <div class="mt-4 flex items-center justify-between border bg-elevated/50 px-3 py-2.5">
     <div class="min-w-0">
       <p class="text-sm font-medium text-foreground">Delete associated threads</p>
       <p class="text-xs text-muted">Also permanently delete every thread in this scope.</p>
@@ -140,7 +140,7 @@
   {#if actions.deleteTarget?.root.kind === 'worktree' && actions.deletePreflight}
     <div class="mt-4 space-y-2 text-xs">
       {#if (actions.deletePreflight.dirtyFiles.length ?? 0) > 0}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+        <div class="border border-warning/30 bg-warning/10 p-3 text-warning">
           <p class="font-medium">
             Uncommitted changes will be lost ({actions.deletePreflight.dirtyFiles.length})
           </p>
@@ -152,12 +152,12 @@
         </div>
       {/if}
       {#if (actions.deletePreflight.unpushedCommits ?? 0) > 0}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+        <div class="border border-warning/30 bg-warning/10 p-3 text-warning">
           {actions.deletePreflight.unpushedCommits} unpushed commit(s) are not reachable from any remote.
         </div>
       {/if}
       {#if actions.deletePreflight.hasActiveProcesses}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+        <div class="border border-warning/30 bg-warning/10 p-3 text-warning">
           Active agent processes are still running in this scope.
         </div>
       {/if}

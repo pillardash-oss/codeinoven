@@ -312,8 +312,8 @@
 
   function noteMarkerClass(active: boolean): string {
     return active
-      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-primary bg-primary/15 px-1.5 text-[0.5625rem] text-foreground tabular-nums transition-colors'
-      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-elevated px-1.5 text-[0.5625rem] text-muted tabular-nums transition-colors hover:text-foreground'
+      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 border border-primary bg-primary/15 px-1.5 text-[0.5625rem] text-foreground tabular-nums transition-colors'
+      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 border border-border bg-elevated px-1.5 text-[0.5625rem] text-muted tabular-nums transition-colors hover:text-foreground'
   }
 
   onMount(() => {
@@ -372,7 +372,7 @@
 
 <div
   bind:this={root}
-  class="rounded-xl border border-border bg-surface p-3"
+  class="border border-border bg-surface p-3"
   role="group"
   aria-label="Composition timeline"
 >
@@ -387,7 +387,7 @@
     <div class="flex items-center gap-0.5">
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
         title="Step back one frame"
         aria-label="Step back one frame"
         disabled={!tab}
@@ -397,7 +397,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
         title={playing ? 'Pause the composition' : 'Play the composition'}
         aria-label={playing ? 'Pause the composition' : 'Play the composition'}
         disabled={!tab}
@@ -411,7 +411,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
         title="Step forward one frame"
         aria-label="Step forward one frame"
         disabled={!tab}
@@ -421,7 +421,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
         title="Comment on the moment the playhead is on"
         aria-label="Comment on the moment the playhead is on"
         disabled={!manifest}
@@ -457,7 +457,7 @@
 
       <div
         bind:this={bandArea}
-        class="relative mt-1 rounded-lg border border-border bg-app"
+        class="relative mt-1 border border-border bg-app"
         role="group"
         aria-label="Playhead"
         onpointerdown={beginScrub}
@@ -469,7 +469,7 @@
           {#each captions as band (band.key)}
             {@const geometry = videoBandGeometry(band.start, band.end, duration)}
             <span
-              class="absolute top-1 h-4 overflow-hidden rounded-sm bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
+              class="absolute top-1 h-4 overflow-hidden bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
               style={`left: ${geometry.left}; width: ${geometry.width};`}
               title={`${videoTimecode(band.start)} ${band.text}`}>{band.text}</span
             >
@@ -490,7 +490,7 @@
               title={`${lane.source} (gain ${lane.gain})`}>{lane.label}</span
             >
             <span
-              class="absolute top-0 bottom-0 overflow-hidden rounded-sm border border-accent/40 bg-accent/10"
+              class="absolute top-0 bottom-0 overflow-hidden border border-accent/40 bg-accent/10"
               style={`left: ${geometry.left}; width: ${geometry.width};`}
             >
               {#if waveforms[lane.key]}

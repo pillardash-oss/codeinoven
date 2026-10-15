@@ -12,7 +12,7 @@
   skill's own detail header.
 -->
 <span
-  class="rounded-md border border-success/30 bg-success/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success {className}"
+  class="border border-success/30 bg-success/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success {className}"
 >
   Installed
 </span>

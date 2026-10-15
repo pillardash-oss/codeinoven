@@ -170,7 +170,7 @@
       <input
         id="edit-routine-name"
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         placeholder="Routine name"
         bind:value={name}
       />
@@ -183,7 +183,7 @@
       <textarea
         id="edit-routine-description"
         rows="2"
-        class="w-full resize-none rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full resize-none border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         placeholder="A note for yourself about what this routine is for"
         bind:value={description}></textarea>
       <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
@@ -191,7 +191,7 @@
       </p>
     </div>
 
-    <div class="flex items-center justify-between gap-3 rounded-lg border bg-elevated px-3 py-2">
+    <div class="flex items-center justify-between gap-3 border bg-elevated px-3 py-2">
       <div class="min-w-0">
         <p class="text-sm text-foreground">Run on a schedule</p>
         <p class="text-[0.625rem] leading-relaxed text-dimmed">
@@ -208,7 +208,7 @@
     </div>
 
     {#if error}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
+      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
     {/if}
   </form>
 
@@ -217,7 +217,7 @@
       {#if hasAppearance}
         <button
           type="button"
-          class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
           title="Reset appearance"
           onclick={resetAppearance}
         >
@@ -227,7 +227,7 @@
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
           title="Cancel"
           onclick={onClose}
         >
@@ -236,7 +236,7 @@
         <button
           type="submit"
           form="edit-routine-form"
-          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={!name.trim() || busy}
           title="Save routine settings"
         >

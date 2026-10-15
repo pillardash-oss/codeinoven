@@ -144,14 +144,14 @@
 
 {#if context}
   <div
-    class="prompt-card flex flex-col gap-1.5 rounded-lg border bg-surface p-4 shadow-lg"
+    class="prompt-card flex flex-col gap-1.5 border bg-surface p-4 shadow-lg"
     role="alertdialog"
     aria-labelledby="browser-permission-title"
     style:width={`${TOAST_CARD_WIDTH}px`}
   >
     <div class="flex min-w-0 items-start gap-2">
       <span
-        class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full {external
+        class="mt-0.5 grid size-7 shrink-0 place-items-center {external
           ? 'bg-primary/20 text-primary'
           : 'bg-warning/20 text-warning'}"
         aria-hidden="true"

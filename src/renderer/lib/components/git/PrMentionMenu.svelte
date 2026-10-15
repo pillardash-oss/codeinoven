@@ -51,7 +51,7 @@
 -->
 <div
   bind:this={listElement}
-  class="absolute bottom-full left-2 right-2 z-40 mb-1 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-2 right-2 z-40 mb-1 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
   style="max-height: {maxHeight}px"
   role="listbox"
   aria-label="Mention an account on this pull request"
@@ -63,7 +63,7 @@
       <button
         type="button"
         class={[
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
+          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs outline-none',
           entry === entries[activeIndex]
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:bg-elevated'

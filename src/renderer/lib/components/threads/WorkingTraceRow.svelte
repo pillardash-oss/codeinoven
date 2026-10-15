@@ -52,7 +52,7 @@
 {:else if part.type === 'subagent'}
   <SubagentCard {part} {live} onOpen={onOpenSubagent} />
 {:else if part.type === 'compaction-summary'}
-  <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+  <div class="border border-border bg-elevated px-3 py-2">
     <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>
     <div class="text-sm text-muted">
       <MarkdownView text={part.text} {onCiteFile} />
@@ -63,7 +63,7 @@
     <span class="text-[0.625rem] text-dimmed">Step complete · {part.reason}</span>
   {/if}
 {:else if part.type === 'compaction'}
-  <div class="rounded-lg border border-border bg-elevated">
+  <div class="border border-border bg-elevated">
     <button
       type="button"
       class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-overlay"
@@ -81,7 +81,7 @@
           {part.auto ? 'Automatic compaction' : 'Compact Work'}
           {#if !part.summary && !busy}
             <span
-              class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-normal text-warning"
+              class="border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-warning uppercase"
               title="The harness completed compaction without producing a summary."
             >
               harness returned nothing
@@ -116,7 +116,7 @@
       <img
         src={imageUrls.getUrl(part.url)}
         alt={part.filename ?? 'file'}
-        class="h-6 w-6 shrink-0 rounded object-cover"
+        class="h-6 w-6 shrink-0 object-cover"
         onerror={(e: Event) =>
           void imageUrls.bindImage(part.url, part.mime, e.currentTarget as HTMLImageElement)}
       />

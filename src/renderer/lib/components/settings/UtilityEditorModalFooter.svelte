@@ -34,7 +34,7 @@
   <div>
     {#if showBack}
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
+        class="flex h-9 items-center gap-1.5 px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
         type="button"
         data-modal-dismiss
         onclick={onBack}
@@ -46,7 +46,7 @@
   <div class="flex items-center gap-2">
     {#if setupPreset === 'plugin-bundle'}
       <button
-        class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
         data-modal-dismiss
         onclick={onClose}
@@ -54,7 +54,7 @@
         Cancel
       </button>
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="button"
         data-modal-primary
         disabled={saving || !canImportPlugin}
@@ -65,7 +65,7 @@
       </button>
     {:else}
       <button
-        class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
         data-modal-dismiss
         onclick={onClose}
@@ -74,7 +74,7 @@
       </button>
       {#if (hasDraftId || isNative) && !isAppOwned}
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-danger hover:bg-danger-hover disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-danger hover:bg-danger-hover disabled:opacity-50"
           type="button"
           disabled={saving}
           onclick={onRequestDelete}
@@ -85,7 +85,7 @@
       {/if}
       {#if hasDraftId || isNative || setupPreset !== null}
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           form="utility-editor-form"
           data-modal-primary

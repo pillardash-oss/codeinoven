@@ -504,7 +504,7 @@
                 <ScopeActionsMenu
                   bucket={scopeBucket}
                   actions={scopeActions}
-                  triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
+                  triggerClass="flex shrink-0 cursor-pointer items-center transition-opacity hover:opacity-85"
                   triggerTitle="Scope actions"
                 >
                   {#snippet trigger()}
@@ -527,7 +527,7 @@
               >
                 <span class="min-w-0 flex-1">{scopeActions.error}</span>
                 <button
-                  class="shrink-0 rounded-md px-1.5 py-0.5 transition-colors hover:bg-danger/10"
+                  class="shrink-0 px-1.5 py-0.5 transition-colors hover:bg-danger/10"
                   aria-label="Dismiss scope action error"
                   title="Dismiss"
                   onclick={() => scopeActions.dismissError()}
@@ -643,7 +643,7 @@
                       <ScopeActionsMenu
                         {bucket}
                         actions={scopeActions}
-                        triggerClass="flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                        triggerClass="flex h-7 w-7 items-center justify-center text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
                       />
                     </div>
                   {/each}
@@ -663,7 +663,7 @@
                     {@const isActive = scopeContext.stage === stage}
                     {@const bgOpacity = isActive ? '35%' : '8%'}
                     <button
-                      class="flex min-h-12 flex-1 items-center justify-center rounded-md transition-all text-xs font-medium"
+                      class="flex min-h-12 flex-1 items-center justify-center transition-all text-xs font-medium"
                       style="background-color: color-mix(in srgb, {STAGE_COLORS[
                         stage
                       ]} {bgOpacity}, transparent); color: {isActive
@@ -986,7 +986,7 @@
                               placeholder="Search threads in {project.name}…"
                             />
                             <button
-                              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                              class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                               aria-label="New thread in {project.name}"
                               title="New thread"
                               data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
@@ -995,7 +995,7 @@
                               <Plus size={12} />
                             </button>
                             <DropdownMenu.Trigger
-                              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                              class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                               aria-label="Options for {project.name}"
                               title="Project options"
                               oncontextmenu={(e: MouseEvent) => e.preventDefault()}
@@ -1106,38 +1106,38 @@
                         align="end"
                         sideOffset={4}
                         collisionPadding={8}
-                        class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                        class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
                       >
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => projectDialogs.askEditProject(project.id)}
                         >
                           <Pencil size={14} class="text-muted" />
                           Edit Project
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => openInEditor(project.id)}
                         >
                           <ExternalLink size={14} class="text-muted" />
                           Open in Editor
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => copyProjectPath(project.id)}
                         >
                           <Copy size={14} class="text-muted" />
                           Copy Path
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => revealProjectInFileManager(project.id)}
                         >
                           <FolderOpen size={14} class="text-muted" />
                           {osFileManagerLabel()}
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => toggleProjectPin(project.id)}
                         >
                           {#if project.pinned}
@@ -1150,7 +1150,7 @@
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
                         <DropdownMenu.Item
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                           onSelect={() => projectDialogs.askRemoveProject(project.id)}
                         >
                           <Trash2 size={14} />
@@ -1224,7 +1224,7 @@
                           placeholder="Search threads in {project.name}…"
                         />
                         <button
-                          class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                          class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                           aria-label="New thread in {project.name}"
                           title="New thread"
                           data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
@@ -1233,7 +1233,7 @@
                           <Plus size={12} />
                         </button>
                         <DropdownMenu.Trigger
-                          class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                          class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                           aria-label="Options for {project.name}"
                           title="Project options"
                           oncontextmenu={(e: MouseEvent) => e.preventDefault()}
@@ -1344,38 +1344,38 @@
                     align="end"
                     sideOffset={4}
                     collisionPadding={8}
-                    class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                    class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
                   >
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => projectDialogs.askEditProject(project.id)}
                     >
                       <Pencil size={14} class="text-muted" />
                       Edit Project
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => openInEditor(project.id)}
                     >
                       <ExternalLink size={14} class="text-muted" />
                       Open in Editor
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => copyProjectPath(project.id)}
                     >
                       <Copy size={14} class="text-muted" />
                       Copy Path
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => revealProjectInFileManager(project.id)}
                     >
                       <FolderOpen size={14} class="text-muted" />
                       {osFileManagerLabel()}
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => toggleProjectPin(project.id)}
                     >
                       {#if project.pinned}
@@ -1388,7 +1388,7 @@
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
                     <DropdownMenu.Item
-                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                       onSelect={() => projectDialogs.askRemoveProject(project.id)}
                     >
                       <Trash2 size={14} />

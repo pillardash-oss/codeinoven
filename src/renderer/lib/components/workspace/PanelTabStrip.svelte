@@ -123,7 +123,7 @@
           <button
             type="button"
             data-active={tab.id === activeTabId ? 'true' : undefined}
-            class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
+            class="group flex h-7 shrink-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
             activeTabId
               ? 'bg-elevated text-foreground'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
@@ -151,7 +151,7 @@
           {#if onCloseTab}
             <button
               type="button"
-              class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+              class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
               aria-label={`Close ${tab.title}`}
               title={`Close ${tab.title}`}
               onclick={() => onCloseTab(tab.id)}
@@ -183,8 +183,8 @@
     <button
       type="button"
       class={titlebar
-        ? 'titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
-        : 'flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
+        ? 'titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+        : 'flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
       aria-label={newLabel}
       title={newLabel}
       onclick={() => onNew?.()}
@@ -196,8 +196,8 @@
   <button
     type="button"
     class={titlebar
-      ? 'titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
-      : 'flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
+      ? 'titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+      : 'flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
     aria-label={trailingLabel}
     title={trailingLabel}
     onclick={onTrailingAction}

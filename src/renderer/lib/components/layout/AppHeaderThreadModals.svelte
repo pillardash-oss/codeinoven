@@ -28,7 +28,7 @@
       <input
         id="rename-input"
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         bind:value={menu.renameValue}
       />
     </div>
@@ -37,7 +37,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Cancel"
       onclick={menu.cancelRename}
     >
@@ -46,7 +46,7 @@
     <button
       type="submit"
       form="header-thread-rename-form"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       disabled={!menu.renameValue.trim()}
       title="Save the new title"
     >

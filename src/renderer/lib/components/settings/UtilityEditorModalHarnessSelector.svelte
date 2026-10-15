@@ -37,7 +37,7 @@
   }
 </script>
 
-<fieldset class="space-y-3 rounded-xl border p-3">
+<fieldset class="space-y-3 border p-3">
   <legend class="px-1 text-xs font-semibold">{legend}</legend>
   <p class="text-[0.6875rem] text-dimmed">
     {description}
@@ -45,7 +45,7 @@
   <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
     <button
       type="button"
-      class="flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {allSelected
+      class="flex h-10 items-center justify-center gap-2 border px-3 text-xs font-medium transition-colors {allSelected
         ? 'border-primary bg-primary text-on-primary'
         : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
       aria-pressed={allSelected}
@@ -59,7 +59,7 @@
       {#each availableHarnesses as harness (harness.id)}
         <button
           type="button"
-          class="flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {isSelected(
+          class="flex h-10 items-center justify-center gap-2 border px-3 text-xs font-medium transition-colors {isSelected(
             harness.id
           )
             ? 'border-primary bg-primary text-on-primary'
@@ -75,7 +75,7 @@
     {/if}
   </div>
   {#if !availableHarnesses.length}
-    <div class="rounded-lg bg-raised px-3 py-2">
+    <div class="border bg-raised px-3 py-2">
       <p class="text-xs text-muted">
         No installed, supported harnesses were detected. All harnesses will still apply when one is
         added later.

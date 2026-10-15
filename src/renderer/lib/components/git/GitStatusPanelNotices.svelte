@@ -76,16 +76,14 @@
 </script>
 
 {#if gitState.githubPermission && !noticeDismissals.isDismissed(permissionId, permissionCondition)}
-  <div
-    class="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
-  >
+  <div class="mx-2 mt-2 flex items-center gap-2 border border-warning/20 bg-warning/10 px-3 py-2">
     <Unplug size={13} class="shrink-0 text-warning" />
     <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
       {gitState.githubPermission.message}
     </p>
     <button
       type="button"
-      class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+      class="h-7 shrink-0 border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
       onclick={() => githubSignIn.start()}
     >
       Sign in to GitHub
@@ -103,7 +101,7 @@
   </div>
 {:else if gitState.error && !suppressError}
   <div
-    class="mx-2 mt-2 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-danger"
+    class="mx-2 mt-2 flex items-start gap-2 border border-danger/20 bg-danger/10 px-3 py-2 text-danger"
     role="alert"
   >
     <TriangleAlert size={13} class="mt-0.5 shrink-0" />
@@ -112,7 +110,7 @@
     </p>
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-danger/10"
+      class="flex h-6 w-6 shrink-0 items-center justify-center hover:bg-danger/10"
       title="Dismiss Git error"
       aria-label="Dismiss Git error"
       onclick={() => (gitState.error = null)}
@@ -128,7 +126,7 @@
     below that band so a hard failure is never hidden behind a notice, and it
     outlives the refreshes and project switches that clear an error.
   -->
-  <div class="mx-2 mt-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2">
+  <div class="mx-2 mt-2 border border-warning/20 bg-warning/10 px-3 py-2">
     <div class="flex items-start gap-2">
       <RemoteIssueIcon size={13} class="mt-0.5 shrink-0 text-warning" />
       <div class="min-w-0 flex-1">
@@ -141,7 +139,7 @@
       </div>
       <button
         type="button"
-        class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+        class="h-7 shrink-0 border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
         disabled={retrying}
         onclick={() => void gitState.fetch(projectId)}
       >
@@ -166,7 +164,7 @@
   every view's next step.
 -->
 {#if conflictState === 'rebase' && !noticeDismissals.isDismissed(rebaseId, rebaseCondition)}
-  <div class="mx-2 mt-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2">
+  <div class="mx-2 mt-2 border border-warning/25 bg-warning/10 px-3 py-2">
     <div class="flex items-center gap-1.5">
       <TriangleAlert size={13} class="shrink-0 text-warning" />
       <p class="flex-1 text-[0.625rem] font-semibold text-warning">Rebase in progress</p>

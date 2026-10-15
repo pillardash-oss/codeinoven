@@ -37,7 +37,7 @@
 -->
 <button
   type="button"
-  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+  class="shrink-0 cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
   title="Back to pull requests"
   aria-label="Back to pull requests"
   onclick={onBack}
@@ -46,7 +46,7 @@
 </button>
 <span class="shrink-0 font-mono text-[0.625rem] text-dimmed">#{summary.number}</span>
 <span
-  class="min-w-0 shrink truncate rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {prStateBadgeClass(
+  class="min-w-0 shrink truncate px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {prStateBadgeClass(
     state
   )}"
 >
@@ -56,7 +56,7 @@
   {@const ChecksIcon = prChecksStateIcon(checks.state)}
   <button
     type="button"
-    class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {prChecksBadgeClass(
+    class="flex shrink-0 cursor-pointer items-center gap-1 px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {prChecksBadgeClass(
       checks.state
     )}"
     title="{prChecksStateLabel(checks.state)}, open check results"

@@ -49,7 +49,7 @@
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Refresh the {harnessName} catalog"
       aria-label="Refresh the {harnessName} catalog"
       disabled={loading}
@@ -68,7 +68,7 @@
       <Loader2 size={13} class="animate-spin" /> Starting a private V2 server…
     </p>
   {:else if failure}
-    <div class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 p-2.5">
+    <div class="flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-2.5">
       <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
       <div class="min-w-0">
         <p class="text-xs font-medium text-warning">
@@ -107,7 +107,9 @@
       {:else}
         <ul class="max-h-40 space-y-1 overflow-y-auto">
           {#each catalog.providers as provider (provider.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span class="min-w-0 truncate text-xs text-foreground" title={provider.id}>
                 {provider.name}
               </span>
@@ -125,7 +127,9 @@
       {:else}
         <ul class="max-h-64 space-y-1 overflow-y-auto">
           {#each catalog.models as model (model.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span
                 class="min-w-0 truncate text-xs text-foreground"
                 title="{model.id} · {model.providerId}"
@@ -150,7 +154,9 @@
       {:else}
         <ul class="max-h-40 space-y-1 overflow-y-auto">
           {#each catalog.agents.filter((agent) => !agent.hidden) as agent (agent.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span
                 class="min-w-0 truncate text-xs text-foreground"
                 title={agent.description ?? agent.id}

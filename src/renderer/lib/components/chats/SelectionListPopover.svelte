@@ -56,7 +56,7 @@
 </script>
 
 <div
-  class="w-80 rounded-xl border border-border bg-surface p-1.5 shadow-lg"
+  class="w-80 border border-border bg-surface p-1.5 shadow-lg"
   role="dialog"
   aria-label={summary.aria}
 >
@@ -67,7 +67,7 @@
     {#if onRemoveAll}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
         title="Delete all attached references"
         aria-label="Delete all attached references"
         onclick={onRemoveAll}
@@ -84,9 +84,9 @@
       {@const isAnnotation = reference.kind === 'file'}
       {@const isNote = reference.kind === 'video'}
       {@const isMark = reference.kind === 'image'}
-      <div class="flex items-start gap-2 rounded-lg px-2 py-1.5">
+      <div class="flex items-start gap-2 px-2 py-1.5">
         <span
-          class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[0.625rem] font-semibold text-accent tabular-nums"
+          class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center bg-accent/15 text-[0.625rem] font-semibold text-accent tabular-nums"
           aria-hidden="true"
         >
           {number}
@@ -119,7 +119,7 @@
           {#if onEdit && referenceHasEditableSurface(reference)}
             <button
               type="button"
-              class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
               title={editTitle(reference)}
               aria-label={editTitle(reference)}
               onclick={() => onEdit(reference.id)}
@@ -129,7 +129,7 @@
           {/if}
           <button
             type="button"
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
             title={`Delete ${reference.label}`}
             aria-label={`Delete ${reference.label}`}
             onclick={() => onRemove(reference.id)}

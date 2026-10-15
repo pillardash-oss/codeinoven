@@ -166,7 +166,7 @@
 {/snippet}
 
 <div
-  class="overflow-hidden rounded-lg border bg-elevated"
+  class="overflow-hidden border bg-elevated"
   {@attach renderDiagram(code.trim(), retryKey)}
 >
   <div class="flex h-8 items-center justify-between border-b px-2">
@@ -174,7 +174,7 @@
     <div class="flex items-center gap-0.5">
       {#if onAnnotate}
         <button
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Annotate Mermaid diagram"
           title="Annotate Mermaid diagram"
           onclick={(event: MouseEvent) => {
@@ -187,7 +187,7 @@
       {/if}
       <button
         class={[
-          'rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground',
+          'p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground',
           sourceVisible && 'bg-overlay text-foreground'
         ]}
         aria-label={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
@@ -198,7 +198,7 @@
         <Code2 size={13} />
       </button>
       <button
-        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Copy Mermaid source"
         title="Copy Mermaid source"
         onclick={() => void copySource()}
@@ -211,7 +211,7 @@
       </button>
       {#if svg}
         <button
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Expand Mermaid diagram"
           title="Expand Mermaid diagram"
           onclick={() => (expanded = true)}
@@ -238,7 +238,7 @@
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 text-[0.625rem] font-semibold text-danger transition-colors hover:bg-danger/20"
+          class="shrink-0 border border-danger/30 bg-danger/10 px-2 py-1 text-[0.625rem] font-semibold text-danger transition-colors hover:bg-danger/20"
           title="Try rendering this Mermaid diagram again"
           aria-label="Try rendering this Mermaid diagram again"
           onclick={() => (retryKey += 1)}
@@ -254,7 +254,7 @@
   {/if}
 
   {#if sourceVisible || error}
-    <div class="[&>div]:rounded-none [&>div]:border-0 [&>div]:border-t">
+    <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang="mermaid" />
     </div>
   {/if}

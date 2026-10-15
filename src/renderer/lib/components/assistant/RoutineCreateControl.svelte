@@ -57,7 +57,7 @@
 
 <button
   type="button"
-  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+  class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
   aria-label="New routine"
   title="New routine"
   onclick={() => (open = true)}
@@ -73,7 +73,7 @@
       </label>
       <input
         id="new-routine-name"
-        class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
+        class="w-full border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
         placeholder="e.g. Triage CodeInOven PRs daily, 9am and 5pm"
         aria-label="Routine name"
         bind:value={name}
@@ -96,7 +96,7 @@
       <textarea
         id="new-routine-description"
         rows="2"
-        class="w-full resize-none rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
+        class="w-full resize-none border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
         placeholder="A note for yourself about what this routine is for"
         aria-label="Routine description"
         bind:value={description}></textarea>
@@ -107,7 +107,7 @@
     </div>
 
     <div
-      class="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-2.5 py-2"
+      class="flex items-center justify-between gap-3 border border-border bg-surface px-2.5 py-2"
     >
       <div class="min-w-0">
         <p class="text-[0.75rem] text-foreground">Run on a schedule</p>
@@ -130,7 +130,7 @@
       <button
         type="button"
         data-modal-dismiss
-        class="rounded-md px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
         onclick={() => (open = false)}
       >
         Cancel
@@ -138,7 +138,7 @@
       <button
         type="button"
         data-modal-primary
-        class="rounded-md bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={!canSubmit}
         onclick={() => void submit()}
       >

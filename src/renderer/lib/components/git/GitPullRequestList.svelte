@@ -337,7 +337,7 @@
       </p>
       <button
         type="button"
-        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -356,7 +356,7 @@
         {#if onFullscreen}
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Open in full screen"
             aria-label="Open in full screen"
             onclick={onFullscreen}
@@ -366,7 +366,7 @@
         {/if}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Create pull request"
           aria-label="Create pull request"
           onclick={onCreate}
@@ -375,7 +375,7 @@
         </button>
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
           title="Refresh pull requests"
           aria-label="Refresh pull requests"
           disabled={loading}
@@ -423,7 +423,7 @@
             <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
             <button
               type="button"
-              class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={onSignIn}
             >
               Sign in to GitHub
@@ -542,7 +542,7 @@
                     <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
                       {#each shownLabels as label (label.name)}
                         <span
-                          class="max-w-[9ch] truncate rounded-full px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
+                          class="max-w-[9ch] truncate px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
                           style={prLabelStyle(label.color)}
                           title={label.name}
                         >
@@ -605,7 +605,7 @@
                     user set themselves, and the one they come back to check on.
                   -->
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
+                      class="flex shrink-0 items-center gap-0.5 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
                       title={agentAssignmentLabel(agentAssignment)}
                     >
                       <Bot size={9} />
@@ -614,7 +614,7 @@
                   {/if}
                   {#if hasIssue}
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"
+                      class="flex shrink-0 items-center gap-0.5 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
                       title="This pull request has merge conflicts and needs resolution"
                     >
                       <TriangleAlert size={9} />
@@ -623,7 +623,7 @@
                   {/if}
                   {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
+                      class="flex shrink-0 items-center gap-0.5 px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
                         pr.checks.state
                       )}"
                       title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
@@ -657,7 +657,7 @@
           class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-2 pb-2"
         >
           <div
-            class="selection-bar pointer-events-auto flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-surface/95 px-2 py-1.5 shadow-lg"
+            class="selection-bar pointer-events-auto flex max-w-full flex-wrap items-center gap-1 border border-border bg-surface/95 px-2 py-1.5 shadow-lg"
           >
             <span class="px-0.5 text-[0.625rem] font-medium tabular-nums text-foreground">
               {selectedItems.length} selected
@@ -665,7 +665,7 @@
             {#if closableSelection.length > 0}
               <button
                 type="button"
-                class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
+                class="flex h-6 cursor-pointer items-center gap-1 bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
                 title={`Close ${closableSelection.length} selected ${
                   closableSelection.length === 1 ? 'pull request' : 'pull requests'
                 } without merging`}
@@ -678,7 +678,7 @@
             {#if reopenableSelection.length > 0}
               <button
                 type="button"
-                class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 title={`Reopen ${reopenableSelection.length} selected ${
                   reopenableSelection.length === 1 ? 'pull request' : 'pull requests'
                 }`}
@@ -690,7 +690,7 @@
             {/if}
             <button
               type="button"
-              class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               title="Clear the selection"
               onclick={clearSelection}
             >
@@ -705,7 +705,7 @@
       <div class="flex shrink-0 items-center justify-between border-t border-border px-3 py-1.5">
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={page === 1 || loading}
           onclick={() => onPageChange(page - 1)}
         >
@@ -715,7 +715,7 @@
         <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={!hasMore || loading}
           onpointerenter={warmNextPage}
           onfocus={warmNextPage}

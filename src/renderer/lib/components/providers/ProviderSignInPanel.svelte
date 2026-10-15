@@ -261,12 +261,12 @@
     {#snippet dock()}
       <DockRow {storageKey} label="Move docked provider sign-in">
         <div
-          class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+          class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
           data-region="provider-sign-in-dock"
         >
           <button
             type="button"
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
             title="Show the sign-in for {targetName}"
             aria-label="Show the sign-in for {targetName}"
             onclick={() => (oauth.docked = false)}
@@ -287,7 +287,7 @@
           <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
           <button
             type="button"
-            class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Cancel the sign-in"
             title="Cancel the sign-in"
             onclick={close}
@@ -301,7 +301,9 @@
     {#if oauth.loginId !== null}
       <ProviderSignInProgress {oauth} />
     {:else if error}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        {error}
+      </p>
     {:else if verifying}
       <p class="flex items-center gap-2 text-xs text-muted">
         <Loader2 size={13} class="animate-spin" />
@@ -316,7 +318,7 @@
   </DockableModal>
 {:else}
   <Modal open {title} onClose={close}>
-    <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
+    <div class="h-[28rem] overflow-hidden border border-border bg-app">
       {#if handoff}
         <ProviderLoginTerminal
           {terminalId}

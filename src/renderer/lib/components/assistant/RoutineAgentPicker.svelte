@@ -192,7 +192,7 @@
       {#if draft.primary}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
           title="Clear the primary model"
           aria-label="Clear the primary model"
           {disabled}
@@ -258,7 +258,7 @@
         </div>
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
           title={removeLabel}
           aria-label={removeLabel}
           {disabled}
@@ -271,7 +271,7 @@
     {#if canAddFallback}
       <button
         type="button"
-        class="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex items-center gap-1.5 self-start px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Add another fallback model"
         aria-label="Add another fallback model"
         {disabled}

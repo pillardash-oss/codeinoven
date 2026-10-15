@@ -757,10 +757,10 @@
 >
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked base URL provider">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={dockRestoreLabel}
           aria-label={dockRestoreLabel}
           onclick={() => (docked = false)}
@@ -778,7 +778,7 @@
         <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dockDismissLabel}
           title={dockDismissLabel}
           disabled={submitting}
@@ -795,7 +795,7 @@
       <div class="flex items-center gap-3">
         {#if onBack}
           <button
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
             type="button"
             data-modal-dismiss
             title="Back to Add provider"
@@ -809,7 +809,7 @@
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
           data-modal-dismiss
           disabled={submitting}
@@ -818,7 +818,7 @@
           Cancel
         </button>
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           data-modal-primary
           form="base-url-provider-form"
@@ -861,7 +861,7 @@
         {#if provider === null}
           {#each QUICK_PRESETS as preset (preset.name)}
             <button
-              class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Pre-fill {preset.name} settings"
               onclick={() => applyPreset(preset)}
@@ -872,7 +872,7 @@
         {/if}
         <span class="ml-auto flex items-center gap-1.5">
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
             type="button"
             title="Copy this provider (including API key) to the clipboard"
             onclick={() => void copyProviderDraft()}
@@ -880,7 +880,7 @@
             <Copy size={12} /> Copy
           </button>
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied provider over this form"
             onclick={() => void pasteProviderFromClipboard()}
@@ -893,13 +893,15 @@
 
     <label
       class={[
-        'flex items-center gap-3 rounded-lg border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
+        'flex items-center gap-3 border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
         iconUploadDisabled
           ? 'cursor-default opacity-60'
           : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
       ]}
     >
-      <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
+      <span
+        class="flex h-12 w-12 shrink-0 items-center justify-center border border-border bg-elevated"
+      >
         <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
       </span>
       <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
@@ -919,7 +921,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         placeholder="My AI Provider"
         required
         bind:value={draft.name}
@@ -929,7 +931,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>SDK package</span>
       <select
-        class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
         bind:value={draft.npm}
       >
         {#each NPM_OPTIONS as option (option.value)}
@@ -941,7 +943,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Base URL</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         placeholder="https://api.example.com/v1"
         required
         bind:value={draft.baseURL}
@@ -952,7 +954,7 @@
       <span>{draft.id ? 'API key' : 'API key (optional)'}</span>
       <input
         id="base-url-provider-api-key"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         placeholder={apiKeyConfigured ? 'Stored securely   enter a new key to replace' : 'sk-...'}
         autocomplete="off"
         spellcheck="false"
@@ -961,7 +963,7 @@
       />
     </label>
     {#if draft.id && apiKeyConfigured}
-      <div class="space-y-2 rounded-lg bg-raised px-3 py-2">
+      <div class="space-y-2 bg-raised px-3 py-2">
         <p id="stored-api-key-status" class="text-[0.6875rem] text-muted">
           An API key is stored securely. Leave the field blank to keep it.
         </p>
@@ -986,19 +988,19 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Custom headers · one Name: Value per line</span>
       <textarea
-        class="min-h-16 w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+        class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
         placeholder="Authorization: Bearer token"
         autocomplete="off"
         spellcheck="false"
         bind:value={draft.headers}></textarea>
     </label>
 
-    <div class="space-y-3 rounded-lg border bg-surface/40 px-3 py-2.5">
+    <div class="space-y-3 border bg-surface/40 px-3 py-2.5">
       <div class="flex items-center justify-between gap-2">
         <span class="text-xs font-medium">Usage &amp; limits</span>
         <button
           type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Read the usage endpoint now and show the limits it reports"
           aria-label="Test the usage endpoint"
           disabled={testingUsage || !draft.usagePath.trim() || !draft.baseURL.trim()}
@@ -1032,7 +1034,7 @@
         <span>Usage endpoint</span>
         <input
           id="base-url-provider-usage-path"
-          class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+          class="h-9 w-full border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
           placeholder="/status or https://analytics.example.com/usage"
           autocomplete="off"
           spellcheck="false"
@@ -1045,7 +1047,7 @@
       </label>
 
       {#if usagePreview}
-        <div class="rounded-lg border bg-elevated px-2.5 py-2">
+        <div class="border bg-elevated px-2.5 py-2">
           {#if usagePreview.usage && (usagePreview.usage.rateLimits.length > 0 || usagePreview.usage.credits)}
             <UsageWindowList limits={usagePreview.usage.rateLimits} />
             {#if creditsLabel(usagePreview.usage)}
@@ -1070,7 +1072,7 @@
       <span>Models route (optional)</span>
       <input
         id="base-url-provider-models-path"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
         placeholder="/models"
         autocomplete="off"
         spellcheck="false"
@@ -1087,7 +1089,7 @@
         <span class="text-xs font-medium">Models</span>
         <div class="flex items-center gap-1.5">
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             title="Fetch available models from {draft.baseURL || 'the base URL'}/models"
             disabled={!draft.baseURL.trim() || discoveringModels}
@@ -1101,7 +1103,7 @@
             Refresh models
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied model from the clipboard"
             onclick={() => void pasteModelFromClipboard()}
@@ -1109,7 +1111,7 @@
             <ClipboardPaste size={11} /> Paste model
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             onclick={addModel}
           >
@@ -1118,7 +1120,7 @@
         </div>
       </div>
       {#if draft.models.length === 0}
-        <p class="rounded-lg border border-dashed p-3 text-[0.6875rem] text-dimmed">
+        <p class="border border-dashed p-3 text-[0.6875rem] text-dimmed">
           No models added. On save, we will fetch the model list from the /models route and add
           every model found.
         </p>
@@ -1137,7 +1139,7 @@
             <div class="flex flex-wrap gap-1.5">
               {#each discoveredModels as model (model.id)}
                 <button
-                  class="rounded-full border bg-elevated px-2.5 py-1 text-[0.6875rem] font-mono hover:bg-overlay disabled:opacity-40"
+                  class="border bg-elevated px-2.5 py-1 text-[0.6875rem] font-mono hover:bg-overlay disabled:opacity-40"
                   type="button"
                   disabled={draft.models.some((m) => m.id === model.id)}
                   onclick={() => addDiscoveredModel(model)}
@@ -1150,12 +1152,12 @@
         {/if}
       {/if}
       {#each draft.models as model, index (index)}
-        <div class="rounded-lg border bg-elevated/50 p-3">
+        <div class="border bg-elevated/50 p-3">
           <div class="flex items-center justify-between">
             <span class="text-[0.6875rem] font-medium text-dimmed">Model {index + 1}</span>
             <div class="flex items-center gap-1">
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-6 w-6 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Copy model {index + 1} to clipboard"
                 title="Copy model {index + 1} to clipboard"
                 type="button"
@@ -1164,7 +1166,7 @@
                 <Copy size={12} />
               </button>
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex h-6 w-6 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 aria-label="Remove model {index + 1}"
                 title="Remove model {index + 1}"
                 type="button"
@@ -1178,7 +1180,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Model ID</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="my-model"
                 bind:value={model.id}
               />
@@ -1186,7 +1188,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Display name</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs outline-none focus:border-primary"
                 placeholder="My Model"
                 bind:value={model.name}
               />
@@ -1194,7 +1196,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Context window</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="200000"
                 inputmode="numeric"
                 bind:value={model.contextWindow}
@@ -1203,7 +1205,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Max output tokens</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="65536"
                 inputmode="numeric"
                 bind:value={model.maxOutputTokens}
@@ -1220,7 +1222,7 @@
             <label class="flex items-center gap-1.5 text-[0.6875rem] font-medium">
               <span>Default thinking</span>
               <select
-                class="h-7 rounded border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
+                class="h-7 border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
                 bind:value={model.defaultThinkingLevel}
               >
                 <option value="">None</option>

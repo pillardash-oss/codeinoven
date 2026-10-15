@@ -1969,7 +1969,7 @@ export class BrowserService {
     return (
       '::-webkit-scrollbar{width:6px;height:6px}' +
       '::-webkit-scrollbar-track{background:transparent}' +
-      `::-webkit-scrollbar-thumb{background:${theme.thumb};border-radius:3px}` +
+      `::-webkit-scrollbar-thumb{background:${theme.thumb}}` +
       `::-webkit-scrollbar-thumb:hover{background:${theme.thumbHover}}`
     )
   }

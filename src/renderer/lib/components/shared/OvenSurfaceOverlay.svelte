@@ -81,10 +81,10 @@
     >
       {#if failed}
         <div
-          class="flex w-full max-w-[34ch] flex-col items-center gap-2 rounded-xl border border-border bg-elevated px-4 py-5 text-center shadow-lg"
+          class="flex w-full max-w-[34ch] flex-col items-center gap-2 border border-border bg-elevated px-4 py-5 text-center shadow-lg"
           role="alert"
         >
-          <div class="flex h-9 w-9 items-center justify-center rounded-full bg-danger/10">
+          <div class="flex h-9 w-9 items-center justify-center bg-danger/10">
             <TriangleAlert size={17} class="text-danger" aria-hidden="true" />
           </div>
           <p class="text-xs font-semibold text-foreground">{title}</p>
@@ -94,7 +94,7 @@
           {#if onRetry}
             <button
               type="button"
-              class="mt-1 flex h-7 items-center gap-1.5 rounded-md border border-border-strong bg-surface px-2.5 text-[0.625rem] font-semibold text-foreground transition-colors hover:bg-overlay"
+              class="mt-1 flex h-7 items-center gap-1.5 border border-border-strong bg-surface px-2.5 text-[0.625rem] font-semibold text-foreground transition-colors hover:bg-overlay"
               onclick={onRetry}
             >
               <RefreshCw size={12} aria-hidden="true" />
@@ -104,7 +104,7 @@
         </div>
       {:else}
         <div
-          class="flex items-center gap-2 rounded-full border border-border bg-elevated/95 px-3 py-1.5 shadow-sm"
+          class="flex items-center gap-2 border border-border bg-elevated/95 px-3 py-1.5 shadow-sm"
           role="status"
           aria-live="polite"
         >

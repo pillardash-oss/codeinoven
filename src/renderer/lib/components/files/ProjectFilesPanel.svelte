@@ -824,7 +824,7 @@
   {#if staleSession}
     <div
       class={[
-        'absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg',
+        'absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg',
         positionClass
       ]}
       role="alert"
@@ -833,7 +833,7 @@
       <span class="text-[0.625rem] font-medium text-warning">Viewing an older version</span>
       <button
         type="button"
-        class="rounded bg-warning/20 px-2 py-0.5 text-[0.625rem] font-semibold text-warning transition-colors hover:bg-warning/30"
+        class="bg-warning/20 px-2 py-0.5 text-[0.625rem] font-semibold text-warning transition-colors hover:bg-warning/30"
         title="Reload the current file from disk; the previous content stays recoverable with undo"
         onclick={reloadStaleActive}
       >
@@ -900,7 +900,7 @@
         <button
           type="button"
           class={[
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
+            'flex h-7 w-7 shrink-0 items-center justify-center transition-colors',
             projectState.explorerVisible
               ? 'bg-overlay text-primary'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -1001,7 +1001,7 @@
             {#if !projectState.explorerVisible}
               <button
                 type="button"
-                class="mt-3 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-foreground hover:bg-overlay"
+                class="mt-3 border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-foreground hover:bg-overlay"
                 onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
               >
                 Show explorer
@@ -1018,7 +1018,7 @@
           {#if activeTab.checkpointId}
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+              class="border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
               onclick={() =>
                 activeTab?.checkpointId &&
                 void projectFilesWorkspace.openCheckpointFile(
@@ -1091,7 +1091,7 @@
             </div>
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
+              class="border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
               onclick={ovenFile ? saveSelectedAs : openSelectedInEditor}
             >
               {ovenFile ? 'Save a copy…' : 'Open in editor'}
@@ -1197,7 +1197,7 @@
           )}
           <div
             class={[
-              'group flex min-w-0 max-w-52 shrink-0 items-center rounded-md',
+              'group flex min-w-0 max-w-52 shrink-0 items-center',
               contextTab?.id === fileTab.id
                 ? 'bg-elevated text-foreground'
                 : 'text-muted hover:bg-elevated hover:text-foreground'
@@ -1220,14 +1220,13 @@
                 ]}>{fileTab.title}</span
               >
               {#if fileDirty}
-                <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"
-                ></span>
+                <span class="h-1.5 w-1.5 shrink-0 bg-accent" title="Unsaved changes"></span>
               {/if}
             </button>
             {#if fileTab.fileTabId}
               <button
                 type="button"
-                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
                 aria-label={`Close ${fileTab.title}`}
                 title={`Close ${fileTab.title}`}
                 onclick={() =>
@@ -1243,7 +1242,7 @@
     {#if showSaveButton}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={deletedAtCheckpoint ||
           (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
           (activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving)}
@@ -1263,7 +1262,7 @@
     <button
       type="button"
       class={[
-        'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded transition-colors',
+        'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center transition-colors',
         fullscreenExplorerOpen
           ? 'bg-overlay text-primary'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -1277,7 +1276,7 @@
     </button>
     <button
       type="button"
-      class="titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Minimize fullscreen file viewer"
       title="Minimize fullscreen file viewer"
       onclick={closeFullscreen}

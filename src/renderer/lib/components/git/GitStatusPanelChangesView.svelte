@@ -163,7 +163,7 @@
         <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
       </div>
     {:else}
-      <div class="overflow-hidden rounded-lg border border-border bg-surface">
+      <div class="overflow-hidden border border-border bg-surface">
         <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
           <span
             class="shrink-0"
@@ -228,7 +228,7 @@
   <div class={['flex flex-col', changes.length === 0 ? 'h-full min-h-0' : null]}>
     {#if status && changes.length === 0 && status.clean}
       <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
-        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10">
+        <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
           <Check size={18} class="text-success" />
         </div>
         <p class="text-xs font-medium text-muted">Working tree is clean</p>
@@ -269,7 +269,7 @@
                 onResolveConflict={(path) => routeConflictResolution(path)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
+              <div class="overflow-hidden border border-warning/25 bg-surface">
                 {#each conflictSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   <div class="flex items-center gap-1.5 bg-warning/10 px-2.5 py-1">
@@ -319,7 +319,7 @@
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
+              <div class="overflow-hidden border border-border bg-surface">
                 {#each stagedSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =
@@ -397,7 +397,7 @@
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
+              <div class="overflow-hidden border border-border bg-surface">
                 {#each workingSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =

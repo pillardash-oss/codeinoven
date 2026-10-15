@@ -174,7 +174,7 @@
         <ThreadDropdown items={threadActionsMenu.items} onOpen={() => {}} />
         {#if isWorking}
           <span
-            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
+            class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
               ? 'bg-warning/10 text-warning'
               : 'bg-info/10 text-info'}"
           >

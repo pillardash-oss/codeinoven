@@ -470,7 +470,7 @@
           {#snippet icon()}<Search size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Clear the active source filter"
             onclick={() => (sourceFilter = 'all')}
           >
@@ -503,7 +503,7 @@
           {#snippet icon()}<Server size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Open utility settings"
             onclick={openUtilitiesSettings}
           >
@@ -533,7 +533,7 @@
           {#snippet icon()}<BookOpen size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Open utility settings"
             onclick={openUtilitiesSettings}
           >
@@ -591,7 +591,7 @@
           {#if projectId && threadId}
             <button
               type="button"
-              class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+              class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
               title="Open active memory"
               onclick={openActiveFacts}
             >
@@ -608,7 +608,7 @@
         <div class="border-b border-border px-4 py-2">
           <button
             type="button"
-            class="rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Manage active memory"
             onclick={openActiveFacts}
           >
@@ -689,20 +689,23 @@
         : 'This removes the MCP server from its configuration file.'}
     </p>
     {#if deleteError}
-      <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      <p
+        class="mt-3 border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+        role="alert"
+      >
         {deleteError}
       </p>
     {/if}
     {#snippet footer()}
       <button
-        class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
         onclick={() => (deleteTarget = null)}
       >
         Cancel
       </button>
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         type="button"
         disabled={deleting}
         onclick={() => void confirmDelete()}

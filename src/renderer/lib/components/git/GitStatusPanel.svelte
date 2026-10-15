@@ -1859,7 +1859,7 @@
   const notificationBusy = $derived(githubNotifications.busyThreadId !== null)
   /** The notification action style, shared by the header group's controls. */
   const notificationActionClass =
-    'flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
+    'flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
 
   function prDetailViewsFor(
     bundle: PullRequestBundle | undefined,
@@ -2806,7 +2806,7 @@
    * sits in, which is tighter than the shared `StatusPill`.
    */
   const dirtyBadgeClass =
-    'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
+    'shrink-0 bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
 
   /**
    * What a state badge says once the trigger renders it as a control. The state
@@ -2847,7 +2847,7 @@
   {@const copy = statusActionCopy[state]}
   <span
     class={[
-      '-m-1 flex shrink-0 cursor-pointer items-center rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+      '-m-1 flex shrink-0 cursor-pointer items-center p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
       copy.hoverClass
     ]}
     role="button"
@@ -2902,7 +2902,7 @@
   -->
   <button
     type="button"
-    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label="Refresh the git status and the current view"
     title="Refresh the git status and the current view"
     disabled={busy}
@@ -2930,7 +2930,7 @@
     {#if selectedCommit && isHeadCommit}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Amend the latest commit message"
         aria-label="Amend the latest commit message"
         disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
@@ -2943,7 +2943,7 @@
   {:else if activeTab === 'branches'}
     <button
       type="button"
-      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Create a branch from the current one"
       aria-label="Create a branch from the current one"
       onclick={() => (creatingBranch = true)}
@@ -2955,7 +2955,7 @@
     {#if selectedPullRequest}
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this pull request in the full screen reader"
         aria-label="Open this pull request in the full screen reader"
         onclick={() => openPullRequestFullscreen(selectedPullRequest)}
@@ -2964,7 +2964,7 @@
       </button>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this pull request on GitHub"
         aria-label="Open this pull request on GitHub"
         data-external-url={selectedPullRequest?.url ?? ''}
@@ -2975,7 +2975,7 @@
     {:else}
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open the pull request list in the full screen reader"
         aria-label="Open the pull request list in the full screen reader"
         onclick={() => openPullRequestFullscreen(null)}
@@ -2984,7 +2984,7 @@
       </button>
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Create a pull request"
         aria-label="Create a pull request"
         onclick={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
@@ -2996,7 +2996,7 @@
   {:else if activeTab === 'deployments' && deploymentsExternal}
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title={deploymentsExternal.title}
       aria-label={deploymentsExternal.title}
       data-external-url={deploymentsExternal.url}
@@ -3067,7 +3067,7 @@
     {:else}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Mark all notifications as read"
         aria-label="Mark all notifications as read"
         disabled={!githubConnected ||
@@ -3080,7 +3080,7 @@
       </button>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open GitHub notification settings"
         aria-label="Open GitHub notification settings"
         data-external-url={githubNotificationSettingsUrl()}
@@ -3100,14 +3100,14 @@
 -->
 {#snippet changesViewToggle()}
   <div
-    class="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-elevated p-0.5"
+    class="flex shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
     role="tablist"
     aria-label="Changed files layout"
   >
     <button
       type="button"
       class={[
-        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'list'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'
@@ -3124,7 +3124,7 @@
     <button
       type="button"
       class={[
-        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'tree'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'
@@ -3153,7 +3153,7 @@
     type="button"
     class={[
       'flex shrink-0 cursor-pointer items-center gap-1.5 border border-danger/40 font-medium text-[0.625rem] text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40',
-      compact ? 'h-6 rounded-xs px-2' : 'h-7 rounded-md px-2.5'
+      compact ? 'h-6 px-2' : 'h-7 px-2.5'
     ]}
     disabled={integrateBusy || conflictState === 'none'}
     title={`Discard the whole ${conflictState === 'merge' ? 'merge' : 'rebase'} and restore the working tree`}
@@ -3192,7 +3192,7 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
       title={conflicted.length > 0
         ? `Resolve and stage the ${String(conflicted.length)} remaining conflict${conflicted.length === 1 ? '' : 's'} before continuing`
         : 'Replay the rest of your commits on top of the new base'}
@@ -3210,7 +3210,7 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
       title="Drop the commit git stopped on and replay the rest"
       disabled={integrateBusy}
       onclick={() => void runRebaseAction('skip')}
@@ -3227,7 +3227,7 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
       title="Commit the resolved files to complete the merge"
       disabled={completeMergeBusy}
       onclick={openCompleteMerge}
@@ -3263,7 +3263,7 @@
       -->
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1.5 border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
         disabled={integrateBusy}
         title="Open the merge editor on the conflicted files, starting with the first"
         onclick={() => routeConflictResolution()}
@@ -3273,7 +3273,7 @@
       </button>
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1.5 border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         disabled={integrateBusy}
         title="Hand every conflicted file to an agent to resolve"
         onclick={() => void resolveConflictsWithAgent()}
@@ -3289,13 +3289,13 @@
         a third word. Both sides are destructive to the other, so both confirm.
       -->
       <div
-        class="flex h-6 shrink-0 items-center gap-0.5 rounded-xs border border-border bg-elevated p-0.5"
+        class="flex h-6 shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
         role="group"
         aria-label="Accept one side of every conflicted file"
       >
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
           title="Accept all incoming: replace every conflicted file with its incoming version"
           onclick={() => requestAcceptAllConflicts('incoming')}
@@ -3304,7 +3304,7 @@
         </button>
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
           title="Accept all current: replace every conflicted file with its current version"
           onclick={() => requestAcceptAllConflicts('current')}
@@ -3315,7 +3315,7 @@
     {:else if unstaged.length + untracked.length > 0}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         disabled={gitState.isBusy('stage')}
         onclick={() => void stageAll()}
       >
@@ -3324,7 +3324,7 @@
     {:else if staged.length > 0}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center rounded-xs border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
         disabled={gitState.isBusy('unstage')}
         onclick={() => void unstageAll()}
       >
@@ -3337,7 +3337,7 @@
       </span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={batchBusy}
           aria-label="Selected actions"
           title="Selected actions"
@@ -3346,14 +3346,14 @@
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
             side="bottom"
             align="start"
             sideOffset={4}
             collisionPadding={8}
           >
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void stageSelectedAction(false)}
             >
@@ -3361,7 +3361,7 @@
               Stage
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void stageSelectedAction(true)}
             >
@@ -3370,7 +3370,7 @@
             </DropdownMenu.Item>
             <DropdownMenu.Separator class="my-1 h-px bg-border" />
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={requestCommitSelected}
             >
@@ -3378,7 +3378,7 @@
               Commit…
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestStashFor(selectedPathList)}
             >
@@ -3386,7 +3386,7 @@
               Stash…
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void ignoreSelectedAction()}
             >
@@ -3395,7 +3395,7 @@
             </DropdownMenu.Item>
             <DropdownMenu.Separator class="my-1 h-px bg-border" />
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestDiscard(selectedPathList)}
             >
@@ -3410,7 +3410,7 @@
     {@const commit = selectedCommit}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to history"
       aria-label="Back to history"
       onclick={() => {
@@ -3423,7 +3423,7 @@
     <div class="flex shrink-0 items-center gap-0.5">
       <button
         type="button"
-        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         title="Newer commit"
         aria-label="Newer commit"
         disabled={!canGoNewer}
@@ -3433,7 +3433,7 @@
       </button>
       <button
         type="button"
-        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         title="Older commit"
         aria-label="Older commit"
         disabled={!canGoOlder}
@@ -3466,7 +3466,7 @@
       </span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={batchBusy}
           aria-label={`Actions for the ${selectedPathList.length} selected files`}
           title={`Actions for the ${selectedPathList.length} selected files`}
@@ -3475,14 +3475,14 @@
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
             side="bottom"
             align="start"
             sideOffset={4}
             collisionPadding={8}
           >
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestRemoveCommitChanges(selectedPathList)}
             >
@@ -3497,7 +3497,7 @@
     {@const stash = selectedStash}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to stash list"
       aria-label="Back to stash list"
       onclick={clearSelectedStash}
@@ -3528,7 +3528,7 @@
     {@const NotificationIcon = subjectIcon(openNotification.subjectType)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to notifications"
       aria-label="Back to notifications"
       onclick={() => githubNotifications.closeNotification()}
@@ -3536,7 +3536,7 @@
       <ArrowLeft size={12} />
     </button>
     <span
-      class="flex size-5 shrink-0 items-center justify-center rounded {openNotification.unread
+      class="flex size-5 shrink-0 items-center justify-center {openNotification.unread
         ? 'text-primary'
         : 'text-dimmed'}"
       role="img"
@@ -3606,7 +3606,7 @@
     {@const DeploymentGlyph = stateGlyph(openDeploymentState)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to deployment activity"
       aria-label="Back to deployment activity"
       onclick={() => (selectedDeployment = null)}
@@ -3643,7 +3643,7 @@
     {@const RunGlyph = stateGlyph(openRunState)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to deployment activity"
       aria-label="Back to deployment activity"
       onclick={() => (selectedRun = null)}
@@ -3821,7 +3821,7 @@
           <button
             type="button"
             class={[
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
+              'flex h-6 w-6 shrink-0 items-center justify-center transition-colors',
               findNavState.gitFindOpen
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -3843,7 +3843,7 @@
             -->
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                 aria-label={`Actions for commit ${selectedCommit.shortHash}`}
                 title={`Actions for commit ${selectedCommit.shortHash}`}
               >
@@ -3851,7 +3851,7 @@
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                  class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
                   side="bottom"
                   align="end"
                   sideOffset={4}
@@ -3864,7 +3864,7 @@
           {:else}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                 aria-label="Git actions"
                 title="Git actions"
               >
@@ -3880,7 +3880,7 @@
                   align="end"
                   sideOffset={4}
                   collisionPadding={8}
-                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+                  class="z-50 w-56 overflow-hidden border border-border bg-surface py-1 shadow-xl"
                 >
                   <!--
                   Fetch is the one remote action with no control of its own: it
@@ -3974,7 +3974,7 @@
           {#if showsPull}
             <button
               type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
               disabled={branchSyncBusy}
               onclick={() => void pullAction()}
@@ -3990,7 +3990,7 @@
           {#if showsPush}
             <button
               type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={pushTitle}
               disabled={pushBlocked}
               onclick={() => void pushAction()}
@@ -4041,19 +4041,19 @@
         />
 
         {#if identityNeeded}
-          <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
+          <div class="mx-2 mt-2 border border-border bg-surface px-3 py-2">
             <p class="text-[0.625rem] font-medium text-foreground">
               Commit identity not configured
             </p>
             {#if showIdentityForm}
               <div class="mt-2 space-y-1.5">
                 <input
-                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  class="h-7 w-full border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                   placeholder="Name"
                   bind:value={identityName}
                 />
                 <input
-                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  class="h-7 w-full border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                   placeholder="Email"
                   type="email"
                   bind:value={identityEmail}
@@ -4061,14 +4061,14 @@
                 <div class="flex items-center justify-end gap-1.5">
                   <button
                     type="button"
-                    class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
+                    class="px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
                     onclick={() => (showIdentityForm = false)}
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    class="bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                     disabled={!identityName.trim() || !identityEmail.trim()}
                     onclick={() => void saveIdentity()}
                   >
@@ -4079,7 +4079,7 @@
             {:else}
               <button
                 type="button"
-                class="mt-1.5 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                class="mt-1.5 border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
                 onclick={() => {
                   identityName = gitState.identity?.name ?? ''
                   identityEmail = gitState.identity?.email ?? ''
@@ -4245,7 +4245,7 @@
                 {#snippet action()}
                   <button
                     type="button"
-                    class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+                    class="cursor-pointer bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
                     data-external-url={openNotification.url ?? ''}
                     onclick={() => void openInBrowser(openNotification?.url ?? '')}
                   >

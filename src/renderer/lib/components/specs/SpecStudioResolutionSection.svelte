@@ -30,7 +30,7 @@
       />
     </button>
     <button
-      class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay hover:text-foreground"
+      class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay hover:text-foreground"
       title="Add phase"
       onclick={() => edits.addPhase()}
     >
@@ -40,10 +40,10 @@
   </div>
   <ol class="mt-5 space-y-4">
     {#each phases as phase, phaseIndex (phase.id)}
-      <li class="rounded-xl border bg-surface p-4">
+      <li class="border border-border bg-surface p-4">
         <div class="flex items-start gap-3">
           <span
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[0.6875rem] font-semibold text-on-primary"
+            class="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-[0.6875rem] font-semibold text-on-primary"
           >
             {phaseIndex + 1}
           </span>
@@ -64,7 +64,7 @@
             />
           </div>
           <button
-            class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
+            class="p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
             aria-label={`Remove phase ${phaseIndex + 1}`}
             title={`Remove phase ${phaseIndex + 1}`}
             onclick={() => edits.removePhase(phase.id)}
@@ -74,7 +74,7 @@
         </div>
         <div class="mt-3 grid gap-3 lg:grid-cols-2">
           <div>
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between border-b border-border pb-1.5">
               <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                 Checkpoints
               </p>
@@ -86,7 +86,7 @@
             </div>
             <div class="mt-1.5 space-y-1.5">
               {#each phase.checkpoints as checkpoint, checkpointIndex (checkpoint.id)}
-                <div class="rounded-lg bg-elevated p-2 text-xs">
+                <div class="border border-border bg-elevated p-2 text-xs">
                   <EditableMarkdown
                     class="font-medium outline-none focus:bg-surface"
                     text={checkpoint.description}
@@ -108,7 +108,7 @@
             </div>
           </div>
           <div>
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between border-b border-border pb-1.5">
               <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                 File operations
               </p>
@@ -120,10 +120,10 @@
             </div>
             <div class="mt-1.5 space-y-1.5">
               {#each phase.fileOperations as operation, operationIndex (`${phase.id}:${operationIndex}`)}
-                <div class="rounded-lg bg-elevated p-2 text-xs">
+                <div class="border border-border bg-elevated p-2 text-xs">
                   <div class="flex items-center gap-2">
                     <select
-                      class="rounded border bg-surface px-1.5 py-1 text-[0.6875rem]"
+                      class="border border-border bg-surface px-1.5 py-1 text-[0.6875rem]"
                       value={operation.operation}
                       onchange={(event) =>
                         edits.setFileOperationField(
@@ -161,7 +161,7 @@
           </div>
         </div>
         <EditableMarkdown
-          class="mt-3 block rounded-md bg-elevated px-2 py-1 font-mono text-xs outline-none"
+          class="mt-3 block border border-border bg-elevated px-2 py-1 font-mono text-xs outline-none"
           text={phase.commit}
           fallback="No commit specified."
           ariaLabel={`Phase ${phaseIndex + 1} commit`}
