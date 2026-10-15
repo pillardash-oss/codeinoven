@@ -1222,7 +1222,7 @@
         <span
           role="button"
           tabindex={-1}
-          class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
+          class="flex h-[0.875rem] w-[0.875rem] mb-1 flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
             ? 'pointer-events-auto cursor-pointer opacity-100'
             : 'pointer-events-none opacity-0'}"
           aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
