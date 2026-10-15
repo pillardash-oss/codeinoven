@@ -16,6 +16,7 @@
   import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
+  import { settledThreadReadsUnread } from '$shared/thread-status-policy'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import { ovens } from '$lib/stores/ovens.svelte'
   import { type Thread, type ThreadSearchResult } from '$shared/types'
@@ -71,10 +72,12 @@
     if (thread.status === 'spec') {
       return { stage: 'spec' as const }
     }
-    if (thread.status === 'failed' && thread.read) {
+    if (thread.status === 'failed') {
+      // A failure needs the user whether or not they have opened it; unread is
+      // reserved for a completed run nobody has opened.
       return { kind: 'error' as const }
     }
-    if (!thread.read) return { stage: 'unread' as const }
+    if (settledThreadReadsUnread(thread, thread.read)) return { stage: 'unread' as const }
     if (thread.status === 'created') return { stage: 'todo' as const }
     return null
   })
@@ -104,14 +107,15 @@
   })
 
   let threadState = $derived.by((): ThreadState => {
-    // An errored thread the user has not read reads as unread; the Error state
-    // returns once it is opened (see `settledThreadReadsUnread`).
-    if (thread.status === 'failed' && thread.read) return 'error'
+    // A failure needs the user whether or not they have opened it: unread is
+    // reserved for a completed run nobody has opened
+    // (`settledThreadReadsUnread`), so the failure shows its own mark at once.
+    if (thread.status === 'failed') return 'error'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
     if (isWorking) return 'working'
-    if (!thread.read) return 'unread'
+    if (settledThreadReadsUnread(thread, thread.read)) return 'unread'
     if (thread.status === 'created') return 'todo'
     return 'read'
   })

@@ -65,7 +65,6 @@
         option.id,
         projectBadgeOption,
         activity.counts,
-        activity.unreadCounts,
         activity.browserTransfers,
         activity.browserAssistant,
         activity.audio

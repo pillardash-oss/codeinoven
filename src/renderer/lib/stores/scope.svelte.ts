@@ -4,7 +4,6 @@ import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
-  isOrchestrationChildThread,
   type AdoptableWorktreeInfo,
   type ManagedWorktreeDescriptor,
   type Project,
@@ -24,14 +23,12 @@ import {
   type Thread
 } from '$shared/types'
 import type { AuthoredWorkKind } from '$shared/ipc-contract'
-import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import {
   cloneBoard,
   EMPTY_BOARD,
   loadScopeSnapshot,
   orderedBuckets,
   persistScopeSnapshot,
-  type ProjectBadge,
   type ScopeBucketEdit,
   type ScopeProject,
   type ScopeSidebarContext,
@@ -40,13 +37,7 @@ import {
 import { ScopeThreads } from './scope-threads.svelte'
 import { ScopeWorktrees } from './scope-worktrees.svelte'
 
-export type {
-  ProjectBadge,
-  ScopeBucketEdit,
-  ScopeProject,
-  ScopeSidebarContext,
-  ThreadStage
-} from './scope-board'
+export type { ScopeBucketEdit, ScopeProject, ScopeSidebarContext, ThreadStage } from './scope-board'
 export {
   clearScopeSnapshot,
   STAGE_COLORS,
@@ -156,25 +147,6 @@ class ScopeState {
    */
   async ensureScopeBoardThreadsLoaded(projectId: string): Promise<void> {
     await this.threads.ensureScopeBoardThreadsLoaded(projectId)
-  }
-
-  get projectBadges(): SvelteMap<string, ProjectBadge> {
-    const badges = new SvelteMap<string, ProjectBadge>()
-    for (const project of this.projects) {
-      const projectThreads = this.threads.allScopeThreads.filter(
-        (t) => t.projectId === project.id && !t.archived
-      )
-      const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
-      badges.set(project.id, {
-        hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
-        // A settled thread counts as unread until the user reads it; once read,
-        // an errored one shows its error again (see `settledThreadReadsUnread`).
-        hasUnread: userThreads.some((t) => canMarkThreadUnread(t.status) && !t.read),
-        hasAttention: userThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
-        hasError: userThreads.some((t) => t.status === 'failed' && t.read)
-      })
-    }
-    return badges
   }
 
   get buckets(): ScopeBucket[] {

@@ -125,7 +125,8 @@ export function countThreadStates(threads: Iterable<Thread>, now = Date.now()): 
  *
  * Archived rows and orchestration children are skipped (a child never has a row
  * of its own), and an unread child holds its coordinator's row open exactly as
- * the row badges and the rail fold it, so no group is ever counted twice.
+ * the row badges do (see `coordinatorHasUnreadWorkers`), so no group is ever
+ * counted twice.
  */
 export function countThreadStatesByProject(
   threads: readonly Thread[],
@@ -146,8 +147,11 @@ export function countThreadStatesByGroup<K>(
   now = Date.now()
 ): Map<K, ThreadStateCounts> {
   const groups = new Map<K, ThreadStateCounts>()
-  // Coordinators an unread worker holds open. Collected first because a child
-  // can appear before or after the row that stands for it.
+  // Coordinators an unread worker holds open. A child's own read state is the
+  // coordinator's rule rather than the rail's (see `coordinatorHasUnreadWorkers`):
+  // a worker the user never opened holds the row that stands for it open,
+  // whatever its outcome. Collected first because a child can appear before or
+  // after the row it belongs to.
   const coordinatorsHeldUnread = new Set<string>()
   for (const thread of threads) {
     if (thread.archived) continue
@@ -155,7 +159,7 @@ export function countThreadStatesByGroup<K>(
       if (
         thread.coordinatorThreadId !== undefined &&
         threadTracksReadStatus(thread) &&
-        settledThreadReadsUnread(thread, thread.read)
+        !thread.read
       ) {
         coordinatorsHeldUnread.add(thread.coordinatorThreadId)
       }

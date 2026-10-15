@@ -82,11 +82,10 @@ export function statusBadgeForThread(
     case 'spec':
       return { label: 'Spec ready', stage: 'spec' }
     case 'failed':
-      // An errored thread the user has not read still reads as unread; the
-      // Error badge returns once it is opened (see `settledThreadReadsUnread`).
-      return thread.read
-        ? { label: 'Needs attention · error', kind: 'error' }
-        : { label: 'Unread', stage: 'unread' }
+      // A failure needs the user whether or not they have opened it: unread is
+      // reserved for a completed run nobody has opened (`canMarkThreadUnread`),
+      // so the error badge is the state rather than the read mark.
+      return { label: 'Needs attention · error', kind: 'error' }
     case 'interrupted':
       return { label: 'Needs attention · interrupted', tone: 'done' }
     case 'completed':

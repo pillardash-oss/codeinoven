@@ -152,33 +152,38 @@ export const DONE_THREAD_STATUSES: readonly ThreadStatus[] = THREAD_STATUSES.fil
 )
 
 /**
- * Whether a settled thread may be pushed back to unread from a thread actions
- * menu. Only the two outcomes that end a run qualify: `completed` and `failed`.
- * A live status still has work in flight, and `spec` or `awaiting_approval`
- * ("Needs attention") are states the app keeps and never evicts, so unread is
- * not the same thing and neither may be flipped. `interrupted` is likewise out:
- * the user stopped that run on purpose, which unread would only obscure.
+ * Whether a thread may read as unread at all.
  *
- * This mirrors the terminal-outcome split the assistant reports use; see
- * `assistantReportIsTerminal` in `src/lib/assistant-reports.ts`.
+ * Unread is reserved for a run that *finished* (`completed`) and that the user
+ * has not opened yet: the work is over, the result is waiting, and nothing else
+ * is asked of them. A failure is not unread. It is a needs-attention state, and
+ * it says so with its own mark, its own group and its own rail pill whether or
+ * not the thread was ever opened, so a red row can never hide behind the green
+ * unread dot. `interrupted` is out for the same reason (the user stopped that
+ * run on purpose), and the live, parked, retrying and spec states are not
+ * settled at all.
+ *
+ * This is the one rule. The view rail's unread count, a project row's state
+ * strip, the sidebar's rows and status groups, the scope board's Unread slice,
+ * and the "Mark as unread" action all read it, so no surface can call a thread
+ * unread while another calls it failed.
  */
 export function canMarkThreadUnread(status: ThreadStatus): boolean {
-  return status === 'completed' || status === 'failed'
+  return status === 'completed'
 }
 
 /**
  * Whether a settled thread reads as unread until the user opens it.
  *
- * A `completed` or `failed` thread the user has not read shows the unread dot
- * and sits in the Unread slice, exactly as it did the moment the run settled.
- * A run that failed while the user was away and a thread they pushed back to
- * unread from its actions menu are therefore the same, and neither hides behind
- * a Done or Error badge until it is actually opened.
+ * A `completed` thread the user has not read shows the unread dot and sits in
+ * the Unread slice, exactly as it did the moment the run settled. A run that
+ * failed never does: it reads as an error from the moment it settles, and stays
+ * one until the user answers it (see `canMarkThreadUnread`).
  *
  * `read` is the caller's resolved read state, so a surface that folds in
  * orchestration children passes its own `effectiveRead`.
  */
-export function settledThreadReadsUnread(thread: Thread, read: boolean): boolean {
+export function settledThreadReadsUnread(thread: Pick<Thread, 'status'>, read: boolean): boolean {
   return !read && canMarkThreadUnread(thread.status)
 }
 

@@ -37,13 +37,6 @@ export interface ScopeBucketEdit {
   iconType?: string
 }
 
-export interface ProjectBadge {
-  hasWorking: boolean
-  hasUnread: boolean
-  hasAttention: boolean
-  hasError: boolean
-}
-
 export const STAGE_LABELS: Record<ThreadStage, string> = {
   pinned: 'Pinned',
   todo: 'Todo',

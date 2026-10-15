@@ -61,7 +61,7 @@
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
-  import { countThreadStates } from '$lib/thread-state-counts'
+  import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
   import { ThreadOrderSettle } from './thread-order-settle.svelte'
 
@@ -186,6 +186,19 @@
    * instead of rows fighting over a slot; see {@link ThreadOrderSettle}.
    */
   const threadOrderSettle = new ThreadOrderSettle()
+
+  /**
+   * The state breakdown a project row's strip shows, for every project at once.
+   *
+   * Counted from `scopeState.allScopeThreads`, the one in-memory list the view
+   * rail's badge counts, rather than from the folder's own loaded rows: that
+   * list is a bounded recent slice, so a thread the app already knows about (one
+   * a board hydration merged, or one a `thread:updated` broadcast introduced)
+   * could sit outside it and leave the strip's working figure stale until the
+   * folder was expanded far enough to page the thread in. One pass builds every
+   * project's counts, so the rail and the strip can never disagree.
+   */
+  const projectStateCounts = $derived(countThreadStatesByProject(scopeState.allScopeThreads))
 
   /** The settle key of one project's folder list. */
   function projectOrderKey(projectId: string): string {
@@ -581,16 +594,10 @@
                             <StatusBadge stage="working" title="Working threads" />
                           {/if}
                           {#if attentionCount > 0}
-                            <StatusBadge
-                              tone="attention"
-                              title="Threads that need attention"
-                            />
+                            <StatusBadge tone="attention" title="Threads that need attention" />
                           {/if}
                           {#if retryCount > 0}
-                            <StatusBadge
-                              tone="working-paused"
-                              title="Threads waiting to retry"
-                            />
+                            <StatusBadge tone="working-paused" title="Threads waiting to retry" />
                           {/if}
                           {#if issueCount > 0}
                             <StatusBadge stage="issue" title="Issue threads" />
@@ -942,7 +949,8 @@
                   {@const expanded =
                     sidebar.expandedFolders.has(project.id) ||
                     sidebar.projectSearchOpen.has(project.id)}
-                  {@const stateCounts = countThreadStates(folderThreads)}
+                  {@const stateCounts =
+                    projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
                   <DropdownMenu.Root
                     open={openProjectMenuId === project.id}
                     onOpenChange={(o) => {
@@ -1180,7 +1188,7 @@
               {@const expanded =
                 sidebar.expandedFolders.has(project.id) ||
                 sidebar.projectSearchOpen.has(project.id)}
-              {@const stateCounts = countThreadStates(folderThreads)}
+              {@const stateCounts = projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
               <DropdownMenu.Root
                 open={openProjectMenuId === project.id}
                 onOpenChange={(o) => {

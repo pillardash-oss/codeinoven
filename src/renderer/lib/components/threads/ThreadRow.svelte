@@ -54,7 +54,7 @@
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AuthoredWorkKind } from '$shared/ipc-contract'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
@@ -523,10 +523,11 @@
   })
 
   let threadState = $derived.by((): ThreadState => {
-    // A settled thread the user has not read reads as unread: an errored run
-    // they never opened falls through to the unread dot below, and the Error
-    // badge returns the moment it is read (see `settledThreadReadsUnread`).
-    if (thread.status === 'failed' && effectiveRead) return 'error'
+    // A failure needs the user whether or not they have opened it: unread is
+    // reserved for a completed run nobody has opened
+    // (`settledThreadReadsUnread`), so a failed row wears its error mark from the
+    // moment it settles and the green unread dot can never hide it.
+    if (thread.status === 'failed') return 'error'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
@@ -547,7 +548,7 @@
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
-    if (!effectiveRead) return 'unread'
+    if (settledThreadReadsUnread(thread, effectiveRead)) return 'unread'
     if (thread.status === 'completed') return 'completed'
     if (isBusyIndicator) return 'working'
     if (thread.status === 'created') return 'todo'
@@ -556,8 +557,8 @@
 
   /** The word a state that wants the user shows in the detailed row's end slot,
    *  or null when the state is quiet. Four states want them: parked on the user
-   *  (approval), a failed run they have read, a spec ready for review, and a run
-   *  paused on a retry. Every other state keeps its age. */
+   *  (approval), a failed run, a spec ready for review, and a run paused on a
+   *  retry. Every other state keeps its age. */
   let stateWord = $derived.by((): { label: string; color: string } | null => {
     switch (threadState) {
       case 'approval':

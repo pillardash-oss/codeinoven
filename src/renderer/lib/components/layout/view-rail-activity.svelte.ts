@@ -98,13 +98,6 @@ const subscribeToRetryClock = createSubscriber((update) => {
   return () => window.clearInterval(timer)
 })
 
-/** Nothing happening in a family: the shape a caller falls back to. */
-const NO_FAMILY_ACTIVITY: ViewActivityCounts = {
-  projects: emptyThreadStateCounts(),
-  chats: emptyThreadStateCounts(),
-  assistant: emptyThreadStateCounts()
-}
-
 /** The family a rail view belongs to. Every project-mode view shares one badge. */
 export function viewOptionFamily(optionId: HeaderViewOptionId): ContentThreadFamily {
   if (optionId === 'chats') return 'chats'
@@ -146,13 +139,18 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
  *
  * Working threads wear the working tone; threads parked on `working-paused`
  * wear the retry tone; threads parked on the user (a permission, question or
- * secret) wear the attention tone. A badge carries its count and never animates,
- * because a running animation keeps the compositor producing frames for as long
- * as it runs, which a parked state can hold open indefinitely. Orchestration
- * children are folded into their coordinator (same rule as the sidebar rows) so
- * a delegated run counts once instead of inflating the total with hidden worker
- * threads. A live-working thread always counts as working, never as
- * attention/retry, so no thread is ever double-counted.
+ * secret) wear the attention tone, and a failed total wears the error tone. A
+ * badge carries its count and never animates, because a running animation keeps
+ * the compositor producing frames for as long as it runs, which a parked state
+ * can hold open indefinitely. Orchestration children are folded into their
+ * coordinator (same rule as the sidebar rows) so a delegated run counts once
+ * instead of inflating the total with hidden worker threads. A live-working
+ * thread always counts as working, never as attention/retry, so no thread is
+ * ever double-counted.
+ *
+ * The unread axis lives inside the same counts: the mark under the activity pill
+ * reads `counts[family].unread`, so the rail and every project strip count the
+ * same threads on the same rule.
  */
 export class ViewRailActivity {
   counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {
@@ -169,19 +167,9 @@ export class ViewRailActivity {
     }
   })
 
-  /** The unread axis of {@link ViewRailActivity.counts}, read apart because the
-   *  rail shows it as its own mark under the activity pill. Persisted unread
-   *  threads, rebuilt from the same startup-hydrated thread snapshot used by the
-   *  sidebar, so this survives app restarts and includes assistant execution
-   *  threads stored in the assistant space. */
-  unreadCounts: Record<ContentThreadFamily, number> = $derived.by(() => ({
-    projects: this.counts.projects.unread,
-    chats: this.counts.chats.unread,
-    assistant: this.counts.assistant.unread
-  }))
-
   /**
-   * A browser tab's assistant conversation, counted apart from every other family.
+   * A browser tab's assistant conversation, counted apart from every other
+   * family.
    *
    * These rows are held out of `scopeState.allScopeThreads` on purpose, so no
    * family badge can ever see them and the Browser item used to report only
