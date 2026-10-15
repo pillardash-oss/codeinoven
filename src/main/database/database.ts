@@ -882,6 +882,7 @@ export class Database {
       this.migrateThreadPinnedAt(connection)
       this.migrateAssistantPinned(connection)
       this.migrateAssistantAgentsAndPause(connection)
+      this.migrateAssistantIdentityColumns(connection)
       this.migrateAssistantDescription(connection)
       this.migrateAssistantReporting(connection)
       this.migrateCustomSvgIcons(connection)
@@ -1091,6 +1092,26 @@ export class Database {
     }
     if (!columns.has('paused')) {
       connection.exec('ALTER TABLE assistants ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
+    }
+  }
+
+  /**
+   * Add the two columns an assistant is described by, to databases created
+   * before it had a voice of its own: the personality its owner wrote, and the
+   * name they gave its schedule. Fresh databases already carry both, and the
+   * guarded `ALTER TABLE`s are idempotent.
+   */
+  private migrateAssistantIdentityColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('personality')) {
+      connection.exec('ALTER TABLE assistants ADD COLUMN personality TEXT')
+    }
+    if (columns.size > 0 && !columns.has('schedule_name')) {
+      connection.exec('ALTER TABLE assistants ADD COLUMN schedule_name TEXT')
     }
   }
 

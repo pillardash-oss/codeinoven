@@ -68,6 +68,13 @@ export interface Assistant {
    */
   description?: string
   /**
+   * How the assistant should behave and speak, written by its owner when they
+   * create it ("You manage my X and LinkedIn accounts, and you write in my
+   * voice"). It rides every turn of the assistant's threads, ahead of the
+   * knowledge, so the assistant answers as the person they were given.
+   */
+  personality?: string
+  /**
    * Whether this assistant runs on a schedule. On by default, so an assistant the
    * user has always known about keeps firing. When off, the assistant is
    * on-demand only: it has no schedule, its tasks never fire on a clock, and
@@ -75,6 +82,13 @@ export interface Assistant {
    * rows written before this flag existed still read as scheduled.
    */
   scheduled?: boolean
+  /**
+   * What its owner calls the assistant's clock ("Daily social check"), so a
+   * schedule reads as a named habit rather than a bare cadence. Only meaningful
+   * while the assistant runs on a schedule; absent falls back to the assistant's
+   * own name.
+   */
+  scheduleName?: string
   /** Accent colour from the project palette; rendered as the row's left border. */
   color?: string
   /** Filename of the assistant's stored icon image, relative to its storage dir. */
@@ -190,8 +204,12 @@ export const ASSISTANT_SETUP_TITLE = 'Getting started'
 export interface CreateAssistantInput {
   name: string
   description?: string
+  /** How the assistant should behave and speak; rides every turn of its threads. */
+  personality?: string
   /** Defaults to true: an assistant runs on a schedule unless the user turns it off. */
   scheduled?: boolean
+  /** What the owner calls the assistant's clock; only used while it is scheduled. */
+  scheduleName?: string
   color?: string
   iconType?: string
   schedule?: AssistantSchedule | null
@@ -208,8 +226,12 @@ export interface UpdateAssistantInput {
   name?: string
   /** `null` clears the description. */
   description?: string | null
+  /** `null` clears the personality, leaving the assistant with no voice of its own. */
+  personality?: string | null
   /** Turn the assistant's schedule on or off; turning it off clears its schedule. */
   scheduled?: boolean
+  /** `null` clears the schedule's name, falling back to the assistant's own name. */
+  scheduleName?: string | null
   /** `null` clears the accent colour, restoring the neutral border. */
   color?: string | null
   icon?: string | null

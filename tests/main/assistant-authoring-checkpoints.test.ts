@@ -156,7 +156,7 @@ describe('assistantAuthoringProgressContext', () => {
 
 describe('assistantAuthoringContext', () => {
   it('asks for the two priority brackets as two separate questions', () => {
-    const contract = assistantAuthoringContext('Slack latest info')
+    const contract = assistantAuthoringContext({ name: 'Slack latest info', scheduled: true })
     expect(contract).toContain('two separate single-choice questions')
     expect(contract).toContain(ASSISTANT_AUTHORING_UTILITY_ID)
     // The observed failure: one question carrying both brackets, answered as
@@ -165,10 +165,10 @@ describe('assistantAuthoringContext', () => {
   })
 
   it('finishes the connection setup before the recap and asks for credentials in the same turn', () => {
-    const contract = assistantAuthoringContext('Slack latest info')
+    const contract = assistantAuthoringContext({ name: 'Slack latest info', scheduled: true })
     // The observed failure: the model installed Slack, hit a 401, and presented
     // the plan for confirmation instead of walking the user through the setup.
-    expect(contract).toContain('patient and gentle')
+    expect(contract).toContain('never make them feel behind for not already knowing')
     expect(contract).toContain('A connection that returns an authorization error is not set up')
     expect(contract).toContain(
       'Never present a plan as ready while a connection it depends on is unverified'

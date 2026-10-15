@@ -30,8 +30,9 @@
   }
 
   let name = $state('')
-  let description = $state('')
+  let personality = $state('')
   let scheduled = $state(true)
+  let scheduleName = $state('')
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
   let customSvg = $state<string | undefined>(undefined)
@@ -45,8 +46,9 @@
   $effect(() => {
     if (!assistant) return
     name = assistant.name
-    description = assistant.description ?? ''
+    personality = assistant.personality ?? ''
     scheduled = assistantIsScheduled(assistant)
+    scheduleName = assistant.scheduleName ?? ''
     color = assistant.color
     iconType = assistant.iconType
     customSvg = assistant.customSvg
@@ -90,8 +92,9 @@
     try {
       const appearance = {
         name: name.trim(),
-        description: description.trim() || null,
+        personality: personality.trim() || null,
         scheduled,
+        scheduleName: scheduleName.trim() || null,
         color: color ?? null,
         iconType: iconType ?? null,
         customSvg: customSvg ?? null
@@ -175,17 +178,17 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-description">
-        Description <span class="font-normal text-dimmed">(optional)</span>
+      <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-personality">
+        Personality <span class="font-normal text-dimmed">(optional)</span>
       </label>
       <textarea
-        id="edit-assistant-description"
-        rows="2"
+        id="edit-assistant-personality"
+        rows="4"
         class="w-full resize-none border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        placeholder="A note for yourself about what this assistant is for"
-        bind:value={description}></textarea>
+        placeholder="You are Jenny. You keep my X and LinkedIn accounts moving, and you write the way I do."
+        bind:value={personality}></textarea>
       <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
-        For you only, it is never sent to the agent.
+        How it should behave and sound. It works the rest out with you.
       </p>
     </div>
 
@@ -194,8 +197,8 @@
         <p class="text-sm text-foreground">Run on a schedule</p>
         <p class="text-[0.625rem] leading-relaxed text-dimmed">
           {scheduled
-            ? 'The assistant fires on its agreed cadence. Turn this off to keep it on demand.'
-            : 'No schedule: the assistant runs only when you ask it to. Turning this on clears its saved cadence, so the agent agrees a new one with you.'}
+            ? 'It agrees the times with you, then keeps to them.'
+            : 'No schedule. It runs when you ask. Turning this on starts the schedule fresh, so it agrees the times with you again.'}
         </p>
       </div>
       <Switch
@@ -204,6 +207,21 @@
         title="Run on a schedule"
       />
     </div>
+
+    {#if scheduled}
+      <div>
+        <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-schedule-name">
+          Schedule name <span class="font-normal text-dimmed">(optional)</span>
+        </label>
+        <input
+          id="edit-assistant-schedule-name"
+          type="text"
+          class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+          placeholder="e.g. Daily account check"
+          bind:value={scheduleName}
+        />
+      </div>
+    {/if}
 
     {#if error}
       <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>

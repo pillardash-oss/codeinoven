@@ -433,7 +433,7 @@
             onSelect={() => onOpenKnowledge(assistant)}
           >
             <AssistantIcon mark="knowledge" size={14} class="text-muted" />
-            How to
+            What it knows
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"

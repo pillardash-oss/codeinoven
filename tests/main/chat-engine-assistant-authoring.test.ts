@@ -62,7 +62,7 @@ interface EngineInternals {
     thread: Thread | null | undefined
   ): Promise<string | undefined>
   assistantRunHiddenContext(thread: Thread | null | undefined): string | undefined
-  assistantKnowledgeInstruction(thread: Thread | null | undefined): string | undefined
+  assistantPersonaLayers(thread: Thread | null | undefined): string | undefined
   createAssistantRunThread(input: { task: Thread; title: string }): Promise<Thread>
 }
 
@@ -155,7 +155,9 @@ describe('assistant run threads', () => {
     // the run contract into its system prompt.
     expect(run.assistantId).toBe(assistant(knowledge).id)
     expect(run.assistantTaskId).toBe(thread.id)
-    expect(internals(engine).assistantKnowledgeInstruction(run)).toBe(knowledge)
+    // The persona layers ride ahead of the knowledge, so the run still reads
+    // the instruction set it was given.
+    expect(internals(engine).assistantPersonaLayers(run)).toContain(knowledge)
     const contract = internals(engine).assistantRunHiddenContext(run)
     expect(contract).toContain('Slack latest info')
     expect(contract).toContain('Its knowledge is your instruction set')

@@ -42,6 +42,8 @@ const TIMELINESS_BRACKETS = new Set<string>(ASSISTANT_TIMELINESS_IDS)
 const IMPACT_BRACKETS = new Set<string>(ASSISTANT_IMPACT_IDS)
 const MAX_ASSISTANT_NAME = 200
 const MAX_ASSISTANT_DESCRIPTION = 2000
+const MAX_ASSISTANT_PERSONALITY = 4_000
+const MAX_ASSISTANT_SCHEDULE_NAME = 120
 const MAX_KNOWLEDGE = 100_000
 const MAX_CONNECTIONS = 64
 const MAX_CONNECTION_SETUP = 4_000
@@ -225,7 +227,13 @@ function validateCreateInput(value: unknown): CreateAssistantInput {
     ...(typeof record.description === 'string'
       ? { description: record.description.slice(0, MAX_ASSISTANT_DESCRIPTION) }
       : {}),
+    ...(typeof record.personality === 'string'
+      ? { personality: record.personality.slice(0, MAX_ASSISTANT_PERSONALITY) }
+      : {}),
     ...(typeof record.scheduled === 'boolean' ? { scheduled: record.scheduled } : {}),
+    ...(typeof record.scheduleName === 'string'
+      ? { scheduleName: record.scheduleName.slice(0, MAX_ASSISTANT_SCHEDULE_NAME) }
+      : {}),
     ...(typeof record.color === 'string' ? { color: record.color.slice(0, 32) } : {}),
     ...(typeof record.iconType === 'string' ? { iconType: record.iconType.slice(0, 64) } : {}),
     schedule: sanitizeSchedule(record.schedule),
@@ -270,6 +278,24 @@ function validateUpdateInput(value: unknown): UpdateAssistantInput {
       throw new TypeError('Assistant scheduled flag must be a boolean')
     }
     patch.scheduled = record.scheduled
+  }
+  if (record.personality !== undefined) {
+    patch.personality =
+      record.personality === null
+        ? null
+        : requireString(record.personality, 'Assistant personality', true).slice(
+            0,
+            MAX_ASSISTANT_PERSONALITY
+          )
+  }
+  if (record.scheduleName !== undefined) {
+    patch.scheduleName =
+      record.scheduleName === null
+        ? null
+        : requireString(record.scheduleName, 'Schedule name', true).slice(
+            0,
+            MAX_ASSISTANT_SCHEDULE_NAME
+          )
   }
   if (record.color !== undefined) {
     patch.color =

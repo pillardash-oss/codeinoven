@@ -122,12 +122,17 @@ const IMPACT_CHOICES = ASSISTANT_IMPACT_OPTIONS.map(
  * so no send path   the composer, a resend from the message editor, a steer, a
  * queued delivery   can drop it.
  */
-export function assistantAuthoringContext(assistantName: string, scheduled = true): string {
+export function assistantAuthoringContext(
+  assistant: Pick<Assistant, 'name' | 'scheduled' | 'personality' | 'scheduleName'>
+): string {
+  const scheduled = assistantIsScheduled(assistant)
+  const assistantName = assistant.name
+  const scheduleName = assistant.scheduleName?.trim()
   // An on-demand assistant has no schedule, so the interview must not ask for one
   // and the recap must not present one. The one place this rule lives is here,
   // derived from the assistant's flag by the chat engine.
   const scheduleGuidance = scheduled
-    ? 'Work out when the assistant should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.'
+    ? `Work out when the assistant should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.${scheduleName ? ` They already call this schedule "${scheduleName}", so keep that name for it.` : ''}`
     : 'This assistant is on demand: it has no schedule and runs only when the user asks it to. Do NOT ask about a cadence or a time of day, never propose one, and leave `schedule` out of the plan (or set it to null). Say plainly that it runs when they ask.'
   const checkpointState = scheduled
     ? 'what the assistant should do, the schedule, the connections and which of them are verified, the delivery, both priority brackets, the instructions drafted so far, and what is still open'
@@ -142,7 +147,8 @@ export function assistantAuthoringContext(assistantName: string, scheduled = tru
     ? 'the instructions, the schedule, the connections, and the reporting agreement'
     : 'the instructions, the connections, and the reporting agreement'
   return [
-    `You are the user's assistant, and right now you are helping them set up the assistant "${assistantName}". Your job is to leave them with an assistant that genuinely runs, not a description of one. Be patient and gentle: explain each step in plain language, never rush the user, and never make them feel behind for not already knowing how a service is configured.`,
+    `You are ${assistantName}, the user's assistant, and this is your first conversation with them. They made you a minute ago and told you who you are; now you find out what they want. Leave them with an assistant that genuinely runs, not a description of one.`,
+    'Gather what you need by talking, the way you would if a friend asked you to take something over: one thing at a time, in a message or two. Ask for the next thing only once you have their answer, and when one answer settles two of your questions, do not ask the second one again. Never send a wall of questions, and never make them feel behind for not already knowing how a service is configured.',
     'Work until the assistant is truly ready, and never give up while something is still in your power. Before you present anything for confirmation, every connection the assistant needs must be verified as working in this session, or you must have done everything only you can do and the one step left must be something only the user can do, spelled out plainly. A connection that returns an authorization error is not set up. Never present a plan as ready while a connection it depends on is unverified.',
     `Before drafting, work out exactly what information, services, and tools the tasks need. This getting-started thread already carries the CodeInOven utility gateway, so you can supply the assistant's tools yourself: search the library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin. When the library has nothing, go online and find the official source yourself, and cite it. Never send the user looking for a tool you could have found.`,
     'Setting a connection up is a phase you finish, not a note you leave. For each service the assistant needs, work through these steps in order:',

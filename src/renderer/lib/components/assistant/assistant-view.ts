@@ -529,6 +529,74 @@ export function extractKnowledgeDraft(text: string): string | null {
 }
 
 /**
+ * Which machinery block a fence opens: the knowledge the agent wrote, the plan it
+ * has to act on, or neither.
+ */
+function taggedBlockKind(lines: readonly string[], fence: FenceLine): 'knowledge' | 'plan' | null {
+  if (KNOWLEDGE_TAG.test(fence.tag)) return 'knowledge'
+  if (ASSISTANT_TAG.test(fence.tag)) return 'plan'
+  const head = firstNonEmptyLine(lines.slice(fence.index + 1))
+  if (head === null) return null
+  if (KNOWLEDGE_MARKER_LINE.test(head)) return 'knowledge'
+  if (ASSISTANT_MARKER_LINE.test(head)) return 'plan'
+  return null
+}
+
+/** The fence that closes one block, tracking tagged inner fences as nesting. */
+function closingFenceFor(fences: readonly FenceLine[], open: FenceLine): FenceLine | null {
+  let depth = 1
+  for (const fence of fences) {
+    if (fence.index <= open.index) continue
+    if (fence.length < open.length) continue
+    if (fence.tag !== '') {
+      depth += 1
+      continue
+    }
+    depth -= 1
+    if (depth === 0) return fence
+  }
+  return null
+}
+
+/**
+ * One assistant message as the user should read it.
+ *
+ * The agent drafts in two fenced blocks that are machinery, not conversation:
+ * the knowledge it wrote for the assistant, and the plan the app has to act on.
+ * Left as they were, the assistant's answer arrived as a wall of markdown inside
+ * a code block, which is the one thing the person reading it should never have to
+ * parse. So the knowledge block is unwrapped and rendered as the document it is,
+ * and the plan block is dropped entirely: the recap card beside the message
+ * already states the schedule, the connections and the reporting agreement in
+ * plain language.
+ *
+ * Everything else, the prose the agent wrote around the blocks, is untouched.
+ */
+export function assistantDisplayText(text: string): string {
+  const lines = text.split('\n')
+  const fences = collectFences(lines)
+  const out: string[] = []
+  let index = 0
+  while (index < lines.length) {
+    const fence = fences.find((entry) => entry.index === index)
+    const kind = fence ? taggedBlockKind(lines, fence) : null
+    const close = fence && kind ? closingFenceFor(fences, fence) : null
+    if (!fence || !kind || !close) {
+      out.push(lines[index] ?? '')
+      index += 1
+      continue
+    }
+    if (kind === 'knowledge') {
+      const body = lines.slice(fence.index + 1, close.index).join('\n')
+      const content = stripLeadingMarker(body, (line) => KNOWLEDGE_MARKER_LINE.test(line))
+      if (content.trim() !== '') out.push(content)
+    }
+    index = close.index + 1
+  }
+  return out.join('\n').trim()
+}
+
+/**
  * The newest knowledge draft across assistant messages, newest message first.
  * Messages are given as plain text so this stays free of thread plumbing.
  */

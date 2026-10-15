@@ -119,7 +119,7 @@
     </dd>
   </div>
   <div class="flex gap-2">
-    <dt class="w-16 shrink-0 text-dimmed">How to</dt>
+    <dt class="w-16 shrink-0 text-dimmed">Knows</dt>
     <dd class="flex min-w-0 items-start gap-1 text-muted">
       <Link2 size={12} class="mt-0.5 shrink-0" />
       <span class="min-w-0 break-words">{knowledgePreview}</span>

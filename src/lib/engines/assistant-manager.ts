@@ -103,7 +103,11 @@ export class AssistantManager {
       id: generateId(),
       name: input.name.trim() || 'New Assistant',
       description: input.description?.trim() || undefined,
+      personality: input.personality?.trim() || undefined,
       scheduled,
+      // A schedule's name only exists while there is a schedule to name, so an
+      // unscheduled assistant never keeps one behind its flag.
+      scheduleName: scheduled ? input.scheduleName?.trim() || undefined : undefined,
       color: input.color ?? pickColorForSeed(input.name),
       iconType: input.iconType,
       schedule: scheduled ? (input.schedule ?? null) : null,
@@ -153,7 +157,14 @@ export class AssistantManager {
       name: input.name?.trim() || existing.name,
       description:
         'description' in input ? input.description?.trim() || undefined : existing.description,
+      personality:
+        'personality' in input ? input.personality?.trim() || undefined : existing.personality,
       scheduled,
+      scheduleName: scheduled
+        ? 'scheduleName' in input
+          ? input.scheduleName?.trim() || undefined
+          : existing.scheduleName
+        : undefined,
       color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,

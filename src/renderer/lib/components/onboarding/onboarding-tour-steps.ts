@@ -229,7 +229,7 @@ export const VIEW_TOURS: Record<WorkspaceTourView, ViewTour> = {
         eyebrow: 'Header actions',
         title: 'Assistants and tasks start here',
         description:
-          'An assistant owns a repeating job and the knowledge that describes it. A task is a single piece of work. Search runs, create either one, and start a task with the same actions.',
+          'An assistant takes something off your hands for good and remembers everything you tell it. A task is one piece of work inside an assistant. Search runs, and start either one from here.',
         shortcuts: [
           { label: 'New task', keys: shortcutKey('N') },
           { label: 'New assistant', keys: isMac ? '⌘⇧N' : 'Ctrl+Shift+N' }
@@ -240,7 +240,7 @@ export const VIEW_TOURS: Record<WorkspaceTourView, ViewTour> = {
         eyebrow: 'Start here',
         title: 'Begin with an assistant',
         description:
-          'A new assistant opens a Getting started thread, where the agent interviews you until the knowledge, the schedule and the connections it needs are agreed.'
+          'A new assistant opens its first conversation. It asks what it needs, one thing at a time, and writes down what it learns so every run follows it.'
       },
       {
         selector: '[data-onboarding="notifications"]',

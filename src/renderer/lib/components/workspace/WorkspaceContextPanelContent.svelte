@@ -56,6 +56,8 @@
     onOpenAssistantTask: (task: Thread) => void
     /** Open one assistant connection's setup as a new thread of that assistant. */
     onSetupAssistantConnection: (input: ConnectionSetupRequest) => void
+    /** Move a task that belongs to no assistant into one the user picks. */
+    onAdoptAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -75,7 +77,8 @@
     onOpenSubagent,
     navigate,
     onOpenAssistantTask,
-    onSetupAssistantConnection
+    onSetupAssistantConnection,
+    onAdoptAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -310,6 +313,7 @@
               {navigate}
               onOpenTask={onOpenAssistantTask}
               onSetupConnection={onSetupAssistantConnection}
+              onAdoptTask={onAdoptAssistantTask}
             />
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}

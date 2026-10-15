@@ -102,6 +102,12 @@
      * thread creation and the selection.
      */
     onSetupConnection: (input: ConnectionSetupRequest) => void
+    /**
+     * Move a task that belongs to no assistant into one the user picks. Nothing
+     * in this view runs without an assistant, so a task with no owner is a
+     * question waiting to be answered rather than a working state.
+     */
+    onAdoptTask?: (task: Thread) => void
   }
 
   let {
@@ -111,7 +117,8 @@
     panelTab = $bindable(),
     navigate,
     onOpenTask,
-    onSetupConnection
+    onSetupConnection,
+    onAdoptTask
   }: Props = $props()
 
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
@@ -189,12 +196,20 @@
   const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
   /** Whether this assistant runs on a clock at all; drives the schedule copy. */
   const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
-  /** The schedule line everywhere in the panel: a cadence, or on-demand. */
-  const scheduleLabel = $derived(
-    scheduled ? describeSchedule(assistant?.schedule ?? null) : 'Runs on demand'
-  )
+  /**
+   * The schedule line everywhere in the panel: what the user named the clock,
+   * then the cadence the assistant agreed, or "runs on demand" when it has none.
+   */
+  const scheduleLabel = $derived.by(() => {
+    if (!scheduled) return 'Runs on demand'
+    const cadence = describeSchedule(assistant?.schedule ?? null)
+    const named = assistant?.scheduleName?.trim()
+    return named ? `${named} · ${cadence}` : cadence
+  })
 
   const collapsed = new SvelteSet<string>()
+  /** The assistant's name, for copy that would otherwise repeat "this assistant". */
+  const assistantLabel = $derived(assistant?.name?.trim() || 'your assistant')
   let editingId = $state<string | null>(null)
   let editDraft = $state('')
 
@@ -515,7 +530,7 @@
    *  lives on the run thread. */
   const runIssues = $derived.by(() => {
     const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
-    const seen = new Set<string>()
+    const seen = new SvelteSet<string>()
     const pushIssue = (thread: Thread, kind: string, detail: string): void => {
       const id = `${thread.id}:${kind}`
       if (seen.has(id)) return
@@ -786,10 +801,10 @@
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
       <AssistantIcon mark="knowledge" size={24} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">No knowledge yet</p>
+    <p class="text-[0.8125rem] font-medium text-foreground">Nothing yet</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Describe what this assistant should do to the agent in its task. Tell it the goal, the steps,
-      and when it should run. The plan you agree on shows up here.
+      Tell {assistantLabel} what you want in its thread. It asks what it needs, then writes it down here,
+      and every run follows it.
     </p>
   </div>
   {#if gettingStartedCheckpoint}
@@ -814,9 +829,18 @@
     </span>
     <p class="text-[0.8125rem] font-medium text-foreground">Not part of an assistant</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Group this task into an assistant to give it instructions, connections, models, and a
-      schedule.
+      Give it to one and it gets instructions, connections, models, and a schedule.
     </p>
+    {#if onAdoptTask && task}
+      <button
+        type="button"
+        class="mt-1 bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover"
+        title="Choose the assistant this task belongs to"
+        onclick={() => onAdoptTask?.(task)}
+      >
+        Move it into an assistant
+      </button>
+    {/if}
   </div>
 {/snippet}
 
@@ -961,15 +985,21 @@
         {@render assistantEmptyState()}
       {:else}
         <div class="flex flex-col gap-1.5 p-3">
-          {#if assistant.description?.trim()}
-            <p
-              class="mb-1 bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
-              title="Your own note about this assistant, never sent to the agent"
-            >
-              {assistant.description}
-            </p>
+          {#if assistant.personality?.trim()}
+            <div class="mb-1 bg-elevated px-2.5 py-2">
+              <p
+                class="mb-1 text-[0.625rem] font-medium text-dimmed"
+                title="How this assistant behaves and sounds"
+              >
+                Personality
+              </p>
+              <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
+            </div>
           {/if}
-          <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
+          <p
+            class="mb-1 text-[0.625rem] text-dimmed"
+            title="What you and the assistant agreed it keeps to"
+          >
             Schedule: {scheduleLabel}
           </p>
 
@@ -1071,6 +1101,12 @@
                 </button>
               {/if}
             </div>
+          </div>
+          <div class="mt-1 flex items-baseline justify-between px-0.5">
+            <p class="text-[0.75rem] text-foreground">What {assistant.name} knows</p>
+            <span class="text-[0.625rem] text-dimmed"
+              >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
+            >
           </div>
           {#each sections as section (section.id)}
             {@const folded = collapsed.has(section.id) && editingId !== section.id}

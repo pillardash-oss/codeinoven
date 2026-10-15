@@ -263,7 +263,7 @@
   }> = [
     { id: 'all', label: 'Assistants and tasks', hint: 'Everything the assistant ran' },
     { id: 'assistant', label: 'Assistants only', hint: 'Runs owned by a scheduled assistant' },
-    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no assistant' }
+    { id: 'task', label: 'Tasks only', hint: 'Runs of tasks that belong to no assistant yet' }
   ]
 
   const assistantSubjectLabel = $derived(

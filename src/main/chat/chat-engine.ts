@@ -118,6 +118,7 @@ import {
   pendingContinuationRequest,
   type PendingContinuationRequest
 } from '../../lib/pending-request'
+import { ASSISTANT_VOICE_INSTRUCTION, assistantPersonalityContext } from '../../lib/assistant-voice'
 import { composeAssistantInstruction, assistantRunContext } from '../../lib/assistant-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -381,9 +382,9 @@ import {
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
   assistantKnowledgeComplete,
-  assistantIsScheduled,
   workerReportsToCoordinator
 } from '../../lib/types'
+import type { Assistant } from '../../lib/types'
 import {
   resolveWorkflowCoordinatorThreadId,
   workflowGroupThreads
@@ -8095,7 +8096,9 @@ export class ChatEngine {
     // is what the agent revises. The interview checkpoint belongs to the authoring
     // conversation, so it is neither read nor injected here.
     if (conversation === 'update') {
-      return assistantKnowledgeUpdateContext(assistant)
+      return [this.assistantPersonaContext(assistant), assistantKnowledgeUpdateContext(assistant)]
+        .filter(Boolean)
+        .join('\n\n')
     }
     const [checkpoint, messages] = await Promise.all([
       this.assistantAuthoringCheckpoints
@@ -8108,7 +8111,8 @@ export class ChatEngine {
     ])
     const decisions = formatInterviewDecisions(messages, ASSISTANT_AUTHORING_DECISION_LIMIT)
     return [
-      assistantAuthoringContext(assistant.name, assistantIsScheduled(assistant)),
+      this.assistantPersonaContext(assistant),
+      assistantAuthoringContext(assistant),
       assistantAuthoringProgressContext({ checkpoint, decisions })
     ]
       .filter(Boolean)
@@ -8159,20 +8163,40 @@ export class ChatEngine {
   }
 
   /**
-   * The assistant's saved knowledge for the turn prompt of a task that runs it. The
-   * knowledge is the assistant's instruction set and changes only when the user edits
-   * the assistant, so it belongs in the system prompt beside the contract rather
-   * than on each scheduled run's message, where every run appended another copy
-   * to the harness transcript. Putting it here also means a follow-up turn still
-   * carries the instruction set the contract refers to, even after a session
-   * rotation dropped the run messages from the native transcript.
+   * The persona layers for any turn on an assistant's own threads: who the user
+   * asked the assistant to be, and how it talks. They ride ahead of the
+   * knowledge, so an assistant sounds like itself while it is setting up, while
+   * the user is changing what it knows, and when it runs.
+   *
+   * The voice rule is unconditional: it is what makes an assistant's answer read
+   * as a message from a person rather than a report, and the Assistant view is
+   * used by people who did not come here to read a report.
    */
-  private assistantKnowledgeInstruction(thread: Thread | null | undefined): string | undefined {
+  private assistantPersonaContext(assistant: Assistant): string {
+    return [assistantPersonalityContext(assistant.personality), ASSISTANT_VOICE_INSTRUCTION].join(
+      '\n\n'
+    )
+  }
+
+  /**
+   * The layers a task turn carries for the assistant that owns it: the persona,
+   * then the knowledge the assistant and the user wrote together.
+   *
+   * The knowledge is the assistant's instruction set and changes only when the
+   * user edits the assistant, so it belongs in the system prompt beside the
+   * contract rather than on each scheduled run's message, where every run would
+   * append another copy to the harness transcript. Putting it here also means a
+   * follow-up turn still carries the instruction set the contract refers to,
+   * even after a session rotation dropped the run messages from the native
+   * transcript.
+   */
+  private assistantPersonaLayers(thread: Thread | null | undefined): string | undefined {
     if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.assistantId) return undefined
     const assistant = this.assistantRepo.get(thread.assistantId)
     if (!assistant || !assistantKnowledgeComplete(assistant)) return undefined
-    const knowledge = assistant.knowledge.trim()
-    return knowledge.length > 0 ? knowledge : undefined
+    return [this.assistantPersonaContext(assistant), assistant.knowledge.trim()]
+      .filter((layer) => layer.length > 0)
+      .join('\n\n')
   }
 
   /**
@@ -9469,7 +9493,7 @@ export class ChatEngine {
     // kept in the harness transcript and replayed once more on every later turn,
     // which would accumulate one copy per turn for the life of the thread.
     const assistantInstruction = assistantTaskTurn
-      ? composeAssistantInstruction(this.assistantKnowledgeInstruction(targetThread), assistantRun)
+      ? composeAssistantInstruction(this.assistantPersonaLayers(targetThread), assistantRun)
       : origin === 'user'
         ? await this.assistantAuthoringInstruction(projectId, threadId, targetThread)
         : undefined

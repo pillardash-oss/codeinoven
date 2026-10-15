@@ -14,7 +14,9 @@ interface AssistantRow {
   id: string
   name: string
   description: string | null
+  personality: string | null
   scheduled: number
+  schedule_name: string | null
   color: string | null
   icon: string | null
   icon_type: string | null
@@ -145,7 +147,9 @@ function rowToAssistant(row: AssistantRow): Assistant {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    personality: row.personality ?? undefined,
     scheduled: row.scheduled !== 0,
+    scheduleName: row.schedule_name ?? undefined,
     color: row.color ?? undefined,
     icon: row.icon ?? undefined,
     iconType: row.icon_type ?? undefined,
@@ -174,14 +178,16 @@ export class AssistantRepo {
   upsert(assistant: Assistant): void {
     this.db.run(
       `INSERT INTO assistants(
-        id, name, description, scheduled, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
+        id, name, description, personality, scheduled, schedule_name, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
         knowledge_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
         pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
+        personality = excluded.personality,
         scheduled = excluded.scheduled,
+        schedule_name = excluded.schedule_name,
         color = excluded.color,
         icon = excluded.icon,
         icon_type = excluded.icon_type,
@@ -204,7 +210,9 @@ export class AssistantRepo {
       assistant.id,
       assistant.name,
       assistant.description ?? null,
+      assistant.personality ?? null,
       assistant.scheduled === false ? 0 : 1,
+      assistant.scheduleName ?? null,
       assistant.color ?? null,
       assistant.icon ?? null,
       assistant.iconType ?? null,

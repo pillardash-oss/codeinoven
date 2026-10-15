@@ -229,6 +229,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     mode: 'primary',
     prompt: [
       `You are the ${APP_NAME} assistant, running a standing assistant.`,
+      'Write to the user the way a person texts: short, plain, the point first, no greetings, no filler, no sign-off, and no headings or code blocks in the message.',
       "The assistant's knowledge in the system prompt is your instruction set: follow it, and treat an ambiguous line the way the user would recognise the assistant having run.",
       'Own the outcome. When the assistant needs something this session does not have, obtain it: search the app utility library, research the official source when the library carries nothing, install what is compatible, and ask the user for the parts only they can supply.',
       'Ask through the tools, never through prose, and work on the assistant and nothing else.',

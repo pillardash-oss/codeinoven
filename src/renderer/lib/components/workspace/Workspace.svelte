@@ -139,6 +139,8 @@
   import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import AssistantCreateControl from '../assistant/AssistantCreateControl.svelte'
+  import AssistantOwnerPicker from '../assistant/AssistantOwnerPicker.svelte'
+  import type { NewAssistantDraft } from '../assistant/assistant-create'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
@@ -4236,12 +4238,6 @@
     })
   }
 
-  /** Create an assistant-less task and open it (header New Task). */
-  async function createAssistantTask(): Promise<void> {
-    if (!assistantProject) return
-    await createThreadInProject(assistantProject)
-  }
-
   /**
    * The model the composer would start a new assistant task on: the selected
    * assistant task's model, else the assistant's own last-used model, else the
@@ -4283,26 +4279,31 @@
     return assistantList.find((assistant) => assistant.id === assistantId) ?? null
   }
 
-  /** Cmd/Ctrl+N on the Assistant view: new task in the active assistant when the
-   *  user is inside one, otherwise an assistant-less task. */
+  /**
+   * Cmd/Ctrl+N on the Assistant view: a new task, in the assistant the user is
+   * currently in, or in the one they pick when they are not in any. There is no
+   * task outside an assistant, so there is nothing to create without an answer.
+   */
   async function createAssistantTaskFromShortcut(): Promise<void> {
     const assistant = activeAssistant()
     if (assistant) await createTaskInAssistant(assistant)
-    else await createAssistantTask()
+    else requestTaskOwner()
   }
 
   /** Create an assistant and seed its "Getting started" task, then open its panel. */
-  async function createAssistant(
-    name: string,
-    description: string,
-    scheduled = true
-  ): Promise<void> {
+  async function createAssistant(draft: NewAssistantDraft): Promise<void> {
     if (!assistantProject) return
     // No model prompt: the primary is the model the user is already working on,
     // so creating an assistant never blocks on a pick. Fallbacks are added later
     // from the panel's Agents tab, which the agent points the user at.
     const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
-    const assistant = await assistants.createAssistant({ name, description, scheduled, agents })
+    const assistant = await assistants.createAssistant({
+      name: draft.name,
+      personality: draft.personality || undefined,
+      scheduled: draft.scheduled,
+      scheduleName: draft.scheduleName || undefined,
+      agents
+    })
     // The seed task is created already inside the assistant: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, {
@@ -4487,6 +4488,58 @@
     const updated = await assistants.assignTask(taskId, assistantId)
     upsertThreadInList(updated)
     workspaceState.updateThread(updated)
+  }
+
+  /**
+   * What the user is choosing an assistant for: a task they just asked for, or a
+   * task that already exists and still belongs to nobody.
+   *
+   * Nothing in the Assistant view runs without an assistant, so a task with no
+   * owner is never created here: the workspace asks which assistant takes it on,
+   * and only a brand-new assistant starts without being asked.
+   */
+  let taskOwnerRequest = $state<{
+    mode: 'create' | 'assign'
+    taskId?: string
+    taskLabel?: string
+  } | null>(null)
+
+  /** Ask which assistant a new task belongs to, before it is created. */
+  function requestTaskOwner(): void {
+    if (assistantList.length === 0) {
+      // Nothing to choose from, so the only way forward is an assistant of its
+      // own; the create flow seeds its first task and opens the panel.
+      assistantCreateTrigger++
+      return
+    }
+    taskOwnerRequest = { mode: 'create' }
+  }
+
+  /** Offer to move one existing task into an assistant. */
+  function requestTaskOwnerForTask(task: Thread): void {
+    if (assistantList.length === 0) {
+      assistantCreateTrigger++
+      return
+    }
+    taskOwnerRequest = { mode: 'assign', taskId: task.id, taskLabel: task.title }
+  }
+
+  /** The assistant the user picked: create the task in it, or move one into it. */
+  async function pickTaskOwner(assistantId: string): Promise<void> {
+    const request = taskOwnerRequest
+    taskOwnerRequest = null
+    const assistant = assistantList.find((entry) => entry.id === assistantId)
+    if (!assistant || !request) return
+    if (request.mode === 'assign' && request.taskId) {
+      try {
+        await assignAssistantTask(request.taskId, assistant.id)
+        toast.success(`Moved into ${assistant.name}`)
+      } catch (error) {
+        reportError(error, 'The task could not be moved')
+      }
+      return
+    }
+    await createTaskInAssistant(assistant)
   }
 
   function openAssistantKnowledgeForTask(task: Thread): void {
@@ -4968,6 +5021,7 @@
             {navigate}
             onOpenAssistantTask={openAssistantTask}
             onSetupAssistantConnection={openAssistantConnectionSetup}
+            onAdoptAssistantTask={requestTaskOwnerForTask}
           />
         {/snippet}
         <div
@@ -5110,4 +5164,20 @@
   onCancel={() => (closeTabTarget = null)}
   onDiscard={discardCloseTab}
   onSave={saveAndCloseTab}
+/>
+
+<!-- Which assistant takes on a task. Nothing in the Assistant view runs without
+     one, so this is the question every task with no owner is answered with. -->
+<AssistantOwnerPicker
+  open={taskOwnerRequest !== null}
+  assistants={assistantList}
+  question={taskOwnerRequest?.mode === 'assign'
+    ? `Who should take on “${taskOwnerRequest.taskLabel ?? 'this task'}”?`
+    : 'Which assistant should this task belong to?'}
+  onPick={(assistantId) => void pickTaskOwner(assistantId)}
+  onNewAssistant={() => {
+    taskOwnerRequest = null
+    assistantCreateTrigger++
+  }}
+  onClose={() => (taskOwnerRequest = null)}
 />

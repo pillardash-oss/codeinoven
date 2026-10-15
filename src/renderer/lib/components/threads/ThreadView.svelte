@@ -172,6 +172,7 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
+    assistantDisplayText,
     connectionsFromPlan,
     extractKnowledgeDraft,
     isAssistantConfirmation,
@@ -13399,9 +13400,14 @@
                           {:else}
                             <!-- The agent's closing statement is the turn's answer;
                                  the running commentary it wrote between tool calls
-                                 lives in the trace above. -->
+                                 lives in the trace above. In the Assistant view the
+                                 answer may carry the drafted knowledge, which is a
+                                 document rather than a code block, so it is shown as
+                                 the finished markdown it is. -->
                             <MarkdownView
-                              text={turnClosingText.text}
+                              text={assistantMode
+                                ? assistantDisplayText(turnClosingText.text)
+                                : turnClosingText.text}
                               citationThread={citationThreadContext}
                               annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                               onCiteFile={openFileCitation}
@@ -13871,13 +13877,11 @@
                   </h1>
                   <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
                     {#if assistantName && !assistantKnowledgeComplete}
-                      How should this assistant happen? Describe it properly for the agent. Say what
-                      it should do, how often, and where the information comes from. The agent works
-                      out what it needs, asks about anything missing, and drafts the knowledge with
-                      you until you agree. It then shows a recap for you to save.
+                      Tell {assistantName} what you want it to handle. It asks what it needs, and writes
+                      down what it learns so every run follows it.
                     {:else if assistantName}
-                      This task follows the <span class="text-foreground">{assistantName}</span>
-                      knowledge. Send a message to run it now, or adjust anything in How to.
+                      This task runs on what <span class="text-foreground">{assistantName}</span> knows.
+                      Send a message to run it now, or change anything in What it knows.
                     {:else}
                       Describe what this task should do and the agent will take it from there.
                     {/if}
@@ -14383,9 +14387,9 @@
                     <ChatComposer
                       bind:this={composer}
                       placeholder={assistantMode && assistantName && !assistantKnowledgeComplete
-                        ? 'Describe how this assistant should run…'
+                        ? `Tell ${assistantName} what you want it to do…`
                         : assistantSetupThread && assistantKnowledgeComplete
-                          ? 'Tweak the knowledge, the schedule, or a connection…'
+                          ? 'Change what it knows, its times, or a connection…'
                           : activePlanningEntry === 'brainstorm'
                             ? 'Add details to the Brainstorm discussion…'
                             : activePlanningEntry === 'spec'

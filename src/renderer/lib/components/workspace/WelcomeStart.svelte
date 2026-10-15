@@ -109,7 +109,7 @@
         id: 'new-assistant',
         icon: AssistantIcon,
         title: 'Start a new assistant',
-        description: 'A job that repeats, with a knowledge the agent works from',
+        description: 'Someone you hand something over to, once',
         run: () => onNewAssistant?.(),
         highlight: true
       })
@@ -119,7 +119,7 @@
         id: 'new-task',
         icon: AssistantTaskIcon,
         title: 'Start a new task',
-        description: 'One piece of work for the agent, with no schedule',
+        description: 'One thing to do, inside an assistant',
         run: () => onNewTask?.()
       })
     }
