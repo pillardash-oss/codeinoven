@@ -13644,15 +13644,15 @@
              from the tail. Squared and bordered like every other control, and it
              names what it does instead of showing a bare chevron in a pill.
 
-             Its layer is deliberate: above the cards that stack in this column
-             (they carry no z-index, so any rung clears them, and the control
-             stays whole where it perches on one), and below the composer, which
-             is z-10 with its own popovers inside it. The context meter's popover
-             opens from the shoe above all of this, so the reading the user asked
-             for is never covered by this control. -->
+             Its rung is deliberate: above everything the transcript paints, which
+             reaches z-20 on a working trace's sticky header, and below the panels
+             and menus at z-40, so the context meter's popover opens over it and a
+             card's own menu is never covered by it. The click-away scrims sit at
+             this same rung and paint after it, which is what a scrim should do to
+             a control. -->
         <button
           type="button"
-          class="group absolute left-1/2 z-5 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+          class="group absolute left-1/2 z-30 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
           style:top={scrollButtonTop}
           title="Scroll to latest message"
           aria-label="Scroll to latest message"
