@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search } from '@lucide/svelte'
+  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search, Target } from '@lucide/svelte'
   import { RoutineDefaultIcon } from '$lib/routine-icons'
 
   interface Props {
@@ -28,10 +28,14 @@
     treeBusy: boolean
     filterOpen: boolean
     rootLoading: boolean
+    /** False while no file is open: there is nothing to locate in the tree. */
+    canRevealActiveFile: boolean
     onStartResize: (event: PointerEvent) => void
     onResizeKeydown: (event: KeyboardEvent) => void
     onToggleExpandAll: () => void
     onToggleFilter: () => void
+    /** Bring the open file's row on screen, opening the folders above it. */
+    onRevealActiveFile: () => void
     onRefresh: () => void
   }
 
@@ -49,10 +53,12 @@
     treeBusy,
     filterOpen,
     rootLoading,
+    canRevealActiveFile,
     onStartResize,
     onResizeKeydown,
     onToggleExpandAll,
     onToggleFilter,
+    onRevealActiveFile,
     onRefresh
   }: Props = $props()
 </script>
@@ -135,6 +141,16 @@
     onclick={onToggleFilter}
   >
     <Search size={12} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label="Locate the open file in the tree"
+    title="Locate the open file in the tree"
+    disabled={!canRevealActiveFile}
+    onclick={onRevealActiveFile}
+  >
+    <Target size={12} />
   </button>
   <button
     type="button"
