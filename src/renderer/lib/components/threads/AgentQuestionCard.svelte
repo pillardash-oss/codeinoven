@@ -1,13 +1,5 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ChevronRight,
-    CircleHelp,
-    ClipboardList,
-    Paperclip,
-    Send,
-    X
-  } from '@lucide/svelte'
+  import { CircleHelp, ClipboardList, Paperclip, Send, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -16,9 +8,11 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardButton from '../shared/CardButton.svelte'
+  import CardCloseButton from '../shared/CardCloseButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
   import CardHead from '../shared/CardHead.svelte'
   import CardOption from '../shared/CardOption.svelte'
+  import CardStepper from '../shared/CardStepper.svelte'
   import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
@@ -128,9 +122,12 @@
   let currentAnswers = $derived(answers[currentIndex] ?? [])
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
   let allAnswered = $derived(answers.every((answer) => answer.length > 0))
-  // The send key resolved through the user's keymap overrides, so the Next
-  // button advertises whichever combination actually advances the question.
+  // The send key resolved through the user's keymap overrides, so the stepper's
+  // forward arrow advertises whichever combination advances the walkthrough.
   let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
+  // The close in the head ends the whole request, and the title says so: a bare
+  // X on a card that walks through several questions reads as "skip this one".
+  let dismissTitle = $derived(total > 1 ? 'Dismiss all questions' : 'Dismiss this question')
   // Paused is read from the server's own deadline, never from local interaction:
   // the main process holds the countdown while the user is active anywhere in the
   // app and only hands back a fresh window once they stop. Saying "Paused" off a
@@ -158,9 +155,6 @@
       ? 'The countdown is paused while you fill this card in'
       : 'The recommended answer is selected automatically when time expires'
   )
-  /** The primary advances the walkthrough until every question has an answer. */
-  let nextUp = $derived(currentIndex < total - 1)
-  let currentAnswered = $derived(currentAnswers.length > 0 || currentCustomAnswer.trim().length > 0)
 
   // Plain-markdown rendition of the question and its options that the agent
   // speaks aloud via the speaker button; keyed to the visible question.
@@ -475,7 +469,23 @@
     }}
     foldLabel="question"
     bind:folded
-  />
+  >
+    {#snippet actions()}
+      <AgentCardChatActions
+        onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
+        onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
+        subject="question"
+        disabled={working}
+      />
+    {/snippet}
+    {#snippet controls()}
+      <CardCloseButton
+        title={dismissTitle}
+        disabled={working}
+        onclick={() => void handleDismiss()}
+      />
+    {/snippet}
+  </CardHead>
 
   {#if !folded}
     <div class="flex min-h-0 flex-1 flex-col" transition:slide={foldSlide()}>
@@ -618,12 +628,6 @@
           </div>
         {/if}
 
-        {#if total > 1}
-          <p class="text-[0.6875rem] tabular-nums text-dimmed">
-            Question {currentIndex + 1} of {total}
-          </p>
-        {/if}
-
         {#if actionError}
           <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {actionError}
@@ -632,36 +636,23 @@
       </div>
 
       <!-- Shrinkable footer: the row never lets one control paint over another.
-         The chat actions give way first, the speech control keeps its slot, and
-         the model switch ellipsizes instead of pushing into its neighbour. -->
-      <CardFoot class="question-card-footer">
+         Stepping through the questions and reading them aloud sit on the falsy
+         side, the model switch and the submit that ends the card on the truthy
+         side. The context actions live in the head, so the row stays short. -->
+      <CardFoot>
         {#snippet left()}
-          {#if total > 1}
-            <CardButton
-              label="Previous"
-              title="Previous question"
-              icon={ChevronLeft}
-              variant="ghost"
-              disabled={currentIndex === 0 || working}
-              onclick={goPrev}
-            />
-          {/if}
-          {#if onExplain || onQuickChat}
-            <AgentCardChatActions
-              onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
-              onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
-              subject="question"
-              disabled={working}
-            />
-          {:else}
+          <CardStepper
+            subject="question"
+            index={currentIndex}
+            {total}
+            advanceHint={advanceShortcutLabel}
+            disabled={working}
+            onPrev={goPrev}
+            onNext={goNext}
+          />
+          {#if !allAnswered}
             <p class="min-w-0 truncate text-[0.6875rem] text-muted">
-              {#if !currentAnswers.length}
-                Answer this question to continue
-              {:else if !allAnswered}
-                {answers.filter((answer) => answer.length > 0).length} of {total} answered
-              {:else}
-                Ready to send
-              {/if}
+              {total > 1 ? 'Answer every question to send' : 'Answer this question to send'}
             </p>
           {/if}
           <!-- Self-hides when no TTS artifact is installed -->
@@ -669,14 +660,6 @@
             messageId={speechMessageId}
             markdown={spokenQuestionText}
             disabled={working}
-          />
-          <CardButton
-            label="Discard"
-            title="Discard this question request"
-            icon={X}
-            variant="ghost-danger"
-            disabled={working}
-            onclick={() => void handleDismiss()}
           />
         {/snippet}
         {#snippet right()}
@@ -691,28 +674,15 @@
             {onToggleFavorite}
             {onReorderFavorite}
           />
-          {#if nextUp && !allAnswered}
-            <CardButton
-              label="Next"
-              title={advanceShortcutLabel
-                ? `Next question (${advanceShortcutLabel})`
-                : 'Next question'}
-              icon={ChevronRight}
-              variant="primary"
-              disabled={!currentAnswered || working}
-              onclick={goNext}
-            />
-          {:else}
-            <CardButton
-              label={working ? 'Sending…' : `Submit ${total > 1 ? 'answers' : 'answer'}`}
-              title="Send your answer to the agent"
-              icon={Send}
-              variant="primary"
-              loading={working}
-              disabled={!allAnswered || working}
-              onclick={() => void handleSubmit()}
-            />
-          {/if}
+          <CardButton
+            label={working ? 'Sending…' : `Submit ${total > 1 ? 'answers' : 'answer'}`}
+            title="Send your answer to the agent"
+            icon={Send}
+            variant="primary"
+            loading={working}
+            disabled={!allAnswered || working}
+            onclick={() => void handleSubmit()}
+          />
         {/snippet}
       </CardFoot>
     </div>
@@ -735,10 +705,6 @@
     header and footer stay pinned.
   */
   :global(.question-card) {
-    /* The card is also the query container for its own footer row, so the
-       controls inside retreat before the row runs out of room (a wide side
-       panel, a split pane) instead of overlapping. */
-    container: agent-card-footer / inline-size;
     max-height: var(--question-card-max-height, calc(100dvh - 6rem));
   }
 </style>

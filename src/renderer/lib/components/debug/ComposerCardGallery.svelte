@@ -44,6 +44,7 @@
     galleryMentionEntries,
     galleryPermission,
     galleryQuestionFile,
+    galleryQuestionAnswered,
     galleryQuestionMultiple,
     galleryQuestionPlain,
     galleryQuestionSingle,
@@ -116,6 +117,12 @@
       group: 'replace',
       label: 'Question, walkthrough',
       note: 'Three questions, the middle one open.'
+    },
+    {
+      id: 'question-answered',
+      group: 'replace',
+      label: 'Question, walkthrough answered',
+      note: 'Every question answered, read from the middle.'
     },
     { id: 'secret', group: 'replace', label: 'Secret request', note: 'Two secrets, value mode.' },
     {
@@ -473,6 +480,18 @@
           {:else if selected.id === 'question-walkthrough'}
             <AgentQuestionCard
               request={galleryQuestionWalkthrough}
+              scope={galleryScope}
+              settings={DEFAULT_SETTINGS}
+              {providers}
+              onAnswer={noopAsync}
+              onDismiss={noopAsync}
+              onUpdate={noopUpdate}
+              onExplain={noop}
+              onQuickChat={noop}
+            />
+          {:else if selected.id === 'question-answered'}
+            <AgentQuestionCard
+              request={galleryQuestionAnswered}
               scope={galleryScope}
               settings={DEFAULT_SETTINGS}
               {providers}

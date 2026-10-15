@@ -12,7 +12,13 @@
     meta?: Snippet
     /** The reading at the far right of the row, before the fold. */
     chip?: CardChipData
-    /** Extra controls that sit before the fold. */
+    /**
+     * Quiet card-level actions in the head's right cluster, before the reading
+     * and the fold: explain, quick chat. They arrive before the chip, so the
+     * reading stays the last thing read before the controls.
+     */
+    actions?: Snippet
+    /** Extra controls that sit before the fold, such as a close button. */
     controls?: Snippet
     /**
      * Fold state, bound so the owning card can gate its own body and footer on
@@ -34,6 +40,7 @@
     title,
     meta,
     chip,
+    actions,
     controls,
     folded = $bindable(false),
     foldLabel,
@@ -46,9 +53,9 @@
   const iconClass = $derived(tone === 'warn' ? 'text-warning' : 'text-muted')
 </script>
 
-<!-- The design's card head: icon, title, then the reading, then the fold at the far
-right. Every card that can fold folds from here, so one row shape serves the whole
-composer stack. -->
+<!-- The design's card head: icon, title, then the card's quiet actions, then the
+reading, then the fold at the far right. Every card that can fold folds from here,
+so one row shape serves the whole composer stack. -->
 <div
   class={[
     'flex shrink-0 items-center gap-2 px-3 py-2',
@@ -65,6 +72,7 @@ composer stack. -->
     {@render meta?.()}
   </div>
 
+  {@render actions?.()}
   {#if chip}
     <CardTimer {...chip} />
   {/if}

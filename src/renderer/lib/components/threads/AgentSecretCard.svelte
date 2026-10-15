@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight, KeyRound, ShieldCheck, X } from '@lucide/svelte'
+  import { KeyRound, ShieldCheck } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardButton from '../shared/CardButton.svelte'
+  import CardCloseButton from '../shared/CardCloseButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
   import CardHead from '../shared/CardHead.svelte'
+  import CardStepper from '../shared/CardStepper.svelte'
   import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
@@ -74,8 +76,10 @@
   let filledCount = $derived(request.questions.filter((_, index) => entryAnswered(index)).length)
   let allFilled = $derived(filledCount === total)
   let currentAnswered = $derived(entryAnswered(currentIndex))
-  // The send key resolved through the user's keymap overrides, so the Next and
-  // Submit buttons advertise whichever combination actually advances the card.
+  // The close in the head ends the whole request, never the entry on screen.
+  let dismissTitle = $derived(total > 1 ? 'Dismiss all secrets' : 'Dismiss this request')
+  // The send key resolved through the user's keymap overrides, so the stepper's
+  // forward arrow advertises whichever combination advances the card.
   let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
   // The request carries its own deadline, so the countdown is the same one the
   // main process is running: the card closes when it reaches zero. Time is an
@@ -261,7 +265,23 @@
     }}
     foldLabel="secret request"
     bind:folded
-  />
+  >
+    {#snippet actions()}
+      <AgentCardChatActions
+        onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
+        onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
+        subject="secret request"
+        disabled={working}
+      />
+    {/snippet}
+    {#snippet controls()}
+      <CardCloseButton
+        title={dismissTitle}
+        disabled={working}
+        onclick={() => void handleDismiss()}
+      />
+    {/snippet}
+  </CardHead>
 
   {#if !folded}
     <div transition:slide={foldSlide()}>
@@ -374,33 +394,20 @@
             {actionError}
           </p>
         {/if}
-
-        {#if total > 1}
-          <p class="text-[0.6875rem] tabular-nums text-dimmed">
-            Secret {currentIndex + 1} of {total}
-          </p>
-        {/if}
       </div>
     </div>
   {/if}
 
   <CardFoot class="secret-card-footer">
     {#snippet left()}
-      {#if total > 1}
-        <CardButton
-          label="Previous"
-          title="Previous secret"
-          icon={ChevronLeft}
-          variant="ghost"
-          disabled={currentIndex === 0 || working}
-          onclick={goPrev}
-        />
-      {/if}
-      <AgentCardChatActions
-        onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
-        onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
-        subject="secret request"
+      <CardStepper
+        subject="secret"
+        index={currentIndex}
+        {total}
+        advanceHint={advanceShortcutLabel}
         disabled={working}
+        onPrev={goPrev}
+        onNext={advance}
       />
       <p
         class="flex min-w-0 items-center gap-1.5 text-xs text-muted"
@@ -419,38 +426,17 @@
         disabled={working}
         onclick={toggleAlternativeMode}
       />
-      <CardButton
-        label="Discard"
-        title="Discard this secret request"
-        icon={X}
-        variant="ghost-danger"
-        disabled={working}
-        onclick={() => void handleDismiss()}
-      />
     {/snippet}
     {#snippet right()}
-      {#if currentIndex < total - 1}
-        <CardButton
-          label="Next"
-          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
-          icon={ChevronRight}
-          variant="primary"
-          disabled={working || !currentAnswered}
-          onclick={advance}
-        />
-      {:else}
-        <CardButton
-          label={working ? 'Storing…' : 'Submit'}
-          title={advanceShortcutLabel
-            ? `Store the secret and answer the agent (${advanceShortcutLabel})`
-            : 'Store the secret and answer the agent'}
-          icon={ShieldCheck}
-          variant="primary"
-          loading={working}
-          disabled={working || !allFilled}
-          onclick={() => void handleSubmit()}
-        />
-      {/if}
+      <CardButton
+        label={working ? 'Storing…' : 'Submit'}
+        title="Store the secret and answer the agent"
+        icon={ShieldCheck}
+        variant="primary"
+        loading={working}
+        disabled={working || !allFilled}
+        onclick={() => void handleSubmit()}
+      />
     {/snippet}
   </CardFoot>
 </section>
@@ -458,8 +444,8 @@
 <style>
   /*
     Same footer contract as the question card: the row is the query container so
-    the shared chat actions (and the security note here) give way before the
-    card's own controls. The shield keeps its tooltip when the note text hides.
+    the note gives way before the card's own controls. The shield keeps its
+    tooltip when the note text hides.
   */
   .secret-card-footer {
     container: agent-card-footer / inline-size;

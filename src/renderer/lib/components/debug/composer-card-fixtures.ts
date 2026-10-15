@@ -144,6 +144,29 @@ export const galleryQuestionFile: PendingAgentQuestionRequest = {
   ]
 }
 
+/** The three questions of a release-planning walkthrough, shared by the two
+ *  stepper states so they cannot drift apart. */
+const planningWalkthroughQuestions = [
+  question({
+    header: 'Plan the release',
+    prompt: 'Two branches could take this change. Which one should it land on?',
+    options: ['Use the existing branch', 'Create a new branch']
+  }),
+  question({
+    header: 'Plan the release',
+    prompt: 'How should the release notes be written?',
+    richOptions: [
+      { label: 'From the commits', description: 'Grouped by area.', recommended: true },
+      { label: 'From the specification', description: 'Written for the reader.' }
+    ]
+  }),
+  question({
+    header: 'Plan the release',
+    prompt: 'Who reviews it before it ships?',
+    options: ['The Reviewer sub-agent', 'I will', 'Nobody']
+  })
+]
+
 /** A three-question walkthrough, part answered: the stepper in the middle. */
 export const galleryQuestionWalkthrough: PendingAgentQuestionRequest = {
   ...galleryQuestionSingle,
@@ -152,26 +175,20 @@ export const galleryQuestionWalkthrough: PendingAgentQuestionRequest = {
   answers: [['Use the existing branch'], []],
   interactedQuestionIndexes: [0],
   expiresAt: undefined,
-  questions: [
-    question({
-      header: 'Plan the release',
-      prompt: 'Two branches could take this change. Which one should it land on?',
-      options: ['Use the existing branch', 'Create a new branch']
-    }),
-    question({
-      header: 'Plan the release',
-      prompt: 'How should the release notes be written?',
-      richOptions: [
-        { label: 'From the commits', description: 'Grouped by area.', recommended: true },
-        { label: 'From the specification', description: 'Written for the reader.' }
-      ]
-    }),
-    question({
-      header: 'Plan the release',
-      prompt: 'Who reviews it before it ships?',
-      options: ['The Reviewer sub-agent', 'I will', 'Nobody']
-    })
-  ]
+  questions: planningWalkthroughQuestions
+}
+
+/**
+ * The same walkthrough with every question answered, read from the middle. This
+ * is the state that used to hide the forward arrow: the card auto-advances as
+ * options are picked, so it arrives at the last question with nothing left to
+ * answer, and a step back used to leave no way forward.
+ */
+export const galleryQuestionAnswered: PendingAgentQuestionRequest = {
+  ...galleryQuestionWalkthrough,
+  requestId: 'gallery-question-answered',
+  answers: [['Use the existing branch'], ['From the commits'], ['I will']],
+  interactedQuestionIndexes: [0, 1, 2]
 }
 
 /** A secret request with two entries. */
