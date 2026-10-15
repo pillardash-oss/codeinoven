@@ -1,18 +1,15 @@
 <script lang="ts">
   import {
-    AudioLines,
     Clapperboard,
     Clock,
     FileText,
     HardDrive,
-    Image as ImageIcon,
     MessageSquare,
     PenLine,
     SquareDashedMousePointer,
-    Video,
     X
   } from '@lucide/svelte'
-  import { attachmentPreviewKind } from '$lib/mime'
+  import AttachmentPill from './AttachmentPill.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
   import type { StartAfterSelection } from './chat-composer-attachments'
@@ -258,53 +255,12 @@
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
         {#each attachments as file, i (file.url)}
-          {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
-          <div
-            class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
-          >
-            {#if previewKind}
-              <button
-                type="button"
-                class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
-                title="Click to preview"
-                aria-label="Preview {file.filename ?? 'file'}"
-                onclick={() => onPreviewAttachment(file)}
-              >
-                {#if previewKind === 'image'}
-                  {#if previewUrls[file.url]}
-                    <img
-                      src={previewUrls[file.url]}
-                      alt={file.filename ?? 'file'}
-                      class="h-5 w-5 shrink-0 rounded object-cover"
-                    />
-                  {:else}
-                    <ImageIcon size={11} class="shrink-0" />
-                  {/if}
-                {:else if previewKind === 'video'}
-                  <Video size={11} class="shrink-0" />
-                {:else if previewKind === 'audio'}
-                  <AudioLines size={11} class="shrink-0" />
-                {:else}
-                  <FileText size={11} class="shrink-0" />
-                {/if}
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </button>
-            {:else}
-              <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </span>
-            {/if}
-            <button
-              type="button"
-              class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-              title="Remove attachment"
-              aria-label="Remove attachment"
-              onclick={() => onRemoveAttachment(i)}
-            >
-              <X size={11} />
-            </button>
-          </div>
+          <AttachmentPill
+            attachment={file}
+            previewUrl={previewUrls[file.url]}
+            onPreview={onPreviewAttachment}
+            onRemove={() => onRemoveAttachment(i)}
+          />
         {/each}
       </div>
     {/if}

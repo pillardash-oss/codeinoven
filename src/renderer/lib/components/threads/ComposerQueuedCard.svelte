@@ -4,27 +4,34 @@
     Clock,
     Ellipsis,
     MessageSquare,
+    Paperclip,
     Pencil,
     Plus,
     Send,
     Trash2
   } from '@lucide/svelte'
+  import AttachmentPill from '../chats/AttachmentPill.svelte'
   import CardButton from '../shared/CardButton.svelte'
   import CardStack from '../shared/CardStack.svelte'
   import CardTag from '../shared/CardTag.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
-  import type { UserMessagePresentation } from '$shared/types'
+  import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
 
   interface Props {
     /** The message waiting behind the running turn. */
     text: string
     /** True when the queued payload carries attachments or context but no text. */
     hasContent: boolean
+    /** Files the queued message carries, shown the way the composer shows them. */
+    attachments: PromptAttachment[]
+    /** Object URLs for image chips, keyed by the attachment's `file://` URL. */
+    previewUrls: Record<string, string>
     /** How many messages wait in the thread's FIFO queue. */
     count: number
-    /** The rest of the queue, listed under the head entry. */
-    next: { id: string; text: string }[]
+    /** The rest of the queue, listed under the head entry, with how many files
+     *  each message behind the head carries. */
+    next: { id: string; text: string; attachments: number }[]
     /** Selections the queued message answers. */
     promptReferences: ResponseReferenceAnchor[]
     /** A presentation the queued message carries instead of plain text. */
@@ -35,6 +42,8 @@
     steerModifierLabel: string
     /** Folds the card down to its head while a message waits. */
     folded?: boolean
+    /** Opens one of the queued message's files fullscreen. */
+    onPreviewAttachment?: (attachment: PromptAttachment) => void
     onSteer: () => void
     onEdit: () => void
     onDelete: () => void
@@ -48,6 +57,8 @@
   let {
     text,
     hasContent,
+    attachments,
+    previewUrls,
     count,
     next,
     promptReferences,
@@ -55,6 +66,7 @@
     startAfterThreads,
     steerModifierLabel,
     folded = $bindable(false),
+    onPreviewAttachment,
     onSteer,
     onEdit,
     onDelete,
@@ -261,6 +273,18 @@ the head's menu. -->
         </div>
       {/if}
 
+      {#if attachments.length > 0}
+        <div class="flex flex-wrap gap-1.5">
+          {#each attachments as file (file.url)}
+            <AttachmentPill
+              attachment={file}
+              previewUrl={previewUrls[file.url]}
+              onPreview={onPreviewAttachment}
+            />
+          {/each}
+        </div>
+      {/if}
+
       {#if presentation}
         <div>
           <p class="text-[0.75rem] italic text-dimmed">{presentation.action}</p>
@@ -278,7 +302,19 @@ the head's menu. -->
             Next up
           </p>
           {#each next as entry (entry.id)}
-            <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{entry.text}</p>
+            <p class="flex items-start gap-1.5 pt-1 text-[0.75rem] text-muted">
+              <span class="line-clamp-2 min-w-0 flex-1">{entry.text}</span>
+              {#if entry.attachments > 0}
+                <span
+                  class="flex shrink-0 items-center gap-0.5 border border-border px-1 text-[0.625rem] text-dimmed"
+                  title={`${entry.attachments} ${entry.attachments === 1 ? 'attachment' : 'attachments'}`}
+                >
+                  <Paperclip size={10} />
+                  {entry.attachments}
+                  <span class="sr-only">attachments</span>
+                </span>
+              {/if}
+            </p>
           {/each}
         </div>
       {/if}

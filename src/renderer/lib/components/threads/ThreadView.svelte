@@ -2538,6 +2538,13 @@
   /** Fullscreen preview for a message attachment: the same cache the composer
    *  previews attachments with, keyed by the attachment's `file://` URL. */
   const attachmentPreview = createComposerAttachmentPreview()
+  /**
+   * The queued message's own files, open fullscreen. They are files the user
+   * attached rather than material the agent delivered, so they carry no
+   * annotation surface and they render through the same cache that feeds the
+   * chips' thumbnails.
+   */
+  let queuedAttachmentViewer = $state<{ items: PromptAttachment[]; index: number } | null>(null)
   /** The message file parts a fullscreen preview can render, and which one is
    *  open. Parts no preview can render stay out of `items`, so the pager walks
    *  only the attachments that can be shown. */
@@ -6479,6 +6486,10 @@
       head.promptReferences.length > 0 ||
       head.projectReferences.length > 0 ||
       head.taskReferences.length > 0
+    // The card's chips lead with a picture's own thumbnail, so the head's files
+    // are read into the cache the composer previews attachments from. A file
+    // already cached is skipped, so a repeated sync reads nothing.
+    if (head.attachments.length > 0) void attachmentPreview.loadAll(head.attachments)
   }
 
   /** Recover response-selection annotations persisted with the composer draft
@@ -6517,12 +6528,13 @@
   let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
-  /** The rest of the queue behind the head entry, listed inside its card. */
+  /** The rest of the queue behind the head entry, listed inside its card, with
+   *  how many files each message behind the head carries. */
   const queuedNextMessages = $derived(
     rendererRecovery
       .queuedMessagesFor(thread.projectId, thread.id)
       .slice(1)
-      .map((entry) => ({ id: entry.id, text: entry.text }))
+      .map((entry) => ({ id: entry.id, text: entry.text, attachments: entry.attachments.length }))
   )
 
   /**
@@ -7858,6 +7870,51 @@
     messageViewer = null
     attachmentPreview.close()
   }
+
+  /**
+   * Open one of the queued message's files fullscreen, stepping between its
+   * siblings. Only files a preview can render are listed, so the pager never
+   * lands on an empty frame.
+   */
+  function openQueuedAttachment(attachment: PromptAttachment): void {
+    const items = queuedAttachments.filter((file) =>
+      attachmentPreviewKind(file.mime, file.filename ?? 'file')
+    )
+    const index = items.findIndex((item) => item.url === attachment.url)
+    const item = items[index]
+    if (!item) return
+    queuedAttachmentViewer = { items, index }
+    void attachmentPreview.load(item)
+  }
+
+  /** Move the open queued-file preview by `delta` and read the file it lands on. */
+  function stepQueuedAttachmentViewer(delta: number): void {
+    const viewer = queuedAttachmentViewer
+    if (!viewer) return
+    const index = viewer.index + delta
+    const item = viewer.items[index]
+    if (!item) return
+    queuedAttachmentViewer = { items: viewer.items, index }
+    void attachmentPreview.load(item)
+  }
+
+  function closeQueuedAttachmentViewer(): void {
+    queuedAttachmentViewer = null
+    attachmentPreview.close()
+  }
+
+  /** Sibling navigation for the open queued-file preview, absent for a message
+   *  that carries fewer than two previewable files. */
+  const queuedAttachmentPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const viewer = queuedAttachmentViewer
+    if (!viewer || viewer.items.length < 2) return undefined
+    return {
+      index: viewer.index,
+      count: viewer.items.length,
+      onPrevious: () => stepQueuedAttachmentViewer(-1),
+      onNext: () => stepQueuedAttachmentViewer(1)
+    }
+  })
 
   /** Sibling navigation for the open message preview, absent for a message with
    *  fewer than two previewable attachments. */
@@ -12322,6 +12379,21 @@
   {/if}
 {/if}
 
+{#if queuedAttachmentViewer}
+  {@const queuedViewerItem = queuedAttachmentViewer.items[queuedAttachmentViewer.index]}
+  {#if queuedViewerItem}
+    <AttachmentPreview
+      attachment={queuedViewerItem}
+      src={attachmentPreview.urls[queuedViewerItem.url]}
+      text={attachmentPreview.texts[queuedViewerItem.url]}
+      documentHtml={attachmentPreview.documents[queuedViewerItem.url]}
+      documentLoading={attachmentPreview.documentLoading[queuedViewerItem.url] ?? false}
+      pager={queuedAttachmentPager}
+      onClose={closeQueuedAttachmentViewer}
+    />
+  {/if}
+{/if}
+
 {#if responseSelection}
   <ResponseSelectionPopover
     text={responseSelection.text}
@@ -13734,6 +13806,8 @@
               <ComposerQueuedCard
                 text={queuedMessage}
                 hasContent={queuedHasContent}
+                attachments={queuedAttachments}
+                previewUrls={attachmentPreview.urls}
                 count={queuedCount}
                 next={queuedNextMessages}
                 promptReferences={queuedPromptReferences}
@@ -13741,6 +13815,7 @@
                 startAfterThreads={queuedStartAfterThreads}
                 {steerModifierLabel}
                 bind:folded={queuedFolded}
+                onPreviewAttachment={openQueuedAttachment}
                 onSteer={() => void steerQueuedMessage()}
                 onEdit={editQueuedMessage}
                 onDelete={deleteQueuedMessage}
