@@ -19,13 +19,20 @@ const bridge = vi.hoisted(() => ({
   listeners: new Map<string, (payload: unknown) => void>(),
   hideWhile: vi.fn<(key: string, reason: string, hidden: boolean) => () => void>(() => () => {})
 }))
-vi.mock('$lib/ipc.svelte', () => ({
-  invoke: bridge.invoke,
-  subscribe: (name: string, callback: (payload: unknown) => void) => {
-    bridge.listeners.set(name, callback)
-    return () => bridge.listeners.delete(name)
+vi.mock('$lib/ipc.svelte', async (importOriginal) => {
+  // `subscribeGuarded` is kept real: it is the guard the stores and the app
+  // wiring subscribe through, and stubbing it would hide whether a subscription
+  // is actually made.
+  const actual = await importOriginal<typeof import('$lib/ipc.svelte')>()
+  return {
+    ...actual,
+    invoke: bridge.invoke,
+    subscribe: (name: string, callback: (payload: unknown) => void) => {
+      bridge.listeners.set(name, callback)
+      return () => bridge.listeners.delete(name)
+    }
   }
-}))
+})
 vi.mock('$lib/stores/browser-visibility.svelte', () => ({
   browserVisibility: { hideWhile: bridge.hideWhile }
 }))

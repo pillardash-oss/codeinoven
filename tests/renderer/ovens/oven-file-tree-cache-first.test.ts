@@ -5,10 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // the real implementations, so what this exercises is the actual load path a
 // remote file tree takes.
 const invokeMock = vi.hoisted(() => vi.fn())
-vi.mock('$lib/ipc.svelte', () => ({
-  invoke: invokeMock,
-  subscribe: vi.fn(() => () => {})
-}))
+vi.mock('$lib/ipc.svelte', async (importOriginal) => {
+  // `subscribeGuarded` is kept real: it is the guard the stores and the app
+  // wiring subscribe through, and stubbing it would hide whether a subscription
+  // is actually made.
+  const actual = await importOriginal<typeof import('$lib/ipc.svelte')>()
+  return { ...actual, invoke: invokeMock, subscribe: vi.fn(() => () => {}) }
+})
 
 import {
   ProjectFilesExplorer,

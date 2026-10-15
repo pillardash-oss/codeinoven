@@ -25,6 +25,7 @@
 
 import type { Database } from '../database/database'
 import { instanceRegistry } from './instance-registry'
+import { Logger } from './logger'
 
 /** Which side of a hand-off a lock belongs to. */
 export type ThreadTransferLockRole = 'release' | 'adopt'
@@ -100,7 +101,7 @@ export class ThreadTransferLock {
       .run(projectId, threadId, role, this.localPid, token, now, expiresAt)
     if (inserted.changes === 1) return token
 
-    const row = this.read(projectId, threadId, role)
+    const row = await this.read(projectId, threadId, role)
     if (!row) {
       // The row was released between the insert and the read   one more try, and
       // if it is taken again by then we simply lose the claim.
@@ -162,7 +163,7 @@ export class ThreadTransferLock {
     holderPid: number,
     token?: string
   ): Promise<boolean> {
-    const row = this.read(projectId, threadId, role)
+    const row = await this.read(projectId, threadId, role)
     if (!row) return false
     if (row.holder_pid !== holderPid) return false
     if (token !== undefined && row.token !== token) return false
@@ -184,16 +185,42 @@ export class ThreadTransferLock {
       .run(projectId, threadId, role, token)
   }
 
-  private read(projectId: string, threadId: string, role: ThreadTransferLockRole): LockRow | null {
-    return (
-      this.db.get<LockRow>(
-        `SELECT holder_pid, token, acquired_at, expires_at
+  /**
+   * The lease row, read on the database worker.
+   *
+   * Every acquire and every token check reads it, and both sit on an interaction
+   * path   a hand-off is what the user just asked for   so the read never runs
+   * SQLite on the main thread. A read that fails is a read that did not find a
+   * live claim: the caller is told the thread is elsewhere, which is the answer
+   * that keeps two writers off one session.
+   */
+  private async read(
+    projectId: string,
+    threadId: string,
+    role: ThreadTransferLockRole
+  ): Promise<LockRow | null> {
+    const result = await this.db.queryViaWorker(
+      `SELECT holder_pid, token, acquired_at, expires_at
          FROM thread_transfer_locks
          WHERE project_id = ? AND thread_id = ? AND role = ?`,
-        projectId,
-        threadId,
-        role
-      ) ?? null
+      [projectId, threadId, role],
+      1
     )
+    if (!result.ok) {
+      Logger.error('Thread transfer lock read failed', result.error ?? 'unknown error')
+      return null
+    }
+    return toLockRow(result.rows[0])
+  }
+}
+
+/** Shape one worker row into the lease record this lock reasons about. */
+function toLockRow(row: Record<string, unknown> | undefined): LockRow | null {
+  if (!row) return null
+  return {
+    holder_pid: Number(row.holder_pid),
+    token: String(row.token),
+    acquired_at: Number(row.acquired_at),
+    expires_at: Number(row.expires_at)
   }
 }

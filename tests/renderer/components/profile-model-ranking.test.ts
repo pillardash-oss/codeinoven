@@ -6,10 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // ranking columns must appear and no rubric or judge wording may leak into
 // the document. IPC is stubbed at the preload boundary.
 const invokeMock = vi.hoisted(() => vi.fn())
-vi.mock('$lib/ipc.svelte', () => ({
-  invoke: invokeMock,
-  subscribe: vi.fn(() => () => {})
-}))
+vi.mock('$lib/ipc.svelte', async (importOriginal) => {
+  // `subscribeGuarded` is kept real: it is the guard the stores and the app
+  // wiring subscribe through, and stubbing it would hide whether a subscription
+  // is actually made.
+  const actual = await importOriginal<typeof import('$lib/ipc.svelte')>()
+  return { ...actual, invoke: invokeMock, subscribe: vi.fn(() => () => {}) }
+})
 
 import { mount, unmount } from 'svelte'
 import ProfileSettingsTab from '$lib/components/settings/ProfileSettingsTab.svelte'

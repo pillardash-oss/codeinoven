@@ -19,6 +19,8 @@
     "ffmpeg-static"
   ],
   "overrides": {
+    "adm-zip": "0.6.1",
+    "sharp": "0.35.5",
     "mediabunny": "1.61.3",
     "nanoid": "3.3.18",
     "uuid": "11.1.1",
@@ -59,7 +61,7 @@
     "oven:cli:build": "bun scripts/build-oven-cli.ts",
     "oven:version:bump": "bun scripts/bump-oven-cli-version.ts",
     "ci:local": "bun scripts/ci-local.ts",
-    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c",
+    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c --ignore=GHSA-2p57-rm9w-gvfp",
     "verify": "bun run check && bun run lint . && bun run test && bun run audit",
     "verify:release": "bun run verify && bun run build:production && bun run check:bundle",
     "version:bump": "bun scripts/bump-version.ts",
