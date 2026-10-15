@@ -59,13 +59,16 @@
 
 {#if count > 0}
   {@const Icon = icon}
-  <!-- The host places this badge in its corner row, so the mark only has to fill
-       its own space and stay legible over the glyph. A counted badge wears the
-       box and the tone; a colour mark shows its swatches and the count beside
-       them, because every status on the strip reports how many it stands for. -->
+  <!-- A counted badge is a filled, bordered box, so it can afford the host's
+       overhang: over the rail's current-item surface it blends and reads as a
+       chip laid on top. A bare swatch mark cannot. The active item draws a 2px
+       accent bar down the item's right edge, and a mark that overhung the same
+       way would sit across that line and cut it, which reads as a glitch rather
+       than as a chip. The mark therefore cancels the overhang to sit inside its
+       own item's corner, with a little air before the accent. -->
   <span
     class="flex items-center gap-px text-[0.5625rem] font-semibold tabular-nums {colorOnly
-      ? ''
+      ? 'mr-2'
       : `h-3.5 min-w-3.5 justify-center border border-border bg-elevated px-1 shadow-sm ${toneClass}`} {className}"
     role="status"
     aria-label={label}
