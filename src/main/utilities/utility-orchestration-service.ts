@@ -1,3 +1,5 @@
+import { normalizePlanDelivery, normalizePlanPriority } from '../../lib/assistant-reporting'
+import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { randomBytes, randomUUID } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import type {
@@ -233,6 +235,8 @@ export interface UtilityTurnRequest {
    * answers rather than at the end of the interview.
    */
   saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  /** Persist settled reporting choices during the live setup interview. */
+  saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -2341,7 +2345,27 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation === 'save_checkpoint') {
+      if (operation === 'save_reporting') {
+        if (!state.request.saveAssistantReporting) {
+          throw new Error('Reporting can only be saved in an assistant setup conversation')
+        }
+        const reporting: AssistantReportingPatch = {}
+        if (operationInput['delivery'] !== undefined) {
+          const delivery = normalizePlanDelivery(operationInput['delivery'])
+          if (!delivery) throw new Error('Delivery needs a valid channel')
+          reporting.delivery = delivery
+        }
+        if (operationInput['priority'] !== undefined) {
+          const priority = normalizePlanPriority(operationInput['priority'])
+          if (!priority) throw new Error('Priority needs both timeliness and impact')
+          reporting.priority = priority
+        }
+        if (!reporting.delivery && !reporting.priority) {
+          throw new Error('save_reporting needs delivery or priority')
+        }
+        await state.request.saveAssistantReporting(reporting)
+        result = { status: 'saved', ...reporting }
+      } else if (operation === 'save_checkpoint') {
         if (!state.request.saveAssistantCheckpoint) {
           throw new Error(
             'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
@@ -2377,7 +2401,9 @@ export class UtilityOrchestrationService {
         }
         result = await state.request.saveAssistantIdentity(identity)
       } else {
-        throw new Error('The getting-started capability exposes save_checkpoint and save_identity')
+        throw new Error(
+          'The getting-started capability exposes save_checkpoint, save_identity and save_reporting'
+        )
       }
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor

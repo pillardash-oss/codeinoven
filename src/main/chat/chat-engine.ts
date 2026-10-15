@@ -1,3 +1,4 @@
+import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
 import { BrowserWindow, net, powerMonitor } from 'electron'
 import { readdir, readFile, rm, stat } from 'fs/promises'
@@ -4163,6 +4164,8 @@ export class ChatEngine {
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
                 this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
@@ -4497,6 +4500,8 @@ export class ChatEngine {
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
                 this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
@@ -8124,6 +8129,18 @@ export class ChatEngine {
     ]
       .filter(Boolean)
       .join('\n\n')
+  }
+
+  /** Save settled reporting fields and publish the live panel state. */
+  private async saveAssistantReporting(
+    assistantId: string,
+    reporting: AssistantReportingPatch
+  ): Promise<void> {
+    if (!(await this.assistantRepo.getViaWorker(assistantId))) {
+      throw new Error('The assistant no longer exists')
+    }
+    this.assistantRepo.updateReporting(assistantId, reporting, Date.now())
+    broadcastAssistantsChanged(await this.assistantRepo.listViaWorker())
   }
 
   /**

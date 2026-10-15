@@ -7415,6 +7415,22 @@
       errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
     }
+    if (!assistantKnowledgeComplete && !draft.plan) {
+      await sendMessage(
+        'The application could not save this setup because the recap has no valid assistant settings. Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.',
+        [],
+        undefined,
+        undefined,
+        undefined,
+        [],
+        [],
+        {
+          action: 'Repair setup recap',
+          body: 'Complete the settings already agreed before saving.'
+        }
+      )
+      return false
+    }
     assistantSaving = true
     try {
       const plan = draft.plan

@@ -240,6 +240,31 @@ export class AssistantRepo {
     return row ? rowToAssistant(row) : null
   }
 
+  /** Patch only settled reporting columns, preserving concurrent panel edits. */
+  updateReporting(
+    id: string,
+    reporting: Partial<Pick<Assistant, 'delivery' | 'priority'>>,
+    updatedAt: number
+  ): void {
+    const fields: string[] = []
+    const values: (string | number)[] = []
+    if (reporting.delivery !== undefined) {
+      fields.push('delivery = ?')
+      values.push(JSON.stringify(reporting.delivery))
+    }
+    if (reporting.priority !== undefined) {
+      fields.push('priority = ?')
+      values.push(JSON.stringify(reporting.priority))
+    }
+    if (fields.length === 0) return
+    fields.push('updated_at = ?')
+    this.db.run(`UPDATE assistants SET ${fields.join(', ')} WHERE id = ?`, [
+      ...values,
+      updatedAt,
+      id
+    ])
+  }
+
   /**
    * Write the two fields the setup conversation settles before the knowledge
    * exists: the name the user gives their assistant and the personality they

@@ -8,10 +8,10 @@
  * fallbacks, and is told to touch no tools so the turn can never start a run.
  */
 export const ASSISTANT_NEXT_STEPS_PROMPT = [
-  'The assistant is saved. Do not call any tools and do not start the assistant.',
+  'The assistant knowledge is saved. This confirms storage, not connection readiness. Do not call any tools and do not start the assistant.',
   'Reply with a short "Next steps" message in plain prose for the user, a few sentences or a compact list. Cover:',
   '- Adding one or two fallback models to this assistant on the Agents tab of the assistant panel, so a model that fails or hits its limit never stops the assistant.',
-  '- Connecting any service the assistant needs that is not connected yet. A run sets it up itself and asks you for anything it needs; you can also wire it up now from the Connections tab or the Utilities page.',
+  '- If a required connection is still unresolved, say setup is incomplete and name the specific remaining sign-in or approval. Tell the user to continue in this Getting started conversation so the assistant can finish setup itself. Never send the user to Connections or Utilities to configure services manually, and never describe an unverified assistant as ready.',
   '- Anything else worth checking before the first run, such as the schedule or a test run from the panel.',
   'Do not repeat the knowledge and do not re-present the recap. Keep it brief and friendly.'
 ].join('\n')
