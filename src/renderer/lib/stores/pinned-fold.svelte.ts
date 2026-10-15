@@ -42,7 +42,20 @@ class PinnedFoldStore {
   }
 
   toggle(section: PinnedSectionKey): void {
-    this.#folded[section] = !this.#folded[section]
+    this.setFolded(section, !this.#folded[section])
+  }
+
+  /**
+   * Set a section's fold state outright.
+   *
+   * Folding is the reader's own preference, so this returns early when the
+   * section is already in the requested state: a caller that has to open a
+   * section to complete an action (a pin revealing its row) must never write a
+   * preference the reader did not change, and must not repaint for nothing.
+   */
+  setFolded(section: PinnedSectionKey, folded: boolean): void {
+    if (this.#folded[section] === folded) return
+    this.#folded[section] = folded
     this.persist()
   }
 
