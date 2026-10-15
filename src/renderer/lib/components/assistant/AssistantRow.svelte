@@ -18,9 +18,9 @@
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
-  import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
-  import { routineIsScheduled, type Routine } from '$shared/types'
-  import { routineGap, routineNextRunLine, routineRunCountLabel } from './assistant-view'
+  import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
+  import { assistantIsScheduled, type Assistant } from '$shared/types'
+  import { assistantGap, assistantNextRunLine, assistantRunCountLabel } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     calculateThreadHoverPopoverPosition,
@@ -28,50 +28,50 @@
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
   import { tick } from 'svelte'
-  import AssistantRoutineHoverPopover from './AssistantRoutineHoverPopover.svelte'
+  import AssistantHoverPopover from './AssistantHoverPopover.svelte'
 
   interface Props {
-    routine: Routine
+    assistant: Assistant
     expanded: boolean
     /**
-     * How this routine's threads break down   its tasks and their runs   by
+     * How this assistant's threads break down   its tasks and their runs   by
      * working, attention, and error. This is the same indicator a project row
-     * wears, so a routine summarizes its work the same way.
+     * wears, so an assistant summarizes its work the same way.
      */
     stateCounts: ThreadStateCountsValue
     /** At least one task or run waits on the user or has failed. */
     attention: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
-    /** How many times this routine has run: one row per execution. The routine's
+    /** How many times this assistant has run: one row per execution. The assistant's
      *  Getting started host is not an execution, so it is never counted here. */
     runCount: number
-    /** Custom icon data URL for this routine, when it stores one. */
+    /** Custom icon data URL for this assistant, when it stores one. */
     iconUrl?: string | null
-    /** Next intended fire for the routine, or null when unscheduled. */
+    /** Next intended fire for the assistant, or null when unscheduled. */
     nextRunAt: number | null
-    /** Inline routine-search state, driven from the sidebar. */
+    /** Inline assistant-search state, driven from the sidebar. */
     searchOpen: boolean
     searchQuery: string
-    onToggle: (routine: Routine) => void
-    onSearchOpenChange: (routine: Routine, open: boolean) => void
-    onSearchQueryChange: (routine: Routine, value: string) => void
-    onCreateTask: (routine: Routine) => void
-    onOpenHowTo: (routine: Routine) => void
-    onEdit: (routine: Routine) => void
-    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
-    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
-    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
-    onTogglePin: (routine: Routine) => void
-    onDelete: (routine: Routine) => void
-    /** Drag-to-reorder routines; position is relative to this row. */
-    onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
-    /** A task (thread) drag was dropped onto this routine. */
-    onDropTask: (taskId: string, routineId: string) => void
+    onToggle: (assistant: Assistant) => void
+    onSearchOpenChange: (assistant: Assistant, open: boolean) => void
+    onSearchQueryChange: (assistant: Assistant, value: string) => void
+    onCreateTask: (assistant: Assistant) => void
+    onOpenKnowledge: (assistant: Assistant) => void
+    onEdit: (assistant: Assistant) => void
+    onHasAssistantRunsToday: (assistant: Assistant) => Promise<boolean>
+    onSkipNextAssistantRun: (assistant: Assistant) => Promise<void>
+    onSkipAssistantRunsToday: (assistant: Assistant) => Promise<void>
+    onTogglePin: (assistant: Assistant) => void
+    onDelete: (assistant: Assistant) => void
+    /** Drag-to-reorder assistants; position is relative to this row. */
+    onMoveAssistant: (draggedId: string, targetId: string, position: 'before' | 'after') => void
+    /** A task (thread) drag was dropped onto this assistant. */
+    onDropTask: (taskId: string, assistantId: string) => void
   }
 
   let {
-    routine,
+    assistant,
     expanded,
     stateCounts,
     attention,
@@ -85,30 +85,30 @@
     onSearchOpenChange,
     onSearchQueryChange,
     onCreateTask,
-    onOpenHowTo,
+    onOpenKnowledge,
     onEdit,
-    onHasRoutineRunsToday,
-    onSkipNextRoutineRun,
-    onSkipRoutineRunsToday,
+    onHasAssistantRunsToday,
+    onSkipNextAssistantRun,
+    onSkipAssistantRunsToday,
     onTogglePin,
     onDelete,
-    onMoveRoutine,
+    onMoveAssistant,
     onDropTask
   }: Props = $props()
 
   const TASK_DRAG_TYPE = 'application/x-assistant-task'
 
-  const color = $derived(routine.color ?? 'var(--color-muted)')
-  // Custom image wins, then the SVG icon type tinted with the routine colour;
-  // without either the row draws the routine default mark.
-  const routineIcon = $derived(getRoutineIcon(routine, iconUrl))
-  const incomplete = $derived(routineGap(routine) !== null)
+  const color = $derived(assistant.color ?? 'var(--color-muted)')
+  // Custom image wins, then the SVG icon type tinted with the assistant colour;
+  // without either the row draws the assistant default mark.
+  const assistantIcon = $derived(getAssistantIcon(assistant, iconUrl))
+  const incomplete = $derived(assistantGap(assistant) !== null)
   const working = $derived(stateCounts.working > 0)
-  /** Line 2's next fire, beside the run count (see `routineNextRunLine`). */
-  const nextRunLabel = $derived(routineNextRunLine(routine, nextRunAt, Date.now()))
-  const scheduled = $derived(routineIsScheduled(routine))
-  const gapLabel = $derived(routineGap(routine) ?? '')
-  const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
+  /** Line 2's next fire, beside the run count (see `assistantNextRunLine`). */
+  const nextRunLabel = $derived(assistantNextRunLine(assistant, nextRunAt, Date.now()))
+  const scheduled = $derived(assistantIsScheduled(assistant))
+  const gapLabel = $derived(assistantGap(assistant) ?? '')
+  const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} assistant: ${assistant.name}`)
 
   let menuOpen = $state(false)
   let hasRunsToday = $state(false)
@@ -136,8 +136,8 @@
     if (!action || skipBusy) return
     skipBusy = true
     try {
-      if (action === 'next') await onSkipNextRoutineRun(routine)
-      else await onSkipRoutineRunsToday(routine)
+      if (action === 'next') await onSkipNextAssistantRun(assistant)
+      else await onSkipAssistantRunsToday(assistant)
       skipConfirm = null
     } catch {
       // The workspace reports the error; keep the confirmation open for retry.
@@ -156,7 +156,7 @@
 
     const check = ++todayRunsCheck
     hasRunsToday = false
-    void onHasRoutineRunsToday(routine)
+    void onHasAssistantRunsToday(assistant)
       .then((hasRuns) => {
         if (menuOpen && check === todayRunsCheck) hasRunsToday = hasRuns
       })
@@ -220,9 +220,9 @@
 
   function handleDragStart(event: DragEvent): void {
     if (!event.dataTransfer) return
-    event.dataTransfer.setData('text/plain', routine.id)
+    event.dataTransfer.setData('text/plain', assistant.id)
     event.dataTransfer.effectAllowed = 'move'
-    setDragImage(event, routine.name)
+    setDragImage(event, assistant.name)
     showPopover = false
     clearTimeout(popoverTimer)
   }
@@ -247,13 +247,13 @@
     event.preventDefault()
     const taskId = event.dataTransfer?.getData(TASK_DRAG_TYPE)
     if (taskId) {
-      onDropTask(taskId, routine.id)
+      onDropTask(taskId, assistant.id)
       taskDropActive = false
       return
     }
     const draggedId = event.dataTransfer?.getData('text/plain')
-    if (draggedId && draggedId !== routine.id) {
-      onMoveRoutine(draggedId, routine.id, dropIndicator ?? 'after')
+    if (draggedId && draggedId !== assistant.id) {
+      onMoveAssistant(draggedId, assistant.id, dropIndicator ?? 'after')
     }
     dropIndicator = null
   }
@@ -270,7 +270,7 @@
     : taskDropActive
       ? 'bg-primary/10'
       : 'hover:bg-elevated'}"
-  style="border-color: {routine.color ?? 'var(--color-border-strong)'}"
+  style="border-color: {assistant.color ?? 'var(--color-border-strong)'}"
   role="listitem"
   draggable="true"
   ondragstart={handleDragStart}
@@ -282,7 +282,7 @@
   oncontextmenu={openContextMenu}
   bind:this={rowEl}
 >
-  <!-- Stable drop indicator (routine reorder) -->
+  <!-- Stable drop indicator (assistant reorder) -->
   <div
     class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator ===
     'before'
@@ -301,18 +301,18 @@
     class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
     aria-expanded={expanded}
     title={toggleTitle}
-    onclick={() => onToggle(routine)}
+    onclick={() => onToggle(assistant)}
   >
-    <!-- Routine icon ↔ chevron swap on hover -->
+    <!-- Assistant icon ↔ chevron swap on hover -->
     <span class="relative h-4 w-4 shrink-0">
       <span
         class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0"
         aria-hidden="true"
       >
-        {#if routineIcon}
-          <img src={routineIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
+        {#if assistantIcon}
+          <img src={assistantIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
         {:else}
-          <RoutineDefaultIcon size={14} style="color: {color}" />
+          <AssistantDefaultIcon size={14} style="color: {color}" />
         {/if}
       </span>
       <span
@@ -328,10 +328,10 @@
 
     <span class="min-w-0 flex-1">
       <span class="flex items-center gap-1.5">
-        {#if routine.pinned}
+        {#if assistant.pinned}
           <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
-        <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
+        <span class="truncate text-[0.8125rem] text-foreground">{assistant.name}</span>
         <ThreadStateCounts counts={stateCounts} class="shrink-0" />
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
@@ -340,23 +340,23 @@
             ? 'bg-elevated text-dimmed'
             : 'bg-elevated text-accent'}"
           title={scheduled
-            ? 'This routine runs on a schedule'
-            : 'This routine runs only when you ask it to'}
+            ? 'This assistant runs on a schedule'
+            : 'This assistant runs only when you ask it to'}
         >
           {scheduled ? 'Scheduled' : 'Unscheduled'}
         </span>
-        <span class="shrink-0">{routineRunCountLabel(runCount)}</span>
+        <span class="shrink-0">{assistantRunCountLabel(runCount)}</span>
         {#if nextRunLabel}
           <span class="shrink-0" aria-hidden="true">·</span>
           <span class="truncate">{nextRunLabel}</span>
         {/if}
-        {#if routine.paused}
+        {#if assistant.paused}
           <span
             class="flex shrink-0 items-center"
             style="color: var(--color-warning)"
             role="img"
-            aria-label="This routine is paused"
-            title="Paused: this routine does not run until you resume it"
+            aria-label="This assistant is paused"
+            title="Paused: this assistant does not run until you resume it"
           >
             <Pause size={11} />
           </span>
@@ -396,26 +396,26 @@
     <SidebarSearchControl
       open={searchOpen}
       query={searchQuery}
-      onOpenChange={(open) => onSearchOpenChange(routine, open)}
-      onQueryChange={(value) => onSearchQueryChange(routine, value)}
-      ariaLabel="Search tasks in {routine.name}"
+      onOpenChange={(open) => onSearchOpenChange(assistant, open)}
+      onQueryChange={(value) => onSearchQueryChange(assistant, value)}
+      ariaLabel="Search tasks in {assistant.name}"
       title="Search tasks"
-      placeholder="Search tasks in {routine.name}…"
+      placeholder="Search tasks in {assistant.name}…"
     />
     <button
       type="button"
       class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-      aria-label="New task in {routine.name}"
+      aria-label="New task in {assistant.name}"
       title="New task"
-      onclick={() => onCreateTask(routine)}
+      onclick={() => onCreateTask(assistant)}
     >
       <Plus size={12} />
     </button>
     <DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
       <DropdownMenu.Trigger
         class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-        aria-label="Options for {routine.name}"
-        title="Routine options"
+        aria-label="Options for {assistant.name}"
+        title="Assistant options"
         oncontextmenu={(event: MouseEvent) => event.preventDefault()}
       >
         <Ellipsis size={12} />
@@ -430,17 +430,17 @@
         >
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onOpenHowTo(routine)}
+            onSelect={() => onOpenKnowledge(assistant)}
           >
-            <AssistantIcon mark="how-to" size={14} class="text-muted" />
+            <AssistantIcon mark="knowledge" size={14} class="text-muted" />
             How to
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onEdit(routine)}
+            onSelect={() => onEdit(assistant)}
           >
             <Pencil size={14} class="text-muted" />
-            Edit routine
+            Edit assistant
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           {#if scheduled}
@@ -463,23 +463,23 @@
           {/if}
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onTogglePin(routine)}
+            onSelect={() => onTogglePin(assistant)}
           >
-            {#if routine.pinned}
+            {#if assistant.pinned}
               <PinOff size={14} class="text-muted" />
-              Unpin Routine
+              Unpin Assistant
             {:else}
               <Pin size={14} class="text-muted" />
-              Pin Routine
+              Pin Assistant
             {/if}
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-            onSelect={() => onDelete(routine)}
+            onSelect={() => onDelete(assistant)}
           >
             <Trash2 size={14} />
-            Remove Routine
+            Remove Assistant
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
@@ -498,12 +498,13 @@
 >
   {#if skipConfirm === 'today'}
     <p>
-      Skip all remaining scheduled runs for <strong class="text-foreground">{routine.name}</strong>
-      today? The routine will resume at its next scheduled time after today.
+      Skip all remaining scheduled runs for <strong class="text-foreground">{assistant.name}</strong
+      >
+      today? The assistant will resume at its next scheduled time after today.
     </p>
   {:else}
     <p>
-      Skip the closest scheduled run for <strong class="text-foreground">{routine.name}</strong>?
+      Skip the closest scheduled run for <strong class="text-foreground">{assistant.name}</strong>?
       The next run after that will stay scheduled.
     </p>
   {/if}
@@ -516,7 +517,7 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
     >
-      <AssistantRoutineHoverPopover {routine} {runCount} {working} {missed} {nextRunAt} {attention} />
+      <AssistantHoverPopover {assistant} {runCount} {working} {missed} {nextRunAt} {attention} />
     </div>
   </Portal>
 {/if}

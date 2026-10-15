@@ -33,7 +33,7 @@
 
   /**
    * What this panel is showing. The gate is keyed to the conversation on screen,
-   * and through it to the assistant task it ran for and the routine that owns
+   * and through it to the assistant task it ran for and the assistant that owns
    * that task, so a decision made on a scheduled run thread is still visible on
    * the task's own thread.
    */
@@ -43,7 +43,7 @@
     return {
       id: threadId,
       projectId,
-      ...(matches && thread.routineId ? { routineId: thread.routineId } : {}),
+      ...(matches && thread.assistantId ? { assistantId: thread.assistantId } : {}),
       ...(matches && thread.assistantTaskId ? { assistantTaskId: thread.assistantTaskId } : {})
     }
   })

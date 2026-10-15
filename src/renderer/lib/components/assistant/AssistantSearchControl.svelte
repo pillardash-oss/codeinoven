@@ -1,26 +1,26 @@
 <script lang="ts">
   import { AlertTriangle, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
-  import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
+  import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { routineIsScheduled, type Routine, type Thread } from '$shared/types'
-  import { routineGap } from './assistant-view'
+  import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
+  import { assistantIsScheduled, type Assistant, type Thread } from '$shared/types'
+  import { assistantGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
-    routines: Routine[]
+    assistants: Assistant[]
     /** Assistant tasks. */
     tasks: Thread[]
     /** One run per execution of a task, each its own thread. */
     runs: Thread[]
     /** Open a task or run result. */
     onOpenTask: (task: Thread) => void
-    /** Open a routine result (its how-to panel / first task). */
-    onOpenRoutine: (routine: Routine) => void
+    /** Open an assistant result (its knowledge panel / first task). */
+    onOpenAssistant: (assistant: Assistant) => void
   }
 
-  let { routines, tasks, runs, onOpenTask, onOpenRoutine }: Props = $props()
+  let { assistants, tasks, runs, onOpenTask, onOpenAssistant }: Props = $props()
 
   let open = $state(false)
   let query = $state('')
@@ -33,10 +33,10 @@
 
   const trimmed = $derived(query.trim().toLowerCase())
 
-  const routineResults = $derived(
+  const assistantResults = $derived(
     trimmed.length === 0
       ? []
-      : routines.filter((routine) => routine.name.toLowerCase().includes(trimmed))
+      : assistants.filter((assistant) => assistant.name.toLowerCase().includes(trimmed))
   )
   const taskResults = $derived(
     trimmed.length === 0 ? [] : tasks.filter((task) => task.title.toLowerCase().includes(trimmed))
@@ -46,7 +46,7 @@
   )
   const empty = $derived(
     trimmed.length > 0 &&
-      routineResults.length === 0 &&
+      assistantResults.length === 0 &&
       taskResults.length === 0 &&
       runResults.length === 0
   )
@@ -57,36 +57,36 @@
     query = ''
   }
 
-  function selectRoutine(routine: Routine): void {
-    onOpenRoutine(routine)
+  function selectAssistant(assistant: Assistant): void {
+    onOpenAssistant(assistant)
     open = false
     query = ''
   }
 
-  /** The routine's own icon, so a routine edited in the sidebar reads the same
+  /** The assistant's own icon, so an assistant edited in the sidebar reads the same
    *  in the search results: custom image first, then the SVG icon type tinted
-   *  with its accent colour. Without either the result draws the routine
+   *  with its accent colour. Without either the result draws the assistant
    *  default mark. */
-  function routineIcon(routine: Routine): string | null {
-    return getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+  function assistantIcon(assistant: Assistant): string | null {
+    return getAssistantIcon(assistant, assistantStore.iconUrls.get(assistant.id) ?? null)
   }
 
-  function runRoutine(run: Thread): Routine | null {
-    return assistantRoutines.routineForTask(run)
+  function runAssistant(run: Thread): Assistant | null {
+    return assistantStore.assistantForTask(run)
   }
 
   function runIcon(run: Thread): string | null {
-    const routine = runRoutine(run)
-    if (!routine) return null
-    return routineIcon(routine)
+    const assistant = runAssistant(run)
+    if (!assistant) return null
+    return assistantIcon(assistant)
   }
 </script>
 
 <Popover.Root bind:open>
   <Popover.Trigger
     class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-    aria-label="Search routines, tasks and runs"
-    title="Search routines, tasks and runs"
+    aria-label="Search assistants, tasks and runs"
+    title="Search assistants, tasks and runs"
   >
     <Search size={15} strokeWidth={1.8} />
   </Popover.Trigger>
@@ -98,7 +98,7 @@
       sideOffset={6}
       collisionPadding={8}
       class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
-      aria-label="Search routines, tasks and runs"
+      aria-label="Search assistants, tasks and runs"
     >
       <div class="flex items-center gap-1.5">
         <Search size={14} class="shrink-0 text-dimmed" />
@@ -106,7 +106,7 @@
           {@attach focusInput}
           type="text"
           class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search routines, tasks and runs…"
+          placeholder="Search assistants, tasks and runs…"
           bind:value={query}
         />
         {#if query}
@@ -127,51 +127,51 @@
 
       {#if empty}
         <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">
-          No matching routines, tasks or runs
+          No matching assistants, tasks or runs
         </p>
       {:else if trimmed.length > 0}
         <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
-          {#if routineResults.length > 0}
+          {#if assistantResults.length > 0}
             <div
               class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
             >
-              Routines
+              Assistants
             </div>
-            {#each routineResults as routine (routine.id)}
-              {@const icon = routineIcon(routine)}
+            {#each assistantResults as assistant (assistant.id)}
+              {@const icon = assistantIcon(assistant)}
               <button
                 type="button"
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-                onclick={() => selectRoutine(routine)}
+                onclick={() => selectAssistant(assistant)}
               >
                 <span class="flex h-4 w-4 shrink-0 items-center justify-center">
                   {#if icon}
                     <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
                   {:else}
-                    <RoutineDefaultIcon
+                    <AssistantDefaultIcon
                       size={14}
-                      style="color: {routine.color ?? 'var(--color-muted)'}"
+                      style="color: {assistant.color ?? 'var(--color-muted)'}"
                     />
                   {/if}
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
-                  >{routine.name}</span
+                  >{assistant.name}</span
                 >
-                {#if !routineIsScheduled(routine)}
+                {#if !assistantIsScheduled(assistant)}
                   <span
                     class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
-                    title="This routine runs only when you ask it to"
+                    title="This assistant runs only when you ask it to"
                   >
                     Unscheduled
                   </span>
                 {/if}
-                {#if routineGap(routine)}
+                {#if assistantGap(assistant)}
                   <span
                     class="flex shrink-0 items-center"
                     style="color: var(--color-warning)"
                     role="img"
-                    aria-label={routineGap(routine) ?? ''}
-                    title={routineGap(routine) ?? ''}
+                    aria-label={assistantGap(assistant) ?? ''}
+                    title={assistantGap(assistant) ?? ''}
                   >
                     <AlertTriangle size={11} />
                   </span>
@@ -192,7 +192,7 @@
                 onclick={() => selectTask(task)}
               >
                 <AssistantIcon
-                  mark={task.assistantGettingStarted ? 'how-to' : 'task'}
+                  mark={task.assistantGettingStarted ? 'knowledge' : 'task'}
                   size={14}
                   class="shrink-0 text-muted"
                 />
@@ -209,7 +209,7 @@
               Runs
             </div>
             {#each runResults as run (run.id)}
-              {@const routine = runRoutine(run)}
+              {@const assistant = runAssistant(run)}
               {@const icon = runIcon(run)}
               <button
                 type="button"
@@ -219,10 +219,10 @@
                 <span class="flex h-4 w-4 shrink-0 items-center justify-center">
                   {#if icon}
                     <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-                  {:else if routine}
-                    <RoutineDefaultIcon
+                  {:else if assistant}
+                    <AssistantDefaultIcon
                       size={14}
-                      style="color: {routine.color ?? 'var(--color-muted)'}"
+                      style="color: {assistant.color ?? 'var(--color-muted)'}"
                     />
                   {:else}
                     <AssistantIcon mark="task" size={14} class="text-muted" />

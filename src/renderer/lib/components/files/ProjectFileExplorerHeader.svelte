@@ -1,22 +1,22 @@
 <script lang="ts">
   import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search, Target } from '@lucide/svelte'
-  import { RoutineDefaultIcon } from '$lib/routine-icons'
+  import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
-    /** Full name of the tree's root. It is the routine's own name for an
+    /** Full name of the tree's root. It is the assistant's own name for an
      *  assistant task's tree, which is often a whole sentence, so it is used as
      *  the root icon's tooltip rather than printed as the label. */
     projectName: string
     /** Label beside the root icon; empty when the root names itself with the
-     *  icon alone, which is a routine root. */
+     *  icon alone, which is an assistant root. */
     projectLabel?: string
-    /** Root icon image: the routine's own icon when the tree is mounted on a
-     *  routine's workspace, else null. */
+    /** Root icon image: the assistant's own icon when the tree is mounted on a
+     *  assistant's workspace, else null. */
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine: without an icon of its own it
-     *  draws the routine default mark, never a generic folder. */
-    routineRoot?: boolean
-    /** Accent colour of the root identity (a routine's colour), or null for the
+    /** True when the tree's root is an assistant: without an icon of its own it
+     *  draws the assistant default mark, never a generic folder. */
+    assistantRoot?: boolean
+    /** Accent colour of the root identity (an assistant's colour), or null for the
      *  default primary accent. Drawn as an inset left edge so the header never
      *  shifts, whatever the scope. */
     projectAccentColor?: string | null
@@ -43,7 +43,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null,
     explorerWidth,
     resizing,
@@ -102,8 +102,8 @@
         class="h-3.5 w-3.5 object-contain"
         draggable="false"
       />
-    {:else if routineRoot}
-      <RoutineDefaultIcon
+    {:else if assistantRoot}
+      <AssistantDefaultIcon
         size={13}
         style="color: {projectAccentColor ?? 'var(--color-primary)'}"
       />

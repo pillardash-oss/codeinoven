@@ -262,7 +262,7 @@
   }
 
   /**
-   * The owner node a runtime belongs to: its thread when it has one (a routine
+   * The owner node a runtime belongs to: its thread when it has one (an assistant
    * run), otherwise its project. App-scoped runtimes have neither and return
    * null, so they list under the app node instead.
    */
@@ -613,9 +613,9 @@
    * Everything the task manager opens belongs to a conversation: a browser tab,
    * a terminal, or the conversation itself. A tab's context is the project that
    * is on screen, and opening one for a process in another project, chat, or
-   * routine run without landing there first created it in a context nobody
+   * assistant run without landing there first created it in a context nobody
    * could see. Landing first also puts the surface in the right hands: a run of
-   * a routine shares the routine's browser and terminal, a chat owns its own.
+   * an assistant shares the assistant's browser and terminal, a chat owns its own.
    */
   async function landOnOwner(target: { projectId: string; threadId: string }): Promise<void> {
     const [thread, project] = await Promise.all([
@@ -1096,7 +1096,7 @@
 
             <!-- The app node holds only what the app owns for its whole run:
             the config-rooted services and the app-scoped processes such as the
-            shared model server. Projects and routines are never nested here. -->
+            shared model server. Projects and assistants are never nested here. -->
             <ul class="divide-y divide-border">
               {#each appScopedProcesses as process (process.pid)}
                 {@render processRow(process)}

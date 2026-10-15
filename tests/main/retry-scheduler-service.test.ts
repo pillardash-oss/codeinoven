@@ -18,7 +18,7 @@ afterEach(async () => {
   // persisting `scheduler/retry-scheduler.json`) can land between the directory
   // listing and the final `rmdir`, which then fails with ENOTEMPTY on Windows.
   // Retry briefly so late writes can settle (same precedent as
-  // routine-scheduler-service and claude-code-driver tests).
+  // assistant-scheduler-service and claude-code-driver tests).
   await new Promise((resolve) => setTimeout(resolve, 25))
   await Promise.all(
     roots

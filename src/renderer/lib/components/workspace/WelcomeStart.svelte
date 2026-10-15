@@ -10,7 +10,7 @@
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
-  import AssistantRoutineIcon from '$lib/components/icons/AssistantRoutineIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
 
   interface Props {
@@ -31,9 +31,9 @@
     onToggleSidebar?: () => void
     /** Start a standalone chat without a project. */
     onNewChat?: () => void
-    /** Start the new-routine flow (Assistant). */
-    onNewRoutine?: () => void
-    /** Create a routine-less task (Assistant). */
+    /** Start the new-assistant flow (Assistant). */
+    onNewAssistant?: () => void
+    /** Create an assistant-less task (Assistant). */
     onNewTask?: () => void
     /** Open the add-project flow. */
     onAddProject?: () => void
@@ -50,7 +50,7 @@
     sidebarHasContent = false,
     onToggleSidebar,
     onNewChat,
-    onNewRoutine,
+    onNewAssistant,
     onNewTask,
     onAddProject,
     onCloneRepo,
@@ -100,17 +100,17 @@
     return items.map((item, index) => (index === 0 ? { ...item, highlight: true } : item))
   }
 
-  /** The Assistant's empty state: a routine first, then a one-off task, then
+  /** The Assistant's empty state: an assistant first, then a one-off task, then
    *  the app's own settings, then its tour. */
   function assistantActions(): ActionItem[] {
     const items: ActionItem[] = []
-    if (onNewRoutine) {
+    if (onNewAssistant) {
       items.push({
-        id: 'new-routine',
-        icon: AssistantRoutineIcon,
-        title: 'Start a new routine',
-        description: 'A job that repeats, with a how-to the agent works from',
-        run: () => onNewRoutine?.(),
+        id: 'new-assistant',
+        icon: AssistantIcon,
+        title: 'Start a new assistant',
+        description: 'A job that repeats, with a knowledge the agent works from',
+        run: () => onNewAssistant?.(),
         highlight: true
       })
     }

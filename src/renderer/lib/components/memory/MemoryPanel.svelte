@@ -42,9 +42,9 @@
     variant?: 'settings' | 'sidebar'
     projectId?: string
     threadId?: string
-    /** The selected assistant task's routine, so routine-scoped memory knows
-     *  which routine it belongs to. */
-    routineId?: string
+    /** The selected assistant task's assistant, so assistant-scoped memory knows
+     *  which assistant it belongs to. */
+    assistantId?: string
     memoryEnabled?: boolean
     chatMemoryEnabled?: boolean
     onMemoryEnabledChange?: (enabled: boolean) => Promise<void>
@@ -65,7 +65,7 @@
     variant = 'settings',
     projectId,
     threadId,
-    routineId,
+    assistantId,
     memoryEnabled,
     chatMemoryEnabled,
     onMemoryEnabledChange,
@@ -132,12 +132,12 @@
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
 
-  /** The routine the panel resolved for an assistant task. The rail passes it
+  /** The assistant the panel resolved for an assistant task. The rail passes it
    *  with the tab, and every other entry point (a proposal toast, the sources
    *  panel, a shortcut) leaves it out, in which case the panel reads it from
-   *  the task thread so routine memory is never silently hidden. */
-  let resolvedRoutineId = $state<string | undefined>(undefined)
-  let effectiveRoutineId = $derived(routineId ?? resolvedRoutineId)
+   *  the task thread so assistant memory is never silently hidden. */
+  let resolvedAssistantId = $state<string | undefined>(undefined)
+  let effectiveAssistantId = $derived(assistantId ?? resolvedAssistantId)
 
   /** What this panel is and where it sits, the single value every visibility
    *  check (load, save, add) reads from. */
@@ -145,7 +145,7 @@
     surface,
     projectId,
     threadId,
-    routineId: effectiveRoutineId
+    assistantId: effectiveAssistantId
   })
 
   let projectMemoryEnabled = $derived(memoryEnabled ?? loadedProjectEnabled)
@@ -165,7 +165,7 @@
         : projectId === GLOBAL_BROWSER_PROJECT_ID
           ? 'Global, all browser chats, and this chat’s preferences.'
           : projectId === ASSISTANT_SPACE_ID
-            ? 'Global, routine, and task preferences active in this conversation.'
+            ? 'Global, assistant, and task preferences active in this conversation.'
             : 'Global, project, and thread preferences active in this conversation.'
   )
 
@@ -243,14 +243,14 @@
   })
 
   /** What the panel state was read for: the surface, its container, and (on
-   *  the assistant surface) the task's routine, so a task regrouped into
-   *  another routine reloads even though its thread id stayed the same. */
+   *  the assistant surface) the task's assistant, so a task regrouped into
+   *  another assistant reloads even though its thread id stayed the same. */
   function currentContextKey(): string {
-    return `${surface}:${projectId ?? ''}:${routineId ?? ''}:${threadId ?? ''}`
+    return `${surface}:${projectId ?? ''}:${assistantId ?? ''}:${threadId ?? ''}`
   }
 
   function currentContainerKey(): string {
-    return `${surface}:${projectId ?? ''}:${routineId ?? ''}`
+    return `${surface}:${projectId ?? ''}:${assistantId ?? ''}`
   }
 
   async function load(): Promise<void> {
@@ -260,10 +260,10 @@
     loading = true
     error = ''
     try {
-      // A routine entry is only visible through its own routine, so resolve the
-      // task's routine before filtering when the caller did not supply it.
-      if (surface === 'sidebar-assistant' && !routineId && projectId && threadId) {
-        resolvedRoutineId = (await invoke('thread:get', projectId, threadId))?.routineId
+      // An assistant entry is only visible through its own assistant, so resolve the
+      // task's assistant before filtering when the caller did not supply it.
+      if (surface === 'sidebar-assistant' && !assistantId && projectId && threadId) {
+        resolvedAssistantId = (await invoke('thread:get', projectId, threadId))?.assistantId
       }
       const config = await invoke('config:get')
       loadedProjectEnabled = config.memory.enabled
@@ -476,7 +476,7 @@
         source: 'manual',
         projectId: location.projectId,
         threadId: location.threadId,
-        routineId: location.routineId
+        assistantId: location.assistantId
       })
       // Prepend and keep load baseline in sync so a following bulk Save
       // treats this as already-known (not newSinceLoad/duplicate).
@@ -580,7 +580,7 @@
         const scopes = value as MemoryScope[]
         const location = locationForScopeChange(
           scopes,
-          { projectId: entry.projectId, threadId: entry.threadId, routineId: entry.routineId },
+          { projectId: entry.projectId, threadId: entry.threadId, assistantId: entry.assistantId },
           surfaceContext
         )
         return {
@@ -588,7 +588,7 @@
           scopes,
           projectId: location.projectId,
           threadId: location.threadId,
-          routineId: location.routineId,
+          assistantId: location.assistantId,
           updatedAt: Date.now()
         }
       }

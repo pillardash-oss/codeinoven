@@ -4,27 +4,27 @@ import { join } from 'node:path'
 import { createTestDb, destroyTestDb } from '../database/test-helper'
 import { Database } from '../../../src/main/database/database'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
-import { RoutineManager } from '../../../src/lib/engines/routine-manager'
+import { AssistantManager } from '../../../src/lib/engines/assistant-manager'
 import { ProjectManager } from '../../../src/lib/engines/project-manager'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
-import { RoutineSchedulerService } from '../../../src/main/scheduler/routine-scheduler-service'
+import { AssistantSchedulerService } from '../../../src/main/scheduler/assistant-scheduler-service'
 import { MissedRunStore } from '../../../src/main/scheduler/missed-run-store'
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
-import { ASSISTANT_SPACE_ID, type Routine, type Thread } from '../../../src/lib/types'
+import { ASSISTANT_SPACE_ID, type Assistant, type Thread } from '../../../src/lib/types'
 
 /** Local-time epoch for a fixed wall clock so tests never depend on TZ. */
 function at(year: number, month: number, day: number, hour: number, minute = 0): number {
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
 }
 
-describe('RoutineSchedulerService', () => {
+describe('AssistantSchedulerService', () => {
   let db: Database
   let storage: StorageEngine
   let root: string
-  let routines: RoutineManager
+  let assistants: AssistantManager
   let threads: ThreadManager
   let clock = 0
-  const dispatched: Array<{ run: Thread; task: Thread; routine: Routine | null }> = []
+  const dispatched: Array<{ run: Thread; task: Thread; assistant: Assistant | null }> = []
 
   beforeEach(async () => {
     db = await createTestDb()
@@ -32,7 +32,7 @@ describe('RoutineSchedulerService', () => {
     root = await mkdtemp(join(process.cwd(), '.cio', 'tmp', 'sched-'))
     storage = new StorageEngine(root)
     await storage.initialize()
-    routines = new RoutineManager(db, () => clock)
+    assistants = new AssistantManager(db, () => clock)
     threads = new ThreadManager(db)
     await new ProjectManager(db).ensureAssistantSpace()
     dispatched.length = 0
@@ -45,17 +45,17 @@ describe('RoutineSchedulerService', () => {
   })
 
   async function makeScheduledTask(
-    schedule: Routine['schedule'],
+    schedule: Assistant['schedule'],
     title = 'Task',
-    howTo = 'Do the thing.'
-  ): Promise<{ task: Thread; routine: Routine }> {
-    // The routine and its schedule came into being two hours before the moment
+    knowledge = 'Do the thing.'
+  ): Promise<{ task: Thread; assistant: Assistant }> {
+    // The assistant and its schedule came into being two hours before the moment
     // under test, so a due slot after that is a real fire or miss rather than a
     // slot that predates the schedule.
     const moment = clock
     const inception = moment - 2 * 60 * 60 * 1000
     clock = inception
-    const routine = routines.createRoutine({ name: 'Routine', schedule, howTo })
+    const assistant = assistants.createAssistant({ name: 'Assistant', schedule, knowledge })
     clock = moment
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
@@ -63,20 +63,20 @@ describe('RoutineSchedulerService', () => {
       title
     })
     // A task's schedule anchor is the later of its own creation and its
-    // routine's schedule clock, and the thread manager stamps `createdAt` from
-    // the real clock. Pin it to the routine's inception so this fixture models
-    // a task that has belonged to the routine from the start, which is what
+    // assistant's schedule clock, and the thread manager stamps `createdAt` from
+    // the real clock. Pin it to the assistant's inception so this fixture models
+    // a task that has belonged to the assistant from the start, which is what
     // every test below is about.
     new ThreadRepo(db).upsert({ ...task, createdAt: inception, lastActivity: inception })
-    // Return the regrouped row: the scheduler reads a task's routine from the
+    // Return the regrouped row: the scheduler reads a task's assistant from the
     // thread it is handed, exactly as the app hands it a fresh row.
-    const grouped = routines.setTaskRoutine(task.id, routine.id)
-    return { task: grouped, routine }
+    const grouped = assistants.assignTask(task.id, assistant.id)
+    return { task: grouped, assistant }
   }
 
-  function service(): RoutineSchedulerService {
-    return new RoutineSchedulerService(storage, {
-      routines,
+  function service(): AssistantSchedulerService {
+    return new AssistantSchedulerService(storage, {
+      assistants,
       now: () => clock,
       // Every run gets its own thread, exactly as the app does it: the run is a
       // real row linked to its task through `assistantTaskId`.
@@ -85,27 +85,27 @@ describe('RoutineSchedulerService', () => {
           projectId: ASSISTANT_SPACE_ID,
           providerId: 'pi',
           title: `Run · ${dispatched.length + 1}`,
-          routineId: task.routineId,
+          assistantId: task.assistantId,
           assistantTaskId: task.id
         }),
-      dispatch: (run, task, routine) => {
-        dispatched.push({ run, task, routine })
+      dispatch: (run, task, assistant) => {
+        dispatched.push({ run, task, assistant })
       }
     })
   }
 
   it('dispatches exactly one run when a schedule comes due while open', async () => {
-    const { routine, task } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    const { assistant, task } = await makeScheduledTask({ cadence: 'hourly', times: [] })
     const scheduler = service()
     await scheduler.start() // startedAt === clock; does not fire during detection
     scheduler.evaluate()
     await scheduler.flush()
     expect(dispatched).toHaveLength(1)
-    expect(dispatched[0].routine?.id).toBe(routine.id)
+    expect(dispatched[0].assistant?.id).toBe(assistant.id)
     // The run executes on a fresh thread linked to its task, never on the task.
     expect(dispatched[0].run.id).not.toBe(task.id)
     expect(dispatched[0].run.assistantTaskId).toBe(task.id)
-    expect(dispatched[0].run.routineId).toBe(routine.id)
+    expect(dispatched[0].run.assistantId).toBe(assistant.id)
     // A second tick in the same slot must not fire again.
     scheduler.evaluate()
     await scheduler.flush()
@@ -115,21 +115,21 @@ describe('RoutineSchedulerService', () => {
   })
 
   it('never schedules a run thread as a task of its own', async () => {
-    const { task, routine } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    const { task, assistant } = await makeScheduledTask({ cadence: 'hourly', times: [] })
     const scheduler = service()
     await scheduler.start()
     scheduler.evaluate()
     await scheduler.flush()
     const run = dispatched[0].run
     expect(run.assistantTaskId).toBe(task.id)
-    // The run thread carries a schedule through its routine, yet only its task
+    // The run thread carries a schedule through its assistant, yet only its task
     // is evaluated: a run can never have a run.
-    expect(routines.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
-    expect(routines.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
+    expect(assistants.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
+    expect(assistants.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
     scheduler.evaluate()
     await scheduler.flush()
     expect(dispatched).toHaveLength(1)
-    expect(routine.id).toBeTruthy()
+    expect(assistant.id).toBeTruthy()
     scheduler.dispose()
   })
 
@@ -141,14 +141,14 @@ describe('RoutineSchedulerService', () => {
     await scheduler.flush()
     const run = dispatched[0].run
     scheduler.settleRun(run.id, 'completed')
-    const updated = routines.listAssistantTasks().find((entry) => entry.id === task.id)
+    const updated = assistants.listAssistantTasks().find((entry) => entry.id === task.id)
     expect(updated?.lastSuccessAt).toBe(clock)
     scheduler.dispose()
   })
 
   it('gives every manual run its own thread', async () => {
-    const { task, routine } = await makeScheduledTask({ cadence: 'daily', times: ['09:00'] })
-    routines.updateRoutine(routine.id, { howTo: 'Check the inbox, then report.' })
+    const { task, assistant } = await makeScheduledTask({ cadence: 'daily', times: ['09:00'] })
+    assistants.updateAssistant(assistant.id, { knowledge: 'Check the inbox, then report.' })
     const scheduler = service()
     await scheduler.start()
     const first = await scheduler.runTaskNow(task)
@@ -158,19 +158,19 @@ describe('RoutineSchedulerService', () => {
     scheduler.dispose()
   })
 
-  it('passes the routine how-to to the dispatch as prompt context', async () => {
-    const { routine } = await makeScheduledTask({ cadence: 'hourly', times: [] })
-    routines.updateRoutine(routine.id, { howTo: 'Check the inbox, then report.' })
+  it('passes the assistant knowledge to the dispatch as prompt context', async () => {
+    const { assistant } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    assistants.updateAssistant(assistant.id, { knowledge: 'Check the inbox, then report.' })
     const scheduler = service()
     await scheduler.start()
     scheduler.evaluate()
     await scheduler.flush()
-    expect(dispatched[0].routine?.howTo).toBe('Check the inbox, then report.')
+    expect(dispatched[0].assistant?.knowledge).toBe('Check the inbox, then report.')
     scheduler.dispose()
   })
 
   it('records a missed run instead of firing when the app was closed at fire time', async () => {
-    const { task, routine } = await makeScheduledTask({
+    const { task, assistant } = await makeScheduledTask({
       cadence: 'daily',
       times: ['09:00']
     })
@@ -180,7 +180,7 @@ describe('RoutineSchedulerService', () => {
     expect(dispatched).toHaveLength(0)
     expect(missed).toHaveLength(1)
     expect(missed[0].threadId).toBe(task.id)
-    expect(missed[0].routineId).toBe(routine.id)
+    expect(missed[0].assistantId).toBe(assistant.id)
     expect(missed[0].dueAt).toBe(at(2026, 3, 10, 9, 0))
     scheduler.dispose()
   })
@@ -238,20 +238,20 @@ describe('RoutineSchedulerService', () => {
   })
 
   it('never records a miss for a slot that predates the schedule', async () => {
-    // The routine (and its schedule) came into being at 10:00, so the 09:00
+    // The assistant (and its schedule) came into being at 10:00, so the 09:00
     // slot the same day was never due for it. This is the reported bug: a
-    // routine created in the afternoon must not badge a morning slot as missed.
-    const routine = routines.createRoutine({
-      name: 'Routine',
+    // assistant created in the afternoon must not badge a morning slot as missed.
+    const assistant = assistants.createAssistant({
+      name: 'Assistant',
       schedule: { cadence: 'daily', times: ['09:00'] },
-      howTo: 'Do the thing.'
+      knowledge: 'Do the thing.'
     })
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
       title: 'Task'
     })
-    routines.setTaskRoutine(task.id, routine.id)
+    assistants.assignTask(task.id, assistant.id)
     const scheduler = service()
     await scheduler.start()
     expect(scheduler.listMissedRuns()).toHaveLength(0)
@@ -259,24 +259,24 @@ describe('RoutineSchedulerService', () => {
   })
 
   it('drops a persisted miss that predates the schedule on load', async () => {
-    const routine = routines.createRoutine({
-      name: 'Routine',
+    const assistant = assistants.createAssistant({
+      name: 'Assistant',
       schedule: { cadence: 'daily', times: ['09:00'] },
-      howTo: 'Do the thing.'
+      knowledge: 'Do the thing.'
     })
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
       title: 'Task'
     })
-    const grouped = routines.setTaskRoutine(task.id, routine.id)
-    // Simulate a record written by an older build: a slot before the routine
+    const grouped = assistants.assignTask(task.id, assistant.id)
+    // Simulate a record written by an older build: a slot before the assistant
     // existed. The scheduler must drop it rather than keep badging it.
     const store = new MissedRunStore(storage)
     await store.load()
     store.record({
       threadId: grouped.id,
-      routineId: routine.id,
+      assistantId: assistant.id,
       dueAt: at(2026, 3, 10, 8, 0),
       title: 'Task'
     })
@@ -288,12 +288,12 @@ describe('RoutineSchedulerService', () => {
     scheduler.dispose()
   })
 
-  it('never schedules a routine that has no how-to yet', async () => {
-    // A half-configured routine cannot run, so it has nothing to fire or miss.
+  it('never schedules an assistant that has no knowledge yet', async () => {
+    // A half-configured assistant cannot run, so it has nothing to fire or miss.
     const moment = clock
     clock = moment - 2 * 60 * 60 * 1000
-    const routine = routines.createRoutine({
-      name: 'Routine',
+    const assistant = assistants.createAssistant({
+      name: 'Assistant',
       schedule: { cadence: 'daily', times: ['09:00'] }
     })
     clock = moment
@@ -302,7 +302,7 @@ describe('RoutineSchedulerService', () => {
       providerId: 'pi',
       title: 'Task'
     })
-    routines.setTaskRoutine(task.id, routine.id)
+    assistants.assignTask(task.id, assistant.id)
     const scheduler = service()
     await scheduler.start()
     expect(scheduler.listMissedRuns()).toHaveLength(0)

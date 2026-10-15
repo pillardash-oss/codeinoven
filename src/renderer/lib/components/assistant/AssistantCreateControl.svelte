@@ -5,9 +5,9 @@
 
   interface Props {
     /**
-     * Create a routine with the given title, optional description, and whether
+     * Create an assistant with the given title, optional description, and whether
      * it runs on a schedule; the host seeds the "Getting started" thread where
-     * the how-to is written.
+     * the knowledge is written.
      */
     onCreate: (name: string, description: string, scheduled: boolean) => void | Promise<void>
     title?: string
@@ -16,12 +16,12 @@
     trigger?: number
   }
 
-  let { onCreate, title = 'New routine', trigger = 0 }: Props = $props()
+  let { onCreate, title = 'New assistant', trigger = 0 }: Props = $props()
 
   let open = $state(false)
   let name = $state('')
   let description = $state('')
-  /** On by default: a new routine runs on a schedule unless the user opts out. */
+  /** On by default: a new assistant runs on a schedule unless the user opts out. */
   let scheduled = $state(true)
   let busy = $state(false)
 
@@ -58,24 +58,24 @@
 <button
   type="button"
   class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-  aria-label="New routine"
-  title="New routine"
+  aria-label="New assistant"
+  title="New assistant"
   onclick={() => (open = true)}
 >
-  <AssistantIcon mark="routine" size={15} />
+  <AssistantIcon mark="assistant" size={15} />
 </button>
 
 <Modal {open} {title} size="lg" onClose={() => (open = false)}>
   <div class="flex flex-col gap-4">
     <div>
-      <label class="mb-1 block text-[0.6875rem] font-medium text-muted" for="new-routine-name">
-        Routine name
+      <label class="mb-1 block text-[0.6875rem] font-medium text-muted" for="new-assistant-name">
+        Assistant name
       </label>
       <input
-        id="new-routine-name"
+        id="new-assistant-name"
         class="w-full border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
         placeholder="e.g. Triage CodeInOven PRs daily, 9am and 5pm"
-        aria-label="Routine name"
+        aria-label="Assistant name"
         bind:value={name}
         onkeydown={(event) => {
           if (event.key === 'Enter' && !event.isComposing) {
@@ -89,20 +89,20 @@
     <div>
       <label
         class="mb-1 block text-[0.6875rem] font-medium text-muted"
-        for="new-routine-description"
+        for="new-assistant-description"
       >
         Description <span class="font-normal text-dimmed">(optional)</span>
       </label>
       <textarea
-        id="new-routine-description"
+        id="new-assistant-description"
         rows="2"
         class="w-full resize-none border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-        placeholder="A note for yourself about what this routine is for"
-        aria-label="Routine description"
+        placeholder="A note for yourself about what this assistant is for"
+        aria-label="Assistant description"
         bind:value={description}></textarea>
       <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-        A note for you only, it is never sent to the agent. Next you describe the routine to the
-        agent in its Getting started thread, and it writes the how-to with you.
+        A note for you only, it is never sent to the agent. Next you describe the assistant to the
+        agent in its Getting started thread, and it writes the knowledge with you.
       </p>
     </div>
 
@@ -113,13 +113,13 @@
         <p class="text-[0.75rem] text-foreground">Run on a schedule</p>
         <p class="text-[0.625rem] leading-relaxed text-dimmed">
           {scheduled
-            ? 'The agent will agree a cadence with you, and the routine fires on the clock.'
-            : 'No schedule: this routine runs only when you ask it to. A single function can still be scheduled later.'}
+            ? 'The agent will agree a cadence with you, and the assistant fires on the clock.'
+            : 'No schedule: this assistant runs only when you ask it to. A single function can still be scheduled later.'}
         </p>
       </div>
       <Switch
         bind:checked={scheduled}
-        aria-label="Run this routine on a schedule"
+        aria-label="Run this assistant on a schedule"
         title="Run on a schedule"
       />
     </div>
@@ -142,7 +142,7 @@
         disabled={!canSubmit}
         onclick={() => void submit()}
       >
-        Create routine
+        Create assistant
       </button>
     </div>
   {/snippet}

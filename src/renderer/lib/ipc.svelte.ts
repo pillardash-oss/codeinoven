@@ -59,7 +59,7 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'project:ensureInbox',
   // Registered on the hydration surface so Assistant View's first pass resolves
   // it immediately instead of waiting for the post-paint feature graph.
-  'routine:ensureSpace',
+  'assistant:ensureSpace',
   'project:get',
   'project:getIcon',
   'project:list',

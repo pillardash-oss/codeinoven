@@ -7,13 +7,13 @@ import { invoke } from '$lib/ipc.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
+import { assistants } from '$lib/stores/assistants.svelte'
+import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
 import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
 import { threadScopeBucket } from '$lib/threads/thread-scope'
 import {
   isOrchestrationChildThread,
-  type Routine,
+  type Assistant,
   type Thread,
   type ThreadSearchResult
 } from '$shared/types'
@@ -23,15 +23,15 @@ import { actionId } from './app-palette-actions'
 /** The thread families the spotlight can search in their own screen. */
 export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant'
 
-/** A picked row is either a thread to open or a routine to focus. */
-type ThreadSearchTarget = { thread: Thread } | { routine: Routine }
+/** A picked row is either a thread to open or an assistant to focus. */
+type ThreadSearchTarget = { thread: Thread } | { assistant: Assistant }
 
 const SEARCH_DEBOUNCE_MS = 160
 const MIN_QUERY_LENGTH = 2
 const MAX_RESULTS = 60
 const RESULT_LIMIT = 50
-/** Routine-name matches surfaced above the task rows. */
-const MAX_ROUTINE_RESULTS = 12
+/** Assistant-name matches surfaced above the task rows. */
+const MAX_ASSISTANT_RESULTS = 12
 
 function relativeThreadTime(timestamp: number): string {
   const minutes = Math.floor((Date.now() - timestamp) / 60_000)
@@ -50,23 +50,23 @@ function relativeThreadTime(timestamp: number): string {
 
 export interface ThreadSearchPaletteDeps {
   openThread: (thread: Thread) => void
-  /** Focus a matching routine (assistant search only). */
-  openRoutine?: (routine: Routine) => void
+  /** Focus a matching assistant (assistant search only). */
+  openAssistant?: (assistant: Assistant) => void
 }
 
 /**
  * Reactive state machine behind a family-scoped thread search palette: the
  * debounced fan-out search, the row metadata, and opening the picked thread or
- * routine. One instance serves the Projects screen (filtered by project), the
- * Chats screen (no filter), and the Assistant screen (filtered by routine, where
- * matching routine names are surfaced above their tasks).
+ * assistant. One instance serves the Projects screen (filtered by project), the
+ * Chats screen (no filter), and the Assistant screen (filtered by assistant, where
+ * matching assistant names are surfaced above their tasks).
  */
 export class ThreadSearchPaletteController {
   paletteOpen = $state(false)
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
   /** Selected sub-container ids for the footer picker; empty = all of them.
-   *  Project ids for the Projects screen, routine ids for the Assistant one. */
+   *  Project ids for the Projects screen, assistant ids for the Assistant one. */
   scopeIds = $state<string[]>([])
 
   private timer: number | null = null
@@ -99,10 +99,10 @@ export class ThreadSearchPaletteController {
   openPalette(): void {
     this.reset()
     this.paletteOpen = true
-    // The assistant screen's routine picker and routine rows read the routines
+    // The assistant screen's assistant picker and assistant rows read the assistants
     // store, which may not have hydrated yet on a session that restored onto a
     // non-content view. Idempotent, so an already-initialised store is free.
-    if (this.family === 'assistant') assistantRoutines.initialize()
+    if (this.family === 'assistant') assistants.initialize()
     // Rows carry the thread's Oven next to its scope, so the registry has to be
     // read once before the first result can name one.
     void ovens.ensure()
@@ -134,7 +134,7 @@ export class ThreadSearchPaletteController {
   }
 
   /** Re-run the in-flight search immediately when the sub-container scope
-   *  (project or routine) changes. */
+   *  (project or assistant) changes. */
   setScope(scopeIds: string[]): void {
     this.scopeIds = scopeIds
     if (!this.paletteOpen || this.lastQuery.trim().length < MIN_QUERY_LENGTH) return
@@ -151,7 +151,7 @@ export class ThreadSearchPaletteController {
     const target = this.targets.get(selection.action.id)
     if (!target) return
     this.close()
-    if ('routine' in target) this.deps.openRoutine?.(target.routine)
+    if ('assistant' in target) this.deps.openAssistant?.(target.assistant)
     else this.deps.openThread(target.thread)
   }
 
@@ -159,7 +159,7 @@ export class ThreadSearchPaletteController {
     let results: ThreadSearchResult[]
     try {
       // Scoped search: fan out per selected sub-container so the manager can use
-      // its per-project index (projects) or narrow to one routine (assistant);
+      // its per-project index (projects) or narrow to one assistant (assistant);
       // an empty selection searches the whole family in one call.
       results = await this.runFanOut(query)
     } catch {
@@ -194,10 +194,10 @@ export class ThreadSearchPaletteController {
     if (this.family === 'assistant' && this.scopeIds.length > 0) {
       return (
         await Promise.all(
-          this.scopeIds.map((routineId) =>
+          this.scopeIds.map((assistantId) =>
             invoke('threads:search', query, {
               family: 'assistant',
-              routineId,
+              assistantId,
               limit: RESULT_LIMIT
             }).catch((): ThreadSearchResult[] => [])
           )
@@ -239,7 +239,7 @@ export class ThreadSearchPaletteController {
    * The container a result row belongs to, presented the way the palette already
    * presents a thread's project: its display label, colour, and icon. Projects
    * resolve their real record, chats are the inbox, and assistant rows name the
-   * routine they run under.
+   * assistant they run under.
    */
   private containerFor(thread: Thread): {
     label: string
@@ -249,16 +249,16 @@ export class ThreadSearchPaletteController {
   } {
     if (this.family === 'chats') return { label: 'Chats', icon: MessagesSquare }
     if (this.family === 'assistant') {
-      const routine = assistantRoutines.routineForTask(thread)
-      if (routine) {
-        const iconUri = getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+      const assistant = assistants.assistantForTask(thread)
+      if (assistant) {
+        const iconUri = getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
         return {
-          label: routine.name,
-          ...(routine.color ? { color: routine.color } : {}),
-          ...(iconUri ? { iconUri } : { icon: RoutineDefaultIcon })
+          label: assistant.name,
+          ...(assistant.color ? { color: assistant.color } : {}),
+          ...(iconUri ? { iconUri } : { icon: AssistantDefaultIcon })
         }
       }
-      return { label: 'Assistant', icon: RoutineDefaultIcon }
+      return { label: 'Assistant', icon: AssistantDefaultIcon }
     }
     const project = scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId)
     const iconUri = scopeState.projects.find(
@@ -271,11 +271,11 @@ export class ThreadSearchPaletteController {
     }
   }
 
-  /** Routine rows for assistant searches: a routine whose name matches the query
+  /** Assistant rows for assistant searches: an assistant whose name matches the query
    *  is surfaced above its tasks, the way the Assistant view's own search lists
-   *  it. Hidden while a routine filter is active, where the user is already
-   *  searching inside one routine. */
-  private buildRoutineRows(query: string): {
+   *  it. Hidden while an assistant filter is active, where the user is already
+   *  searching inside one assistant. */
+  private buildAssistantRows(query: string): {
     actions: ActionDefinition[]
     targets: Array<[ActionDefinition['id'], ThreadSearchTarget]>
   } {
@@ -286,27 +286,27 @@ export class ThreadSearchPaletteController {
     if (!normalized) return { actions: [], targets: [] }
     const actions: ActionDefinition[] = []
     const targets: Array<[ActionDefinition['id'], ThreadSearchTarget]> = []
-    for (const routine of assistantRoutines.routines) {
-      if (!routine.name.toLowerCase().includes(normalized)) continue
-      const iconUri = getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
-      const id = actionId(`routine:${routine.id}`)
+    for (const assistant of assistants.assistants) {
+      if (!assistant.name.toLowerCase().includes(normalized)) continue
+      const iconUri = getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
+      const id = actionId(`assistant:${assistant.id}`)
       actions.push({
         id,
-        title: routine.name,
-        description: 'Assistant routine',
-        category: 'routine',
+        title: assistant.name,
+        description: 'Assistant',
+        category: 'assistant',
         source: {
-          id: `routine:${routine.id}`,
-          label: routine.name,
+          id: `assistant:${assistant.id}`,
+          label: assistant.name,
           kind: 'app',
-          ...(routine.color ? { color: routine.color } : {})
+          ...(assistant.color ? { color: assistant.color } : {})
         },
         showSourceBadge: false,
-        ...(iconUri ? { iconUri } : { icon: RoutineDefaultIcon }),
-        keywords: [routine.name, routine.description ?? ''].filter(Boolean)
+        ...(iconUri ? { iconUri } : { icon: AssistantDefaultIcon }),
+        keywords: [assistant.name, assistant.description ?? ''].filter(Boolean)
       })
-      targets.push([id, { routine }])
-      if (actions.length >= MAX_ROUTINE_RESULTS) break
+      targets.push([id, { assistant }])
+      if (actions.length >= MAX_ASSISTANT_RESULTS) break
     }
     return { actions, targets }
   }
@@ -317,9 +317,9 @@ export class ThreadSearchPaletteController {
     targets: SvelteMap<ActionDefinition['id'], ThreadSearchTarget>
   } {
     const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
-    const routines = this.buildRoutineRows(this.lastQuery)
-    const actions: ActionDefinition[] = routines.actions
-    for (const [id, target] of routines.targets) targets.set(id, target)
+    const assistants = this.buildAssistantRows(this.lastQuery)
+    const actions: ActionDefinition[] = assistants.actions
+    for (const [id, target] of assistants.targets) targets.set(id, target)
     for (const result of results) {
       const thread = result.thread
       if (thread.archived || isOrchestrationChildThread(thread)) continue

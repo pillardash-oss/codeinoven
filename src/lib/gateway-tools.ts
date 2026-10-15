@@ -284,7 +284,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, a routine, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -342,7 +342,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/diagnostics',
     sentWhen:
-      'Whenever the user reports a problem with the app, a thread, a routine, or a log line and the evidence lives in app data'
+      'Whenever the user reports a problem with the app, a thread, an assistant, or a log line and the evidence lives in app data'
   },
   {
     name: UTILITY_SUGGEST_TOOL_NAME,

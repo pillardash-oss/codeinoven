@@ -392,7 +392,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-threads',
     title: 'Run in the background',
-    description: 'Keep Assistant routines on schedule after the window closes.',
+    description: 'Keep Assistants on schedule after the window closes.',
     keywords: ['background', 'menu bar', 'tray', 'scheduled', 'close', 'quit'],
     icon: SlidersHorizontal
   },

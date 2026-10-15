@@ -204,7 +204,7 @@
     'sticky-notes',
     'thread-note',
     'coordinator',
-    'assistant-how-to'
+    'assistant-knowledge'
   ])
 
   /**
@@ -500,8 +500,8 @@
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'oven'}
       <Server size={12} class="shrink-0" />
-    {:else if tab.kind === 'assistant-how-to'}
-      <AssistantIcon mark="how-to" size={12} class="shrink-0 text-primary" />
+    {:else if tab.kind === 'assistant-knowledge'}
+      <AssistantIcon mark="knowledge" size={12} class="shrink-0 text-primary" />
     {:else}
       <Bot size={12} class="shrink-0" />
     {/if}

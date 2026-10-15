@@ -19,7 +19,7 @@
 
   /**
    * The optional footer filter: a search screen's own sub-container picker. The
-   * palette is entity agnostic, so a project search, a routine search, and a
+   * palette is entity agnostic, so a project search, an assistant search, and a
    * browser-group search all drive the same picker from a description instead of
    * a component per entity.
    */

@@ -17,8 +17,8 @@ import {
 } from '../system/log-paths'
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
-import { RoutineAuthoringCheckpoints } from './routine-authoring-checkpoints'
-import { broadcastRoutineCheckpointChanged } from '../scheduler/assistant-events'
+import { AssistantAuthoringCheckpoints } from './assistant-authoring-checkpoints'
+import { broadcastAssistantCheckpointChanged } from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -104,21 +104,21 @@ import type {
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
-import { RoutineRepo } from '../database/repositories/routine-repo'
+import { AssistantRepo } from '../database/repositories/assistant-repo'
 import {
-  ROUTINE_AUTHORING_DECISION_LIMIT,
-  routineAuthoringContext,
-  routineAuthoringProgressContext,
-  routineHowToUpdateContext
-} from '../../lib/routine-authoring'
-import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
+  ASSISTANT_AUTHORING_DECISION_LIMIT,
+  assistantAuthoringContext,
+  assistantAuthoringProgressContext,
+  assistantKnowledgeUpdateContext
+} from '../../lib/assistant-authoring'
+import { isAssistantNextStepsPrompt } from '../../lib/assistant-next-steps'
 import {
   continuationRequestPrompt,
   isContinuationRelayPrompt,
   pendingContinuationRequest,
   type PendingContinuationRequest
 } from '../../lib/pending-request'
-import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
+import { composeAssistantInstruction, assistantRunContext } from '../../lib/assistant-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
@@ -170,7 +170,7 @@ import {
 } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
-  CIO_UTILITY_ROUTINE_EDIT_PROMPT,
+  CIO_UTILITY_ASSISTANT_EDIT_PROMPT,
   CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
@@ -370,7 +370,7 @@ import type {
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
   RankingJudgeConfig,
-  RoutineAgents
+  AssistantAgents
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -380,8 +380,8 @@ import {
   isAssistantThread,
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
-  routineHowToComplete,
-  routineIsScheduled,
+  assistantKnowledgeComplete,
+  assistantIsScheduled,
   workerReportsToCoordinator
 } from '../../lib/types'
 import {
@@ -401,7 +401,7 @@ import type { BrowserActionReview } from '../browser/browser-service/browser-act
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts, completedTurnWindow } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
-import { nextRoutineModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { nextAssistantModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import {
   MEMORY_AUDIENCE_SCOPES,
   memoryAudienceForContainer,
@@ -1170,11 +1170,11 @@ export class ChatEngine {
   private readonly brainstormAlignmentNotes: BrainstormAlignmentNotes
 
   /**
-   * The app-owned Getting started checkpoints. One routine keeps one, and it is
+   * The app-owned Getting started checkpoints. One assistant keeps one, and it is
    * re-injected into every authoring turn beside the answers the user already
    * submitted, so the interview survives a model or harness switch mid-way.
    */
-  private readonly routineAuthoringCheckpoints: RoutineAuthoringCheckpoints
+  private readonly assistantAuthoringCheckpoints: AssistantAuthoringCheckpoints
 
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
@@ -1314,15 +1314,15 @@ export class ChatEngine {
   private retryScheduler: RetrySchedulerService | null = null
 
   /**
-   * Resolves the model set an assistant task's routine runs on. Attached by the
-   * bootstrap, which owns the routine manager; absent means assistant tasks get
+   * Resolves the model set an assistant task's assistant runs on. Attached by the
+   * bootstrap, which owns the assistant manager; absent means assistant tasks get
    * no model fallback.
    */
-  private assistantAgentsResolver: ((task: Thread) => RoutineAgents | undefined) | null = null
+  private assistantAgentsResolver: ((task: Thread) => AssistantAgents | undefined) | null = null
   /**
    * Records that an assistant task's turn settled with a final status, so the
-   * routine can note its last successful run when the run truly completes.
-   * Attached by the bootstrap, which owns the routine manager; absent means run
+   * assistant can note its last successful run when the run truly completes.
+   * Attached by the bootstrap, which owns the assistant manager; absent means run
    * outcomes are not tracked.
    */
   private assistantRunSettled: ((threadId: string, status: ThreadStatus) => void) | null = null
@@ -1529,7 +1529,7 @@ export class ChatEngine {
 
   private rankingSnapshotRepo: ModelRankingSnapshotRepo
 
-  private routineRepo: RoutineRepo
+  private assistantRepo: AssistantRepo
 
   /**
    * The app's TypeSafe (Jev) decision capability, attached during boot.
@@ -1643,7 +1643,7 @@ export class ChatEngine {
     this.usageRepo = new HarnessUsageRepo(database)
     this.rankingRepo = new ModelRankingRepo(database)
     this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
-    this.routineRepo = new RoutineRepo(database)
+    this.assistantRepo = new AssistantRepo(database)
     this.projectManager = new ProjectManager(database)
     // Tagged composer references are resolved against the sending thread's
     // scope root, so this service needs the same scope authority every other
@@ -1746,7 +1746,7 @@ export class ChatEngine {
       return { rendered: true, messageId: message.id }
     })
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
-    this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
+    this.assistantAuthoringCheckpoints = new AssistantAuthoringCheckpoints(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
@@ -4052,22 +4052,22 @@ export class ChatEngine {
     brainstormInterview = false,
     explicitUtilityInvocation = false,
     /**
-     * The routine conversation this turn belongs to, when it is one.
-     * `'run'`   a turn on a saved routine's task (a scheduled run or a user
+     * The assistant conversation this turn belongs to, when it is one.
+     * `'run'`   a turn on a saved assistant's task (a scheduled run or a user
      * follow-up on the same thread): it carries the run grant (management is in
      * scope) rather than the reuse contract, which reserves installing for an
-     * explicit request. `'edit'`   a user turn on a saved routine's Getting
-     * started thread: it does not run the routine, but a connection the change
+     * explicit request. `'edit'`   a user turn on a saved assistant's Getting
+     * started thread: it does not run the assistant, but a connection the change
      * needs is installed here, so the grant is the same. A turn where the user
      * typed @cio-utility keeps the full setup briefing instead.
      */
-    assistantRoutineTurn: 'none' | 'run' | 'edit' = 'none',
+    assistantTurn: 'none' | 'run' | 'edit' = 'none',
     /**
-     * The routine whose Getting started interview this turn belongs to, when it
+     * The assistant whose Getting started interview this turn belongs to, when it
      * is one. Binds the checkpoint capability to the turn so the agent can save
      * the interview state the app re-injects.
      */
-    authoringRoutineId: string | null = null,
+    authoringAssistantId: string | null = null,
     /**
      * Whether this turn belongs to a design session the user opened with
      * `@cio-design`. `start` is the turn that typed the tag, `continue` is every
@@ -4155,10 +4155,10 @@ export class ChatEngine {
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
             }
           : {}),
-        ...(authoringRoutineId
+        ...(authoringAssistantId
           ? {
-              saveRoutineCheckpoint: (markdown: string) =>
-                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
+              saveAssistantCheckpoint: (markdown: string) =>
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
             }
           : {}),
         budgetContext,
@@ -4179,12 +4179,12 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : assistantRoutineTurn === 'run'
+        : assistantTurn === 'run'
           ? CIO_UTILITY_RUN_PROMPT
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
-            : assistantRoutineTurn === 'edit'
-              ? CIO_UTILITY_ROUTINE_EDIT_PROMPT
+            : assistantTurn === 'edit'
+              ? CIO_UTILITY_ASSISTANT_EDIT_PROMPT
               : CIO_UTILITY_REUSE_PROMPT
       // The design contract is separate from the utility contract because it is
       // not a setup grant: the capability it activates arrives with the turn
@@ -4423,23 +4423,23 @@ export class ChatEngine {
     const previous = this.utilityTurns.get(sessionId)
     if (previous?.cleanupPromise) await previous.cleanupPromise
     const steeringThread = await this.threadManager.getThread(projectId, threadId)
-    // A routine's how-to authoring thread keeps management for the whole
+    // An assistant's knowledge authoring thread keeps management for the whole
     // authoring conversation, exactly like a turn where the user typed
     // @cio-utility; a steer landing mid-conversation must not drop it. A run of
-    // a saved routine keeps it for the same reason: a steer must not drop the
+    // a saved assistant keeps it for the same reason: a steer must not drop the
     // ability to supply a connection the run needs. A user editing a saved
-    // routine's how-to on its Getting started thread keeps it too, because the
+    // assistant's knowledge on its Getting started thread keeps it too, because the
     // tweak may need a capability installed.
     const allowManagement =
-      this.routineConversation(steeringThread) !== null ||
+      this.assistantConversation(steeringThread) !== null ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // A steer landing mid-authoring keeps the checkpoint capability alive for
     // the rest of the turn, so an answer the user steered with is still saved.
-    // A steer on a saved routine's Getting started thread is an editing turn,
+    // A steer on a saved assistant's Getting started thread is an editing turn,
     // not an interview: it has no checkpoint to keep.
-    const authoringRoutineId =
-      this.routineConversation(steeringThread) === 'authoring'
-        ? (steeringThread?.routineId ?? null)
+    const authoringAssistantId =
+      this.assistantConversation(steeringThread) === 'authoring'
+        ? (steeringThread?.assistantId ?? null)
         : null
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
@@ -4487,10 +4487,10 @@ export class ChatEngine {
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
             }
           : {}),
-        ...(authoringRoutineId
+        ...(authoringAssistantId
           ? {
-              saveRoutineCheckpoint: (markdown: string) =>
-                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
+              saveAssistantCheckpoint: (markdown: string) =>
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
             }
           : {}),
         budgetContext,
@@ -7490,7 +7490,7 @@ export class ChatEngine {
           : undefined,
         executionScope,
         workspaceScope,
-        thread?.routineId
+        thread?.assistantId
       )
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
@@ -8014,48 +8014,48 @@ export class ChatEngine {
   }
 
   /**
-   * Whether a turn belongs to a routine's Getting started authoring interview:
-   * an assistant-space thread whose routine has no how-to yet. Derived from the
+   * Whether a turn belongs to an assistant's Getting started authoring interview:
+   * an assistant-space thread whose assistant has no knowledge yet. Derived from the
    * thread every turn and never memoized, so the interview ends the moment the
-   * how-to is saved.
+   * knowledge is saved.
    */
-  private isRoutineAuthoringThread(thread: Thread | null | undefined): boolean {
-    return this.routineConversation(thread) === 'authoring'
+  private isAssistantAuthoringThread(thread: Thread | null | undefined): boolean {
+    return this.assistantConversation(thread) === 'authoring'
   }
 
   /**
-   * Which routine conversation a thread is on, when it is one of the three. The
+   * Which assistant conversation a thread is on, when it is one of the three. The
    * single source of truth for them, so a turn can never be read as two at once:
    *
-   * - `authoring`: a thread of a routine that still has no how-to, the Getting
+   * - `authoring`: a thread of an assistant that still has no knowledge, the Getting
    *   started interview that drafts it. The user confirms the recap and the app
-   *   saves the routine from it.
-   * - `update`: the Getting started thread of a routine that is already saved.
-   *   The user is back to tweak the how-to, the schedule, or the connections, so
-   *   the turn carries the editing contract and never runs the routine.
-   * - `run`: any other thread of a saved routine. This is where the routine
-   *   actually runs, and what carries the how-to plus the self-provisioning
+   *   saves the assistant from it.
+   * - `update`: the Getting started thread of an assistant that is already saved.
+   *   The user is back to tweak the knowledge, the schedule, or the connections, so
+   *   the turn carries the editing contract and never runs the assistant.
+   * - `run`: any other thread of a saved assistant. This is where the assistant
+   *   actually runs, and what carries the knowledge plus the self-provisioning
    *   contract.
    *
-   * `null` for every thread that belongs to no routine.
+   * `null` for every thread that belongs to no assistant.
    */
-  private routineConversation(
+  private assistantConversation(
     thread: Thread | null | undefined
   ): 'authoring' | 'update' | 'run' | null {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return null
-    const routine = this.routineRepo.get(thread.routineId)
-    if (!routine) return null
-    // A routine with no how-to cannot run, so every one of its threads is the
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.assistantId) return null
+    const assistant = this.assistantRepo.get(thread.assistantId)
+    if (!assistant) return null
+    // An assistant with no knowledge cannot run, so every one of its threads is the
     // interview, exactly as before the Getting started thread's flag existed.
-    if (!routineHowToComplete(routine)) return 'authoring'
-    // A routine's Getting started thread is its later editing host, never a run:
+    if (!assistantKnowledgeComplete(assistant)) return 'authoring'
+    // An assistant's Getting started thread is its later editing host, never a run:
     // runs are dispatched on their own run threads.
     return isAssistantSetupThread(thread) ? 'update' : 'run'
   }
 
   /**
-   * The contract for a turn on a routine's Getting started thread: the authoring
-   * interview while the routine still has no how-to, and the editing contract
+   * The contract for a turn on an assistant's Getting started thread: the authoring
+   * interview while the assistant still has no knowledge, and the editing contract
    * once it is saved.
    *
    * The authoring form carries the interview's own app-owned state beside it: the
@@ -8076,72 +8076,74 @@ export class ChatEngine {
    * recap of the transcript, so it resumes the conversation instead of re-asking
    * questions the user already answered.
    */
-  private async routineAuthoringInstruction(
+  private async assistantAuthoringInstruction(
     projectId: string,
     threadId: string,
     thread: Thread | null | undefined
   ): Promise<string | undefined> {
-    const conversation = this.routineConversation(thread)
+    const conversation = this.assistantConversation(thread)
     // Only the two Getting started conversations have a contract here: a run
     // thread carries the run contract instead, and the app's own next-steps turn
     // on a task thread carries none.
-    if ((conversation !== 'authoring' && conversation !== 'update') || !thread?.routineId) {
+    if ((conversation !== 'authoring' && conversation !== 'update') || !thread?.assistantId) {
       return undefined
     }
-    const routine = this.routineRepo.get(thread.routineId)
-    if (!routine) return undefined
-    // The routine is saved, so this is no longer an interview: the user is back
-    // to tweak the how-to, the schedule, or the connections, and the saved state
+    const assistant = this.assistantRepo.get(thread.assistantId)
+    if (!assistant) return undefined
+    // The assistant is saved, so this is no longer an interview: the user is back
+    // to tweak the knowledge, the schedule, or the connections, and the saved state
     // is what the agent revises. The interview checkpoint belongs to the authoring
     // conversation, so it is neither read nor injected here.
     if (conversation === 'update') {
-      return routineHowToUpdateContext(routine)
+      return assistantKnowledgeUpdateContext(assistant)
     }
     const [checkpoint, messages] = await Promise.all([
-      this.routineAuthoringCheckpoints.read(routine.id).catch((error: unknown): string | null => {
-        Logger.error('Getting started checkpoint could not be read:', error)
-        return null
-      }),
+      this.assistantAuthoringCheckpoints
+        .read(assistant.id)
+        .catch((error: unknown): string | null => {
+          Logger.error('Getting started checkpoint could not be read:', error)
+          return null
+        }),
       this.threadManager.loadMessageRecords(projectId, threadId)
     ])
-    const decisions = formatInterviewDecisions(messages, ROUTINE_AUTHORING_DECISION_LIMIT)
+    const decisions = formatInterviewDecisions(messages, ASSISTANT_AUTHORING_DECISION_LIMIT)
     return [
-      routineAuthoringContext(routine.name, routineIsScheduled(routine)),
-      routineAuthoringProgressContext({ checkpoint, decisions })
+      assistantAuthoringContext(assistant.name, assistantIsScheduled(assistant)),
+      assistantAuthoringProgressContext({ checkpoint, decisions })
     ]
       .filter(Boolean)
       .join('\n\n')
   }
 
   /**
-   * Replace a routine's Getting started checkpoint. The capability that calls
+   * Replace an assistant's Getting started checkpoint. The capability that calls
    * this is bound to the live authoring turn, so the write is app-owned and the
-   * agent never names a path. The open how-to panel is told afterwards, so what
+   * agent never names a path. The open knowledge panel is told afterwards, so what
    * the interview has agreed is visible without reopening it.
    */
-  private async saveRoutineCheckpoint(
-    routineId: string,
+  private async saveAssistantCheckpoint(
+    assistantId: string,
     markdown: string
   ): Promise<{ path: string }> {
-    const saved = await this.routineAuthoringCheckpoints.save(routineId, markdown)
-    broadcastRoutineCheckpointChanged(routineId)
+    const saved = await this.assistantAuthoringCheckpoints.save(assistantId, markdown)
+    broadcastAssistantCheckpointChanged(assistantId)
     return saved
   }
 
   /**
-   * One routine's Getting started checkpoint, for the how-to panel. Read-only:
+   * One assistant's Getting started checkpoint, for the knowledge panel. Read-only:
    * only the authoring agent writes it, and only through the capability bound to
    * its own turn.
    */
-  async readRoutineCheckpoint(routineId: string): Promise<string | null> {
-    return this.routineAuthoringCheckpoints.read(validateEntityId(routineId, 'Routine ID'))
+  async readAssistantCheckpoint(assistantId: string): Promise<string | null> {
+    return this.assistantAuthoringCheckpoints.read(validateEntityId(assistantId, 'Assistant ID'))
   }
 
   /**
-   * The self-provisioning contract for a turn on an assistant task whose routine
-   * already has its how-to   a real run (scheduled or "Run now"), or a follow-up
-   * on that task. The how-to is the instruction set; this contract covers a
-   * connection the routine needs that is not set up in this session: the agent
+   * The self-provisioning contract for a turn on an assistant task whose assistant
+   * already has its knowledge   a real run (scheduled or "Run now"), or a follow-up
+   * on that task. The knowledge is the instruction set; this contract covers a
+   * connection the assistant needs that is not set up in this session: the agent
    * supplies it itself and asks the user for what only the user can give,
    * instead of ending the turn by pointing at the Connections tab.
    *
@@ -8149,28 +8151,28 @@ export class ChatEngine {
    * whether the run is dispatched by the scheduler, a missed-run "Run now", or a
    * user message on the task.
    */
-  private routineRunHiddenContext(thread: Thread | null | undefined): string | undefined {
-    if (this.routineConversation(thread) !== 'run') return undefined
-    const routine = thread?.routineId ? this.routineRepo.get(thread.routineId) : null
-    if (!routine) return undefined
-    return routineRunContext(routine)
+  private assistantRunHiddenContext(thread: Thread | null | undefined): string | undefined {
+    if (this.assistantConversation(thread) !== 'run') return undefined
+    const assistant = thread?.assistantId ? this.assistantRepo.get(thread.assistantId) : null
+    if (!assistant) return undefined
+    return assistantRunContext(assistant)
   }
 
   /**
-   * The routine's saved how-to for the turn prompt of a task that runs it. The
-   * how-to is the routine's instruction set and changes only when the user edits
-   * the routine, so it belongs in the system prompt beside the contract rather
+   * The assistant's saved knowledge for the turn prompt of a task that runs it. The
+   * knowledge is the assistant's instruction set and changes only when the user edits
+   * the assistant, so it belongs in the system prompt beside the contract rather
    * than on each scheduled run's message, where every run appended another copy
    * to the harness transcript. Putting it here also means a follow-up turn still
    * carries the instruction set the contract refers to, even after a session
    * rotation dropped the run messages from the native transcript.
    */
-  private routineHowToInstruction(thread: Thread | null | undefined): string | undefined {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
-    const routine = this.routineRepo.get(thread.routineId)
-    if (!routine || !routineHowToComplete(routine)) return undefined
-    const howTo = routine.howTo.trim()
-    return howTo.length > 0 ? howTo : undefined
+  private assistantKnowledgeInstruction(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.assistantId) return undefined
+    const assistant = this.assistantRepo.get(thread.assistantId)
+    if (!assistant || !assistantKnowledgeComplete(assistant)) return undefined
+    const knowledge = assistant.knowledge.trim()
+    return knowledge.length > 0 ? knowledge : undefined
   }
 
   /**
@@ -8842,8 +8844,8 @@ export class ChatEngine {
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
     // A steer lands inside the running turn, and that turn's SYSTEM PROMPT
-    // already carries the routine contract (authoring or run), because the
-    // engine composes it on every turn of a routine thread. Re-stating it in
+    // already carries the assistant contract (authoring or run), because the
+    // engine composes it on every turn of an assistant thread. Re-stating it in
     // the steer message would only add a copy to the harness transcript, so the
     // steer relies on the prompt it is already running under.
     const steerInputBudget = this.selectedModelInputBudget(
@@ -9440,23 +9442,23 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
-    // A run of a routine that already has its how-to: the how-to is the
+    // A run of an assistant that already has its knowledge: the knowledge is the
     // instruction set, and this contract tells the agent to supply any
     // connection the run needs that is not set up, asking the user for what
     // only the user can give. The app's own next-steps message is not a run, so
     // it carries neither the contract nor management.
-    const routineRun = this.routineRunHiddenContext(targetThread)
+    const assistantRun = this.assistantRunHiddenContext(targetThread)
     const assistantTaskTurn =
-      routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
-    // A user turn on the Getting started thread of a routine that is already
-    // saved: the user is tweaking the how-to, the schedule, or the connections,
-    // not running the routine. It carries the editing contract through
-    // `routineAuthoringInstruction` below, and the same management grant a run
+      assistantRun !== undefined && !(origin === 'internal' && isAssistantNextStepsPrompt(text))
+    // A user turn on the Getting started thread of an assistant that is already
+    // saved: the user is tweaking the knowledge, the schedule, or the connections,
+    // not running the assistant. It carries the editing contract through
+    // `assistantAuthoringInstruction` below, and the same management grant a run
     // gets, because a tweak can need a capability this thread has to install.
-    const routineHowToUpdateTurn =
-      origin === 'user' && this.routineConversation(targetThread) === 'update'
+    const assistantKnowledgeUpdateTurn =
+      origin === 'user' && this.assistantConversation(targetThread) === 'update'
     // The contract belongs to the thread, not to one send path. A scheduled run
-    // and a user follow-up on the same task are both the routine's assistant, so
+    // and a user follow-up on the same task are both the assistant's assistant, so
     // both carry the self-provisioning contract and the run grant; gating it on
     // an internal origin left a follow-up with only the reuse contract, which
     // reserves installing and dead-ends on "connect it yourself".
@@ -9466,10 +9468,10 @@ export class ChatEngine {
     // rewrites that prompt each turn, while text appended to a user message is
     // kept in the harness transcript and replayed once more on every later turn,
     // which would accumulate one copy per turn for the life of the thread.
-    const routineInstruction = assistantTaskTurn
-      ? composeRoutineInstruction(this.routineHowToInstruction(targetThread), routineRun)
+    const assistantInstruction = assistantTaskTurn
+      ? composeAssistantInstruction(this.assistantKnowledgeInstruction(targetThread), assistantRun)
       : origin === 'user'
-        ? await this.routineAuthoringInstruction(projectId, threadId, targetThread)
+        ? await this.assistantAuthoringInstruction(projectId, threadId, targetThread)
         : undefined
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
@@ -10033,25 +10035,25 @@ export class ChatEngine {
         targetThread?.authoredWorkKind
       )
     }
-    // The routine how-to authoring thread carries the utility gateway from the
+    // The assistant knowledge authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
-    // a routine needs while it writes the how-to, without the user first arming
+    // an assistant needs while it writes the knowledge, without the user first arming
     // setup by hand. It grants the same contract as an explicit @cio-utility
     // invocation, and it is derived from the thread on every turn rather than
-    // memoized, so it ends the moment the how-to is saved.
-    const assistantAuthoringTurn = this.isRoutineAuthoringThread(targetThread)
+    // memoized, so it ends the moment the knowledge is saved.
+    const assistantAuthoringTurn = this.isAssistantAuthoringThread(targetThread)
     // Once @cio-utility has been invoked in this thread (earlier or now), later
     // turns keep the setup contract reusable without repeating the invocation.
     // Other utilities were already freely invocable whenever the gateway runs,
     // and read-only app diagnostics never needed the invocation at all.
-    // An assistant task whose routine is saved keeps management too: a run (or a
-    // follow-up on the task) has to be able to supply a connection the routine
+    // An assistant task whose assistant is saved keeps management too: a run (or a
+    // follow-up on the task) has to be able to supply a connection the assistant
     // needs instead of dead-ending on "connect it yourself".
     const utilitySetupAllowed =
       utilitySetupRequested ||
       assistantAuthoringTurn ||
       assistantTaskTurn ||
-      routineHowToUpdateTurn ||
+      assistantKnowledgeUpdateTurn ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // Every chat, web-only or not, receives the app utility gateway: the
     // in-app browser (and any installed web tool) is reached through it, and
@@ -10073,8 +10075,8 @@ export class ChatEngine {
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantTaskTurn ? 'run' : routineHowToUpdateTurn ? 'edit' : 'none',
-      assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
+      assistantTaskTurn ? 'run' : assistantKnowledgeUpdateTurn ? 'edit' : 'none',
+      assistantAuthoringTurn ? (targetThread?.assistantId ?? null) : null,
       designSession,
       videoSession,
       orchestrationSession,
@@ -10197,7 +10199,7 @@ export class ChatEngine {
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
-          routineInstruction
+          assistantInstruction
         })
       : composeTurnSystemPrompt({
           chatPrompt: chatSystemPrompt,
@@ -10206,7 +10208,7 @@ export class ChatEngine {
           assignmentCoordinatorSystemPrompt,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
-          routineInstruction,
+          assistantInstruction,
           behaviorMode
         })
     // The single production budget/composition decision: build the raw recap,
@@ -10417,7 +10419,7 @@ export class ChatEngine {
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
-            routineInstruction
+            assistantInstruction
           }),
           allowedTools:
             activeBrainstormSession && driverId === 'opencode'
@@ -10514,7 +10516,7 @@ export class ChatEngine {
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
-            routineInstruction,
+            assistantInstruction,
             behaviorMode
           }) || undefined,
         allowedTools:
@@ -14730,7 +14732,7 @@ export class ChatEngine {
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks. A rework review automatically returns the same approved task and your complete review findings to its worker; do not create a replacement Assignment or ask the user to sign off again.',
-      'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for routine implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
+      'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for assistant implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
       'A task whose worker crashed or whose deliverable was rejected is marked failed   that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
       'Task rework remains inside the signed Assignment. Let review-task dispatch it directly. Only propose a new Assignment when the user has requested genuinely new product scope that is not a correction of the approved task.',
       this.assignmentApiInstructions(
@@ -22375,13 +22377,13 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
-    // A routine behaves like a project, so every task in it works inside its own
-    // `assistant-cwd/<routineId>/` root and keeps its artifacts there. A
-    // routine-less task gets `assistant-cwd/<threadId>/` so it still lives under
-    // the assistant root without colliding with any routine. The file tree
+    // An assistant behaves like a project, so every task in it works inside its own
+    // `assistant-cwd/<assistantId>/` root and keeps its artifacts there. A
+    // assistant-less task gets `assistant-cwd/<threadId>/` so it still lives under
+    // the assistant root without colliding with any assistant. The file tree
     // resolves the very same directory through `assistantThreadWorkspaceDirectory`.
     if (projectId === ASSISTANT_SPACE_ID) {
-      const assistantDirectory = assistantThreadWorkspaceDirectory(threadId, thread.routineId)
+      const assistantDirectory = assistantThreadWorkspaceDirectory(threadId, thread.assistantId)
       await this.storage.ensureDirectory(assistantDirectory)
       return this.storage.resolve(assistantDirectory)
     }
@@ -25032,17 +25034,17 @@ export class ChatEngine {
   }
 
   /**
-   * Register the resolver that supplies an assistant task's routine model set.
+   * Register the resolver that supplies an assistant task's assistant model set.
    * A scheduled assistant run that hits a provider failure falls over to the
-   * routine's next model instead of waiting out the failed provider's reset.
+   * assistant's next model instead of waiting out the failed provider's reset.
    */
-  attachAssistantAgentsResolver(resolver: (task: Thread) => RoutineAgents | undefined): void {
+  attachAssistantAgentsResolver(resolver: (task: Thread) => AssistantAgents | undefined): void {
     this.assistantAgentsResolver = resolver
   }
 
   /**
    * Wire the assistant run-outcome recorder. Fired when a turn on an assistant
-   * task settles with its final thread status, so the routine manager can stamp
+   * task settles with its final thread status, so the assistant manager can stamp
    * the task's last successful run once the run actually completes.
    */
   attachAssistantRunSettledRecorder(
@@ -25099,7 +25101,7 @@ export class ChatEngine {
 
   /**
    * Publish one settled assistant run's report as a durable Markdown file under
-   * `reports/` in the routine's own workspace.
+   * `reports/` in the assistant's own workspace.
    *
    * A thread is capped and evicted, so a report that only ever lived in the run
    * transcript disappears with it. Fire-and-forget and swallowed on error: the
@@ -25125,7 +25127,7 @@ export class ChatEngine {
     status: ThreadStatus
   ): Promise<void> {
     try {
-      const routine = thread.routineId ? this.routineRepo.get(thread.routineId) : null
+      const assistant = thread.assistantId ? this.assistantRepo.get(thread.assistantId) : null
       // A run's own title is just its start time, so the report's heading uses
       // the task it ran for. A turn on the task's own thread is already titled.
       let taskTitle = thread.title
@@ -25136,8 +25138,8 @@ export class ChatEngine {
       await writeAssistantReport(this.storage, {
         thread,
         taskTitle,
-        routineName: routine?.name,
-        priority: routine?.priority,
+        assistantName: assistant?.name,
+        priority: assistant?.priority,
         report,
         status,
         at: Date.now()
@@ -25156,8 +25158,8 @@ export class ChatEngine {
    * Every scheduled fire and every manual "Run now" gets its own thread: a run
    * never lands in the task's own conversation, so the task's history stays the
    * user's and a run's transcript carries only that execution. The run thread
-   * inherits the task's routine (so the engine keeps composing the routine's
-   * how-to and the run contract into its system prompt) and links back to the
+   * inherits the task's assistant (so the engine keeps composing the assistant's
+   * knowledge and the run contract into its system prompt) and links back to the
    * task through `assistantTaskId`. It is created with the settings the run
    * will actually use, so opening the run shows the model it ran on.
    */
@@ -25176,7 +25178,7 @@ export class ChatEngine {
         titleSource: 'manual',
         workingDirectory: input.task.workingDirectory,
         settings: input.settings ?? input.task.settings,
-        routineId: input.task.routineId,
+        assistantId: input.task.assistantId,
         assistantTaskId: input.task.id
       },
       {
@@ -25531,9 +25533,9 @@ export class ChatEngine {
     if (!scheduler) return false
     const info = this.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
-    // An assistant task whose routine carries fallback models moves onto the
+    // An assistant task whose assistant carries fallback models moves onto the
     // next model and re-runs at once. The fallback exists so a failed model
-    // never stops the routine, so it is applied before any reset wait.
+    // never stops the assistant, so it is applied before any reset wait.
     if (issue.kind !== 'network' && (await this.tryAssistantModelFallback(info, sessionId, issue)))
       return true
     // A provider with an explicit retry deadline has declared that the issue
@@ -25625,19 +25627,19 @@ export class ChatEngine {
   }
 
   /**
-   * Move an assistant task whose routine carries fallback models onto the next
+   * Move an assistant task whose assistant carries fallback models onto the next
    * one and re-run it immediately, instead of parking the thread for the failed
    * provider's reset window.
    *
    * The model is persisted onto the thread before the resume, so the re-run
    * reads it from the thread's own settings like any other turn. A current
-   * model that is not part of the routine's set is left untouched: that is the
-   * user's own pick, and a routine's fallbacks never override it. Returns true
+   * model that is not part of the assistant's set is left untouched: that is the
+   * user's own pick, and an assistant's fallbacks never override it. Returns true
    * when a fallback was armed.
    *
    * One resume per thread is in flight at a time, and a resume that could not
    * even be dispatched advances to the next candidate instead of only logging:
-   * a released session or a dead server must not strand the routine on the
+   * a released session or a dead server must not strand the assistant on the
    * model that just failed.
    */
   private async tryAssistantModelFallback(
@@ -25668,19 +25670,19 @@ export class ChatEngine {
     // AFTER it, skipping a model and racing two sends onto one thread.
     const fallbackKey = `${info.projectId}:${info.threadId}`
     if (this.assistantFallbackResumes.has(fallbackKey)) return true
-    const next = nextRoutineModel(settings, resolver(thread))
+    const next = nextAssistantModel(settings, resolver(thread))
     if (!next) return false
     try {
       await this.threadManager.updateSettings(
         info.projectId,
         info.threadId,
-        settingsWithRoutineModel(settings, next)
+        settingsWithAssistantModel(settings, next)
       )
     } catch (error) {
       Logger.error('Assistant model fallback could not be persisted:', error)
       return false
     }
-    Logger.info('Assistant task falling back to the next routine model', {
+    Logger.info('Assistant task falling back to the next assistant model', {
       projectId: info.projectId,
       threadId: info.threadId,
       harnessId: next.harnessId,
@@ -25707,7 +25709,7 @@ export class ChatEngine {
         Logger.error('Assistant model fallback resume failed:', error)
         // Release the claim first, then advance: the next candidate is read
         // from the model that just failed to dispatch. The chain ends when the
-        // routine has nothing left to try.
+        // assistant has nothing left to try.
         this.assistantFallbackResumes.delete(fallbackKey)
         try {
           await this.tryAssistantModelFallback(info, sessionId, issue)
@@ -26070,8 +26072,8 @@ export class ChatEngine {
     // A chat and a browser tab's agent chat each own an app-storage workspace,
     // and the directory their session runs in is that workspace, so it is
     // pre-authorized scratch. An assistant task deliberately gets none: it is
-    // routine-scoped, so its workspace is the routine's own
-    // `assistant-cwd/<routineId>/` root and must never fall back to a chat
+    // assistant-scoped, so its workspace is the assistant's own
+    // `assistant-cwd/<assistantId>/` root and must never fall back to a chat
     // workspace directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
     const scratchPaths = isAssistant
@@ -26175,7 +26177,7 @@ export class ChatEngine {
     // Only an app-owned browser call may supply this decision. Harness metadata
     // cannot turn an unclassified tool into an automatically approved action.
     if (settleBrowserAction && browserReview && level === 'auto_review') {
-      // A routine assistant runs unattended on the browser pages it opens
+      // An assistant runs unattended on the browser pages it opens
       // itself, so a card it cannot answer would only park the run. The
       // capability's own effect review still runs and is recorded, but it never
       // escalates to the user for these threads. The browser assistant in the
@@ -26184,7 +26186,7 @@ export class ChatEngine {
       const unattended = thread !== null && isAssistantThread(thread)
       const approved = unattended || browserReview.approved
       const reason = unattended
-        ? 'Auto-approved: a routine assistant acting on a page it opened itself.'
+        ? 'Auto-approved: an assistant acting on a page it opened itself.'
         : browserReview.reason
       const decision = approved ? 'auto_review' : 'ask'
       policy = {
@@ -26503,7 +26505,7 @@ export class ChatEngine {
    * `onSessionIdle` captures the thread when the idle arrives and then spends
    * seconds loading the transcript, stamping parts, and validating output. A
    * provider failure inside that window is handled immediately and, on an
-   * assistant task, moves the routine onto its next model on a replacement
+   * assistant task, moves the assistant onto its next model on a replacement
    * session. This finalization still holds the failed session and the settings
    * that turn ran with, and issuing its own continuation from that snapshot is
    * what made an assistant model fallback resume fail: the late continuation
@@ -27141,7 +27143,7 @@ export class ChatEngine {
       const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
       // A superseded finalization owns nothing on the thread any more: its
       // session was replaced while the transcript was being finalized (a model
-      // fallback moved the routine onto its next model, the harness changed, or
+      // fallback moved the assistant onto its next model, the harness changed, or
       // a newer turn started). The transcript and its usage are durable above;
       // the live turn owns the status, the notifications, the run report, and
       // the coordinator hand-off, so this must not settle any of them.
@@ -27307,7 +27309,7 @@ export class ChatEngine {
       if (settledDispatch) {
         void this.reportOrchestrationDispatch(settledDispatch, finalStatus)
       }
-      // A settled turn on an assistant task is reported to the routine scheduler,
+      // A settled turn on an assistant task is reported to the assistant scheduler,
       // which knows whether it dispatched a run on that task and stamps its last
       // successful run. Harmless for a user's own chat: the scheduler ignores a
       // thread no run was dispatched on.
@@ -27315,7 +27317,7 @@ export class ChatEngine {
         this.assistantRunSettled(finishedThread.id, finalStatus)
       }
       // A settled assistant task turn also leaves a durable Markdown report in
-      // the routine's workspace, so the report outlives the evicted thread. The
+      // the assistant's workspace, so the report outlives the evicted thread. The
       // in-app report and its notification are unchanged.
       if (finishedThread && isAssistantThread(finishedThread)) {
         this.captureAssistantReport(finishedThread, turnAssistant, finalStatus)
@@ -30307,12 +30309,12 @@ export class ChatEngine {
     settings: ThreadSettings,
     references: PromptReference[]
   ): Promise<void> {
-    // A routine's "Getting started" thread is an authoring conversation, not a
+    // An assistant's "Getting started" thread is an authoring conversation, not a
     // run: its exchanges must never be mined for memory.
     const ownerThread = await this.threadManager.getThread(projectId, threadId)
     if (ownerThread && isAssistantSetupThread(ownerThread)) return
-    const routineId = ownerThread?.routineId
-    const current = await this.memoryService.current(projectId, threadId, routineId)
+    const assistantId = ownerThread?.assistantId
+    const current = await this.memoryService.current(projectId, threadId, assistantId)
     if (current.enabled) {
       // Deterministic extraction gate (A-06): skip the auxiliary model call when
       // no durable candidate is detected, the conversation is debounced, or the
@@ -30622,7 +30624,7 @@ export class ChatEngine {
       audience === 'chat'
         ? 'This is a standalone chat. Use scope chat for preferences applying to every standalone chat, or thread only for this chat.'
         : audience === 'assistant'
-          ? "This is an assistant task. Use scope assistant for preferences applying to every assistant task, routine for preferences applying to this routine's tasks, or task only for this task."
+          ? "This is an assistant task. Use scope assistant for preferences applying to every assistant task, assistant for preferences applying to this assistant's tasks, or task only for this task."
           : 'This is a project thread. Use scope project for a rule about this project or its codebase, thread only for this conversation, and projects only when the user’s own words say the rule applies to every project or repository. Default to project when unsure.'
     const decisionSystemPrompt = [
       'Evaluate one completed exchange and decide whether it contains durable, user-authored information worth proposing for persistent memory. Judge the user intent, never summarize, and never write memory unless the exchange qualifies.',
@@ -30635,11 +30637,11 @@ export class ChatEngine {
       'Set propose to false for conversational continuations, confirmations, questions, temporary context, and one-off task instructions.',
       'A request to implement, edit, fix, review, investigate, or choose something for the current task is not memory, even when it names a project, repository, feature, file, platform, or preferred implementation.',
       'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
-      'A feature request or an acceptance criterion for the deliverable in front of the user is not memory, even when it is phrased with must, should, needs to, never, always, or every. "The task manager must track every app process in production" and "the assistant browser should be scoped per routine" describe the work being requested, not a rule about how later turns are handled, so they must return propose false.',
+      'A feature request or an acceptance criterion for the deliverable in front of the user is not memory, even when it is phrased with must, should, needs to, never, always, or every. "The task manager must track every app process in production" and "the assistant browser should be scoped per assistant" describe the work being requested, not a rule about how later turns are handled, so they must return propose false.',
       '"I want you to ...", "can you make sure ...", and other request phrasing ask for work now. They are not memory unless the same message also states something explicitly lasting, such as "from now on" or "remember this".',
       'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
       'A complaint or correction can still be durable when it states an explicit recurring rule. Do not reject a durable rule merely because the user is frustrated.',
-      'Scope words such as project, thread, chat, routine, task, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
+      'Scope words such as project, thread, chat, assistant, task, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
       'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
       'Choose category from behavioral, project-rule, identity, preference, or models. Use models when the durable preference is specifically about how one or more AI models behave; the application will associate it with the model used for this completed turn. Choose priority from critical, high, medium, or low.',
       scopeInstruction
@@ -30867,11 +30869,11 @@ export class ChatEngine {
       return {
         status: 'memory_unavailable',
         message:
-          "Memory is not collected on a routine's getting-started thread. Save the how-to first, then propose memory on a task."
+          "Memory is not collected on an assistant's getting-started thread. Save the knowledge first, then propose memory on a task."
       }
     }
-    const routineId = ownerThread?.routineId
-    const current = await this.memoryService.current(projectId, threadId, routineId)
+    const assistantId = ownerThread?.assistantId
+    const current = await this.memoryService.current(projectId, threadId, assistantId)
     if (!current.enabled) {
       return {
         status: 'memory_disabled',
@@ -30890,7 +30892,7 @@ export class ChatEngine {
     const queueProjectId = memoryLocationForScopes(input.scopes, {
       projectId,
       threadId,
-      routineId
+      assistantId
     }).projectId
     const normalizedContent = input.content.trim().toLowerCase()
     const remembered = current.entries.find(
@@ -30928,7 +30930,7 @@ export class ChatEngine {
       modelKeys: input.modelKeys,
       projectId,
       threadId,
-      routineId
+      assistantId
     })
     broadcastMemoryProposal(projectId, threadId)
     return {

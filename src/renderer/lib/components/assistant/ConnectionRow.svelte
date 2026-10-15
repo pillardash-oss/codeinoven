@@ -1,12 +1,12 @@
 <script lang="ts">
   import { AlertTriangle, Check, Eye, Settings2, X } from '@lucide/svelte'
-  import type { RoutineConnection } from '$shared/types'
+  import type { AssistantConnection } from '$shared/types'
   import type { ConnectionStatus, ConnectionView } from './assistant-view'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
 
   interface Props {
     view: ConnectionView
-    onRemove: (connection: RoutineConnection) => void
+    onRemove: (connection: AssistantConnection) => void
     /** Open the capability modal for this row, seeded with its setup prompt. */
     onSetup: (view: ConnectionView) => void
     /** Open the resolved utility details in its editor. */
@@ -94,8 +94,8 @@
     <button
       type="button"
       class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Remove {view.connection.label} from this routine"
-      aria-label="Remove {view.connection.label} from this routine"
+      title="Remove {view.connection.label} from this assistant"
+      aria-label="Remove {view.connection.label} from this assistant"
       onclick={() => onRemove(view.connection)}
     >
       <X size={12} strokeWidth={1.8} />

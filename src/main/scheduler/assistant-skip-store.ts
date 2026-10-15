@@ -1,37 +1,37 @@
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
-import { skippedRoutineRunId, type SkippedRoutineRun } from '../../lib/types'
+import { skippedAssistantRunId, type SkippedRun } from '../../lib/types'
 
-interface RoutineSkipStoreFile {
+interface AssistantSkipStoreFile {
   version: 1
-  runs: SkippedRoutineRun[]
+  runs: SkippedRun[]
 }
 
 const STORE_PATH = 'scheduler/skipped-runs.json'
 const EMPTY_DUE_TIMES: ReadonlySet<number> = new Set<number>()
 
-function isValidRun(value: unknown): value is SkippedRoutineRun {
+function isValidRun(value: unknown): value is SkippedRun {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
   return (
     typeof record.id === 'string' &&
     typeof record.taskId === 'string' &&
-    typeof record.routineId === 'string' &&
+    typeof record.assistantId === 'string' &&
     typeof record.dueAt === 'number' &&
-    record.id === skippedRoutineRunId(record.taskId, record.dueAt)
+    record.id === skippedAssistantRunId(record.taskId, record.dueAt)
   )
 }
 
 /** Durable, idempotent ledger for user-skipped schedule slots. */
-export class RoutineSkipStore {
-  private readonly runs = new Map<string, SkippedRoutineRun>()
+export class AssistantSkipStore {
+  private readonly runs = new Map<string, SkippedRun>()
   private readonly runsByTask = new Map<string, Set<number>>()
   private persistChain: Promise<void> = Promise.resolve()
 
   constructor(private readonly storage: StorageEngine) {}
 
   async load(): Promise<void> {
-    const raw = await this.storage.read<RoutineSkipStoreFile>(STORE_PATH)
+    const raw = await this.storage.read<AssistantSkipStoreFile>(STORE_PATH)
     this.runs.clear()
     this.runsByTask.clear()
     if (!raw || !Array.isArray(raw.runs)) return
@@ -40,28 +40,28 @@ export class RoutineSkipStore {
     }
   }
 
-  list(): SkippedRoutineRun[] {
+  list(): SkippedRun[] {
     return [...this.runs.values()].sort((a, b) => a.dueAt - b.dueAt)
   }
 
-  listForRoutine(routineId: string): SkippedRoutineRun[] {
-    return this.list().filter((run) => run.routineId === routineId)
+  listForAssistant(assistantId: string): SkippedRun[] {
+    return this.list().filter((run) => run.assistantId === assistantId)
   }
 
   has(taskId: string, dueAt: number): boolean {
-    return this.runs.has(skippedRoutineRunId(taskId, dueAt))
+    return this.runs.has(skippedAssistantRunId(taskId, dueAt))
   }
 
   timesForTask(taskId: string): ReadonlySet<number> {
     return this.runsByTask.get(taskId) ?? EMPTY_DUE_TIMES
   }
 
-  async recordMany(inputs: readonly Omit<SkippedRoutineRun, 'id'>[]): Promise<SkippedRoutineRun[]> {
-    const inserted: SkippedRoutineRun[] = []
+  async recordMany(inputs: readonly Omit<SkippedRun, 'id'>[]): Promise<SkippedRun[]> {
+    const inserted: SkippedRun[] = []
     for (const input of inputs) {
-      const run: SkippedRoutineRun = {
+      const run: SkippedRun = {
         ...input,
-        id: skippedRoutineRunId(input.taskId, input.dueAt)
+        id: skippedAssistantRunId(input.taskId, input.dueAt)
       }
       if (this.runs.has(run.id)) continue
       this.insert(run)
@@ -78,11 +78,11 @@ export class RoutineSkipStore {
     }
   }
 
-  removeForRoutine(routineId: string, taskIds: readonly string[]): number {
+  removeForAssistant(assistantId: string, taskIds: readonly string[]): number {
     const tasks = new Set(taskIds)
     let removed = 0
     for (const [id, run] of this.runs) {
-      if (run.routineId !== routineId && !tasks.has(run.taskId)) continue
+      if (run.assistantId !== assistantId && !tasks.has(run.taskId)) continue
       this.removeFromMemory(id)
       removed += 1
     }
@@ -90,7 +90,7 @@ export class RoutineSkipStore {
     return removed
   }
 
-  prune(shouldRemove: (run: SkippedRoutineRun) => boolean): number {
+  prune(shouldRemove: (run: SkippedRun) => boolean): number {
     let removed = 0
     for (const [id, run] of this.runs) {
       if (!shouldRemove(run)) continue
@@ -105,7 +105,7 @@ export class RoutineSkipStore {
     await this.persistChain
   }
 
-  private insert(run: SkippedRoutineRun): void {
+  private insert(run: SkippedRun): void {
     this.runs.set(run.id, run)
     const taskRuns = this.runsByTask.get(run.taskId) ?? new Set<number>()
     taskRuns.add(run.dueAt)
@@ -126,7 +126,7 @@ export class RoutineSkipStore {
   }
 
   private persist(): Promise<void> {
-    const snapshot: RoutineSkipStoreFile = { version: 1, runs: this.list() }
+    const snapshot: AssistantSkipStoreFile = { version: 1, runs: this.list() }
     const write = this.persistChain.then(() => this.storage.write(STORE_PATH, snapshot))
     this.persistChain = write.catch((error) => {
       Logger.error('Skipped-run store could not be written:', error)

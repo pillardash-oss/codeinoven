@@ -146,20 +146,20 @@
         edit: true,
         focusEditor: true
       }),
-    // The selected thread can be a routine's how-to thread. It is pinned for
+    // The selected thread can be an assistant's knowledge thread. It is pinned for
     // life, so the header menu hides it instead of offering Unpin/Delete, which
     // the thread manager would refuse anyway.
-    isHowToThread: () => isAssistantSetupThread(workspaceState.selectedThread ?? {}),
-    onHideHowTo: async (thread) => {
-      if (!thread.routineId) return
+    isKnowledgeThread: () => isAssistantSetupThread(workspaceState.selectedThread ?? {}),
+    onHideKnowledge: async (thread) => {
+      if (!thread.assistantId) return
       try {
-        const updated = await invoke('assistant:setHowToHidden', thread.routineId, true)
+        const updated = await invoke('assistant:setKnowledgeHidden', thread.assistantId, true)
         workspaceState.updateThread(updated)
         if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
           scopeState.updateThread(updated)
         }
       } catch (error) {
-        reportError(error, 'Could not hide the how-to thread')
+        reportError(error, 'Could not hide the knowledge thread')
       }
     }
   })

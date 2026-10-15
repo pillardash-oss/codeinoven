@@ -2,30 +2,34 @@ import { formatDateTime } from '$shared/date-time-format'
 import {
   describeRelativeTime,
   isAssistantSetupThread,
-  routineAgentsComplete,
-  routineHowToComplete,
-  routineIsScheduled,
+  assistantAgentsComplete,
+  assistantKnowledgeComplete,
+  assistantIsScheduled,
   type AgentCapabilityCatalog,
   type BackgroundRun,
   type BackgroundRunOutcome,
   type BackgroundRunReason,
   type MissedRun,
   type MissedRunReason,
-  type Routine,
-  type RoutineConnection,
-  type RoutineSchedule,
+  type Assistant,
+  type AssistantConnection,
+  type AssistantSchedule,
   type ScheduleCadence,
   type Thread,
   type UtilityCatalog,
   type UtilityDefinition
 } from '$shared/types'
-import { normalizePlanDelivery, normalizePlanPriority } from '$shared/routine-reporting'
+import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
 import {
-  parseRoutinePlanJson,
-  type RoutinePlan,
-  type RoutinePlanConnection
-} from '$shared/routine-plan'
-import { threadStatusPolicy, type ThreadStatusTone } from '$shared/thread-status-policy'
+  parseAssistantPlanJson,
+  type AssistantPlan,
+  type AssistantPlanConnection
+} from '$shared/assistant-plan'
+import {
+  settledThreadReadsUnread,
+  threadStatusPolicy,
+  type ThreadStatusTone
+} from '$shared/thread-status-policy'
 import {
   buildConnectionLibrary,
   connectionNamesOverlap,
@@ -55,51 +59,51 @@ export function missedRunReasonText(reason: MissedRunReason | undefined): string
     : 'The app was not running when this run was due.'
 }
 
-/** Group key for missed runs whose task belongs to no routine. */
+/** Group key for missed runs whose task belongs to no assistant. */
 export const UNGROUPED_MISSED_RUNS = '__ungrouped__'
 
-/** Group key for background runs whose task belongs to no routine. */
+/** Group key for background runs whose task belongs to no assistant. */
 export const UNGROUPED_BACKGROUND_RUNS = '__ungrouped_background_runs__'
 
-/** The neutral label every routine-less bucket wears. */
-const UNGROUPED_ACTIVITY_LABEL = 'Tasks without a routine'
+/** The neutral label every assistant-less bucket wears. */
+const UNGROUPED_ACTIVITY_LABEL = 'Tasks without an assistant'
 
-/** One routine's activity, whatever mix of notices, missed fires and runs. */
-export interface RoutineActivityGroup<T> {
-  /** Routine id, or the ungrouped key for activity owned by no routine. */
+/** One assistant's activity, whatever mix of notices, missed fires and runs. */
+export interface AssistantActivityGroup<T> {
+  /** Assistant id, or the ungrouped key for activity owned by no assistant. */
   key: string
-  /** Routine name, or the neutral label used for routine-less activity. */
+  /** Assistant name, or the neutral label used for assistant-less activity. */
   label: string
-  /** The routine's entries, newest first. */
+  /** The assistant's entries, newest first. */
   items: T[]
   /** Newest activity time in the group; drives the top-of-list ordering. */
   latestAt: number
 }
 
 /**
- * Group per-routine activity, newest first at both levels.
+ * Group per-assistant activity, newest first at both levels.
  *
- * Each entry names the routine it belongs to and the moment it reports (`at`).
- * One group is produced per routine, plus one for everything owned by no
- * routine. Inside a group the newest entry leads, and the groups themselves are
- * ordered by their newest entry, so a routine that just updated jumps to the top
+ * Each entry names the assistant it belongs to and the moment it reports (`at`).
+ * One group is produced per assistant, plus one for everything owned by no
+ * assistant. Inside a group the newest entry leads, and the groups themselves are
+ * ordered by their newest entry, so an assistant that just updated jumps to the top
  * and its fresh update reads as the first message under it. The sort is stable,
  * so entries reporting the same moment keep the order their source handed them.
  */
-export function groupActivityByRoutine<T extends { routineId?: string | null; at: number }>(
+export function groupActivityByAssistant<T extends { assistantId?: string | null; at: number }>(
   items: readonly T[],
-  routineNameById: ReadonlyMap<string, string>,
+  assistantNameById: ReadonlyMap<string, string>,
   ungrouped: { key: string; label?: string }
-): RoutineActivityGroup<T>[] {
-  const groups = new Map<string, RoutineActivityGroup<T>>()
+): AssistantActivityGroup<T>[] {
+  const groups = new Map<string, AssistantActivityGroup<T>>()
   for (const item of items) {
-    const key = item.routineId ?? ungrouped.key
+    const key = item.assistantId ?? ungrouped.key
     let group = groups.get(key)
     if (!group) {
       group = {
         key,
-        label: item.routineId
-          ? (routineNameById.get(item.routineId) ?? 'Routine')
+        label: item.assistantId
+          ? (assistantNameById.get(item.assistantId) ?? 'Assistant')
           : (ungrouped.label ?? UNGROUPED_ACTIVITY_LABEL),
         items: [],
         latestAt: item.at
@@ -113,27 +117,27 @@ export function groupActivityByRoutine<T extends { routineId?: string | null; at
   return [...groups.values()].sort((a, b) => b.latestAt - a.latestAt)
 }
 
-/** One routine's pending missed runs. */
+/** One assistant's pending missed runs. */
 export interface MissedRunGroup {
-  /** Routine id, or `UNGROUPED_MISSED_RUNS` for routine-less tasks. */
+  /** Assistant id, or `UNGROUPED_MISSED_RUNS` for assistant-less tasks. */
   key: string
-  /** Routine name, or the neutral label used for routine-less tasks. */
+  /** Assistant name, or the neutral label used for assistant-less tasks. */
   label: string
   runs: MissedRun[]
 }
 
 /**
- * Missed runs are surfaced per routine: one group per owning routine, plus a
- * single group for routine-less tasks. Newest fire first, and groups ordered by
+ * Missed runs are surfaced per assistant: one group per owning assistant, plus a
+ * single group for assistant-less tasks. Newest fire first, and groups ordered by
  * their newest fire.
  */
-export function groupMissedRunsByRoutine(
+export function groupMissedRunsByAssistant(
   runs: readonly MissedRun[],
-  routineNameById: ReadonlyMap<string, string>
+  assistantNameById: ReadonlyMap<string, string>
 ): MissedRunGroup[] {
-  return groupActivityByRoutine(
-    runs.map((run) => ({ routineId: run.routineId, at: run.dueAt, run })),
-    routineNameById,
+  return groupActivityByAssistant(
+    runs.map((run) => ({ assistantId: run.assistantId, at: run.dueAt, run })),
+    assistantNameById,
     { key: UNGROUPED_MISSED_RUNS }
   ).map((group) => ({
     key: group.key,
@@ -142,26 +146,26 @@ export function groupMissedRunsByRoutine(
   }))
 }
 
-/** One routine's unattended (background) runs. */
+/** One assistant's unattended (background) runs. */
 export interface BackgroundRunGroup {
-  /** Routine id, or `UNGROUPED_BACKGROUND_RUNS` for routine-less tasks. */
+  /** Assistant id, or `UNGROUPED_BACKGROUND_RUNS` for assistant-less tasks. */
   key: string
-  /** Routine name, or the neutral label used for routine-less tasks. */
+  /** Assistant name, or the neutral label used for assistant-less tasks. */
   label: string
   runs: BackgroundRun[]
 }
 
 /**
- * Unattended runs are surfaced per routine, mirroring missed runs: one group per
- * owning routine, plus a single group for routine-less tasks, newest run first.
+ * Unattended runs are surfaced per assistant, mirroring missed runs: one group per
+ * owning assistant, plus a single group for assistant-less tasks, newest run first.
  */
-export function groupBackgroundRunsByRoutine(
+export function groupBackgroundRunsByAssistant(
   runs: readonly BackgroundRun[],
-  routineNameById: ReadonlyMap<string, string>
+  assistantNameById: ReadonlyMap<string, string>
 ): BackgroundRunGroup[] {
-  return groupActivityByRoutine(
-    runs.map((run) => ({ routineId: run.routineId, at: run.settledAt ?? run.startedAt, run })),
-    routineNameById,
+  return groupActivityByAssistant(
+    runs.map((run) => ({ assistantId: run.assistantId, at: run.settledAt ?? run.startedAt, run })),
+    assistantNameById,
     { key: UNGROUPED_BACKGROUND_RUNS }
   ).map((group) => ({
     key: group.key,
@@ -234,49 +238,49 @@ export function runRowLine(run: Pick<Thread, 'lastActivity'>, now: number): stri
 }
 
 /**
- * The name a run or a card reports for: the task it ran, else its routine, else a
- * neutral fallback. A routine's fixed "Getting started" title is its authoring
+ * The name a run or a card reports for: the task it ran, else its assistant, else a
+ * neutral fallback. An assistant's fixed "Getting started" title is its authoring
  * host, not a job, so a run of it (or a missed/unattended run of it) is named for
- * the routine instead   naming it "Getting started" made a saved routine's runs
+ * the assistant instead   naming it "Getting started" made a saved assistant's runs
  * read as setup work on every notification and sidebar surface.
  */
 export function assistantSubjectName(
   task: Pick<Thread, 'title' | 'assistantGettingStarted'> | null | undefined,
-  routineName: string | null | undefined,
+  assistantName: string | null | undefined,
   fallback: string
 ): string {
-  const routine = routineName?.trim()
-  if (!task) return routine || fallback
-  if (isAssistantSetupThread(task)) return routine || fallback
-  return task.title.trim() || routine || fallback
+  const assistant = assistantName?.trim()
+  if (!task) return assistant || fallback
+  if (isAssistantSetupThread(task)) return assistant || fallback
+  return task.title.trim() || assistant || fallback
 }
 
-/** How many runs a routine row states exactly before it collapses to a chip. */
-export const ROUTINE_RUN_COUNT_CAP = 10
+/** How many runs an assistant row states exactly before it collapses to a chip. */
+export const ASSISTANT_RUN_COUNT_CAP = 10
 
 /**
- * A routine row's run count. A count above the cap collapses to a fixed `+9`
- * chip, so a routine that has fired for months cannot widen its row; the exact
+ * An assistant row's run count. A count above the cap collapses to a fixed `+9`
+ * chip, so an assistant that has fired for months cannot widen its row; the exact
  * total stays on the row's hover card.
  */
-export function routineRunCountLabel(count: number): string {
-  if (count > ROUTINE_RUN_COUNT_CAP) return '+9'
+export function assistantRunCountLabel(count: number): string {
+  if (count > ASSISTANT_RUN_COUNT_CAP) return '+9'
   return count === 1 ? '1 run' : `${count} runs`
 }
 
 /**
- * The next fire a routine row states beside its run count, or null when the
- * scheduler will not fire this routine at all. A paused routine and a routine
- * with no saved how-to are both skipped before any slot is evaluated, so the row
+ * The next fire an assistant row states beside its run count, or null when the
+ * scheduler will not fire this assistant at all. A paused assistant and an assistant
+ * with no saved knowledge are both skipped before any slot is evaluated, so the row
  * must not advertise a time for either.
  */
-export function routineNextRunLine(
-  routine: Pick<Routine, 'paused' | 'howTo' | 'scheduled'>,
+export function assistantNextRunLine(
+  assistant: Pick<Assistant, 'paused' | 'knowledge' | 'scheduled'>,
   nextRunAt: number | null,
   now: number
 ): string | null {
-  if (!routineIsScheduled(routine)) return null
-  if (nextRunAt === null || routine.paused || !routineHowToComplete(routine)) return null
+  if (!assistantIsScheduled(assistant)) return null
+  if (nextRunAt === null || assistant.paused || !assistantKnowledgeComplete(assistant)) return null
   return `Next run ${describeRelativeTime(nextRunAt, now)}`
 }
 
@@ -318,32 +322,32 @@ export function assistantForeignThread<T extends Pick<Thread, 'projectId' | 'id'
 }
 
 /**
- * Runs grouped by the routine they ran for, newest first inside each group. A
- * run inherits its task's `routineId`, so a run whose task is no longer on
- * screen (an archived Getting started thread) still groups under its routine.
+ * Runs grouped by the assistant they ran for, newest first inside each group. A
+ * run inherits its task's `assistantId`, so a run whose task is no longer on
+ * screen (an archived Getting started thread) still groups under its assistant.
  */
-export function groupRunsByRoutine<
-  T extends Pick<Thread, 'assistantTaskId' | 'routineId' | 'createdAt'>
+export function groupRunsByAssistant<
+  T extends Pick<Thread, 'assistantTaskId' | 'assistantId' | 'createdAt'>
 >(threads: readonly T[]): Map<string, T[]> {
   const grouped = new Map<string, T[]>()
   for (const thread of threads) {
-    if (!thread.assistantTaskId || !thread.routineId) continue
-    const runs = grouped.get(thread.routineId)
+    if (!thread.assistantTaskId || !thread.assistantId) continue
+    const runs = grouped.get(thread.assistantId)
     if (runs) runs.push(thread)
-    else grouped.set(thread.routineId, [thread])
+    else grouped.set(thread.assistantId, [thread])
   }
   for (const runs of grouped.values()) runs.sort((a, b) => b.createdAt - a.createdAt)
   return grouped
 }
 
 /**
- * The runs a routine renders at its own level, beside its task rows, newest
+ * The runs an assistant renders at its own level, beside its task rows, newest
  * first:
  *
- * - every task's runs, so a task row never nests them. A routine's Getting
- *   started seed is the one exception while the routine is still authoring (its
- *   how-to unsaved): its runs stay nested inside it, since they are the failed
- *   startup passes that set the routine up, and they lift here once the how-to
+ * - every task's runs, so a task row never nests them. An assistant's Getting
+ *   started seed is the one exception while the assistant is still authoring (its
+ *   knowledge unsaved): its runs stay nested inside it, since they are the failed
+ *   startup passes that set the assistant up, and they lift here once the knowledge
  *   is saved;
  * - any run whose task is no longer on screen, so hiding the Getting started
  *   thread never hides the runs it produced.
@@ -351,8 +355,8 @@ export function groupRunsByRoutine<
  * A run whose task renders elsewhere in the sidebar (a pinned task that left
  * for the Pinned section) is never hoisted: it keeps nesting under that row.
  */
-export function routineSiblingRuns<
-  T extends Pick<Thread, 'assistantTaskId' | 'routineId' | 'createdAt'>
+export function assistantSiblingRuns<
+  T extends Pick<Thread, 'assistantTaskId' | 'assistantId' | 'createdAt'>
 >(
   runs: readonly T[],
   setupDone: boolean,
@@ -363,14 +367,14 @@ export function routineSiblingRuns<
     const taskId = run.assistantTaskId
     if (!taskId) return false
     const parent = tasksById.get(taskId)
-    // A parent that is not on screen at all (a hidden how-to thread) has no row
-    // left to nest under, so the run rises to the routine.
+    // A parent that is not on screen at all (a hidden knowledge thread) has no row
+    // left to nest under, so the run rises to the assistant.
     if (!parent) return true
     // A parent that renders elsewhere (the Pinned section) still owns it.
     if (!renderedTaskIds.has(taskId)) return false
-    // While the routine is still authoring, its Getting started seed nests its
-    // own runs; every other task's runs, and the seed's once the how-to is
-    // saved, lift to the routine's own level.
+    // While the assistant is still authoring, its Getting started seed nests its
+    // own runs; every other task's runs, and the seed's once the knowledge is
+    // saved, lift to the assistant's own level.
     return setupDone || !isAssistantSetupThread(parent)
   })
   hoisted.sort((a, b) => b.createdAt - a.createdAt)
@@ -379,7 +383,7 @@ export function routineSiblingRuns<
 
 /**
  * How many of a task's runs the sidebar shows before offering "Show all". A
- * routine that fires every day for a year would otherwise turn the sidebar into
+ * assistant that fires every day for a year would otherwise turn the sidebar into
  * a log, and the sidebar is a navigation surface, not a run history reader.
  */
 export const TASK_RUN_PREVIEW = 3
@@ -391,27 +395,28 @@ export function previewRuns<T>(runs: readonly T[], expanded: boolean): T[] {
 
 /**
  * The task row icon key: a custom icon when the task carries one, otherwise the
- * Hammer for a routine's how-to ("Getting started") thread, otherwise a run
+ * Hammer for an assistant's knowledge ("Getting started") thread, otherwise a run
  * mark for one execution of a task, otherwise the plain task clock. The
  * generic assistant robot is deliberately gone.
  */
 export function taskRowIconKey(
   task: Pick<Thread, 'assistantIconType' | 'assistantGettingStarted' | 'assistantTaskId'>
-): 'custom' | 'how-to' | 'run' | 'task' {
+): 'custom' | 'knowledge' | 'run' | 'task' {
   if (task.assistantIconType) return 'custom'
   if (task.assistantTaskId) return 'run'
-  return task.assistantGettingStarted === true ? 'how-to' : 'task'
+  return task.assistantGettingStarted === true ? 'knowledge' : 'task'
 }
 
 /**
- * Fence tag or leading body line naming a block as a how-to: `how-to`,
- * `howto`, `how_to`, `how to`, each optionally followed by `: <title>` or
+ * Fence tag or leading body line naming a block as a knowledge: `knowledge`,
+ * `knowledge`, `knowledge`, `how to`, each optionally followed by `: <title>` or
  * `- <title>`. A trailing `.md` or other word is rejected.
  */
-const HOW_TO_TAG = /^how[ _-]?to(?:[ \t]*[-:][^\n]*)?$/i
+/** The fence tag that opens a knowledge block: `knowledge`, or `knowledge: <title>`. */
+const KNOWLEDGE_TAG = /^knowledge(?:[ \t]*[-:][^\n]*)?$/i
 
-/** A leading `how-to` marker line inside a block, e.g. `how-to: Slack digest`. */
-const HOW_TO_MARKER_LINE = /^[ \t]*how[-_]?to\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/
+/** A leading `knowledge` marker line inside a block, e.g. `knowledge: Slack digest`. */
+const KNOWLEDGE_MARKER_LINE = /^[ \t]*knowledge\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/
 
 /** A fence line: indent, a backtick run of 3+, and an optional tag (no backticks). */
 const FENCE_LINE = /^[ \t]*(`{3,})[ \t]*([^`]*)$/
@@ -501,35 +506,35 @@ function newestTaggedBlock(
 }
 
 /**
- * The how-to draft inside one assistant message, or null when it holds none.
+ * The knowledge draft inside one assistant message, or null when it holds none.
  *
- * The authoring contract asks for a fence tagged `how-to`, but a model also
- * opens a bare fence and starts the body with a `how-to: <title>` line, so both
- * shapes are accepted. The newest how-to block in the text wins, and a leading
- * marker line is stripped so the saved how-to is instructions only.
+ * The authoring contract asks for a fence tagged `knowledge`, but a model also
+ * opens a bare fence and starts the body with a `knowledge: <title>` line, so both
+ * shapes are accepted. The newest knowledge block in the text wins, and a leading
+ * marker line is stripped so the saved knowledge is instructions only.
  *
- * A how-to is a step-by-step instruction set, so it often carries its own code
+ * A knowledge is a step-by-step instruction set, so it often carries its own code
  * fences (a command to run, a payload to post). Matching the block to its first
  * closing fence would silently truncate it there, so tagged inner fences are
  * tracked as nesting and only an untagged fence at the outer depth closes the
- * block. Prose written after the block is left out of the saved how-to.
+ * block. Prose written after the block is left out of the saved knowledge.
  */
-export function extractHowToDraft(text: string): string | null {
+export function extractKnowledgeDraft(text: string): string | null {
   const draft = newestTaggedBlock(
     text,
-    (tag) => HOW_TO_TAG.test(tag),
-    (line) => HOW_TO_MARKER_LINE.test(line)
+    (tag) => KNOWLEDGE_TAG.test(tag),
+    (line) => KNOWLEDGE_MARKER_LINE.test(line)
   )
   return draft || null
 }
 
 /**
- * The newest how-to draft across assistant messages, newest message first.
+ * The newest knowledge draft across assistant messages, newest message first.
  * Messages are given as plain text so this stays free of thread plumbing.
  */
-export function latestHowToDraft(assistantTexts: readonly string[]): string | null {
+export function latestKnowledgeDraft(assistantTexts: readonly string[]): string | null {
   for (let index = assistantTexts.length - 1; index >= 0; index -= 1) {
-    const draft = extractHowToDraft(assistantTexts[index] ?? '')
+    const draft = extractKnowledgeDraft(assistantTexts[index] ?? '')
     if (draft) return draft
   }
   return null
@@ -552,10 +557,11 @@ export type TaskPopoverState =
 /**
  * Assistant tasks reuse the regular thread hover popover, which takes an
  * overall state rather than a status. The mapping mirrors the thread row's own
- * badge priority: unread wins, then the status policy's tone.
+ * badge priority: unread only for a completed run nobody has opened, then the
+ * status policy's tone, so a parked or failed run reads as what it is waiting on.
  */
 export function taskPopoverState(task: Pick<Thread, 'status' | 'read'>): TaskPopoverState {
-  if (!task.read) return 'unread'
+  if (settledThreadReadsUnread(task, task.read)) return 'unread'
   switch (threadStatusPolicy(task.status).tone) {
     case 'working':
       return 'working'
@@ -580,7 +586,7 @@ export function taskPopoverState(task: Pick<Thread, 'status' | 'read'>): TaskPop
 const MARKDOWN_HEADING = /^(#{1,6})[ \t]+(.+?)[ \t]*$/
 
 /**
- * Whether a line reads as a section title in the how-to's own style: no leading
+ * Whether a line reads as a section title in the knowledge's own style: no leading
  * space, no list or sentence punctuation at the end, and uppercase throughout.
  * Lowercase is tolerated inside parentheses, so `DRAIN PROCEDURE (0600 and
  * 1800)` is recognised while `1. Window: for 1800, local today 06:00` is not.
@@ -595,8 +601,8 @@ function isCapsTitle(line: string): boolean {
   return /^[A-Z0-9 '&/.,:_-]+$/.test(bare)
 }
 
-/** One foldable section of an authored how-to. */
-export interface HowToSection {
+/** One foldable section of an authored knowledge. */
+export interface KnowledgeSection {
   /** Index-based key, stable across a re-parse of the same document. */
   id: string
   /** Raw heading line as it appears in the source; empty for a heading-less doc. */
@@ -607,16 +613,16 @@ export interface HowToSection {
 }
 
 /**
- * Split an authored how-to into foldable sections.
+ * Split an authored knowledge into foldable sections.
  *
  * The authoring agent writes either markdown headings or ALL-CAPS title lines,
  * and both are recognised so the panel can render one section at a time. Lines
- * inside a fenced code block are never treated as headings. A how-to with no
+ * inside a fenced code block are never treated as headings. A knowledge with no
  * headings becomes a single section whose heading is empty, so serializing it
  * back round-trips the source.
  */
-export function parseHowToSections(markdown: string): HowToSection[] {
-  const sections: HowToSection[] = []
+export function parseKnowledgeSections(markdown: string): KnowledgeSection[] {
+  const sections: KnowledgeSection[] = []
   let heading: string | null = null
   let title = ''
   let body: string[] = []
@@ -682,8 +688,8 @@ export function parseHowToSections(markdown: string): HowToSection[] {
   return sections
 }
 
-/** Reassemble sections into the how-to markdown that gets persisted. */
-export function serializeHowToSections(sections: readonly HowToSection[]): string {
+/** Reassemble sections into the knowledge markdown that gets persisted. */
+export function serializeKnowledgeSections(sections: readonly KnowledgeSection[]): string {
   return sections
     .map((section) => {
       const body = section.body.trim()
@@ -694,13 +700,13 @@ export function serializeHowToSections(sections: readonly HowToSection[]): strin
     .join('\n\n')
 }
 
-// ─── The agent's structured routine plan ──────────────────────────────────
+// ─── The agent's structured assistant plan ──────────────────────────────────
 
-/** Fence tag naming a machine-readable routine plan. */
-const ROUTINE_TAG = /^routine(?:[-_ ]?plan)?(?:[ \t]*[-:][^\n]*)?$/i
+/** Fence tag naming a machine-readable assistant plan. */
+const ASSISTANT_TAG = /^assistant(?:[-_ ]?plan)?(?:[ \t]*[-:][^\n]*)?$/i
 
-/** A leading `routine` marker line inside a plain fence. */
-const ROUTINE_MARKER_LINE = /^[ \t]*routine(?:[-_ ]?plan)?\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/i
+/** A leading `assistant` marker line inside a plain fence. */
+const ASSISTANT_MARKER_LINE = /^[ \t]*assistant(?:[-_ ]?plan)?\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/i
 
 const CADENCE_PATTERNS: ReadonlyArray<readonly [RegExp, ScheduleCadence]> = [
   [/^(?:once|one[- ]?off|one[- ]?time)$/, 'once'],
@@ -720,8 +726,8 @@ const WEEKDAY_NAMES: ReadonlyArray<readonly [RegExp, number]> = [
   [/^(?:sat|saturday)$/, 6]
 ]
 
-/** The structured plan the authoring agent emits alongside the how-to. */
-export type RoutinePlanDraft = RoutinePlan
+/** The structured plan the authoring agent emits alongside the knowledge. */
+export type AssistantPlanDraft = AssistantPlan
 
 /** Normalise one time to `HH:mm`, accepting `8`, `8:30`, `8am`, `8:30 pm`, `18:00`. */
 export function parsePlanTime(raw: string): string | null {
@@ -782,7 +788,7 @@ function buildPlanSchedule(
   cadence: ScheduleCadence | null,
   times: readonly string[],
   weekdays: readonly number[]
-): RoutineSchedule | null {
+): AssistantSchedule | null {
   if (!cadence && times.length === 0 && weekdays.length === 0) return null
   const sortedTimes = [...times].sort()
   const isWeekdaySet =
@@ -807,14 +813,14 @@ function buildPlanSchedule(
  * Read one `key: value` plan block   the tolerant fallback for a draft written
  * before the JSON plan contract, or by a model that ignored it. Unknown keys
  * are ignored rather than rejected, so an explanatory line does not break the
- * plan. The strict JSON schema in `$shared/routine-plan` is the primary shape.
+ * plan. The strict JSON schema in `$shared/assistant-plan` is the primary shape.
  */
-export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
+export function parseAssistantPlan(body: string): AssistantPlanDraft | null {
   let cadence: ScheduleCadence | null = null
   const times: string[] = []
   const weekdays: number[] = []
-  const connections: RoutinePlanConnection[] = []
-  let delivery: RoutinePlan['delivery'] = null
+  const connections: AssistantPlanConnection[] = []
+  let delivery: AssistantPlan['delivery'] = null
   let timeliness = ''
   let impact = ''
   let sawAnything = false
@@ -898,24 +904,26 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
 }
 
 /**
- * The routine plan inside one assistant message, or null when it holds none.
- * The plan is JSON matching `ROUTINE_PLAN_JSON_SCHEMA`; a `key: value` body is
+ * The assistant plan inside one assistant message, or null when it holds none.
+ * The plan is JSON matching `ASSISTANT_PLAN_JSON_SCHEMA`; a `key: value` body is
  * still read as a fallback so an older or non-conforming draft can commit.
  */
-export function extractRoutinePlanDraft(text: string): RoutinePlanDraft | null {
+export function extractAssistantPlanDraft(text: string): AssistantPlanDraft | null {
   const body = newestTaggedBlock(
     text,
-    (tag) => ROUTINE_TAG.test(tag),
-    (line) => ROUTINE_MARKER_LINE.test(line)
+    (tag) => ASSISTANT_TAG.test(tag),
+    (line) => ASSISTANT_MARKER_LINE.test(line)
   )
   if (!body) return null
-  return parseRoutinePlanJson(body) ?? parseRoutinePlan(body)
+  return parseAssistantPlanJson(body) ?? parseAssistantPlan(body)
 }
 
-/** The newest routine plan across assistant messages, newest message first. */
-export function latestRoutinePlanDraft(assistantTexts: readonly string[]): RoutinePlanDraft | null {
+/** The newest assistant plan across assistant messages, newest message first. */
+export function latestAssistantPlanDraft(
+  assistantTexts: readonly string[]
+): AssistantPlanDraft | null {
   for (let index = assistantTexts.length - 1; index >= 0; index -= 1) {
-    const draft = extractRoutinePlanDraft(assistantTexts[index] ?? '')
+    const draft = extractAssistantPlanDraft(assistantTexts[index] ?? '')
     if (draft) return draft
   }
   return null
@@ -925,33 +933,33 @@ export function latestRoutinePlanDraft(assistantTexts: readonly string[]): Routi
 
 /**
  * A plain, unambiguous "yes" and nothing else. The authoring agent asks the
- * user to confirm the routine recap, and this is the typed spelling of that
+ * user to confirm the assistant recap, and this is the typed spelling of that
  * go-ahead   it must never match a message that also carries an instruction, so
  * only a short, whole-message confirmation counts.
  */
-const ROUTINE_CONFIRMATION =
+const ASSISTANT_CONFIRMATION =
   /^(?:yes|y|yeah|yep|yup|sure|ok|okay|k|go ahead|go for it|do it|save it|save|looks good|looks great|sounds good|that works|perfect|great|nice|confirm|confirmed|approve|approved|ship it|lgtm|👍)$/
 
-/** Whether a user message is a plain go-ahead for the pending routine recap. */
-export function isRoutineConfirmation(text: string): boolean {
+/** Whether a user message is a plain go-ahead for the pending assistant recap. */
+export function isAssistantConfirmation(text: string): boolean {
   const normalized = text
     .trim()
     .toLowerCase()
     .replace(/[\s.!?,]+$/u, '')
     .trim()
   if (!normalized || normalized.length > 32) return false
-  return ROUTINE_CONFIRMATION.test(normalized)
+  return ASSISTANT_CONFIRMATION.test(normalized)
 }
 
 /**
- * What a routine still needs before it can run: a how-to, a model set, or both.
- * Null means it is ready. Drives the amber badge on every routine surface, so
+ * What an assistant still needs before it can run: a knowledge, a model set, or both.
+ * Null means it is ready. Drives the amber badge on every assistant surface, so
  * the sidebar and the panel never disagree about what is missing.
  */
-export function routineGap(routine: Pick<Routine, 'howTo' | 'agents'>): string | null {
+export function assistantGap(assistant: Pick<Assistant, 'knowledge' | 'agents'>): string | null {
   const missing: string[] = []
-  if (!routineHowToComplete(routine)) missing.push('a how-to')
-  if (!routineAgentsComplete(routine)) missing.push('a model')
+  if (!assistantKnowledgeComplete(assistant)) missing.push('a knowledge')
+  if (!assistantAgentsComplete(assistant)) missing.push('a model')
   if (missing.length === 0) return null
   return `Needs ${missing.join(' and ')}`
 }
@@ -960,19 +968,19 @@ export function routineGap(routine: Pick<Routine, 'howTo' | 'agents'>): string |
 
 /**
  * The context summary that seeds a project fork, so the project thread continues
- * with the routine's instructions and the task's last run in view.
+ * with the assistant's instructions and the task's last run in view.
  */
 export function handoffSummary(
   task: Pick<Thread, 'title' | 'lastRunAt'>,
-  routine: Pick<Routine, 'name' | 'howTo'> | null
+  assistant: Pick<Assistant, 'name' | 'knowledge'> | null
 ): string {
   const lines = [
     `Handed off from Assistant View on ${formatDateTime(Date.now())}.`,
     `Task: ${task.title}`
   ]
-  if (routine) lines.push(`Routine: ${routine.name}`)
-  const howTo = routine?.howTo?.trim()
-  if (howTo) lines.push('', 'How-to:', howTo)
+  if (assistant) lines.push(`Assistant: ${assistant.name}`)
+  const knowledge = assistant?.knowledge?.trim()
+  if (knowledge) lines.push('', 'How-to:', knowledge)
   if (task.lastRunAt !== undefined) {
     lines.push('', `Last scheduled run: ${formatDateTime(task.lastRunAt)}`)
   }
@@ -981,11 +989,11 @@ export function handoffSummary(
 
 // ─── Connections ──────────────────────────────────────────────────────────
 
-/** How a routine connection resolves against the app utility library. */
+/** How an assistant connection resolves against the app utility library. */
 export type ConnectionStatus = 'ready' | 'disabled' | 'incomplete' | 'needs-setup'
 
 export interface ConnectionView {
-  connection: RoutineConnection
+  connection: AssistantConnection
   /** The library utility this connection resolves to, or null when missing. */
   utility: UtilityDefinition | null
   /**
@@ -1001,13 +1009,13 @@ export interface ConnectionView {
 /**
  * A connection whose setup the user handed to an agent.
  *
- * The setup runs as its own thread of the routine, so the panel opens it
+ * The setup runs as its own thread of the assistant, so the panel opens it
  * instead of running anything here: the thread carries the request, shows the
  * work, and takes the steering and the credentials the capability needs.
  */
 export interface ConnectionSetupRequest {
-  /** The routine the setup thread belongs to. */
-  routineId: string
+  /** The assistant the setup thread belongs to. */
+  assistantId: string
   /** The connection's label, which titles the setup thread. */
   label: string
   /**
@@ -1068,7 +1076,7 @@ function utilityConfigGap(utility: UtilityDefinition): string | null {
 }
 
 /**
- * Resolve a routine's connections against the connection library so the panel
+ * Resolve an assistant's connections against the connection library so the panel
  * can show what is actually ready. The library is the same union the Utilities
  * page renders   registry utilities plus the MCP servers and skills a harness
  * discovers   so a connection that points at a discovered capability resolves
@@ -1077,7 +1085,7 @@ function utilityConfigGap(utility: UtilityDefinition): string | null {
  * than rendered as a working connection.
  */
 export function resolveConnections(
-  connections: readonly RoutineConnection[],
+  connections: readonly AssistantConnection[],
   catalog: UtilityCatalog | null,
   capabilities: AgentCapabilityCatalog | null = null
 ): ConnectionView[] {
@@ -1139,7 +1147,7 @@ export function resolveConnections(
 }
 
 /**
- * Fold the connections a plan names into a routine's connection list. An entry
+ * Fold the connections a plan names into an assistant's connection list. An entry
  * that carries a `utilityId` links straight to that utility; otherwise the
  * name is matched against the library. A connection the library does not carry
  * stays as a required connection, which the panel renders as needing setup. An
@@ -1152,10 +1160,10 @@ export function resolveConnections(
  * wins.
  */
 export function connectionsFromPlan(
-  entries: readonly (string | RoutinePlanConnection)[],
-  existing: readonly RoutineConnection[],
+  entries: readonly (string | AssistantPlanConnection)[],
+  existing: readonly AssistantConnection[],
   utilities: readonly UtilityDefinition[]
-): RoutineConnection[] {
+): AssistantConnection[] {
   const merged = [...existing]
   const indexOfCover = (label: string, utilityId: string | null): number => {
     const needle = normalizeName(label)

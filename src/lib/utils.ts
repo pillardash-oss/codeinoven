@@ -326,9 +326,9 @@ export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
 }
 
-/** Get routine storage path (routine icons and future per-routine artifacts). */
-export function getRoutinePath(routineId: string): string {
-  return join(getConfigRoot(), 'routines', routineId)
+/** Get assistant storage path (assistant icons and future per-assistant artifacts). */
+export function getAssistantPath(assistantId: string): string {
+  return join(getConfigRoot(), 'assistants', assistantId)
 }
 
 const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/

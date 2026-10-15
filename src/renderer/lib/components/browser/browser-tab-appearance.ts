@@ -3,7 +3,7 @@ import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-brows
 
 /**
  * A tab's custom icon as an image data URL, drawn by the very resolver projects
- * and routines use, so a picked image, a pasted SVG and a library icon all
+ * and assistants use, so a picked image, a pasted SVG and a library icon all
  * render through one code path. Returns null while the tab carries no custom
  * icon, which is what lets the strip fall back to the page's own favicon.
  *

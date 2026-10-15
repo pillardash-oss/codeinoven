@@ -326,7 +326,7 @@ export class ThreadManager {
       title: input.title,
       titleSource: input.titleSource ?? 'default',
       status: 'created',
-      // A routine's how-to ("Getting started") thread is always pinned: pinning is
+      // An assistant's knowledge ("Getting started") thread is always pinned: pinning is
       // what keeps it out of automatic eviction, and the invariant lives here so
       // no caller can create it unpinned.
       pinned: input.assistantGettingStarted === true,
@@ -347,7 +347,7 @@ export class ThreadManager {
       // Assistant-space fields must be part of the created row itself: the
       // creation broadcast carries this object, so grouping a task after the
       // fact would be wiped by the very next thread:updated payload.
-      routineId: input.routineId,
+      assistantId: input.assistantId,
       assistantIconType: input.assistantIconType,
       assistantIcon: input.assistantIcon,
       // Kept out of the row when absent: the repository stores only the true
@@ -695,7 +695,7 @@ export class ThreadManager {
         | 'independentAuditInitialized'
         | 'activeAuditId'
         | 'activeAuditVersion'
-        | 'routineId'
+        | 'assistantId'
         | 'assistantIconType'
         | 'assistantIcon'
         | 'assistantGettingStarted'
@@ -740,7 +740,7 @@ export class ThreadManager {
         input.independentAuditInitialized ?? existing.independentAuditInitialized,
       activeAuditId: input.activeAuditId ?? existing.activeAuditId,
       activeAuditVersion: input.activeAuditVersion ?? existing.activeAuditVersion,
-      routineId: input.routineId ?? existing.routineId,
+      assistantId: input.assistantId ?? existing.assistantId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
@@ -956,7 +956,7 @@ export class ThreadManager {
   private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
     for (const thread of threads) {
       const project = await this.projectRepo.getViaWorker(thread.projectId)
-      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.routineId)
+      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.assistantId)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
       }
@@ -1174,10 +1174,10 @@ export class ThreadManager {
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
-    // The how-to thread is pinned for its whole life: it is never evicted and
+    // The knowledge thread is pinned for its whole life: it is never evicted and
     // the user can only hide it, so no surface may unpin it.
     if (!pinned && isAssistantSetupThread(existing)) {
-      throw new Error('The how-to thread stays pinned. Hide it instead.')
+      throw new Error('The knowledge thread stays pinned. Hide it instead.')
     }
 
     const pinnedAt = pinned ? Date.now() : undefined

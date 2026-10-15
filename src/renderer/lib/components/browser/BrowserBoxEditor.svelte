@@ -58,7 +58,7 @@
   }
 
   let name = $state(existing?.name ?? '')
-  // The same appearance vocabulary as a group, a project or a routine: a hex
+  // The same appearance vocabulary as a group, a project or an assistant: a hex
   // colour, a shared SVG icon key, a pasted SVG, and a picked image file.
   let color = $state<string | undefined>(existing?.color ?? undefined)
   let iconType = $state<string | undefined>(existing?.iconType ?? undefined)

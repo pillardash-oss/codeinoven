@@ -17,7 +17,7 @@ import { CIO_SCRATCH_DIRECTORY } from '../../lib/cio-cleanup'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
-import { RoutineRepo } from '../database/repositories/routine-repo'
+import { AssistantRepo } from '../database/repositories/assistant-repo'
 
 /**
  * Every folder CIO Cleanup sweeps.
@@ -26,7 +26,7 @@ import { RoutineRepo } from '../database/repositories/routine-repo'
  * its own root, so the sweep follows the same roots the app boots a session in.
  * Those are a project's checkout per scope, a managed scope's worktree, and the
  * three app-owned workspaces a conversation can own (a chat, an assistant
- * routine, a browser tab). The folder is only listed when it exists, and a
+ * assistant, a browser tab). The folder is only listed when it exists, and a
  * managed scope whose checkout is unhealthy is skipped rather than resolved to
  * the project root, exactly as `ScopeRootResolver` demands.
  */
@@ -205,7 +205,7 @@ async function pushTargetIfIdle(
  * One target per conversation workspace under an app-owned root. The
  * directories are read from disk rather than from a thread list so a workspace
  * whose row is already gone is still reclaimed, and each is labelled with the
- * thread (or routine) it belongs to.
+ * thread (or assistant) it belongs to.
  */
 async function appendAppWorkspaceTargets(
   database: Database,
@@ -221,19 +221,19 @@ async function appendAppWorkspaceTargets(
   const threadRepo = new ThreadRepo(database)
   const titles = await threadRepo.listTitlesViaWorker([...workspaceIds])
   const isAssistant = projectId === ASSISTANT_SPACE_ID
-  const routineNames = isAssistant
+  const assistantNames = isAssistant
     ? new Map(
-        (await new RoutineRepo(database).listViaWorker()).map((routine) => [
-          routine.id,
-          routine.name
+        (await new AssistantRepo(database).listViaWorker()).map((assistant) => [
+          assistant.id,
+          assistant.name
         ])
       )
     : new Map<string, string>()
-  // A routine's workspace is mounted by every task in it, so the one directory
-  // answers to the routine's own name and to each task's id. An exclusion set
+  // An assistant's workspace is mounted by every task in it, so the one directory
+  // answers to the assistant's own name and to each task's id. An exclusion set
   // from any task's file tree therefore protects the folder they all share.
-  const taskIdsByRoutine = isAssistant
-    ? await threadRepo.listAssistantTaskIdsByRoutineViaWorker(workspaceIds)
+  const taskIdsByAssistant = isAssistant
+    ? await threadRepo.listAssistantTaskIdsViaWorker(workspaceIds)
     : new Map<string, string[]>()
   const kind =
     projectId === ASSISTANT_SPACE_ID
@@ -243,8 +243,8 @@ async function appendAppWorkspaceTargets(
         : 'browser'
 
   for (const workspaceId of workspaceIds) {
-    const name = routineNames.get(workspaceId) ?? titles.get(workspaceId)
-    const aliases = new Set<string>([workspaceId, ...(taskIdsByRoutine.get(workspaceId) ?? [])])
+    const name = assistantNames.get(workspaceId) ?? titles.get(workspaceId)
+    const aliases = new Set<string>([workspaceId, ...(taskIdsByAssistant.get(workspaceId) ?? [])])
     pushTarget(targets, seen, {
       id: `${projectId}:${workspaceId}`,
       kind,

@@ -114,7 +114,8 @@
       // A previous run's verdict is stale the moment a newer release is offered,
       // so the still-visible result gives way to the update instead of hiding it.
       if (updateProgress?.state === 'failed') updateProgress = null
-      else if (update?.updateAvailable && updateProgress?.state === 'installed') updateProgress = null
+      else if (update?.updateAvailable && updateProgress?.state === 'installed')
+        updateProgress = null
     } catch (checkError) {
       updateError = errorMessage(checkError, 'Cua Driver updates could not be checked.')
     } finally {
@@ -239,7 +240,8 @@
       {:else if status}
         <div class="flex shrink-0 items-center gap-2">
           <span
-            class="border border-border px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {status.enabled && status.ready
+            class="border border-border px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {status.enabled &&
+            status.ready
               ? 'bg-success/10 text-success'
               : status.installed && status.compatible
                 ? 'bg-warning/10 text-warning'
@@ -377,9 +379,7 @@
           />
         </div>
       {:else if updateProgress?.state === 'installed'}
-        <div
-          class="mt-4 flex items-start gap-2 bg-success/10 px-3 py-2 text-xs text-success"
-        >
+        <div class="mt-4 flex items-start gap-2 bg-success/10 px-3 py-2 text-xs text-success">
           <CheckCircle2 size={14} class="mt-0.5 shrink-0" />
           <span>
             {updatedVersion
@@ -586,7 +586,7 @@
       <div class="border bg-elevated p-3">
         <p class="text-xs font-semibold">Auto Review</p>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
-          Cua runs in standard mode. Routine desktop actions proceed; explicitly denied boundaries
+          Cua runs in standard mode. Assistant desktop actions proceed; explicitly denied boundaries
           return to the thread for permission.
         </p>
       </div>

@@ -16,7 +16,7 @@
    *
    * A box is a named cookie jar, so this is where a conversation says whose
    * sign-ins its pages run against. Every conversation starts in its own scope's
-   * jar   a project's box, a routine's box, a chat's box   and the control names
+   * jar   a project's box, an assistant's box, a chat's box   and the control names
    * that as the default. Picking one of the profile's boxes runs this
    * conversation's pages in that box's jar instead, which is how a run can face a
    * site as a different identity than the scope's own. The profile's own box, the
@@ -122,8 +122,7 @@
   {:else if usesProfileDefault}
     <Globe size={13} />
   {:else if current}
-    <span class="h-2.5 w-2.5 shrink-0" style="background-color: {currentAccent}"
-    ></span>
+    <span class="h-2.5 w-2.5 shrink-0" style="background-color: {currentAccent}"></span>
   {:else}
     <Boxes size={13} />
   {/if}

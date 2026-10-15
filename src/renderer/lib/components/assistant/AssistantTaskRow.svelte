@@ -6,7 +6,7 @@
     CalendarClock,
     CalendarOff,
     Loader2,
-    Pin,
+    Pin
   } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { tick } from 'svelte'
@@ -53,24 +53,24 @@
      * idle task while a run is actually in flight.
      */
     runWorking?: boolean
-    /** Routine accent colour, used for the icon fallback tint. */
+    /** Assistant accent colour, used for the icon fallback tint. */
     color?: string
     /** Pending missed fires on this task. */
     missed: boolean
     /** Next intended fire (epoch ms) when the task is scheduled, else null. */
     nextRunAt: number | null
-    /** Human-readable schedule label (schedule override or owning routine). */
+    /** Human-readable schedule label (schedule override or owning assistant). */
     scheduleLabel?: string | null
     /**
      * Whether this function runs on a clock. False renders "On demand" and
      * offers the toggle that turns its schedule back on.
      */
     scheduled?: boolean
-    /** Toggle this function's schedule independently of its routine. */
+    /** Toggle this function's schedule independently of its assistant. */
     onToggleScheduled?: (task: Thread) => void
     /**
      * The task a hoisted run belongs to, shown on the run's line. A run lifted to
-     * its routine's own level has no parent row above it, so without this its
+     * its assistant's own level has no parent row above it, so without this its
      * line would name only a time and no run would be tellable from another.
      */
     contextLabel?: string | null
@@ -83,8 +83,8 @@
     onOpenNotes: (task: Thread) => void
     /** Hand this task off to a project, forking it and seeding a summary. */
     onHandedOff: (forked: Thread) => void
-    /** Hide a routine's how-to thread (the only state its row can change). */
-    onHideHowTo: (task: Thread) => void
+    /** Hide an assistant's knowledge thread (the only state its row can change). */
+    onHideKnowledge: (task: Thread) => void
     /**
      * The thread another instance is running for this row: the task or run
      * itself when its own turn is foreign, or (for a task row) one of its runs
@@ -114,7 +114,7 @@
     onFork,
     onOpenNotes,
     onHandedOff,
-    onHideHowTo,
+    onHideKnowledge,
     foreignThread = null
   }: Props = $props()
 
@@ -136,7 +136,7 @@
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
   )
   const iconKey = $derived(taskRowIconKey(task))
-  const howToThread = $derived(isAssistantSetupThread(task))
+  const knowledgeThread = $derived(isAssistantSetupThread(task))
 
   /** Line 2: task schedule/activity, run activity, or the setup thread's role.
    *  A row whose thread is actually producing work says so instead of reporting
@@ -148,14 +148,14 @@
       const line = working ? 'Running now' : runRowLine(task, Date.now())
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (howToThread) return 'How-to conversation'
+    if (knowledgeThread) return 'How-to conversation'
     subscribeMinute()
     return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
 
-  /** The assistant marks tint with the routine's accent, or the muted ink. */
+  /** The assistant marks tint with the assistant's accent, or the muted ink. */
   const iconStyle = $derived(`color: ${color ?? 'var(--color-muted)'}`)
 
   /** Live-work flags, settled by the same run state the thread rows use so a
@@ -267,10 +267,10 @@
     // Hand-off belongs to the task's own menu, never to the panel.
     onHandoff: () => handoff.open(),
     showHandoff: () => true,
-    // A how-to thread is pinned for life and cannot be deleted, so it offers
+    // A knowledge thread is pinned for life and cannot be deleted, so it offers
     // Hide instead of Pin/Unpin and carries no destructive item at all.
-    isHowToThread: () => howToThread,
-    onHideHowTo: (t) => onHideHowTo(t)
+    isKnowledgeThread: () => knowledgeThread,
+    onHideKnowledge: (t) => onHideKnowledge(t)
   })
 
   // ─── Hover popover ───────────────────────────────────────────────────────
@@ -379,13 +379,8 @@
     <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
       {#if taskIcon}
         <img src={taskIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-      {:else if iconKey === 'how-to'}
-        <AssistantIcon
-          mark="how-to"
-          size={14}
-          style={iconStyle}
-          aria-hidden="true"
-        />
+      {:else if iconKey === 'knowledge'}
+        <AssistantIcon mark="knowledge" size={14} style={iconStyle} aria-hidden="true" />
       {:else if iconKey === 'run'}
         <AssistantIcon mark="run" size={14} style={iconStyle} aria-hidden="true" />
       {:else}
@@ -473,7 +468,7 @@
         {/if}
       </button>
     {/if}
-    {#if !isRun && task.routineId && onToggleScheduled}
+    {#if !isRun && task.assistantId && onToggleScheduled}
       <button
         type="button"
         class="flex size-6 shrink-0 items-center justify-center transition-colors hover:bg-elevated {scheduled
@@ -481,10 +476,10 @@
           : 'text-dimmed'}"
         title={scheduled
           ? 'Stop running this function on a schedule'
-          : 'Run this function on its routine\u2019s schedule'}
+          : 'Run this function on its assistant\u2019s schedule'}
         aria-label={scheduled
           ? 'Stop running this function on a schedule'
-          : 'Run this function on its routine\u2019s schedule'}
+          : 'Run this function on its assistant\u2019s schedule'}
         onclick={() => onToggleScheduled?.(task)}
       >
         {#if scheduled}

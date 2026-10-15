@@ -7,7 +7,18 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
-import { Copy, EyeOff, GitFork, Kanban, Mail, Pencil, Pin, PinOff, Send, Trash2 } from '@lucide/svelte'
+import {
+  Copy,
+  EyeOff,
+  GitFork,
+  Kanban,
+  Mail,
+  Pencil,
+  Pin,
+  PinOff,
+  Send,
+  Trash2
+} from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 
 export interface ThreadActionsMenuConfig {
@@ -25,11 +36,11 @@ export interface ThreadActionsMenuConfig {
   /** Hand a thread off to a project. Assistant tasks only. */
   onHandoff?: (thread: Thread) => void
   showHandoff?: () => boolean
-  /** Whether the thread is a routine's how-to thread. Such a thread is pinned
+  /** Whether the thread is an assistant's knowledge thread. Such a thread is pinned
    *  for life and cannot be deleted, so its menu offers Hide and no destructive
    *  item instead of Pin/Unpin and Delete. */
-  isHowToThread?: () => boolean
-  onHideHowTo?: (thread: Thread) => void
+  isKnowledgeThread?: () => boolean
+  onHideKnowledge?: (thread: Thread) => void
 }
 
 /** One dropdown, one set of modals   shared by the app header and every thread row so the
@@ -136,7 +147,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showNotesItem = config.showNotes?.() ?? false
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
-    const howToThread = config.isHowToThread?.() ?? false
+    const knowledgeThread = config.isKnowledgeThread?.() ?? false
     // Only a settled thread may be pushed back to unread: a finished or errored
     // run. Live work, a ready spec, and "Needs attention" are not the same as
     // unread and are never offered here (see `canMarkThreadUnread`).
@@ -147,12 +158,12 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       ...(canMarkUnread
         ? [{ label: 'Mark as unread', icon: Mail, onClick: () => void markUnread() }]
         : []),
-      ...(howToThread
+      ...(knowledgeThread
         ? [
             {
-              label: 'Hide how-to thread',
+              label: 'Hide knowledge thread',
               icon: EyeOff,
-              onClick: () => config.onHideHowTo?.(thread)
+              onClick: () => config.onHideKnowledge?.(thread)
             }
           ]
         : [
@@ -185,10 +196,10 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       ...(showCopyIdItem
         ? [{ label: 'Copy thread id', icon: Copy, onClick: () => void copyThreadId() }]
         : []),
-      // A how-to thread cannot be deleted: hiding is the only way to get it out
-      // of the list, and it can always be revealed again from the how-to panel.
-      ...(howToThread ? [] : [{ label: '', divider: true }]),
-      ...(howToThread
+      // A knowledge thread cannot be deleted: hiding is the only way to get it out
+      // of the list, and it can always be revealed again from the knowledge panel.
+      ...(knowledgeThread ? [] : [{ label: '', divider: true }]),
+      ...(knowledgeThread
         ? []
         : [{ label: 'Delete', icon: Trash2, onClick: startDelete, danger: true }])
     ] as MenuItem[]

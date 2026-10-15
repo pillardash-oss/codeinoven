@@ -54,7 +54,7 @@ interface ThreadRow {
   engineering: number
   independent_audit: number
   independent_audit_initialized: number
-  routine_id: string | null
+  assistant_id: string | null
   assistant_icon_type: string | null
   assistant_icon: string | null
   schedule_override: string | null
@@ -194,7 +194,7 @@ function rowToThread(row: ThreadRow): Thread {
     engineering: row.engineering === 1,
     independentAudit: row.independent_audit === 1,
     independentAuditInitialized: row.independent_audit_initialized === 1,
-    routineId: row.routine_id ?? undefined,
+    assistantId: row.assistant_id ?? undefined,
     assistantIconType: row.assistant_icon_type ?? undefined,
     assistantIcon: row.assistant_icon ?? undefined,
     scheduleOverride: row.schedule_override
@@ -265,7 +265,7 @@ function buildSnippet(rawText: string, rawQuery: string): string {
  *
  * `projects` searches every engineering project thread, `chats` the standalone
  * conversations in the inbox, and `assistant` the assistant space (optionally
- * narrowed to one routine). Omitted, a search spans every family except the
+ * narrowed to one assistant). Omitted, a search spans every family except the
  * hidden browser-chat container, which is how the in-view thread searches have
  * always behaved.
  */
@@ -275,8 +275,8 @@ export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
   family?: ThreadSearchFamily
-  /** Narrow an assistant search to one routine. Ignored for other families. */
-  routineId?: string
+  /** Narrow an assistant search to one assistant. Ignored for other families. */
+  assistantId?: string
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -413,7 +413,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
   engineering, independent_audit, independent_audit_initialized,
-  routine_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
+  assistant_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
   last_error, last_error_at, last_outcome,
@@ -456,7 +456,7 @@ ON CONFLICT(id) DO UPDATE SET
   engineering=excluded.engineering,
   independent_audit=excluded.independent_audit,
   independent_audit_initialized=excluded.independent_audit_initialized,
-  routine_id=excluded.routine_id,
+  assistant_id=excluded.assistant_id,
   assistant_icon_type=excluded.assistant_icon_type,
   assistant_icon=excluded.assistant_icon,
   schedule_override=excluded.schedule_override,
@@ -513,7 +513,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.engineering ? 1 : 0,
     thread.independentAudit ? 1 : 0,
     thread.independentAuditInitialized ? 1 : 0,
-    thread.routineId ?? null,
+    thread.assistantId ?? null,
     thread.assistantIconType ?? null,
     thread.assistantIcon ?? null,
     thread.scheduleOverride ? JSON.stringify(thread.scheduleOverride) : null,
@@ -1048,32 +1048,32 @@ export class ThreadRepo {
   }
 
   /**
-   * Assistant task ids grouped by the routine they belong to, read on the
-   * database worker. Every task of a routine mounts that routine's single
+   * Assistant task ids grouped by the assistant they belong to, read on the
+   * database worker. Every task of an assistant mounts that assistant's single
    * workspace directory, so a caller that owns the directory needs their ids to
-   * recognise the same folder under each task's own identity. Routine ids with
+   * recognise the same folder under each task's own identity. Assistant ids with
    * no task are simply absent from the map.
    */
-  async listAssistantTaskIdsByRoutineViaWorker(
-    routineIds: readonly string[]
+  async listAssistantTaskIdsViaWorker(
+    assistantIds: readonly string[]
   ): Promise<Map<string, string[]>> {
     const grouped = new Map<string, string[]>()
-    const unique = [...new Set(routineIds)].filter((id) => id.length > 0)
+    const unique = [...new Set(assistantIds)].filter((id) => id.length > 0)
     if (unique.length === 0) return grouped
     const placeholders = unique.map(() => '?').join(',')
     const result = await this.db.queryViaWorker(
-      `SELECT id, routine_id FROM threads WHERE project_id = ? AND routine_id IN (${placeholders})`,
+      `SELECT id, assistant_id FROM threads WHERE project_id = ? AND assistant_id IN (${placeholders})`,
       [ASSISTANT_SPACE_ID, ...unique],
       0
     )
     if (!result.ok) return grouped
     for (const row of result.rows) {
       const id = row['id']
-      const routineId = row['routine_id']
-      if (typeof id !== 'string' || typeof routineId !== 'string') continue
-      const tasks = grouped.get(routineId)
+      const assistantId = row['assistant_id']
+      if (typeof id !== 'string' || typeof assistantId !== 'string') continue
+      const tasks = grouped.get(assistantId)
       if (tasks) tasks.push(id)
-      else grouped.set(routineId, [id])
+      else grouped.set(assistantId, [id])
     }
     return grouped
   }
@@ -1446,16 +1446,16 @@ function threadSearchScopeClause(
   options: ThreadSearchOptions
 ): { sql: string; params: unknown[] } {
   const projectId = options.projectId ?? null
-  const routineId = options.routineId ?? null
+  const assistantId = options.assistantId ?? null
   switch (options.family) {
     case 'chats':
       return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
     case 'assistant': {
       const clauses = [`${alias}.project_id = ?`]
       const params: unknown[] = [ASSISTANT_SPACE_ID]
-      if (routineId) {
-        clauses.push(`${alias}.routine_id = ?`)
-        params.push(routineId)
+      if (assistantId) {
+        clauses.push(`${alias}.assistant_id = ?`)
+        params.push(assistantId)
       }
       return { sql: clauses.join(' AND '), params }
     }
@@ -1492,10 +1492,10 @@ function threadSearchScopeClause(
  * Whether a thread belongs to the family a search was scoped to. This is the
  * in-memory twin of {@link threadSearchScopeClause}, used by the semantic path
  * after matches are hydrated back into `Thread` rows (which carry `projectId`
- * and `routineId` but no SQL to filter against).
+ * and `assistantId` but no SQL to filter against).
  */
 export function threadMatchesSearchScope(
-  thread: Pick<Thread, 'projectId' | 'routineId'>,
+  thread: Pick<Thread, 'projectId' | 'assistantId'>,
   options: ThreadSearchOptions
 ): boolean {
   switch (options.family) {
@@ -1504,7 +1504,7 @@ export function threadMatchesSearchScope(
     case 'assistant':
       return (
         thread.projectId === ASSISTANT_SPACE_ID &&
-        (!options.routineId || thread.routineId === options.routineId)
+        (!options.assistantId || thread.assistantId === options.assistantId)
       )
     case 'projects':
       if (

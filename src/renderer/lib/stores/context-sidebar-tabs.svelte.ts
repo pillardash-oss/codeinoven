@@ -137,12 +137,12 @@ export class SidebarTabContexts {
   rebindProjectTabs(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     for (const tab of context.tabs) {
-      // The how-to panel's thread is its own anchor task, not "the current
-      // thread": re-targeting it would let a routine-less panel turn into
-      // whichever routine the user selected next. Its routine id is the panel's
+      // The knowledge panel's thread is its own anchor task, not "the current
+      // thread": re-targeting it would let an assistant-less panel turn into
+      // whichever assistant the user selected next. Its assistant id is the panel's
       // identity, so it stays put while every other project tab follows the
       // active thread.
-      if ('threadId' in tab && tab.kind !== 'assistant-how-to') tab.threadId = threadId
+      if ('threadId' in tab && tab.kind !== 'assistant-knowledge') tab.threadId = threadId
     }
   }
 
@@ -691,37 +691,37 @@ export class SidebarTabContexts {
   }
 
   /**
-   * Dock the assistant how-to panel for a routine. There is one panel per
-   * routine, keyed by the routine id exactly like the file tree keys one panel
-   * per file, so opening the how-to from any task of the routine focuses the
-   * same tab instead of stacking a second copy. A routine-less task keys on its
+   * Dock the assistant knowledge panel for an assistant. There is one panel per
+   * assistant, keyed by the assistant id exactly like the file tree keys one panel
+   * per file, so opening the knowledge from any task of the assistant focuses the
+   * same tab instead of stacking a second copy. An assistant-less task keys on its
    * own thread and so still owns exactly one panel. The tab lives in the
    * project's context, never a task's, so it survives task switches and its
    * section is preserved while the user visits another sidebar tool.
    */
-  openAssistantHowTo(
+  openAssistantKnowledge(
     projectId: string,
     threadId: string,
-    routineId: string | null,
+    assistantId: string | null,
     title: string
   ): void {
     const context = this.ensureProjectContext(projectId)
-    const id = `assistant-how-to:${projectId}:${routineId ?? threadId}`
+    const id = `assistant-knowledge:${projectId}:${assistantId ?? threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
-    if (existing && existing.kind === 'assistant-how-to') {
+    if (existing && existing.kind === 'assistant-knowledge') {
       existing.title = title
       existing.threadId = threadId
-      existing.routineId = routineId
+      existing.assistantId = assistantId
       this.focusInProjectContext(context, id)
       return
     }
     this.openProject(context, {
       id,
-      kind: 'assistant-how-to',
+      kind: 'assistant-knowledge',
       title,
       projectId,
       threadId,
-      routineId,
+      assistantId,
       panelTab: 'all'
     })
   }
@@ -730,7 +730,7 @@ export class SidebarTabContexts {
     projectId: string,
     threadId: string,
     section?: MemorySection,
-    routineId?: string
+    assistantId?: string
   ): void {
     const context = this.ensureProjectContext(projectId)
     const id = `memory:${projectId}`
@@ -739,11 +739,11 @@ export class SidebarTabContexts {
       if (existing.kind === 'memory') {
         existing.threadId = threadId
         if (section) existing.memorySection = section
-        // The routine follows the selected task, so a task switch inside the
+        // The assistant follows the selected task, so a task switch inside the
         // assistant space re-targets the already-open panel. A caller that
-        // does not know the routine (a proposal toast, the sources panel) must
+        // does not know the assistant (a proposal toast, the sources panel) must
         // not wipe the one the panel already resolved for this project.
-        if (routineId !== undefined) existing.routineId = routineId
+        if (assistantId !== undefined) existing.assistantId = assistantId
       }
       this.focusInProjectContext(context, id)
       return
@@ -755,7 +755,7 @@ export class SidebarTabContexts {
       projectId,
       threadId,
       memorySection: section ?? 'active',
-      routineId
+      assistantId
     })
   }
 

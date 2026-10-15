@@ -7,7 +7,7 @@ const SCHEME = 'appfile'
  *  preview it with a real `src` (iframe/img) instead of a base64 IPC dump.
  *  When `mountThreadId` is set, the file resolves inside that conversation's own
  *  workspace directory (a chat's `chats-cwd/<threadId>`, an assistant
- *  task's `assistant-cwd/<routineId ?? threadId>`) instead of a project root.
+ *  task's `assistant-cwd/<assistantId ?? threadId>`) instead of a project root.
  *  `version`, when provided, is appended as a `?v=` query so a changed URL
  *  re-creates the preview element and re-reads the file from disk (the main
  *  process ignores the query). */

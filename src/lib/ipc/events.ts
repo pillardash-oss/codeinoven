@@ -67,8 +67,8 @@ export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
-   * The one-time start-at-login offer, raised right after a routine gets its
-   * first how-to: the app asks whether it should start at login so a scheduled
+   * The one-time start-at-login offer, raised right after an assistant gets its
+   * first knowledge: the app asks whether it should start at login so a scheduled
    * run can fire after a restart. Sent at most once in an install's life, and
    * only while `launchAtLoginPrompted` is still false, so nothing has to guard
    * against a second prompt arriving.
@@ -114,21 +114,19 @@ export const IPC_EVENT_CONTRACT = {
    * design board changes the work folders and Settings is open behind it.
    */
   'config:changed': [] as unknown as [config: import('../types').AppConfig],
-  /** Assistant routines changed (created, updated, deleted, reordered). */
-  'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
+  /** Assistants changed (created, updated, deleted, reordered). */
+  'assistant:changed': [] as unknown as [assistants: import('../types').Assistant[]],
   /**
-   * A routine's Getting started checkpoint was saved. Only the routine id
+   * An assistant's Getting started checkpoint was saved. Only the assistant id
    * travels: the checkpoint itself is read on demand by the panel that shows it.
    */
-  'routine:checkpointChanged': [] as unknown as [routineId: string],
+  'assistant:checkpointChanged': [] as unknown as [assistantId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   /** The durable record of unattended runs changed (a run started or settled). */
   'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
   /** User-skipped scheduled slots changed, so next-run labels can refresh. */
-  'assistant:skippedRoutineRunsChanged': [] as unknown as [
-    runs: import('../types').SkippedRoutineRun[]
-  ],
+  'assistant:skippedAssistantRunsChanged': [] as unknown as [runs: import('../types').SkippedRun[]],
   /**
    * The set of gates the app resolved without the user changed: one settled, or
    * the user dismissed one or all. Drives the amber attention rail item and its

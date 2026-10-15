@@ -169,16 +169,16 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
     connectionsFromPlan,
-    extractHowToDraft,
-    isRoutineConfirmation,
-    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
-    type RoutinePlanDraft
+    extractKnowledgeDraft,
+    isAssistantConfirmation,
+    latestAssistantPlanDraft as latestAssistantPlanDraftIn,
+    type AssistantPlanDraft
   } from '$lib/components/assistant/assistant-view'
-  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -229,7 +229,7 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
+  import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import {
     ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
@@ -237,7 +237,7 @@
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
-    routineIsScheduled,
+    assistantIsScheduled,
     WORKING_TRACE_PAGE_SIZE,
     COMPLETED_TURN_PAGE_SIZE
   } from '$shared/types'
@@ -399,14 +399,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
-    /** True in Assistant View   the thread authors a routine's how-to. */
+    /** True in Assistant View   the thread authors an assistant's knowledge. */
     assistantMode?: boolean
-    /** Routine the assistant task belongs to, when any. */
-    assistantRoutineId?: string | null
-    /** Routine name, shown in the authoring head start. */
-    assistantRoutineName?: string | null
-    /** Whether the routine already has a saved how-to. */
-    assistantHowToComplete?: boolean
+    /** Assistant the assistant task belongs to, when any. */
+    assistantId?: string | null
+    /** Assistant name, shown in the authoring head start. */
+    assistantName?: string | null
+    /** Whether the assistant already has a saved knowledge. */
+    assistantKnowledgeComplete?: boolean
     /**
      * A run of this assistant task that another instance is streaming, when the
      * task itself is not foreign. A run executes on its own thread, so the task
@@ -457,8 +457,8 @@
     promptSuggestions?: readonly string[]
     /**
      * The composer's placeholder once nothing more specific applies. The states
-     * that describe what is happening right now (a run in flight, a routine's
-     * how-to, a plan being prepared) all outrank it.
+     * that describe what is happening right now (a run in flight, an assistant's
+     * knowledge, a plan being prepared) all outrank it.
      */
     composerPlaceholder?: string
     /** Opens the scoped projects view with the sidebar focused on this thread
@@ -475,9 +475,9 @@
     thread: threadProp,
     chatMode = false,
     assistantMode = false,
-    assistantRoutineId = null,
-    assistantRoutineName = null,
-    assistantHowToComplete = false,
+    assistantId = null,
+    assistantName = null,
+    assistantKnowledgeComplete = false,
     assistantForeignRunThreadId = null,
     onForked,
     projects = [],
@@ -1510,17 +1510,17 @@
    * What the composer is writing into, which the shoe names once.
    *
    * The thread's own project id already says what it is: the assistant space
-   * holds routine tasks and their runs, the hidden browser container holds one
+   * holds assistant tasks and their runs, the hidden browser container holds one
    * conversation per browser tab, and everything else is a project thread   or a
    * plain chat, which is what a chat in the chats view is: a conversation with no
-   * project, no routine and no page behind it.
+   * project, no assistant and no page behind it.
    */
   function composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
     if (target.projectId === ASSISTANT_SPACE_ID) {
-      // A run inherits its task's routine, so this resolves for a task and each
-      // of its runs alike; a routine-less task is named by itself.
-      const routine = assistantRoutines.routineForTask(target)
-      if (routine) return { kind: 'routine', routine }
+      // A run inherits its task's assistant, so this resolves for a task and each
+      // of its runs alike; an assistant-less task is named by itself.
+      const assistant = assistants.assistantForTask(target)
+      if (assistant) return { kind: 'assistant', assistant }
       return { kind: 'task', task: target }
     }
     if (target.projectId === GLOBAL_BROWSER_PROJECT_ID) {
@@ -1999,19 +1999,27 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
-    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // Assistant authoring: the agent drafts the assistant knowledge in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
     // cannot run, so it appears only while a draft is waiting to be committed
-    // and disappears for good once the routine is saved.
-    if (assistantRoutineDraft) {
+    // and disappears for good once the assistant is saved.
+    if (assistantDraft) {
       actions.push({
-        id: 'command:save-how-to',
-        title: '/save-how-to',
-        description: 'Fallback: save the how-to the agent drafted for this routine',
+        id: 'command:save-knowledge',
+        title: '/save-knowledge',
+        description: 'Fallback: save the knowledge the agent drafted for this assistant',
         category: 'command',
         source: applicationActionSource,
-        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
+        keywords: [
+          'knowledge',
+          'knowledge',
+          'save',
+          'assistant',
+          'commit',
+          'assistant',
+          'fallback'
+        ],
         slashCommand: true,
         ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
       })
@@ -3158,15 +3166,15 @@
     // owns the commit: save the pending draft, then have the agent post its
     // next-steps list. The yes is consumed as the confirmation and never sent,
     // so it cannot become a user bubble or re-open the recap.
-    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
-      void confirmRoutineSave()
+    if (assistantDraft && isAssistantConfirmation(text)) {
+      void confirmAssistantSave()
       return
     }
-    // The primary is, by definition, the model the user triggers the how-to with.
-    // While the how-to is still being written, keep it in step with the composer,
-    // so a model picked or switched before the first turn becomes the routine's
+    // The primary is, by definition, the model the user triggers the knowledge with.
+    // While the knowledge is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the assistant's
     // primary   a fresh install has no last-used model to default from.
-    syncRoutinePrimaryToCurrentModel()
+    syncAssistantPrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -3188,9 +3196,9 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
-    // The assistant how-to authoring contract is not assembled here: the chat
-    // engine attaches it to every user turn in a routine that still has no
-    // how-to, so a resend from the message editor or a queued delivery can
+    // The assistant knowledge authoring contract is not assembled here: the chat
+    // engine attaches it to every user turn in an assistant that still has no
+    // knowledge, so a resend from the message editor or a queued delivery can
     // never drop it.
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
@@ -7167,170 +7175,168 @@
     requestSkillUse(skill.name, args)
   }
 
-  /** The routine this assistant thread is authoring, when it is one. */
-  const assistantRoutine = $derived(
-    assistantRoutineId
-      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
-      : null
+  /** The assistant this assistant thread is authoring, when it is one. */
+  const assistant = $derived(
+    assistantId ? (assistants.assistants.find((entry) => entry.id === assistantId) ?? null) : null
   )
 
-  /** Whether this thread is a routine's Getting started thread: the authoring
-   *  host while its how-to is missing, and the editing host once it is saved. */
+  /** Whether this thread is an assistant's Getting started thread: the authoring
+   *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
-  /** The routine's own connection labels, for the recap card's kept ones. */
-  const existingRoutineConnections = $derived(
-    assistantRoutine?.connections.map((connection) => connection.label) ?? []
+  /** The assistant's own connection labels, for the recap card's kept ones. */
+  const existingAssistantConnections = $derived(
+    assistant?.connections.map((connection) => connection.label) ?? []
   )
 
   /**
-   * The complete draft the agent has presented for this routine: the how-to it
+   * The complete draft the agent has presented for this assistant: the knowledge it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
-   * what makes the routine committable, so the recap card and the fallback
+   * what makes the assistant committable, so the recap card and the fallback
    * command both key off it. It is computed only while the agent is idle: a
    * running turn streams the draft token by token, and re-parsing fences on
    * every delta would be wasted work for a card that cannot show yet anyway.
-   * The authoring conversation is short and lives only until the routine is
+   * The authoring conversation is short and lives only until the assistant is
    * saved, so scanning it once per settled turn is bounded work.
    *
-   * A saved routine keeps its draft path on its Getting started thread alone, and
+   * A saved assistant keeps its draft path on its Getting started thread alone, and
    * only for a revision that actually changes it: a message there tweaks the
-   * how-to, so a revised draft has to be committable, while a task or run thread
-   * of the same routine carries the saved how-to and must never suggest a new one,
+   * knowledge, so a revised draft has to be committable, while a task or run thread
+   * of the same assistant carries the saved knowledge and must never suggest a new one,
    * and the draft already committed must not read as a pending change.
    */
-  const assistantRoutineDraft = $derived.by(
+  const assistantDraft = $derived.by(
     (): {
-      howTo: string
-      plan: RoutinePlanDraft | null
+      knowledge: string
+      plan: AssistantPlanDraft | null
     } | null => {
-      if (!assistantMode || !assistantRoutineId || busy) return null
-      const draft = latestHowToDraft()
+      if (!assistantMode || !assistantId || busy) return null
+      const draft = latestKnowledgeDraft()
       if (!draft) return null
-      const plan = latestRoutinePlanDraft()
-      if (assistantHowToComplete && !isRoutineRevision(draft, plan)) return null
-      return { howTo: draft.howTo, plan }
+      const plan = latestAssistantPlanDraft()
+      if (assistantKnowledgeComplete && !isAssistantRevision(draft, plan)) return null
+      return { knowledge: draft.knowledge, plan }
     }
   )
 
   /**
-   * Whether a how-to draft is a change to the routine that is already saved, so
+   * Whether a knowledge draft is a change to the assistant that is already saved, so
    * the card offers a revision and never a second save of what is saved. Three
    * things disqualify a draft:
    *
-   * - it sits on a thread that is not the routine's Getting started thread;
-   * - it is older than the saved how-to, which is what a draft left in a reopened
-   *   thread looks like after the how-to was edited elsewhere;
-   * - it changes nothing, either because the agent re-presented the same how-to
+   * - it sits on a thread that is not the assistant's Getting started thread;
+   * - it is older than the saved knowledge, which is what a draft left in a reopened
+   *   thread looks like after the knowledge was edited elsewhere;
+   * - it changes nothing, either because the agent re-presented the same knowledge
    *   and the same plan, or because the save would patch no field differently.
-   *   A plan-only change counts, because the how-to text often does not carry the
+   *   A plan-only change counts, because the knowledge text often does not carry the
    *   schedule at all.
    *
-   * A routine that predates the how-to timestamp falls back to comparing content.
+   * An assistant that predates the knowledge timestamp falls back to comparing content.
    */
-  function isRoutineRevision(
-    draft: { howTo: string; at: number },
-    plan: RoutinePlanDraft | null
+  function isAssistantRevision(
+    draft: { knowledge: string; at: number },
+    plan: AssistantPlanDraft | null
   ): boolean {
     if (!assistantSetupThread) return false
-    const savedAt = assistantRoutine?.howToUpdatedAt
+    const savedAt = assistant?.knowledgeUpdatedAt
     if (savedAt !== undefined && draft.at <= savedAt) return false
-    const routine = assistantRoutine
-    if (!routine) return true
-    if (draft.howTo.trim() !== routine.howTo.trim()) return true
+    if (!assistant) return true
+    if (draft.knowledge.trim() !== assistant.knowledge.trim()) return true
     if (!plan) return false
     if (
-      routineIsScheduled(routine) &&
+      assistantIsScheduled(assistant) &&
       plan.schedule &&
-      describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)
+      describeSchedule(plan.schedule) !== describeSchedule(assistant.schedule)
     ) {
       return true
     }
-    if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
-    if (plan.priority && routinePriorityLabel(plan.priority) !== currentPriorityLabel()) return true
+    if (plan.delivery && assistantDeliveryLabel(plan.delivery) !== currentDeliveryLabel())
+      return true
+    if (plan.priority && assistantPriorityLabel(plan.priority) !== currentPriorityLabel())
+      return true
     const known = new Set(
-      routine.connections.map((connection) => connection.label.trim().toLowerCase())
+      assistant.connections.map((connection) => connection.label.trim().toLowerCase())
     )
     return plan.connections.some((connection) => !known.has(connection.name.trim().toLowerCase()))
   }
 
   /** The saved delivery as the plan's own label, so the two compare. */
   function currentDeliveryLabel(): string {
-    const delivery = assistantRoutine?.delivery
-    return delivery ? routineDeliveryLabel(delivery) : ''
+    const delivery = assistant?.delivery
+    return delivery ? assistantDeliveryLabel(delivery) : ''
   }
 
   /** The saved urgency as the plan's own label, so the two compare. */
   function currentPriorityLabel(): string {
-    const priority = assistantRoutine?.priority
-    return priority ? routinePriorityLabel(priority) : ''
+    const priority = assistant?.priority
+    return priority ? assistantPriorityLabel(priority) : ''
   }
 
   /**
    * Identity of the current draft. Dismissing the recap card hides it only for
    * this revision, so a revised draft brings the card back.
    */
-  const assistantRoutineDraftSignature = $derived(
-    assistantRoutineDraft
-      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+  const assistantDraftSignature = $derived(
+    assistantDraft
+      ? `${assistantDraft.knowledge.length}:${JSON.stringify(assistantDraft.plan)}`
       : ''
   )
 
   /** The draft revision the user chose to keep editing; empty means none. */
-  let routineRecapDismissed = $state('')
-  let routineSaving = $state(false)
+  let assistantRecapDismissed = $state('')
+  let assistantSaving = $state(false)
 
-  const routineRecapVisible = $derived(
-    assistantRoutineDraft !== null &&
-      !routineSaving &&
-      routineRecapDismissed !== assistantRoutineDraftSignature
+  const assistantRecapVisible = $derived(
+    assistantDraft !== null &&
+      !assistantSaving &&
+      assistantRecapDismissed !== assistantDraftSignature
   )
 
-  function keepEditingRoutine(): void {
-    routineRecapDismissed = assistantRoutineDraftSignature
+  function keepEditingAssistant(): void {
+    assistantRecapDismissed = assistantDraftSignature
   }
 
   /**
-   * The how-to the agent last drafted for this routine, with the time it was
-   * written: the newest how-to fenced block in the newest assistant message that
-   * carries one. The authoring contract asks for a `how-to` fence, but a bare
-   * fence whose body starts with a `how-to: <title>` line is accepted too. The
+   * The knowledge the agent last drafted for this assistant, with the time it was
+   * written: the newest knowledge fenced block in the newest assistant message that
+   * carries one. The authoring contract asks for a `knowledge` fence, but a bare
+   * fence whose body starts with a `knowledge: <title>` line is accepted too. The
    * time is what tells a revision from the authoring draft the app already saved.
    */
-  function latestHowToDraft(): { howTo: string; at: number } | null {
+  function latestKnowledgeDraft(): { knowledge: string; at: number } | null {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index]
       if (!message || message.role !== 'assistant') continue
-      const howTo = extractHowToDraft(messageText(message))
-      if (howTo) return { howTo, at: message.createdAt }
+      const knowledge = extractKnowledgeDraft(messageText(message))
+      if (knowledge) return { knowledge, at: message.createdAt }
     }
     return null
   }
 
-  /** The machine-readable routine plan the agent last emitted, if any. */
-  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
+  /** The machine-readable assistant plan the agent last emitted, if any. */
+  function latestAssistantPlanDraft(): ReturnType<typeof latestAssistantPlanDraftIn> {
     const assistantTexts: string[] = []
     for (const message of messages) {
       if (message.role !== 'assistant') continue
       assistantTexts.push(messageText(message))
     }
-    return latestRoutinePlanDraftIn(assistantTexts)
+    return latestAssistantPlanDraftIn(assistantTexts)
   }
 
   /**
-   * Keep the routine's primary in step with the model the user is working on
-   * while the how-to is still being written. The primary is the model that
-   * triggers the how-to, so a model switched in the composer before the first
-   * turn must become the model the routine runs on   a fresh install has no
-   * last-used model for the create flow to default from. No-op once the how-to
+   * Keep the assistant's primary in step with the model the user is working on
+   * while the knowledge is still being written. The primary is the model that
+   * triggers the knowledge, so a model switched in the composer before the first
+   * turn must become the model the assistant runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the knowledge
    * is saved, and no-op while the composer already matches the primary.
    */
-  function syncRoutinePrimaryToCurrentModel(): void {
-    const routineId = assistantRoutineId
-    if (!routineId || assistantHowToComplete) return
+  function syncAssistantPrimaryToCurrentModel(): void {
+    if (!assistantId || assistantKnowledgeComplete) return
     const current = settings
     if (!current.modelId) return
-    const primary = assistantRoutine?.agents?.primary
+    const primary = assistant?.agents?.primary
     if (
       primary &&
       primary.harnessId === current.harnessId &&
@@ -7339,10 +7345,10 @@
     ) {
       return
     }
-    void assistantRoutines
-      .updateRoutine(routineId, {
+    void assistants
+      .updateAssistant(assistantId, {
         agents: {
-          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          ...(assistant?.agents ?? { fallbacks: [] }),
           primary: {
             harnessId: current.harnessId,
             providerId: current.providerId,
@@ -7356,45 +7362,43 @@
   }
 
   /**
-   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * The user's go-ahead for the pending assistant recap: commit the draft, then
    * have the agent post a short next-steps list in the Getting started thread.
    * Both the recap card's Save button and a typed confirmation route here, so
    * the follow-up turn happens whichever way the user agreed. The next-steps
-   * turn belongs to a routine's first save; an edit of a routine that already
-   * has its how-to commits on its own, with nothing left to set up.
+   * turn belongs to an assistant's first save; an edit of an assistant that already
+   * has its knowledge commits on its own, with nothing left to set up.
    */
-  async function confirmRoutineSave(): Promise<void> {
-    const routineId = assistantRoutineId
-    if (!routineId) return
-    const firstSave = !assistantHowToComplete
-    const saved = await saveRoutineHowTo()
-    if (saved && firstSave) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+  async function confirmAssistantSave(): Promise<void> {
+    if (!assistantId) return
+    const firstSave = !assistantKnowledgeComplete
+    const saved = await saveAssistantKnowledge()
+    if (saved && firstSave) await assistants.postSetup(assistantId).catch(() => undefined)
   }
 
   /**
-   * Commit the agent-drafted how-to, schedule, and connections to the routine
-   * once the user agrees. Called by the recap card and by the `/save-how-to`
-   * fallback. The plan block is optional: without it the how-to is saved on its
+   * Commit the agent-drafted knowledge, schedule, and connections to the assistant
+   * once the user agrees. Called by the recap card and by the `/save-knowledge`
+   * fallback. The plan block is optional: without it the knowledge is saved on its
    * own and the existing schedule is left untouched.
    */
-  async function saveRoutineHowTo(draftOverride?: {
-    howTo: string
-    plan: RoutinePlanDraft | null
+  async function saveAssistantKnowledge(draftOverride?: {
+    knowledge: string
+    plan: AssistantPlanDraft | null
   }): Promise<boolean> {
-    const routineId = assistantRoutineId
-    if (!routineId || routineSaving) return false
-    const draft = draftOverride ?? assistantRoutineDraft
+    if (!assistantId || assistantSaving) return false
+    const draft = draftOverride ?? assistantDraft
     if (!draft) {
-      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
     }
-    routineSaving = true
+    assistantSaving = true
     try {
       const plan = draft.plan
-      const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
-      const scheduled = routine ? routineIsScheduled(routine) : true
-      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
-      // An on-demand routine has no schedule, so a plan that still carries one
+      const assistant = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+      const scheduled = assistant ? assistantIsScheduled(assistant) : true
+      const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
+      // An on-demand assistant has no schedule, so a plan that still carries one
       // (an agent that did not know) can never re-schedule it here.
       if (plan?.schedule && scheduled) patch.schedule = plan.schedule
       if (plan?.delivery) patch.delivery = plan.delivery
@@ -7403,19 +7407,19 @@
         const catalog = await invoke('utilities:list').catch(() => null)
         patch.connections = connectionsFromPlan(
           plan.connections,
-          routine?.connections ?? [],
+          assistant?.connections ?? [],
           catalog?.utilities ?? []
         )
       }
-      await assistantRoutines.updateRoutine(routineId, patch)
+      await assistants.updateAssistant(assistantId, patch)
       toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
-      routineRecapDismissed = ''
+      assistantRecapDismissed = ''
       return true
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      errorMessage = error instanceof Error ? error.message : 'The knowledge could not be saved.'
       return false
     } finally {
-      routineSaving = false
+      assistantSaving = false
     }
   }
 
@@ -7447,8 +7451,8 @@
 
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
-    if (commandId === 'command:save-how-to') {
-      await saveRoutineHowTo()
+    if (commandId === 'command:save-knowledge') {
+      await saveAssistantKnowledge()
       return
     }
     if (commandId === 'command:cio-utility') {
@@ -12268,7 +12272,7 @@
   })
 
   // The transcript can advance to a new turn without this view ever observing
-  // the boundary (a queued message, an auto-retry, a routine, or another app
+  // the boundary (a queued message, an auto-retry, an assistant, or another app
   // instance running the turn). The live poll above only runs while this view
   // believes the thread is busy, so re-read the durable snapshot the moment the
   // transcript's turn anchor actually changes. The guard that feeds the task
@@ -13863,19 +13867,17 @@
               {#if assistantMode}
                 <div class="mb-5 text-center">
                   <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
-                    {assistantRoutineName ?? thread.title}
+                    {assistantName ?? thread.title}
                   </h1>
                   <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
-                    {#if assistantRoutineName && !assistantHowToComplete}
-                      How should this routine happen? Describe it properly for the agent. Say what
+                    {#if assistantName && !assistantKnowledgeComplete}
+                      How should this assistant happen? Describe it properly for the agent. Say what
                       it should do, how often, and where the information comes from. The agent works
-                      out what it needs, asks about anything missing, and drafts the how-to with you
-                      until you agree. It then shows a recap for you to save.
-                    {:else if assistantRoutineName}
-                      This task follows the <span class="text-foreground"
-                        >{assistantRoutineName}</span
-                      >
-                      how-to. Send a message to run it now, or adjust anything in How to.
+                      out what it needs, asks about anything missing, and drafts the knowledge with
+                      you until you agree. It then shows a recap for you to save.
+                    {:else if assistantName}
+                      This task follows the <span class="text-foreground">{assistantName}</span>
+                      knowledge. Send a message to run it now, or adjust anything in How to.
                     {:else}
                       Describe what this task should do and the agent will take it from there.
                     {/if}
@@ -13996,19 +13998,19 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {/if}
-            {#if routineRecapVisible && assistantRoutineDraft}
+            {#if assistantRecapVisible && assistantDraft}
               <div class="conversation-gutter shrink-0 px-6 pb-2">
                 <div class="mx-auto max-w-3xl">
-                  <RoutineRecapCard
-                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
-                    howTo={assistantRoutineDraft.howTo}
-                    plan={assistantRoutineDraft.plan}
-                    update={assistantHowToComplete}
-                    scheduled={assistantRoutine ? routineIsScheduled(assistantRoutine) : true}
-                    existingConnections={existingRoutineConnections}
-                    saving={routineSaving}
-                    onSave={() => void confirmRoutineSave()}
-                    onKeepEditing={keepEditingRoutine}
+                  <AssistantRecapCard
+                    assistantName={assistant?.name ?? assistantName ?? thread.title}
+                    knowledge={assistantDraft.knowledge}
+                    plan={assistantDraft.plan}
+                    update={assistantKnowledgeComplete}
+                    scheduled={assistant ? assistantIsScheduled(assistant) : true}
+                    existingConnections={existingAssistantConnections}
+                    saving={assistantSaving}
+                    onSave={() => void confirmAssistantSave()}
+                    onKeepEditing={keepEditingAssistant}
                   />
                 </div>
               </div>
@@ -14380,10 +14382,10 @@
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}
-                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
-                        ? 'Describe how this routine should run…'
-                        : assistantSetupThread && assistantHowToComplete
-                          ? 'Tweak the how-to, the schedule, or a connection…'
+                      placeholder={assistantMode && assistantName && !assistantKnowledgeComplete
+                        ? 'Describe how this assistant should run…'
+                        : assistantSetupThread && assistantKnowledgeComplete
+                          ? 'Tweak the knowledge, the schedule, or a connection…'
                           : activePlanningEntry === 'brainstorm'
                             ? 'Add details to the Brainstorm discussion…'
                             : activePlanningEntry === 'spec'

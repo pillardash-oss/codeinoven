@@ -109,11 +109,11 @@ import {
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
 import {
-  ROUTINE_AUTHORING_UTILITY_ID,
-  ROUTINE_AUTHORING_OPERATIONS,
-  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
-  routineAuthoringUtility
-} from '../../lib/routine-authoring'
+  ASSISTANT_AUTHORING_UTILITY_ID,
+  ASSISTANT_AUTHORING_OPERATIONS,
+  ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
+  assistantAuthoringUtility
+} from '../../lib/assistant-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -221,10 +221,10 @@ export interface UtilityTurnRequest {
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
-   * Present only for a routine's Getting started interview; the callback owns
+   * Present only for an assistant's Getting started interview; the callback owns
    * the checkpoint path and replaces its content.
    */
-  saveRoutineCheckpoint?: (markdown: string) => Promise<{ path: string }>
+  saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -960,15 +960,17 @@ export class UtilityOrchestrationService {
     eligible = eligible.filter(
       ({ utility }) =>
         utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
-        utility.id !== ROUTINE_AUTHORING_UTILITY_ID
+        utility.id !== ASSISTANT_AUTHORING_UTILITY_ID
     )
     if (request.saveBrainstormNotes) {
       eligible.push(
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
     }
-    if (request.saveRoutineCheckpoint) {
-      eligible.push(routineAuthoringUtility(request.harnessId, request.projectId, request.threadId))
+    if (request.saveAssistantCheckpoint) {
+      eligible.push(
+        assistantAuthoringUtility(request.harnessId, request.projectId, request.threadId)
+      )
     }
     if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
@@ -1174,7 +1176,7 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
-      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, a routine, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
             `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
@@ -1375,7 +1377,7 @@ export class UtilityOrchestrationService {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
       utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
-      utility.id === ROUTINE_AUTHORING_UTILITY_ID
+      utility.id === ASSISTANT_AUTHORING_UTILITY_ID
     ) {
       return
     }
@@ -2096,8 +2098,8 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
-    if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
-      return { tools: ROUTINE_AUTHORING_OPERATIONS }
+    if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
+      return { tools: ASSISTANT_AUTHORING_OPERATIONS }
     }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
@@ -2330,18 +2332,18 @@ export class UtilityOrchestrationService {
         BRAINSTORM_ALIGNMENT_NOTE_LIMIT
       )
       result = await state.request.saveBrainstormNotes(markdown)
-    } else if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
-      if (operation !== 'save_checkpoint' || !state.request.saveRoutineCheckpoint) {
+    } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
+      if (operation !== 'save_checkpoint' || !state.request.saveAssistantCheckpoint) {
         throw new Error(
-          'The getting-started checkpoint is only available while a routine\u2019s how-to is being written'
+          'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
         )
       }
       const markdown = requiredString(
         operationInput['markdown'],
         'markdown',
-        ROUTINE_AUTHORING_CHECKPOINT_LIMIT
+        ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
       )
-      result = await state.request.saveRoutineCheckpoint(markdown)
+      result = await state.request.saveAssistantCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')

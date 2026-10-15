@@ -88,7 +88,7 @@ export const invokeThreadContract = {
         projectId?: string
         limit?: number
         family?: 'projects' | 'chats' | 'assistant'
-        routineId?: string
+        assistantId?: string
       }
     ],
     import('../types').ThreadSearchResult[]

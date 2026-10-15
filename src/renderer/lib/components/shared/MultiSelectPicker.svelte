@@ -5,7 +5,7 @@
   import type { MultiSelectOption } from './multi-select-option'
 
   /**
-   * One entity-agnostic filter list: a project, routine, browser group, or task
+   * One entity-agnostic filter list: a project, assistant, browser group, or task
    * sort picked from the same rows.
    *
    * The list is anchored to its trigger and opens inside the owning panel,
@@ -242,10 +242,7 @@
             {@const Icon = option.icon}
             <Icon size={11} />
           {:else}
-            <span
-              class="h-2 w-2"
-              style:background-color={option.color ?? 'currentColor'}
-            ></span>
+            <span class="h-2 w-2" style:background-color={option.color ?? 'currentColor'}></span>
           {/if}
         </span>
       {/each}
@@ -314,9 +311,7 @@
               onclick={() => toggle(option.id)}
             >
               {#if option.color}
-                <span
-                  class="w-0.5 shrink-0 self-stretch"
-                  style:background-color={option.color}
+                <span class="w-0.5 shrink-0 self-stretch" style:background-color={option.color}
                 ></span>
               {/if}
               {#if option.iconUrl}

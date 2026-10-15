@@ -22,9 +22,7 @@ function isValidRun(value: unknown): value is MissedRun {
     (record.reason === undefined ||
       record.reason === 'app-closed' ||
       record.reason === 'delayed') &&
-    (record.status === 'pending' ||
-      record.status === 'dismissed' ||
-      record.status === 'run')
+    (record.status === 'pending' || record.status === 'dismissed' || record.status === 'run')
   )
 }
 
@@ -75,9 +73,9 @@ export class MissedRunStore {
     return this.list().filter((run) => run.threadId === threadId)
   }
 
-  /** Pending missed runs for every task in a routine. */
-  listForRoutine(routineId: string): MissedRun[] {
-    return this.list().filter((run) => run.routineId === routineId)
+  /** Pending missed runs for every task in an assistant. */
+  listForAssistant(assistantId: string): MissedRun[] {
+    return this.list().filter((run) => run.assistantId === assistantId)
   }
 
   hasAnyPending(): boolean {
@@ -91,7 +89,7 @@ export class MissedRunStore {
    */
   record(input: {
     threadId: string
-    routineId?: string
+    assistantId?: string
     dueAt: number
     title: string
     reason?: MissedRun['reason']
@@ -103,7 +101,7 @@ export class MissedRunStore {
     const run: MissedRun = {
       id,
       threadId: input.threadId,
-      routineId: input.routineId,
+      assistantId: input.assistantId,
       dueAt: input.dueAt,
       detectedAt: input.detectedAt ?? Date.now(),
       title: input.title,
@@ -134,18 +132,18 @@ export class MissedRunStore {
   }
 
   /**
-   * Drop every record belonging to a routine that is being removed, matched by
-   * the record's own routine id and by the ids of that routine's threads.
+   * Drop every record belonging to an assistant that is being removed, matched by
+   * the record's own assistant id and by the ids of that assistant's threads.
    *
-   * Both are needed: a record keeps the routine id it was detected under, so a
-   * task moved into this routine after its miss was recorded is only reachable
+   * Both are needed: a record keeps the assistant id it was detected under, so a
+   * task moved into this assistant after its miss was recorded is only reachable
    * by thread id. Returns how many records were dropped.
    */
-  removeForRoutine(routineId: string, threadIds: readonly string[]): number {
+  removeForAssistant(assistantId: string, threadIds: readonly string[]): number {
     const threads = new Set(threadIds)
     let removed = 0
     for (const [id, run] of this.runs) {
-      if (run.routineId !== routineId && !threads.has(run.threadId)) continue
+      if (run.assistantId !== assistantId && !threads.has(run.threadId)) continue
       this.runs.delete(id)
       removed += 1
     }

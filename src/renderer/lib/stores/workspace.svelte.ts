@@ -432,18 +432,17 @@ class WorkspaceState {
     return true
   }
 
-  /** Incremented to signal Workspace to start the new-routine flow. */
-  requestAssistantRoutineCount = $state(0)
-  private consumedAssistantRoutineRequestCount = 0
+  /** Incremented to signal Workspace to start the new-assistant flow. */
+  requestAssistantCount = $state(0)
+  private consumedAssistantRequestCount = 0
 
-  requestAssistantRoutine(): void {
-    this.requestAssistantRoutineCount++
+  requestAssistant(): void {
+    this.requestAssistantCount++
   }
 
-  consumeAssistantRoutineRequest(): boolean {
-    if (this.consumedAssistantRoutineRequestCount === this.requestAssistantRoutineCount)
-      return false
-    this.consumedAssistantRoutineRequestCount = this.requestAssistantRoutineCount
+  consumeAssistantRequest(): boolean {
+    if (this.consumedAssistantRequestCount === this.requestAssistantCount) return false
+    this.consumedAssistantRequestCount = this.requestAssistantCount
     return true
   }
 

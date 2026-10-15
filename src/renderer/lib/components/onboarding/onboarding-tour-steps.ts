@@ -71,7 +71,7 @@ export const SETUP_SPOTLIGHT_STEPS: readonly SpotlightStep[] = [
     selector: '[data-onboarding="view-switcher"]',
     eyebrow: 'View rail',
     title: 'Switch views from the left rail',
-    description: `The rail down the left edge switches how the workspace is organized. Projects groups conversations by folder (${shortcutKey('1')}). Threads lists every project conversation (${shortcutKey('2')}). Scoped threads opens the scope sidebar over Projects (${shortcutKey('3')}), Scope Board opens the full-page board (${shortcutKey('4')}), Chats is for work that does not need a project (${shortcutKey('0')}), and Assistant holds routines and tasks (${shortcutKey('9')}).`
+    description: `The rail down the left edge switches how the workspace is organized. Projects groups conversations by folder (${shortcutKey('1')}). Threads lists every project conversation (${shortcutKey('2')}). Scoped threads opens the scope sidebar over Projects (${shortcutKey('3')}), Scope Board opens the full-page board (${shortcutKey('4')}), Chats is for work that does not need a project (${shortcutKey('0')}), and Assistant holds assistants and tasks (${shortcutKey('9')}).`
   },
   {
     selector: '[data-onboarding="project-sidebar"]',
@@ -222,32 +222,32 @@ export const VIEW_TOURS: Record<WorkspaceTourView, ViewTour> = {
         selector: '[data-onboarding="view-switcher"]',
         eyebrow: 'View rail',
         title: 'The Assistant is its own view',
-        description: `Routines and tasks live here, apart from your project threads, so scheduled work never mixes with the work you are doing by hand. Open it from the rail with ${shortcutKey('9')}.`
+        description: `Assistants and tasks live here, apart from your project threads, so scheduled work never mixes with the work you are doing by hand. Open it from the rail with ${shortcutKey('9')}.`
       },
       {
         selector: '[data-onboarding="view-actions"]',
         eyebrow: 'Header actions',
-        title: 'Routines and tasks start here',
+        title: 'Assistants and tasks start here',
         description:
-          'A routine owns a repeating job and the how-to that describes it. A task is a single piece of work. Search runs, create either one, and start a task with the same actions.',
+          'An assistant owns a repeating job and the knowledge that describes it. A task is a single piece of work. Search runs, create either one, and start a task with the same actions.',
         shortcuts: [
           { label: 'New task', keys: shortcutKey('N') },
-          { label: 'New routine', keys: isMac ? '⌘⇧N' : 'Ctrl+Shift+N' }
+          { label: 'New assistant', keys: isMac ? '⌘⇧N' : 'Ctrl+Shift+N' }
         ]
       },
       {
         selector: '[data-onboarding="empty-state-actions"]',
         eyebrow: 'Start here',
-        title: 'Begin with a routine',
+        title: 'Begin with an assistant',
         description:
-          'A new routine opens a Getting started thread, where the agent interviews you until the how-to, the schedule and the connections it needs are agreed.'
+          'A new assistant opens a Getting started thread, where the agent interviews you until the knowledge, the schedule and the connections it needs are agreed.'
       },
       {
         selector: '[data-onboarding="notifications"]',
         eyebrow: 'Context and alerts',
         title: 'Runs report back',
         description:
-          'Every run lands in the sidebar under its routine and raises its own notice naming that routine, so a scheduled job never finishes silently.'
+          'Every run lands in the sidebar under its assistant and raises its own notice naming that assistant, so a scheduled job never finishes silently.'
       }
     ]
   }

@@ -1,16 +1,16 @@
 import type { Database } from '../database'
 import type {
-  Routine,
-  RoutineAgents,
-  RoutineConnection,
-  RoutineDelivery,
-  RoutineExecution,
-  RoutinePriority,
-  RoutineSchedule
+  Assistant,
+  AssistantAgents,
+  AssistantConnection,
+  AssistantDelivery,
+  AssistantExecution,
+  AssistantPriority,
+  AssistantSchedule
 } from '../../../lib/types'
-import { normalizePlanDelivery, normalizePlanPriority } from '../../../lib/routine-reporting'
+import { normalizePlanDelivery, normalizePlanPriority } from '../../../lib/assistant-reporting'
 
-interface RoutineRow {
+interface AssistantRow {
   id: string
   name: string
   description: string | null
@@ -21,8 +21,8 @@ interface RoutineRow {
   custom_svg: string | null
   schedule: string | null
   schedule_updated_at: number | null
-  how_to: string
-  how_to_updated_at: number | null
+  knowledge: string
+  knowledge_updated_at: number | null
   connections: string
   delivery: string | null
   priority: string | null
@@ -36,10 +36,10 @@ interface RoutineRow {
   updated_at: number
 }
 
-function parseSchedule(raw: string | null): RoutineSchedule | null {
+function parseSchedule(raw: string | null): AssistantSchedule | null {
   if (!raw) return null
   try {
-    const parsed = JSON.parse(raw) as RoutineSchedule
+    const parsed = JSON.parse(raw) as AssistantSchedule
     return parsed && typeof parsed === 'object' && typeof parsed.cadence === 'string'
       ? parsed
       : null
@@ -48,17 +48,17 @@ function parseSchedule(raw: string | null): RoutineSchedule | null {
   }
 }
 
-function parseConnections(raw: string): RoutineConnection[] {
+function parseConnections(raw: string): AssistantConnection[] {
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
     return parsed
       .filter(
-        (entry): entry is RoutineConnection =>
+        (entry): entry is AssistantConnection =>
           typeof entry === 'object' &&
           entry !== null &&
-          typeof (entry as RoutineConnection).utilityId === 'string' &&
-          typeof (entry as RoutineConnection).label === 'string'
+          typeof (entry as AssistantConnection).utilityId === 'string' &&
+          typeof (entry as AssistantConnection).label === 'string'
       )
       .map((entry) => (entry.required ? { ...entry, required: true } : { ...entry }))
   } catch {
@@ -66,7 +66,7 @@ function parseConnections(raw: string): RoutineConnection[] {
   }
 }
 
-function parseAgents(raw: string | null): RoutineAgents | undefined {
+function parseAgents(raw: string | null): AssistantAgents | undefined {
   if (!raw) return undefined
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -87,7 +87,7 @@ function parseAgents(raw: string | null): RoutineAgents | undefined {
  * Read the stored delivery, validated through the shared normaliser so a row
  * written by an older build cannot surface a channel the app no longer knows.
  */
-function parseDelivery(raw: string | null): RoutineDelivery | undefined {
+function parseDelivery(raw: string | null): AssistantDelivery | undefined {
   if (!raw) return undefined
   try {
     return normalizePlanDelivery(JSON.parse(raw)) ?? undefined
@@ -97,7 +97,7 @@ function parseDelivery(raw: string | null): RoutineDelivery | undefined {
 }
 
 /** Read the stored priority, validated through the shared normaliser. */
-function parsePriority(raw: string | null): RoutinePriority | undefined {
+function parsePriority(raw: string | null): AssistantPriority | undefined {
   if (!raw) return undefined
   try {
     return normalizePlanPriority(JSON.parse(raw)) ?? undefined
@@ -109,9 +109,9 @@ function parsePriority(raw: string | null): RoutinePriority | undefined {
 /**
  * Read the stored execution target. A missing or malformed value means this
  * computer, so an older row and a corrupt one both fall back to local instead
- * of failing the whole routine read.
+ * of failing the whole assistant read.
  */
-function parseExecution(raw: string | null): RoutineExecution | undefined {
+function parseExecution(raw: string | null): AssistantExecution | undefined {
   if (!raw) return undefined
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -130,7 +130,7 @@ function parseExecution(raw: string | null): RoutineExecution | undefined {
 }
 
 /** Whether a persisted value is a usable model selection. */
-function isModelSelection(value: unknown): value is RoutineAgents['fallbacks'][number] {
+function isModelSelection(value: unknown): value is AssistantAgents['fallbacks'][number] {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Record<string, unknown>
   return (
@@ -140,7 +140,7 @@ function isModelSelection(value: unknown): value is RoutineAgents['fallbacks'][n
   )
 }
 
-function rowToRoutine(row: RoutineRow): Routine {
+function rowToAssistant(row: AssistantRow): Assistant {
   return {
     id: row.id,
     name: row.name,
@@ -152,8 +152,8 @@ function rowToRoutine(row: RoutineRow): Routine {
     customSvg: row.custom_svg ?? undefined,
     schedule: parseSchedule(row.schedule),
     scheduleUpdatedAt: row.schedule_updated_at ?? undefined,
-    howTo: row.how_to ?? '',
-    howToUpdatedAt: row.how_to_updated_at ?? undefined,
+    knowledge: row.knowledge ?? '',
+    knowledgeUpdatedAt: row.knowledge_updated_at ?? undefined,
     connections: parseConnections(row.connections),
     delivery: parseDelivery(row.delivery ?? null),
     priority: parsePriority(row.priority ?? null),
@@ -168,14 +168,14 @@ function rowToRoutine(row: RoutineRow): Routine {
   }
 }
 
-export class RoutineRepo {
+export class AssistantRepo {
   constructor(private db: Database) {}
 
-  upsert(routine: Routine): void {
+  upsert(assistant: Assistant): void {
     this.db.run(
-      `INSERT INTO routines(
-        id, name, description, scheduled, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, how_to,
-        how_to_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
+      `INSERT INTO assistants(
+        id, name, description, scheduled, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
+        knowledge_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
         pinned_at, sort_order, created_at, updated_at
       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
@@ -188,8 +188,8 @@ export class RoutineRepo {
         custom_svg = excluded.custom_svg,
         schedule = excluded.schedule,
         schedule_updated_at = excluded.schedule_updated_at,
-        how_to = excluded.how_to,
-        how_to_updated_at = excluded.how_to_updated_at,
+        knowledge = excluded.knowledge,
+        knowledge_updated_at = excluded.knowledge_updated_at,
         connections = excluded.connections,
         delivery = excluded.delivery,
         priority = excluded.priority,
@@ -201,79 +201,79 @@ export class RoutineRepo {
         sort_order = excluded.sort_order,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at`,
-      routine.id,
-      routine.name,
-      routine.description ?? null,
-      routine.scheduled === false ? 0 : 1,
-      routine.color ?? null,
-      routine.icon ?? null,
-      routine.iconType ?? null,
-      routine.customSvg ?? null,
-      routine.schedule ? JSON.stringify(routine.schedule) : null,
-      routine.scheduleUpdatedAt ?? null,
-      routine.howTo ?? '',
-      routine.howToUpdatedAt ?? null,
-      JSON.stringify(routine.connections ?? []),
-      routine.delivery ? JSON.stringify(routine.delivery) : null,
-      routine.priority ? JSON.stringify(routine.priority) : null,
-      routine.agents ? JSON.stringify(routine.agents) : null,
-      routine.execution ? JSON.stringify(routine.execution) : null,
-      routine.paused ? 1 : 0,
-      routine.pinned ? 1 : 0,
-      routine.pinnedAt ?? null,
-      routine.sortOrder ?? null,
-      routine.createdAt,
-      routine.updatedAt
+      assistant.id,
+      assistant.name,
+      assistant.description ?? null,
+      assistant.scheduled === false ? 0 : 1,
+      assistant.color ?? null,
+      assistant.icon ?? null,
+      assistant.iconType ?? null,
+      assistant.customSvg ?? null,
+      assistant.schedule ? JSON.stringify(assistant.schedule) : null,
+      assistant.scheduleUpdatedAt ?? null,
+      assistant.knowledge ?? '',
+      assistant.knowledgeUpdatedAt ?? null,
+      JSON.stringify(assistant.connections ?? []),
+      assistant.delivery ? JSON.stringify(assistant.delivery) : null,
+      assistant.priority ? JSON.stringify(assistant.priority) : null,
+      assistant.agents ? JSON.stringify(assistant.agents) : null,
+      assistant.execution ? JSON.stringify(assistant.execution) : null,
+      assistant.paused ? 1 : 0,
+      assistant.pinned ? 1 : 0,
+      assistant.pinnedAt ?? null,
+      assistant.sortOrder ?? null,
+      assistant.createdAt,
+      assistant.updatedAt
     )
   }
 
-  get(id: string): Routine | null {
-    const row = this.db.get<RoutineRow>('SELECT * FROM routines WHERE id = ?', id)
-    return row ? rowToRoutine(row) : null
+  get(id: string): Assistant | null {
+    const row = this.db.get<AssistantRow>('SELECT * FROM assistants WHERE id = ?', id)
+    return row ? rowToAssistant(row) : null
   }
 
   /**
-   * One routine, read on the worker's connection. Interaction paths (a settled
-   * run's notification naming its routine, say) use this instead of `get`, so a
+   * One assistant, read on the worker's connection. Interaction paths (a settled
+   * run's notification naming its assistant, say) use this instead of `get`, so a
    * synchronous read never holds the Electron main thread.
    */
-  async getViaWorker(id: string): Promise<Routine | null> {
-    const result = await this.db.queryViaWorker('SELECT * FROM routines WHERE id = ?', [id], 1)
+  async getViaWorker(id: string): Promise<Assistant | null> {
+    const result = await this.db.queryViaWorker('SELECT * FROM assistants WHERE id = ?', [id], 1)
     if (!result.ok) return null
-    const row = (result.rows as unknown as RoutineRow[])[0]
-    return row ? rowToRoutine(row) : null
+    const row = (result.rows as unknown as AssistantRow[])[0]
+    return row ? rowToAssistant(row) : null
   }
 
   /**
-   * Every routine, in a stable storage order. Sidebar order is applied on top
-   * of this by `RoutineManager.listRoutines` through the shared comparator, so
+   * Every assistant, in a stable storage order. Sidebar order is applied on top
+   * of this by `AssistantManager.listAssistants` through the shared comparator, so
    * this one never has to agree with the sidebar about anything but being
    * deterministic.
    */
-  list(): Routine[] {
+  list(): Assistant[] {
     return this.db
-      .all<RoutineRow>('SELECT * FROM routines ORDER BY created_at DESC, id ASC')
-      .map(rowToRoutine)
+      .all<AssistantRow>('SELECT * FROM assistants ORDER BY created_at DESC, id ASC')
+      .map(rowToAssistant)
   }
 
   /**
-   * Every routine, read on the database worker.
+   * Every assistant, read on the database worker.
    *
    * For a background service that must not touch SQLite on the main thread
    * (see `docs/APP-BIBLE.md`): the same rows as `list()`, read where a page
    * fault or a WAL wait cannot stall a frame.
    */
-  async listViaWorker(): Promise<Routine[]> {
+  async listViaWorker(): Promise<Assistant[]> {
     const result = await this.db.queryViaWorker(
-      'SELECT * FROM routines ORDER BY created_at DESC, id ASC',
+      'SELECT * FROM assistants ORDER BY created_at DESC, id ASC',
       [],
       0
     )
     if (!result.ok) return []
-    return (result.rows as unknown as RoutineRow[]).map(rowToRoutine)
+    return (result.rows as unknown as AssistantRow[]).map(rowToAssistant)
   }
 
   delete(id: string): void {
-    this.db.run('DELETE FROM routines WHERE id = ?', id)
+    this.db.run('DELETE FROM assistants WHERE id = ?', id)
   }
 }

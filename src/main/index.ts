@@ -378,7 +378,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while
     // nobody owned the scheduler.
-    void state.routineScheduler
+    void state.assistantScheduler
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
@@ -488,8 +488,7 @@ function createWindow(): BrowserWindow {
     // that had been open for hours, on every stop of `scripts/probe.ts`, and the
     // dialog then held the dying process until something killed it.
     const stopped =
-      details.reason === 'clean-exit' ||
-      (details.reason === 'killed' && details.exitCode === 15)
+      details.reason === 'clean-exit' || (details.reason === 'killed' && details.exitCode === 15)
     if (stopped) {
       Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
         reason: details.reason,

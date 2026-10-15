@@ -1,6 +1,6 @@
-import { ASSISTANT_SPACE_ID, type Project, type Routine, type Thread } from '$shared/types'
+import { ASSISTANT_SPACE_ID, type Project, type Assistant, type Thread } from '$shared/types'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
-import { routinePrimaryModel, settingsWithRoutineModel } from '$shared/routine-agents'
+import { assistantPrimaryModel, settingsWithAssistantModel } from '$shared/assistant-agents'
 import { invoke } from '$lib/ipc.svelte'
 import { composerBuiltInTag } from '$lib/components/chats/composer-mentions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -27,8 +27,8 @@ import {
  * steer like any other.
  *
  * Three places a setup thread can live, resolved by what the user was doing:
- * the project they were last on, one of a routine's own threads when the
- * connection is the routine's, and a standalone chat when the user has no
+ * the project they were last on, one of an assistant's own threads when the
+ * connection is the assistant's, and a standalone chat when the user has no
  * project at all, since installing a capability needs no repository.
  */
 
@@ -68,7 +68,7 @@ export function utilitySetupDraft(request?: string | null): string {
  * The project a setup thread belongs to: the one the user was last on.
  *
  * The entry points live outside any thread (the Utilities settings page, a
- * routine's panel), so the project has to be remembered state rather than
+ * assistant's panel), so the project has to be remembered state rather than
  * anything on screen. The open thread is the most specific answer, the
  * workspace's active project covers a project opened without a thread, the
  * recovery snapshot carries the choice across a restart, and the most recent
@@ -125,18 +125,18 @@ export async function openProjectUtilitySetupThread(
 }
 
 /**
- * Create a routine's own setup thread for one of its connections.
+ * Create an assistant's own setup thread for one of its connections.
  *
- * The thread belongs to the routine rather than to whichever project the user
- * happens to be in. A connection is the routine's, so its setup runs on the
- * routine's primary model, sits beside the routine's other tasks where the
- * routine's panel reports on it, and starts off the routine's clock: a thread
+ * The thread belongs to the assistant rather than to whichever project the user
+ * happens to be in. A connection is the assistant's, so its setup runs on the
+ * assistant's primary model, sits beside the assistant's other tasks where the
+ * assistant's panel reports on it, and starts off the assistant's clock: a thread
  * the user opened to configure something must never become a quiet recurring
- * job of the routine.
+ * job of the assistant.
  */
-export async function openRoutineUtilitySetupThread(input: {
+export async function openAssistantUtilitySetupThread(input: {
   project: Project
-  routine: Routine
+  assistant: Assistant
   label: string
   request?: string | null
 }): Promise<Thread> {
@@ -148,13 +148,13 @@ export async function openRoutineUtilitySetupThread(input: {
     input.project.id === ASSISTANT_SPACE_ID ? focused : null,
     threadSettings.lastUsed
   )
-  const primary = routinePrimaryModel(input.routine.agents)
+  const primary = assistantPrimaryModel(input.assistant.agents)
   const label = input.label.trim()
   const thread = await createSetupThread({
     project: input.project,
     title: label ? `Set up ${label}` : UTILITY_SETUP_THREAD_TITLE,
-    settings: primary ? settingsWithRoutineModel(inherited, primary) : inherited,
-    routineId: input.routine.id
+    settings: primary ? settingsWithAssistantModel(inherited, primary) : inherited,
+    assistantId: input.assistant.id
   })
   openSeededSetupThread(thread, input.project, input.request)
   return thread
@@ -187,7 +187,7 @@ async function createSetupThread(input: {
   project: Project
   title: string
   settings: ReturnType<typeof settingsForNewThread>
-  routineId?: string
+  assistantId?: string
   scopeBucketId?: string
 }): Promise<Thread> {
   return invoke('thread:create', {
@@ -196,7 +196,7 @@ async function createSetupThread(input: {
     title: input.title,
     workingDirectory: input.project.path,
     settings: input.settings,
-    ...(input.routineId ? { routineId: input.routineId, scheduled: false } : {}),
+    ...(input.assistantId ? { assistantId: input.assistantId, scheduled: false } : {}),
     ...(input.scopeBucketId ? { scopeBucketId: input.scopeBucketId } : {})
   })
 }

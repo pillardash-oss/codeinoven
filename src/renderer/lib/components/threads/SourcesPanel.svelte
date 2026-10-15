@@ -249,8 +249,8 @@
    *
    * The panel reads the same three files the engine does and then applies the
    * shared surface rule, so this list can never show memory the agent would not
-   * be sent: an assistant task sees assistant, routine and task memory only,
-   * and a routine entry shows up only for the tasks of its own routine.
+   * be sent: an assistant task sees assistant, assistant and task memory only,
+   * and an assistant entry shows up only for the tasks of its own assistant.
    */
   async function loadContextMemoryEntries(
     containerId: string,
@@ -262,10 +262,10 @@
       : containerId === INBOX_PROJECT_ID
         ? 'sidebar-chats'
         : 'sidebar-projects'
-    // An assistant task's routine decides which routine-scoped entries apply,
+    // An assistant task's assistant decides which assistant-scoped entries apply,
     // so it is read from the thread rather than guessed from the panel.
-    const routineId = isAssistant
-      ? (await invoke('thread:get', containerId, containerThreadId))?.routineId
+    const assistantId = isAssistant
+      ? (await invoke('thread:get', containerId, containerThreadId))?.assistantId
       : undefined
     const [rootEntries, containerEntries, threadEntries] = await Promise.all([
       invoke('memory:getEntries'),
@@ -277,7 +277,7 @@
         surface,
         projectId: containerId,
         threadId: containerThreadId,
-        routineId
+        assistantId
       })
     )
   }

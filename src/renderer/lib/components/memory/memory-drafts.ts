@@ -139,7 +139,7 @@ function isDraftEntry(value: unknown): value is MemoryEntry {
           'task'
         ].includes(scope)
     ) &&
-    ['projectId', 'threadId', 'routineId'].every(
+    ['projectId', 'threadId', 'assistantId'].every(
       (key) => entry[key] === undefined || typeof entry[key] === 'string'
     ) &&
     (entry.modelKeys === undefined ||

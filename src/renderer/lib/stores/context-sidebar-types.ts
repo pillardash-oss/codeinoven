@@ -110,7 +110,7 @@ export interface BrowserContextTab {
    * jar.
    *
    * The scope's own jar is the default every conversation starts from: a
-   * project's threads share the project's jar, and an assistant routine or a
+   * project's threads share the project's jar, and an assistant or a
    * chat browses its own. A named box is the profile's one jar for that box, not
    * the scope's own, so a tab in it shares its cookies and logins with every other
    * context that picks the box. That includes the profile's own box, which names
@@ -196,7 +196,7 @@ export interface StickyNotesContextTab {
  * The auto-resolved decision panel, keyed to the conversation it belongs to.
  *
  * A decision concerns the thread it settled on, and through it the assistant
- * task it ran for and the routine that owns that task; the tab therefore carries
+ * task it ran for and the assistant that owns that task; the tab therefore carries
  * the thread it was opened for, exactly like the sources or memory panels, and
  * the rail icon only exists while that scope has an undismissed record.
  */
@@ -300,9 +300,9 @@ export interface MemoryContextTab {
   projectId: string
   threadId: string
   memorySection: MemorySection
-  /** Routine of the assistant task this panel shows memory for; undefined for
-   *  project and chat tabs, which have no routine. */
-  routineId?: string
+  /** Assistant of the assistant task this panel shows memory for; undefined for
+   *  project and chat tabs, which have no assistant. */
+  assistantId?: string
 }
 
 /**
@@ -318,29 +318,29 @@ export interface CoordinatorContextTab {
   threadId: string
 }
 
-/** Sections of the assistant how-to panel, in strip order. */
-export type AssistantPanelTab = 'all' | 'routine' | 'connections' | 'agents' | 'issues'
+/** Sections of the assistant knowledge panel, in strip order. */
+export type AssistantPanelTab = 'all' | 'assistant' | 'connections' | 'agents' | 'issues'
 
 /**
- * Assistant View's how-to panel, docked into the context sidebar. There is
- * exactly one panel per routine, exactly like the file tree keeps one panel per
+ * Assistant View's knowledge panel, docked into the context sidebar. There is
+ * exactly one panel per assistant, exactly like the file tree keeps one panel per
  * file: the tab lives in the project's context (not a task's), so it survives
- * task switches, and its id is keyed by the routine so opening the how-to from
- * any of the routine's tasks focuses the same panel. A routine-less task keys on
+ * task switches, and its id is keyed by the assistant so opening the knowledge from
+ * any of the assistant's tasks focuses the same panel. An assistant-less task keys on
  * its own thread and so still owns exactly one panel. The tab shows the
- * routine's how-to, schedule, and connections, plus the anchor task's own
+ * assistant's knowledge, schedule, and connections, plus the anchor task's own
  * schedule override.
  */
-export interface AssistantHowToContextTab {
+export interface AssistantKnowledgeContextTab {
   id: string
-  kind: 'assistant-how-to'
+  kind: 'assistant-knowledge'
   title: string
   projectId: string
   /** Task the panel was last opened from; refreshes the panel's task-scoped
    *  content (Issues) and never changes the panel's identity. */
   threadId: string
-  /** Routine whose how-to the panel edits; null for a routine-less task. */
-  routineId: string | null
+  /** Assistant whose knowledge the panel edits; null for an assistant-less task. */
+  assistantId: string | null
   /** The section the panel was last showing. It lives on the tab, not in the
    *  component, so switching to another sidebar panel and back reopens the same
    *  section instead of resetting the panel to "All". */
@@ -411,7 +411,7 @@ export type ContextSidebarTab =
   | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab
-  | AssistantHowToContextTab
+  | AssistantKnowledgeContextTab
   | BrowserContextTab
   | BrowserAgentContextTab
 
@@ -469,7 +469,7 @@ export const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'git',
   'cloud-deployment',
   'memory',
-  'assistant-how-to'
+  'assistant-knowledge'
 ])
 
 export function isProjectTab(tab: ContextSidebarTab): boolean {

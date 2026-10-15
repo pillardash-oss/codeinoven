@@ -13,7 +13,7 @@ import type { BrowserBookmark, BrowserBookmarkGroup } from '$shared/browser/brow
  * A bookmark is the one browser identity whose icon is not its own by default: it
  * is the icon of the page it points at. So this answers only for an icon the user
  * chose, and the row falls back to the stored favicon and then to a globe. Drawn
- * by the very resolver projects and routines use, so a picked image, a pasted SVG
+ * by the very resolver projects and assistants use, so a picked image, a pasted SVG
  * and a library icon all render through one code path.
  *
  * A bookmark carries no accent colour, so a library icon takes the deterministic
@@ -48,7 +48,7 @@ export function browserBookmarkGroupAccent(group: BrowserBookmarkGroup): string 
 
 /**
  * A saved-page group's icon as an image data URL, or null while it wears only a
- * colour. Drawn by the very resolver projects, routines, tab groups and boxes
+ * colour. Drawn by the very resolver projects, assistants, tab groups and boxes
  * use, so a picked image, a pasted SVG and a library icon all render through one
  * code path.
  */

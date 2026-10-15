@@ -167,7 +167,7 @@ export interface RendererRecoverySnapshot {
   chatFavoriteModels: string[]
   /** Chats-tab recently used models, most recent first. */
   chatRecentModels: string[]
-  /** Assistant-task favorites, kept separate so a model picked for a routine
+  /** Assistant-task favorites, kept separate so a model picked for an assistant
    *  task never reshapes the Chats or project model lists. */
   assistantFavoriteModels: string[]
   /** Assistant-task recently used models, most recent first. */

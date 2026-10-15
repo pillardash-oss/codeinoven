@@ -49,8 +49,8 @@ import type { HarnessUsageRepo } from '../../database/repositories/harness-usage
 import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
 import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
-import type { RoutineManager } from '../../../lib/engines/routine-manager'
-import type { RoutineSchedulerService } from '../../scheduler/routine-scheduler-service'
+import type { AssistantManager } from '../../../lib/engines/assistant-manager'
+import type { AssistantSchedulerService } from '../../scheduler/assistant-scheduler-service'
 import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { BrowserService } from '../../browser/browser-service'
@@ -73,12 +73,12 @@ export interface RegisterIpcHandlersOptions {
   retryScheduler?: RetrySchedulerService
   /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
   heartbeatScheduler?: HeartbeatSchedulerService
-  /** Assistant View's routine scheduler (app-open-only firing, missed-run records). */
-  routineScheduler?: RoutineSchedulerService
+  /** Assistant View's assistant scheduler (app-open-only firing, missed-run records). */
+  assistantScheduler?: AssistantSchedulerService
   /** Durable record of gates the app resolved without the user (attention rail). */
   autoAnswerStore?: AutoAnswerStore
-  /** Shared assistant routine manager; defaults to a database-backed instance. */
-  routineManager?: RoutineManager
+  /** Shared assistant manager; defaults to a database-backed instance. */
+  assistantManager?: AssistantManager
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
@@ -145,7 +145,7 @@ export type IpcChatEngine = Pick<
   | 'abort'
   | 'recordUserFileSave'
   | 'sendPrompt'
-  | 'readRoutineCheckpoint'
+  | 'readAssistantCheckpoint'
   | 'noteUserActivity'
 > &
   Partial<
@@ -212,8 +212,8 @@ export interface IpcHandlerContext {
   /** Transient grading queue behind the ranking aggregates, cleared with them. */
   rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
-  routineManager: RoutineManager
-  routineScheduler: RoutineSchedulerService | undefined
+  assistantManager: AssistantManager
+  assistantScheduler: AssistantSchedulerService | undefined
   autoAnswerStore: AutoAnswerStore | undefined
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */

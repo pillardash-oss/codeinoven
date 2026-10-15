@@ -23,11 +23,11 @@ import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
-import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
+import type { AssistantSchedulerService } from '../scheduler/assistant-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
 import type { CleanShutdownStore } from '../system/clean-shutdown-store'
-import type { RoutineManager } from '../../lib/engines/routine-manager'
+import type { AssistantManager } from '../../lib/engines/assistant-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import type { OpenCodeV2Service } from '../opencode-v2/opencode-v2-service'
@@ -106,8 +106,8 @@ export interface BootstrapState {
   cioCleanup: CioCleanupService | null
   /** Authored-work service, so a sweep can reconcile the histories it orphaned. */
   designService: DesignService | null
-  routineManager: RoutineManager | null
-  routineScheduler: RoutineSchedulerService | null
+  assistantManager: AssistantManager | null
+  assistantScheduler: AssistantSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
@@ -198,8 +198,8 @@ export function createBootstrapState(): BootstrapState {
     heartbeatScheduler: null,
     cioCleanup: null,
     designService: null,
-    routineManager: null,
-    routineScheduler: null,
+    assistantManager: null,
+    assistantScheduler: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
     cleanShutdownStore: null,

@@ -116,7 +116,7 @@ export interface BrowserBookmark {
    */
   favicon: string | null
   /**
-   * The icon the user chose, in the same vocabulary a project, a routine, a tab,
+   * The icon the user chose, in the same vocabulary a project, an assistant, a tab,
    * a group and a box use: a `PROJECT_SVG_ICONS` key, a sanitized pasted SVG, or
    * a picked image file. All null while the page wears its own favicon. A
    * bookmark takes the icon half of that vocabulary only: there is no accent to

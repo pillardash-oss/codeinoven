@@ -16,7 +16,7 @@ async function copyWithElectron(text: string): Promise<void> {
  * the copy itself (an inline check on the button, or a panel's own notice), so
  * the app never says the same thing twice.
  *
- * A copy is a routine acknowledgement, not a status the app reports about its
+ * A copy is an assistant acknowledgement, not a status the app reports about its
  * own health, so it uses the default toast rather than the green success card.
  * It leads with the clipboard mark all the same: a confirmation of an action the
  * user cannot see happen should be readable without being read, and the chip is

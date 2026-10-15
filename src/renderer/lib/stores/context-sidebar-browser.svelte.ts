@@ -62,8 +62,8 @@ export interface SidebarBrowserTabsHost {
   /**
    * The conversation a thread's browser tabs belong to (see
    * `conversationScopeId`). The sidebar store holds no thread rows, so the
-   * workspace resolves this one identity: a routine's threads share the routine,
-   * a standalone chat or routine-less task owns its own, a project's threads
+   * workspace resolves this one identity: an assistant's threads share the assistant,
+   * a standalone chat or assistant-less task owns its own, a project's threads
    * share the project.
    */
   threadScopeId(projectId: string, threadId: string): string
@@ -158,9 +158,9 @@ export class SidebarBrowserTabs {
    *  project's threads keeps the browser the user was reading. A hidden
    *  conversation container (the inbox, the assistant space) is different: it is
    *  one project holding many independent conversations, so its tabs are scoped
-   *  to the conversation instead. An assistant routine is one such conversation
-   *  whatever thread of it is open   its how-to host and each of its runs share
-   *  the routine (see `conversationScopeId`)   so switching between a routine's
+   *  to the conversation instead. An assistant is one such conversation
+   *  whatever thread of it is open   its knowledge host and each of its runs share
+   *  the assistant (see `conversationScopeId`)   so switching between an assistant's
    *  threads keeps the page those threads opened, instead of closing the browser
    *  on every switch. */
   get activeTabs(): BrowserContextTab[] {
@@ -402,7 +402,7 @@ export class SidebarBrowserTabs {
   /**
    * Whether the sidebar is showing the conversation a tab is opening for. A
    * reveal is delivered to the conversation on screen, which for an assistant
-   * routine is every one of its threads: a run that opens a page while the user
+   * assistant is every one of its threads: a run that opens a page while the user
    * reads its sibling opens it in the browser already on screen.
    */
   private isShownConversation(projectId: string, threadId: string): boolean {
@@ -652,7 +652,7 @@ export class SidebarBrowserTabs {
       const activeThreadId = this.host.activeThreadId()
       if (!activeThreadId) return
       // A tab of the active conversation may be focused from any thread that
-      // shares it, which is what lets a routine keep one browser across its
+      // shares it, which is what lets an assistant keep one browser across its
       // threads. A tab of another conversation never is.
       const scopeId = this.host.threadScopeId(tab.projectId, activeThreadId)
       if (this.host.threadScopeId(tab.projectId, tab.threadId) !== scopeId) return

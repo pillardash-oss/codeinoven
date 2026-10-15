@@ -16,7 +16,7 @@
 
   /**
    * The scope segment's data. Only a project thread has a scope: a chat, a
-   * routine task and a browser conversation have no board to belong to.
+   * assistant task and a browser conversation have no board to belong to.
    */
   export interface ComposerScope {
     projectId: string
@@ -385,7 +385,7 @@
     </div>
   {/if}
 
-  <!-- What this composer writes into: a project, a plain chat, a routine, a task,
+  <!-- What this composer writes into: a project, a plain chat, an assistant, a task,
        or the browser tab a conversation answers about. -->
   <ComposerIdentity identity={shoe.identity} />
 

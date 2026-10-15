@@ -21,7 +21,7 @@
   const label = $derived(subagentStatusLabel(status))
 
   /**
-   * A running worker carries the same working indicator the project and routine
+   * A running worker carries the same working indicator the project and assistant
    * rows use: the shared status dot in the working tone. Its ring used to spin,
    * which cost a running animation on every worker row at once, and the row
    * already names the worker and its state.

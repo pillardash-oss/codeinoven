@@ -49,11 +49,11 @@ export interface AutoAnswerItem {
    */
   taskId?: string
   /**
-   * The routine that owns the task, when the task belongs to one. A routine's
+   * The assistant that owns the task, when the task belongs to one. An assistant's
    * decisions surface on any of its threads, so the panel is keyed to what the
    * gate concerns rather than to the window it happened to land in.
    */
-  routineId?: string
+  assistantId?: string
   /** Epoch ms the gate was resolved. */
   at: number
   entries: AutoAnswerEntry[]
@@ -63,13 +63,13 @@ export interface AutoAnswerItem {
 
 /**
  * The identity a decision is keyed to, resolved from a thread row. Only the
- * fields the scope test needs, so a run thread, its task, and the task's routine
+ * fields the scope test needs, so a run thread, its task, and the task's assistant
  * all match without loading the whole thread graph.
  */
 export interface AutoAnswerThreadScope {
   id: string
   projectId: string
-  routineId?: string
+  assistantId?: string
   assistantTaskId?: string
 }
 
@@ -77,7 +77,7 @@ export interface AutoAnswerThreadScope {
  * Whether a decision concerns the given thread.
  *
  * A gate belongs to the conversation it settled on, and through that
- * conversation to the assistant task it ran for and the routine that owns that
+ * conversation to the assistant task it ran for and the assistant that owns that
  * task. It is shown wherever any of those is open, so an unattended decision is
  * visible exactly where the user would look for it.
  */
@@ -93,5 +93,5 @@ export function autoAnswerConcernsThread(
   ) {
     return true
   }
-  return item.routineId !== undefined && item.routineId === thread.routineId
+  return item.assistantId !== undefined && item.assistantId === thread.assistantId
 }

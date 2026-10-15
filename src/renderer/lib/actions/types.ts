@@ -15,7 +15,7 @@ export type ActionCategory =
   | 'file'
   | 'thread'
   | 'project'
-  | 'routine'
+  | 'assistant'
   | 'browser'
   | 'other'
 

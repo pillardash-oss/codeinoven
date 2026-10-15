@@ -7,13 +7,7 @@
    * changes, and that inside mark is what names the job.
    */
   export type AssistantIconMark =
-    | 'mark'
-    | 'routine'
-    | 'task'
-    | 'run'
-    | 'how-to'
-    | 'connection'
-    | 'agent'
+    'mark' | 'assistant' | 'task' | 'run' | 'knowledge' | 'connection' | 'agent'
 
   interface Props extends Omit<SVGAttributes<SVGSVGElement>, 'size'> {
     /** The inside mark that names the job. Defaults to the assistant itself. */
@@ -69,7 +63,13 @@
     <circle cx="16.2" cy="5" r="1.7" />
   {/if}
 
-  <rect x={tier === 'rail' ? 4.2 : 3.8} y={tier === 'rail' ? 6.4 : 5.8} width={tier === 'rail' ? 15.6 : 16.4} height={tier === 'rail' ? 12.4 : 13.6} rx={tier === 'rail' ? 6 : 6.2} />
+  <rect
+    x={tier === 'rail' ? 4.2 : 3.8}
+    y={tier === 'rail' ? 6.4 : 5.8}
+    width={tier === 'rail' ? 15.6 : 16.4}
+    height={tier === 'rail' ? 12.4 : 13.6}
+    rx={tier === 'rail' ? 6 : 6.2}
+  />
 
   {#if mark === 'mark'}
     <!-- The assistant itself. The largest tier adds the mouth, because a face
@@ -82,7 +82,7 @@
       <circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
       <circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
     {/if}
-  {:else if mark === 'routine'}
+  {:else if mark === 'assistant'}
     <!-- A repeat ring: this happens again and again on a clock. -->
     <path d="M8.6 12.6a3.6 3.6 0 1 0 1.3-2.8" />
     <path d="M8.4 8.6v2.6h2.6" />
@@ -93,13 +93,13 @@
   {:else if mark === 'run'}
     <!-- A soft play mark: one execution of a task, on its own thread. -->
     <path d="M10.6 9.4l4.6 3.1-4.6 3.1z" />
-  {:else if mark === 'how-to'}
-    <!-- A page: the instructions the routine is told to follow. -->
+  {:else if mark === 'knowledge'}
+    <!-- A page: the instructions the assistant is told to follow. -->
     <path d="M8.4 9.6h7.2" />
     <path d="M8.4 12.6h7.2" />
     <path d="M8.4 15.6h4" />
   {:else if mark === 'connection'}
-    <!-- Two joined ends: the services this routine reaches out to. -->
+    <!-- Two joined ends: the services this assistant reaches out to. -->
     <path d="M10 12h4" />
     <circle cx="8.6" cy="12" r="1.4" fill="currentColor" stroke="none" />
     <circle cx="15.4" cy="12" r="1.4" fill="currentColor" stroke="none" />

@@ -41,7 +41,7 @@ import { reportError } from './app-errors.svelte'
  * The global browser's project id is the identity every other durable browser
  * record uses for it, so the history uses it too: one string no conversation can
  * collide with, because a conversation's scope is its project, its thread or its
- * routine.
+ * assistant.
  */
 export const BROWSER_HISTORY_GLOBAL_SCOPE = GLOBAL_BROWSER_PROJECT_ID
 const BROWSER_HISTORY_BOX_SCOPE_PREFIX = 'browser-box:'
@@ -83,7 +83,7 @@ export class BrowserHistoryState {
   /**
    * Resolves a conversation to the browser surface its tabs belong to.
    *
-   * Injected by the runtime seam, because the answer for an assistant routine's
+   * Injected by the runtime seam, because the answer for an assistant's
    * threads needs the thread rows the sidebar deliberately does not hold. Until it
    * is installed, {@link scopeFor} falls back to the same
    * `conversationScopeId` the tab strip does.
@@ -141,7 +141,7 @@ export class BrowserHistoryState {
    *
    * The global browser is always its own surface, whichever conversation happened
    * to open the tab. A conversation resolves through the injected resolver, which
-   * widens an assistant routine's threads to the routine, the same way the tab
+   * widens an assistant's threads to the assistant, the same way the tab
    * strip does, so a browser's history always covers exactly the tabs the user can
    * see.
    */

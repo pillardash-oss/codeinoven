@@ -1890,7 +1890,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
     const activation: UtilityActivation | undefined =
       rawActivation === 'always' || rawActivation === 'on_demand' ? rawActivation : undefined
-    // One install routine serves the card and the background updater, so both
+    // One install assistant serves the card and the background updater, so both
     // put the skill in exactly the destination the card advertises.
     return installMarketSkill(skillInstallContext(), {
       source,

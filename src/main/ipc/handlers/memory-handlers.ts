@@ -84,7 +84,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         : undefined,
       safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread',
       'full',
-      thread?.routineId
+      thread?.assistantId
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -144,7 +144,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
-        routineId: optionalMemoryEntityId(opts.routineId, 'Routine ID')
+        assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })
     }
   )
@@ -202,7 +202,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
-        routineId: optionalMemoryEntityId(opts.routineId, 'Routine ID')
+        assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })
     }
   )

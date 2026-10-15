@@ -138,7 +138,7 @@ export function chatEffectiveSettings(projectFallback: ThreadSettings): ThreadSe
  *
  * The same borrowing rule as a chat applies: only the model identity comes from
  * the project (harness, account, provider, model), never its File System mode or
- * permission level, since that would hand a routine's task access nobody granted
+ * permission level, since that would hand an assistant's task access nobody granted
  * it. A task stays pinned to auto review until File System is turned on for the
  * assistant itself.
  */

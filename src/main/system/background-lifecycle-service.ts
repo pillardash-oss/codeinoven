@@ -3,7 +3,7 @@
  *
  * "Closed" in background mode means **no window and no renderer process**. The
  * main process keeps running with a menu bar icon, SQLite, and a 30s scheduler
- * tick; when a routine comes due the run fires exactly as it does with a window
+ * tick; when an assistant comes due the run fires exactly as it does with a window
  * open, persists, notifies, and returns to idle. Reopening hydrates everything
  * from durable state, which is why nothing about background state may live in
  * renderer memory.
@@ -316,7 +316,7 @@ export class BackgroundLifecycleService {
    */
   refreshAttention(): void {
     // Every state change the icon reacts to is also one that can drain the last
-    // reason to stay: a run settling, a retry firing, a routine being paused.
+    // reason to stay: a run settling, a retry firing, an assistant being paused.
     // Deciding here means the residency exit happens on the change rather than at
     // the next launch. It costs nothing while a window is on screen.
     this.evaluateResidency()

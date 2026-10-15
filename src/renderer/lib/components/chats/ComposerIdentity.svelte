@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { ComposerProject, Routine, Thread } from '$shared/types'
+  import type { ComposerProject, Assistant, Thread } from '$shared/types'
 
   /**
    * The subset of a thread an assistant task's mark is drawn from: the same
@@ -21,11 +21,11 @@
    *
    * - `project`: a thread of a project, named by the project.
    * - `chat`: a plain conversation   a temporary chat, or the chats view   which
-   *    has no project, no routine and no page behind it, so it is named by what
+   *    has no project, no assistant and no page behind it, so it is named by what
    *    it is.
-   * - `routine`: an assistant thread that belongs to a routine, named by the
-   *   routine it belongs to.
-   * - `task`: an assistant task that belongs to no routine, named by itself.
+   * - `assistant`: an assistant thread that belongs to an assistant, named by the
+   *   assistant it belongs to.
+   * - `task`: an assistant task that belongs to no assistant, named by itself.
    * - `browser-tab`: a browser tab's assistant conversation, named by the tab it
    *   answers about.
    *
@@ -44,11 +44,11 @@
         onSwitchProject?: (projectId: string) => void
       }
     | { kind: 'chat' }
-    | { kind: 'routine'; routine: Routine }
+    | { kind: 'assistant'; assistant: Assistant }
     | {
         kind: 'task'
         task: ComposerTaskIdentity
-        /** Routine accent tinting a custom task mark; the shared fallback otherwise. */
+        /** Assistant accent tinting a custom task mark; the shared fallback otherwise. */
         color?: string
       }
     | { kind: 'browser-tab'; tabId: string }
@@ -59,13 +59,13 @@
   import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
-    ROUTINE_ICON_FALLBACK_COLOR,
-    RoutineDefaultIcon,
-    getRoutineIcon,
-    routineAccentColor
-  } from '$lib/routine-icons'
+    ASSISTANT_ICON_FALLBACK_COLOR,
+    AssistantDefaultIcon,
+    getAssistantIcon,
+    assistantAccentColor
+  } from '$lib/assistant-icons'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import { faviconState } from '$lib/stores/favicons.svelte'
@@ -88,20 +88,17 @@
     identity.kind === 'task' && identity.task.assistantIconType
       ? getIconSvgDataUrl(
           identity.task.assistantIconType,
-          identity.color ?? ROUTINE_ICON_FALLBACK_COLOR
+          identity.color ?? ASSISTANT_ICON_FALLBACK_COLOR
         )
       : null
   )
   let taskIconKey = $derived(identity.kind === 'task' ? taskRowIconKey(identity.task) : 'task')
   let taskAccent = $derived(identity.kind === 'task' ? (identity.color ?? null) : null)
 
-  /** The routine's mark, resolved exactly as its sidebar row resolves it. */
-  let routineIcon = $derived(
-    identity.kind === 'routine'
-      ? getRoutineIcon(
-          identity.routine,
-          assistantRoutines.iconUrls.get(identity.routine.id) ?? null
-        )
+  /** The assistant's mark, resolved exactly as its sidebar row resolves it. */
+  let assistantIcon = $derived(
+    identity.kind === 'assistant'
+      ? getAssistantIcon(identity.assistant, assistants.iconUrls.get(identity.assistant.id) ?? null)
       : null
   )
 
@@ -160,21 +157,18 @@
       </span>
     {/if}
   </ProjectSwitch>
-{:else if identity.kind === 'routine'}
+{:else if identity.kind === 'assistant'}
   <span
     class="composer-identity flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
-    title="Routine: {identity.routine.name}"
+    title="Assistant: {identity.assistant.name}"
   >
-    {#if routineIcon}
-      <img src={routineIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
+    {#if assistantIcon}
+      <img src={assistantIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
     {:else}
-      <RoutineDefaultIcon
-        size={13}
-        style="color: {routineAccentColor(identity.routine)}"
-      />
+      <AssistantDefaultIcon size={13} style="color: {assistantAccentColor(identity.assistant)}" />
     {/if}
     <span class="composer-identity-label min-w-0 truncate font-medium text-foreground"
-      >{identity.routine.name}</span
+      >{identity.assistant.name}</span
     >
   </span>
 {:else if identity.kind === 'task'}
@@ -184,9 +178,9 @@
   >
     {#if taskIcon}
       <img src={taskIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
-    {:else if taskIconKey === 'how-to'}
+    {:else if taskIconKey === 'knowledge'}
       <AssistantIcon
-        mark="how-to"
+        mark="knowledge"
         size={13}
         class="shrink-0 text-dimmed"
         style={taskAccent ? `color: ${taskAccent}` : ''}
@@ -237,7 +231,7 @@
        already the tightest this segment can be. -->
   <span
     class="composer-identity flex h-6 shrink-0 items-center px-1.5 text-[0.6875rem] text-muted"
-    title="A plain chat: no project, no routine, no page behind it"
+    title="A plain chat: no project, no assistant, no page behind it"
   >
     <span class="font-medium text-foreground">Chat</span>
   </span>

@@ -58,7 +58,7 @@ export function installRendererSessionGuards(deps: RendererSessionGuardDeps): vo
   // controls behind an `<audio controls>` element carry their own Download item,
   // and denying its request made that item do nothing at all, with no dialog and
   // no file. A blob handed over by the trusted window is therefore allowed
-  // through to Electron's default routine, which prompts for a save path; the
+  // through to Electron's default assistant, which prompts for a save path; the
   // name it suggests is the one the renderer registered for that URL.
   session.defaultSession.on('will-download', (event, item, webContents) => {
     const ownBlob =

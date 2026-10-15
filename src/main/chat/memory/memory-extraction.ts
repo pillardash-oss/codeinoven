@@ -247,8 +247,8 @@ export function detectMemoryCandidates(input: {
   )
   // A deterministic candidate belongs where the conversation does: its own
   // thread for a chat, the project for a project thread, and the assistant
-  // space for an assistant task (the routine is unknown until the model, which
-  // receives the routine scope word, decides).
+  // space for an assistant task (the assistant is unknown until the model, which
+  // receives the assistant scope word, decides).
   const audience = memoryAudienceForContainer(input.projectId)
   const scopes: MemoryScope[] = audience === 'chat' ? ['thread'] : [audience]
   const candidate: MemoryCandidate = {

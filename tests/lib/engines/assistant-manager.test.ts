@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
-import { RoutineManager } from '../../../src/lib/engines/routine-manager'
+import { AssistantManager } from '../../../src/lib/engines/assistant-manager'
 import { ProjectManager } from '../../../src/lib/engines/project-manager'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
-import { ASSISTANT_SPACE_ID, routineHowToComplete } from '../../../src/lib/types'
+import { ASSISTANT_SPACE_ID, assistantKnowledgeComplete } from '../../../src/lib/types'
 import type { Database } from '../../../src/main/database/database'
 
-describe('RoutineManager', () => {
+describe('AssistantManager', () => {
   let db: Database
-  let routines: RoutineManager
+  let assistants: AssistantManager
   let threads: ThreadManager
 
   beforeEach(async () => {
     db = await createTestDb()
-    routines = new RoutineManager(db)
+    assistants = new AssistantManager(db)
     threads = new ThreadManager(db)
     await new ProjectManager(db).ensureAssistantSpace()
   })
@@ -22,37 +22,39 @@ describe('RoutineManager', () => {
     destroyTestDb(db)
   })
 
-  it('creates a routine with a colour and an empty (incomplete) how-to', () => {
-    const routine = routines.createRoutine({ name: 'Triage PRs' })
-    expect(routine.id).toBeTruthy()
-    expect(routine.name).toBe('Triage PRs')
-    expect(routine.color).toBeTruthy()
-    expect(routine.howTo).toBe('')
-    expect(routineHowToComplete(routine)).toBe(false)
-    expect(routines.getRoutine(routine.id)?.name).toBe('Triage PRs')
+  it('creates an assistant with a colour and an empty (incomplete) knowledge', () => {
+    const assistant = assistants.createAssistant({ name: 'Triage PRs' })
+    expect(assistant.id).toBeTruthy()
+    expect(assistant.name).toBe('Triage PRs')
+    expect(assistant.color).toBeTruthy()
+    expect(assistant.knowledge).toBe('')
+    expect(assistantKnowledgeComplete(assistant)).toBe(false)
+    expect(assistants.getAssistant(assistant.id)?.name).toBe('Triage PRs')
   })
 
-  it('updates the how-to and stamps howToUpdatedAt', () => {
-    const routine = routines.createRoutine({ name: 'Morning report' })
-    const updated = routines.updateRoutine(routine.id, { howTo: 'Check the inbox daily.' })
-    expect(updated.howTo).toBe('Check the inbox daily.')
-    expect(updated.howToUpdatedAt).toBeTypeOf('number')
-    expect(routineHowToComplete(updated)).toBe(true)
+  it('updates the knowledge and stamps knowledgeUpdatedAt', () => {
+    const assistant = assistants.createAssistant({ name: 'Morning report' })
+    const updated = assistants.updateAssistant(assistant.id, {
+      knowledge: 'Check the inbox daily.'
+    })
+    expect(updated.knowledge).toBe('Check the inbox daily.')
+    expect(updated.knowledgeUpdatedAt).toBeTypeOf('number')
+    expect(assistantKnowledgeComplete(updated)).toBe(true)
   })
 
   it('persists the default schedule round-trip', () => {
-    const routine = routines.createRoutine({
+    const assistant = assistants.createAssistant({
       name: 'Scheduled',
       schedule: { cadence: 'daily', times: ['09:00', '17:00'] }
     })
-    expect(routines.getRoutine(routine.id)?.schedule).toEqual({
+    expect(assistants.getAssistant(assistant.id)?.schedule).toEqual({
       cadence: 'daily',
       times: ['09:00', '17:00']
     })
   })
 
   it('persists a connection and the agent setup prompt it carries', () => {
-    const routine = routines.createRoutine({
+    const assistant = assistants.createAssistant({
       name: 'Slack digest',
       connections: [
         {
@@ -63,7 +65,7 @@ describe('RoutineManager', () => {
         }
       ]
     })
-    expect(routines.getRoutine(routine.id)?.connections).toEqual([
+    expect(assistants.getAssistant(assistant.id)?.connections).toEqual([
       {
         utilityId: 'required:slack',
         label: 'Slack',
@@ -73,8 +75,8 @@ describe('RoutineManager', () => {
     ])
   })
 
-  it('groups a task and resolves its schedule from the routine', async () => {
-    const routine = routines.createRoutine({
+  it('groups a task and resolves its schedule from the assistant', async () => {
+    const assistant = assistants.createAssistant({
       name: 'Triage',
       schedule: { cadence: 'daily', times: ['09:00'] }
     })
@@ -83,17 +85,17 @@ describe('RoutineManager', () => {
       providerId: 'pi',
       title: 'Triage run'
     })
-    routines.setTaskRoutine(task.id, routine.id)
-    const grouped = routines.listAssistantTasks().find((entry) => entry.id === task.id)
-    expect(grouped?.routineId).toBe(routine.id)
-    expect(routines.resolveTaskSchedule(grouped!)).toEqual({
+    assistants.assignTask(task.id, assistant.id)
+    const grouped = assistants.listAssistantTasks().find((entry) => entry.id === task.id)
+    expect(grouped?.assistantId).toBe(assistant.id)
+    expect(assistants.resolveTaskSchedule(grouped!)).toEqual({
       cadence: 'daily',
       times: ['09:00']
     })
   })
 
-  it('prefers a task schedule override over the routine default', async () => {
-    const routine = routines.createRoutine({
+  it('prefers a task schedule override over the assistant default', async () => {
+    const assistant = assistants.createAssistant({
       name: 'Triage',
       schedule: { cadence: 'daily', times: ['09:00'] }
     })
@@ -102,14 +104,14 @@ describe('RoutineManager', () => {
       providerId: 'pi',
       title: 'Triage run'
     })
-    routines.setTaskRoutine(task.id, routine.id)
-    routines.setTaskScheduleOverride(task.id, { cadence: 'hourly', times: [] })
-    const grouped = routines.listAssistantTasks().find((entry) => entry.id === task.id)
-    expect(routines.resolveTaskSchedule(grouped!)).toEqual({ cadence: 'hourly', times: [] })
+    assistants.assignTask(task.id, assistant.id)
+    assistants.setTaskScheduleOverride(task.id, { cadence: 'hourly', times: [] })
+    const grouped = assistants.listAssistantTasks().find((entry) => entry.id === task.id)
+    expect(assistants.resolveTaskSchedule(grouped!)).toEqual({ cadence: 'hourly', times: [] })
   })
 
   it('lists a task runs and never counts a run as a task', async () => {
-    const routine = routines.createRoutine({
+    const assistant = assistants.createAssistant({
       name: 'Triage',
       schedule: { cadence: 'daily', times: ['09:00'] }
     })
@@ -118,21 +120,23 @@ describe('RoutineManager', () => {
       providerId: 'pi',
       title: 'Triage'
     })
-    routines.setTaskRoutine(task.id, routine.id)
+    assistants.assignTask(task.id, assistant.id)
     const run = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
       title: 'Run · 09:00',
-      routineId: routine.id,
+      assistantId: assistant.id,
       assistantTaskId: task.id
     })
     // A run is an execution of a task, never a task: it is not listed, not
-    // schedulable, and not counted in the routine's task count.
-    expect(routines.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
-    expect(routines.listRoutineTasks(routine.id).map((entry) => entry.id)).toEqual([task.id])
-    expect(routines.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
-    expect(routines.taskIdForRun(run.id)).toBe(task.id)
-    expect(routines.taskIdForRun(task.id)).toBeNull()
+    // schedulable, and not counted in the assistant's task count.
+    expect(assistants.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
+    expect(assistants.listAssistantTasksFor(assistant.id).map((entry) => entry.id)).toEqual([
+      task.id
+    ])
+    expect(assistants.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
+    expect(assistants.taskIdForRun(run.id)).toBe(task.id)
+    expect(assistants.taskIdForRun(task.id)).toBeNull()
   })
 
   it('deletes a task with its runs, so no orphan run row survives', async () => {
@@ -157,9 +161,9 @@ describe('RoutineManager', () => {
     expect(await threads.getThread(ASSISTANT_SPACE_ID, sibling.id)).not.toBeNull()
   })
 
-  it('deletes every thread of a routine when it is removed, the hidden how-to thread included', async () => {
-    routines.attachThreadDeleter((threadId) => threads.deleteThread(ASSISTANT_SPACE_ID, threadId))
-    const routine = routines.createRoutine({ name: 'Temp' })
+  it('deletes every thread of an assistant when it is removed, the hidden knowledge thread included', async () => {
+    assistants.attachThreadDeleter((threadId) => threads.deleteThread(ASSISTANT_SPACE_ID, threadId))
+    const assistant = assistants.createAssistant({ name: 'Temp' })
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
@@ -171,17 +175,17 @@ describe('RoutineManager', () => {
       title: 'Getting started',
       assistantGettingStarted: true
     })
-    routines.setTaskRoutine(task.id, routine.id)
-    routines.setTaskRoutine(setup.id, routine.id)
-    // Hidden how-to thread: archived out of the sidebar but still owned.
-    routines.setHowToHidden(routine.id, true)
-    expect(routines.howToThread(routine.id)?.id).toBe(setup.id)
+    assistants.assignTask(task.id, assistant.id)
+    assistants.assignTask(setup.id, assistant.id)
+    // Hidden knowledge thread: archived out of the sidebar but still owned.
+    assistants.setKnowledgeHidden(assistant.id, true)
+    expect(assistants.knowledgeThread(assistant.id)?.id).toBe(setup.id)
 
-    await routines.deleteRoutine(routine.id)
+    await assistants.deleteAssistant(assistant.id)
 
-    expect(routines.getRoutine(routine.id)).toBeNull()
-    expect(routines.howToThread(routine.id)).toBeNull()
-    expect(routines.listAssistantTasks().map((entry) => entry.id)).not.toContain(task.id)
+    expect(assistants.getAssistant(assistant.id)).toBeNull()
+    expect(assistants.knowledgeThread(assistant.id)).toBeNull()
+    expect(assistants.listAssistantTasks().map((entry) => entry.id)).not.toContain(task.id)
     expect(await threads.getThread(ASSISTANT_SPACE_ID, setup.id)).toBeNull()
   })
 
@@ -193,7 +197,7 @@ describe('RoutineManager', () => {
       title: 'Assistant task'
     })
     await threads.createThread({ projectId: project.id, providerId: 'pi', title: 'Project thread' })
-    const tasks = routines.listAssistantTasks()
+    const tasks = assistants.listAssistantTasks()
     expect(tasks).toHaveLength(1)
     expect(tasks[0].title).toBe('Assistant task')
   })
@@ -204,7 +208,7 @@ describe('RoutineManager', () => {
       providerId: 'pi',
       title: 'Task'
     })
-    routines.setTaskLastRun(task.id, 1_700_000_000_000)
-    expect(routines.listAssistantTasks()[0].lastRunAt).toBe(1_700_000_000_000)
+    assistants.setTaskLastRun(task.id, 1_700_000_000_000)
+    expect(assistants.listAssistantTasks()[0].lastRunAt).toBe(1_700_000_000_000)
   })
 })

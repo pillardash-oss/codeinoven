@@ -56,7 +56,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // Same channel `registerAssistantHandlers` would register after first paint;
   // registering it on the hydration surface lets the renderer resolve it without
   // waiting for the feature graph, and that handler skips its own registration.
-  ipcMain.handle('routine:ensureSpace', () => projectManager.ensureAssistantSpace())
+  ipcMain.handle('assistant:ensureSpace', () => projectManager.ensureAssistantSpace())
   ipcMain.handle('project:getIcon', (_, projectId: string) =>
     projectManager.getIconDataUrl(projectId)
   )

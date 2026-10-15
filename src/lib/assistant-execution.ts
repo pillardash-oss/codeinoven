@@ -1,19 +1,19 @@
-import type { RoutineExecution, ThreadSettings } from './types'
+import type { AssistantExecution, ThreadSettings } from './types'
 import { LOCAL_OVEN_ID } from './ovens'
 
 /**
- * Routine execution targets, as pure functions.
+ * Assistant execution targets, as pure functions.
  *
- * A routine may name an Oven its runs execute on, so scheduled assistant work
- * can stay off the user's own device. The routine's target is the default for
+ * An assistant may name an Oven its runs execute on, so scheduled assistant work
+ * can stay off the user's own device. The assistant's target is the default for
  * every run it dispatches; a task that already has an Oven of its own keeps it,
- * so a task-level choice always wins over the routine default.
+ * so a task-level choice always wins over the assistant default.
  */
 
 /** Whether an execution target actually points at a remote Oven. */
 export function isRemoteExecution(
-  execution: RoutineExecution | undefined
-): execution is RoutineExecution {
+  execution: AssistantExecution | undefined
+): execution is AssistantExecution {
   return !!execution && execution.ovenId !== LOCAL_OVEN_ID
 }
 
@@ -24,11 +24,11 @@ export function taskHasOwnOven(settings: ThreadSettings | undefined): boolean {
 
 /**
  * The settings a run should actually execute with: the task's settings, plus
- * the routine's target when the task has not chosen an Oven itself.
+ * the assistant's target when the task has not chosen an Oven itself.
  */
-export function settingsWithRoutineTarget(
+export function settingsWithAssistantTarget(
   settings: ThreadSettings,
-  execution: RoutineExecution | undefined
+  execution: AssistantExecution | undefined
 ): ThreadSettings {
   if (taskHasOwnOven(settings) || !isRemoteExecution(execution)) return settings
   const { ovenId, ovenPath } = execution

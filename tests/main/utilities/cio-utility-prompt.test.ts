@@ -64,7 +64,7 @@ describe('cio-utility contract', () => {
     expect(manage?.description).toContain('@cio-utility')
   })
 
-  it('puts installing, online research, and the secret path in scope for a routine run', () => {
+  it('puts installing, online research, and the secret path in scope for an assistant run', () => {
     expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_SEARCH_TOOL_NAME)
     expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_ACTIVATE_TOOL_NAME)
     expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_MANAGE_TOOL_NAME)

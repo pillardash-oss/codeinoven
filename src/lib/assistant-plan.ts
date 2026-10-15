@@ -1,19 +1,19 @@
-import { parseTimeOfDay, type RoutineSchedule, type ScheduleCadence } from './types'
+import { parseTimeOfDay, type AssistantSchedule, type ScheduleCadence } from './types'
 import {
   normalizePlanDelivery,
   normalizePlanPriority,
-  ROUTINE_DELIVERY_JSON_SCHEMA,
-  ROUTINE_PRIORITY_JSON_SCHEMA
-} from './routine-reporting'
-import type { RoutineDelivery, RoutinePriority } from './types'
+  ASSISTANT_DELIVERY_JSON_SCHEMA,
+  ASSISTANT_PRIORITY_JSON_SCHEMA
+} from './assistant-reporting'
+import type { AssistantDelivery, AssistantPriority } from './types'
 
 /**
- * The machine-readable routine plan the authoring agent emits, and the JSON
+ * The machine-readable assistant plan the authoring agent emits, and the JSON
  * schemas that make its schedule and its connections reliable.
  *
- * The how-to itself is free prose (a `how-to` fence). Everything the app has to
- * act on deterministically   when the routine runs and which utilities it needs
- *   travels as one JSON object in a `routine` fence, validated here. Prose
+ * The knowledge itself is free prose (a `knowledge` fence). Everything the app has to
+ * act on deterministically   when the assistant runs and which utilities it needs
+ *   travels as one JSON object in a `assistant` fence, validated here. Prose
  * parsing ("cadence: weekdays", "every day at 8:05am") stays as a tolerant
  * fallback so an older draft still commits, but the schema is the contract: a
  * schedule or a connection the schema rejects contributes nothing instead of
@@ -23,8 +23,8 @@ import type { RoutineDelivery, RoutinePriority } from './types'
  * read the exact same rules.
  */
 
-/** One service the routine needs, as the plan names it. */
-export interface RoutinePlanConnection {
+/** One service the assistant needs, as the plan names it. */
+export interface AssistantPlanConnection {
   /** Display name the plan used, matched against the utility library. */
   name: string
   /** Exact utility id when the plan knows it, preferred over name matching. */
@@ -38,14 +38,14 @@ export interface RoutinePlanConnection {
 }
 
 /** The validated plan: the schedule to apply, the connections to link, and how
- *  the routine reports back to the user. */
-export interface RoutinePlan {
-  schedule: RoutineSchedule | null
-  connections: RoutinePlanConnection[]
-  /** Where the routine's output goes; absent for an action-only routine. */
-  delivery: RoutineDelivery | null
-  /** The routine's default urgency; absent to let each run decide. */
-  priority: RoutinePriority | null
+ *  the assistant reports back to the user. */
+export interface AssistantPlan {
+  schedule: AssistantSchedule | null
+  connections: AssistantPlanConnection[]
+  /** Where the assistant's output goes; absent for an action-only assistant. */
+  delivery: AssistantDelivery | null
+  /** The assistant's default urgency; absent to let each run decide. */
+  priority: AssistantPriority | null
 }
 
 const SCHEDULE_CADENCES: readonly ScheduleCadence[] = [
@@ -61,15 +61,15 @@ const CADENCE_SET = new Set<string>(SCHEDULE_CADENCES)
 const TIME_PATTERN = '^([01]?\\d|2[0-3]):[0-5]\\d$'
 
 /**
- * JSON schema for one routine schedule. Conditional branches enforce what the
+ * JSON schema for one assistant schedule. Conditional branches enforce what the
  * scheduler actually needs: a one-shot schedule carries `onceAt`, and every
  * timed cadence carries at least one `HH:mm` value.
  */
-export const ROUTINE_SCHEDULE_JSON_SCHEMA: Record<string, unknown> = {
+export const ASSISTANT_SCHEDULE_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
   description:
-    'When the routine runs. Use local wall-clock times; the app fires against the machine clock.',
+    'When the assistant runs. Use local wall-clock times; the app fires against the machine clock.',
   properties: {
     cadence: {
       type: 'string',
@@ -110,11 +110,11 @@ export const ROUTINE_SCHEDULE_JSON_SCHEMA: Record<string, unknown> = {
   ]
 }
 
-/** JSON schema for one routine connection. */
-export const ROUTINE_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
+/** JSON schema for one assistant connection. */
+export const ASSISTANT_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
-  description: 'One utility the routine needs, e.g. an MCP server or a skill.',
+  description: 'One utility the assistant needs, e.g. an MCP server or a skill.',
   properties: {
     name: {
       type: 'string',
@@ -132,36 +132,36 @@ export const ROUTINE_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
       type: 'string',
       minLength: 1,
       description:
-        'Include ONLY when you could not install this connection yourself. A run of the routine also attempts setup itself, so this is the fallback for what a run still cannot supply. A ready-to-run prompt for the utility setup agent: what the capability is, its source (official MCP URL, npm package, or skill), and what the user must supply. The user sends it verbatim.'
+        'Include ONLY when you could not install this connection yourself. A run of the assistant also attempts setup itself, so this is the fallback for what a run still cannot supply. A ready-to-run prompt for the utility setup agent: what the capability is, its source (official MCP URL, npm package, or skill), and what the user must supply. The user sends it verbatim.'
     }
   },
   required: ['name']
 }
 
-/** JSON schema for the whole `routine` plan block. */
-export const ROUTINE_PLAN_JSON_SCHEMA: Record<string, unknown> = {
+/** JSON schema for the whole `assistant` plan block. */
+export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
-  description: 'The machine-readable half of a routine: when it runs and what it needs.',
+  description: 'The machine-readable half of an assistant: when it runs and what it needs.',
   properties: {
     schedule: {
-      anyOf: [ROUTINE_SCHEDULE_JSON_SCHEMA, { type: 'null' }],
+      anyOf: [ASSISTANT_SCHEDULE_JSON_SCHEMA, { type: 'null' }],
       description:
-        'When the routine runs, or null for a routine that has no schedule and runs only on demand. Use local wall-clock times; the app fires against the machine clock.'
+        'When the assistant runs, or null for an assistant that has no schedule and runs only on demand. Use local wall-clock times; the app fires against the machine clock.'
     },
     connections: {
       type: 'array',
-      items: ROUTINE_CONNECTION_JSON_SCHEMA,
-      description: 'Every service the routine needs. An empty array means it needs none.'
+      items: ASSISTANT_CONNECTION_JSON_SCHEMA,
+      description: 'Every service the assistant needs. An empty array means it needs none.'
     },
-    delivery: ROUTINE_DELIVERY_JSON_SCHEMA,
-    priority: ROUTINE_PRIORITY_JSON_SCHEMA
+    delivery: ASSISTANT_DELIVERY_JSON_SCHEMA,
+    priority: ASSISTANT_PRIORITY_JSON_SCHEMA
   },
   required: ['schedule', 'connections']
 }
 
 /** The plan schema as compact text, ready to paste into an authoring contract. */
-export const ROUTINE_PLAN_SCHEMA_TEXT = JSON.stringify(ROUTINE_PLAN_JSON_SCHEMA)
+export const ASSISTANT_PLAN_SCHEMA_TEXT = JSON.stringify(ASSISTANT_PLAN_JSON_SCHEMA)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -181,7 +181,7 @@ function normalizeTime(value: unknown): string | null {
  * a timed cadence with no usable time, a one-shot with no fire time). The app
  * treats null as "no schedule" rather than inventing one.
  */
-export function normalizePlanSchedule(value: unknown): RoutineSchedule | null {
+export function normalizePlanSchedule(value: unknown): AssistantSchedule | null {
   if (!isRecord(value)) return null
   const cadence = typeof value.cadence === 'string' ? value.cadence : ''
   if (!CADENCE_SET.has(cadence)) return null
@@ -225,9 +225,9 @@ export function normalizePlanSchedule(value: unknown): RoutineSchedule | null {
  * Validate the plan's connections against the connections schema. A plain
  * string is accepted as shorthand for `{ name }`, so a terse plan still links.
  */
-export function normalizePlanConnections(value: unknown): RoutinePlanConnection[] {
+export function normalizePlanConnections(value: unknown): AssistantPlanConnection[] {
   if (!Array.isArray(value)) return []
-  const result: RoutinePlanConnection[] = []
+  const result: AssistantPlanConnection[] = []
   for (const entry of value) {
     if (typeof entry === 'string') {
       const name = entry.trim()
@@ -248,9 +248,9 @@ export function normalizePlanConnections(value: unknown): RoutinePlanConnection[
  * Validate one decoded plan value against the plan schema. Returns the plan, or
  * null when it carries nothing the app can act on   no usable schedule, no
  * connection, and no reporting agreement   so a stray JSON object never reads
- * as a routine plan.
+ * as an assistant plan.
  */
-export function parseRoutinePlanValue(value: unknown): RoutinePlan | null {
+export function parseAssistantPlanValue(value: unknown): AssistantPlan | null {
   if (!isRecord(value)) return null
   const schedule = normalizePlanSchedule(value.schedule)
   const connections = normalizePlanConnections(value.connections)
@@ -260,12 +260,12 @@ export function parseRoutinePlanValue(value: unknown): RoutinePlan | null {
   return { schedule, connections, delivery, priority }
 }
 
-/** Parse a JSON plan body (the `routine` fence) against the plan schema. */
-export function parseRoutinePlanJson(body: string): RoutinePlan | null {
+/** Parse a JSON plan body (the `assistant` fence) against the plan schema. */
+export function parseAssistantPlanJson(body: string): AssistantPlan | null {
   const text = body.trim()
   if (!text.startsWith('{')) return null
   try {
-    return parseRoutinePlanValue(JSON.parse(text))
+    return parseAssistantPlanValue(JSON.parse(text))
   } catch {
     return null
   }

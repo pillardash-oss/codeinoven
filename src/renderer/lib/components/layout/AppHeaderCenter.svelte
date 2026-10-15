@@ -9,8 +9,12 @@
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { RoutineDefaultIcon, getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import {
+    AssistantDefaultIcon,
+    getAssistantIcon,
+    assistantAccentColor
+  } from '$lib/assistant-icons'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -68,22 +72,19 @@
   )
 
   /**
-   * The routine an assistant thread belongs to, so the header can wear the same
-   * routine icon the sidebar row does. A run inherits its task's `routineId`, so
-   * this resolves for a task and each of its runs alike; a routine-less task has
-   * no routine and the header falls back to the routine default mark.
+   * The assistant an assistant thread belongs to, so the header can wear the same
+   * assistant icon the sidebar row does. A run inherits its task's `assistantId`, so
+   * this resolves for a task and each of its runs alike; an assistant-less task has
+   * no assistant and the header falls back to the assistant default mark.
    */
-  let headerAssistantRoutine = $derived(
+  let headerAssistant = $derived(
     workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
-      ? assistantRoutines.routineForTask(workspaceState.selectedThread)
+      ? assistants.assistantForTask(workspaceState.selectedThread)
       : null
   )
   let headerAssistantIcon = $derived(
-    headerAssistantRoutine
-      ? getRoutineIcon(
-          headerAssistantRoutine,
-          assistantRoutines.iconUrls.get(headerAssistantRoutine.id) ?? null
-        )
+    headerAssistant
+      ? getAssistantIcon(headerAssistant, assistants.iconUrls.get(headerAssistant.id) ?? null)
       : null
   )
 </script>
@@ -113,20 +114,20 @@
       class="titlebar-no-drag relative flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
     >
       {#if thread.projectId === ASSISTANT_SPACE_ID}
-        <!-- An assistant thread wears its routine's icon, exactly as its sidebar
-             row does, so the header names the routine at a glance. A
-             routine-less task falls back to the routine default mark. -->
+        <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
+             row does, so the header names the assistant at a glance. A
+             assistant-less task falls back to the assistant default mark. -->
         <span
           class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center"
-          title={headerAssistantRoutine?.name ?? 'Assistant'}
+          title={headerAssistant?.name ?? 'Assistant'}
         >
           {#if headerAssistantIcon}
             <img src={headerAssistantIcon} alt="" class="h-4 w-4 object-contain" />
           {:else}
-            <RoutineDefaultIcon
+            <AssistantDefaultIcon
               size={14}
-              style="color: {headerAssistantRoutine
-                ? routineAccentColor(headerAssistantRoutine)
+              style="color: {headerAssistant
+                ? assistantAccentColor(headerAssistant)
                 : 'var(--color-muted)'}"
             />
           {/if}

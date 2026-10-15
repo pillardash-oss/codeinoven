@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile, unlink, open, stat, type FileHandle } from 'fs/promises'
+import { readFile, appendFile, unlink, open, stat, rename, type FileHandle } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
+import { Logger } from '../system/logger'
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
@@ -406,6 +407,7 @@ export class StorageEngine {
    * removes the source afterward to complete the cleanup.
    */
   private async migrateLegacyLayout(): Promise<void> {
+    await this.migrateLegacyAssistantDirectory()
     await this.moveLegacyFile('window-state.json', 'window-state/window-state.json')
     await this.moveLegacyFile('retry-scheduler.json', 'scheduler/retry-scheduler.json')
 
@@ -455,6 +457,36 @@ export class StorageEngine {
       await this.writeRaw(target, content)
     }
     await this.removeRaw(source)
+  }
+
+  /**
+   * Move each assistant's artifact directory from its old name.
+   *
+   * The feature was called a Routine when these directories were first written,
+   * so an assistant's icon and its Getting started checkpoint sit in
+   * `routines/<id>`. The whole directory moves once, so an assistant that was
+   * already set up keeps its icon and an interview that was half agreed is not
+   * lost. Idempotent: once the new directory exists the legacy one is left
+   * alone, and a failure is logged rather than fatal   the app simply reads the
+   * new directory, which is where everything written from now on lives.
+   */
+  private async migrateLegacyAssistantDirectory(): Promise<void> {
+    const isDirectory = async (path: string): Promise<boolean> => {
+      try {
+        return (await stat(path)).isDirectory()
+      } catch {
+        return false
+      }
+    }
+    const legacy = this.resolve('routines')
+    if (!(await isDirectory(legacy))) return
+    const target = this.resolve('assistants')
+    if (await isDirectory(target)) return
+    try {
+      await rename(legacy, target)
+    } catch (error: unknown) {
+      Logger.error('The legacy routines directory could not be moved to assistants:', error)
+    }
   }
 
   /**

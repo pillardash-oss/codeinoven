@@ -22,7 +22,7 @@ import { Logger } from './logger'
 export function hasUpcomingWork(state: BootstrapState, database: Database): boolean {
   const now = Date.now()
   try {
-    const scheduler = state.routineScheduler
+    const scheduler = state.assistantScheduler
     if (scheduler) {
       if (scheduler.listMissedRuns().length > 0) return true
       const lead = state.backgroundLifecycle?.wakeLeadMs ?? 0
@@ -56,7 +56,7 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
  *     run it belongs to is waiting on this process;
  *   - `run-due`: a slot is due now, or was missed, and must be fired or recorded;
  *   - `heartbeat-armed`: a heartbeat is enabled with times to fire. Like a
- *     routine it only pings while the app is running, so the clock is the reason
+ *     assistant it only pings while the app is running, so the clock is the reason
  *     the process exists;
  *   - `schedule-armed`: a task is on the clock and will come due later. Nothing
  *     needs the process this second, but the clock is the whole reason a menu bar
@@ -87,10 +87,7 @@ export type ResidencyReason =
  * `BackgroundLifecycleService.evaluateResidency` for why it is never consulted at
  * all while a window is on screen.
  */
-export function residencyReason(
-  state: BootstrapState,
-  database: Database
-): ResidencyReason | null {
+export function residencyReason(state: BootstrapState, database: Database): ResidencyReason | null {
   try {
     if (state.quitForUpdate) return 'update-pending'
     if (database.isOpen() && new ThreadRepo(database).hasActive()) return 'thread-running'
@@ -99,7 +96,7 @@ export function residencyReason(
     if (state.retryScheduler?.hasPendingRetryBefore(now + SCHEDULED_RETRY_WAKE_WINDOW_MS)) {
       return 'retry-pending'
     }
-    const scheduler = state.routineScheduler
+    const scheduler = state.assistantScheduler
     if (scheduler) {
       if (scheduler.listMissedRuns().length > 0) return 'run-due'
       const lead = state.backgroundLifecycle?.wakeLeadMs ?? 0

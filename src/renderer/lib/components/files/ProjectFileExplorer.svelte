@@ -55,14 +55,14 @@
     projectId: string
     projectName: string
     /** Label beside the root icon; empty when the root names itself with the
-     *  icon alone (a routine root). */
+     *  icon alone (an assistant root). */
     projectLabel?: string
-    /** Root icon image for the tree header (a routine's own icon), or null for
+    /** Root icon image for the tree header (an assistant's own icon), or null for
      *  the generic mark. */
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine, which draws the routine default
-     *  mark when the routine has no icon of its own. */
-    routineRoot?: boolean
+    /** True when the tree's root is an assistant, which draws the assistant default
+     *  mark when the assistant has no icon of its own. */
+    assistantRoot?: boolean
     /** Accent colour of the tree's root identity, or null for the default
      *  accent. */
     projectAccentColor?: string | null
@@ -90,7 +90,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null,
     projectState,
     onWidthChange,
@@ -1252,7 +1252,7 @@
     {projectName}
     {projectLabel}
     {projectIconUrl}
-    {routineRoot}
+    {assistantRoot}
     {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}

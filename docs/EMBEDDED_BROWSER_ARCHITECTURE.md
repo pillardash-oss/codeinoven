@@ -16,7 +16,7 @@ material way, and the difference is deliberate.
 - **One persistent Electron session per project**, `persist:codeinoven-browser:<projectId>`
   (`src/main/browser/browser-service.ts`). A project's conversations therefore share
   cookies, web storage and logins, which is what keeps the user signed in across
-  threads, routines and agent runs. A tab that names a box is the exception to that
+  threads, assistants and agent runs. A tab that names a box is the exception to that
   partition, because a box is one jar for the whole profile (see the box bullet
   below). Splitting the session per agent would be the only way to give each agent
   its own cookie jar, and it would break that single sign-on, so it is not done.
@@ -41,7 +41,7 @@ material way, and the difference is deliberate.
   - The agent's target tab is addressed per `(projectId, threadId)` (`agentTabIds`), so
     two threads never drive the same page.
   - For hidden conversation containers (the inbox and the assistant space) the sidebar
-    tab list is scoped to the open conversation, so a background routine's tabs never
+    tab list is scoped to the open conversation, so a background assistant's tabs never
     surface in another conversation and cannot be closed from there.
   - Closing a thread destroys exactly that thread's tabs (`browser:destroyThread`).
 - **Popup windows are a global-browser feature.** The personal browser hosts a page's

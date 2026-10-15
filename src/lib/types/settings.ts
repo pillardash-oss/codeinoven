@@ -108,7 +108,7 @@ export interface MemoryEntry {
   projectId?: string
   threadId?: string
   /** Set by routine-scoped memory: the routine whose tasks receive it. */
-  routineId?: string
+  assistantId?: string
   /** Harness-scoped model keys for model-specific memories. */
   modelKeys?: string[]
 }
@@ -132,7 +132,7 @@ export interface MemoryProposal {
   projectId?: string
   threadId?: string
   /** Set by a routine-scoped proposal: the routine whose tasks receive it. */
-  routineId?: string
+  assistantId?: string
   /** Harness-scoped model keys for model-specific proposals. */
   modelKeys?: string[]
   createdAt: number

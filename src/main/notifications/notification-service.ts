@@ -11,7 +11,7 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
-import { RoutineRepo } from '../database/repositories/routine-repo'
+import { AssistantRepo } from '../database/repositories/assistant-repo'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
@@ -121,7 +121,7 @@ export class NotificationService {
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
   private readonly assignmentRepo: AssignmentRepo
-  private readonly routineRepo: RoutineRepo
+  private readonly assistantRepo: AssistantRepo
   private readonly inbox: NotificationInboxStore
   private readonly onThreadClicked: ThreadClickedHandler
   private readonly lastObservedStatus = new Map<string, ThreadStatus>()
@@ -157,7 +157,7 @@ export class NotificationService {
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
     this.assignmentRepo = new AssignmentRepo(db)
-    this.routineRepo = new RoutineRepo(db)
+    this.assistantRepo = new AssistantRepo(db)
     this.inbox = new NotificationInboxStore(storage)
     this.onThreadClicked = onThreadClicked
 
@@ -219,15 +219,15 @@ export class NotificationService {
 
   /**
    * Read the durable inbox, then heal the assistant entries written before the
-   * payload carried a routine. The run thread is the only place left that knows
-   * which routine those entries belong to, so the store reads it back from
+   * payload carried an assistant. The run thread is the only place left that knows
+   * which assistant those entries belong to, so the store reads it back from
    * there; the pass is a no-op once the file has been rewritten.
    */
   private async loadInbox(): Promise<void> {
     await this.inbox.load()
-    await this.inbox.resolveMissingRoutineIds(async (threadId) => {
+    await this.inbox.resolveMissingAssistantIds(async (threadId) => {
       const thread = await this.threadRepo.getViaWorker(threadId)
-      return thread?.routineId ?? null
+      return thread?.assistantId ?? null
     })
   }
 
@@ -1000,14 +1000,14 @@ export class NotificationService {
   }
 
   /**
-   * Resolve the user-facing assistant task or routine title without holding the
+   * Resolve the user-facing assistant task or assistant title without holding the
    * main thread on synchronous SQLite reads.
    *
-   * A run names the task it runs; a task names itself; a routine's Getting
-   * started host is an authoring thread, not a job, so it names its routine
+   * A run names the task it runs; a task names itself; an assistant's Getting
+   * started host is an authoring thread, not a job, so it names its assistant
    * instead of its fixed title. A completed authoring turn returns an empty
    * string   it is not a finished run   but a failure or a parked card there
-   * still names its routine, because "Assistant hit an error" says nothing about
+   * still names its assistant, because "Assistant hit an error" says nothing about
    * what actually failed.
    */
   private async assistantSubjectName(thread: Thread, kind: AgentNotificationKind): Promise<string> {
@@ -1017,9 +1017,11 @@ export class NotificationService {
         const task = await this.threadRepo.getViaWorker(thread.assistantTaskId)
         if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
       }
-      if (thread.routineId) {
-        const routineName = (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim()
-        if (routineName) return routineName
+      if (thread.assistantId) {
+        const assistantName = (
+          await this.assistantRepo.getViaWorker(thread.assistantId)
+        )?.name.trim()
+        if (assistantName) return assistantName
       }
       return isAssistantSetupThread(thread) ? '' : thread.title.trim()
     } catch (error) {
@@ -1038,7 +1040,7 @@ export class NotificationService {
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const isAssistant = source === 'assistant'
     const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
-    // Name every assistant notice after the task or routine the user
+    // Name every assistant notice after the task or assistant the user
     // recognizes, so a failure reads "Slack digest hit an error" instead of the
     // generic "Assistant hit an error" that made the panel's assistants tab
     // impossible to scan. A non-assistant notice keeps its project/chat name.
@@ -1070,7 +1072,7 @@ export class NotificationService {
     // An assistant run says what it did; naming the hidden assistant space as
     // the project it "finished in" would read as a project thread, and repeating
     // the title in the body reads as noise beside a title that is already the
-    // routine or task name, so a completed assistant run states its outcome.
+    // assistant or task name, so a completed assistant run states its outcome.
     const body =
       kind === 'completed'
         ? isAssistant
@@ -1097,9 +1099,9 @@ export class NotificationService {
       ...(lastError ? { errorDetail: lastError } : {}),
       projectId: thread.projectId,
       threadId: thread.id,
-      // The owning routine rides on the payload so the panel's routines/tasks
+      // The owning assistant rides on the payload so the panel's assistants/tasks
       // filter is authoritative without re-reading the thread it names.
-      ...(thread.routineId ? { routineId: thread.routineId } : {}),
+      ...(thread.assistantId ? { assistantId: thread.assistantId } : {}),
       source,
       projectName,
       projectColor

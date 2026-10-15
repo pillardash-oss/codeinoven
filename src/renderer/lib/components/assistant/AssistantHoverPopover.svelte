@@ -9,46 +9,46 @@
     Sparkles
   } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
-  import { describeSchedule, routineIsScheduled, type Routine } from '$shared/types'
-  import { routineGap } from './assistant-view'
+  import { describeSchedule, assistantIsScheduled, type Assistant } from '$shared/types'
+  import { assistantGap } from './assistant-view'
 
   interface Props {
-    routine: Routine
-    /** How many times this routine has run. The Getting started host is an
+    assistant: Assistant
+    /** How many times this assistant has run. The Getting started host is an
      *  authoring thread, not an execution, so it is never counted. */
     runCount: number
-    /** True while any task in this routine is running. */
+    /** True while any task in this assistant is running. */
     working: boolean
     /** At least one task or run waits on the user or has failed. */
     attention?: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
-    /** Next intended fire for the routine, or null when unscheduled. */
+    /** Next intended fire for the assistant, or null when unscheduled. */
     nextRunAt: number | null
   }
 
-  let { routine, runCount, working, missed, nextRunAt, attention = false }: Props = $props()
+  let { assistant, runCount, working, missed, nextRunAt, attention = false }: Props = $props()
 
-  const incomplete = $derived(routineGap(routine) !== null)
-  const gapLabel = $derived(routineGap(routine) ?? '')
-  const scheduled = $derived(routineIsScheduled(routine))
+  const incomplete = $derived(assistantGap(assistant) !== null)
+  const gapLabel = $derived(assistantGap(assistant) ?? '')
+  const scheduled = $derived(assistantIsScheduled(assistant))
   const scheduleLabel = $derived(
-    scheduled ? describeSchedule(routine.schedule ?? null) : 'Runs on demand'
+    scheduled ? describeSchedule(assistant.schedule ?? null) : 'Runs on demand'
   )
   const scheduleAt = $derived(
     !scheduled || nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`
   )
-  const howToPreview = $derived.by(() => {
-    const text = routine.howTo.trim().replace(/\s+/g, ' ')
-    if (text.length === 0) return 'No how-to written yet.'
+  const knowledgePreview = $derived.by(() => {
+    const text = assistant.knowledge.trim().replace(/\s+/g, ' ')
+    if (text.length === 0) return 'No knowledge written yet.'
     return text.length > 180 ? `${text.slice(0, 180)}…` : text
   })
-  const description = $derived(routine.description?.trim() ?? '')
-  const createdLabel = $derived(formatDateTime(routine.createdAt))
-  const updatedLabel = $derived(formatDateTime(routine.updatedAt))
+  const description = $derived(assistant.description?.trim() ?? '')
+  const createdLabel = $derived(formatDateTime(assistant.createdAt))
+  const updatedLabel = $derived(formatDateTime(assistant.updatedAt))
 
   const statusLabel = $derived(
-    routine.paused
+    assistant.paused
       ? 'Paused'
       : incomplete
         ? gapLabel
@@ -65,7 +65,7 @@
                   : 'Ready'
   )
   const statusColor = $derived(
-    routine.paused
+    assistant.paused
       ? 'var(--color-warning)'
       : incomplete
         ? 'var(--color-warning)'
@@ -79,7 +79,7 @@
   )
 </script>
 
-<p class="mb-2 break-words text-sm font-medium text-foreground">{routine.name}</p>
+<p class="mb-2 break-words text-sm font-medium text-foreground">{assistant.name}</p>
 {#if description}
   <p class="mb-2 break-words text-[0.6875rem] leading-relaxed text-muted">{description}</p>
 {/if}
@@ -122,7 +122,7 @@
     <dt class="w-16 shrink-0 text-dimmed">How to</dt>
     <dd class="flex min-w-0 items-start gap-1 text-muted">
       <Link2 size={12} class="mt-0.5 shrink-0" />
-      <span class="min-w-0 break-words">{howToPreview}</span>
+      <span class="min-w-0 break-words">{knowledgePreview}</span>
     </dd>
   </div>
   <div class="flex gap-2">

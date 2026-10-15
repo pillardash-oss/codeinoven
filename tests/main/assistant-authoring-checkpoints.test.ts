@@ -3,18 +3,18 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
-import { RoutineAuthoringCheckpoints } from '../../src/main/chat/routine-authoring-checkpoints'
+import { AssistantAuthoringCheckpoints } from '../../src/main/chat/assistant-authoring-checkpoints'
 import {
-  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
-  ROUTINE_AUTHORING_UTILITY_ID,
-  routineAuthoringContext,
-  routineAuthoringProgressContext
-} from '../../src/lib/routine-authoring'
+  ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
+  ASSISTANT_AUTHORING_UTILITY_ID,
+  assistantAuthoringContext,
+  assistantAuthoringProgressContext
+} from '../../src/lib/assistant-authoring'
 import { formatInterviewDecisions } from '../../src/main/chat/chat-engine/chat-engine-message-text'
 import type { AgentMessage } from '../../src/lib/types'
 
 /**
- * A routine's Getting started conversation is an interview, and these lock in
+ * An assistant's Getting started conversation is an interview, and these lock in
  * the state that makes it survive a model or harness switch mid-way: the
  * app-owned checkpoint the agent keeps current, and the exact answers the user
  * already submitted.
@@ -34,11 +34,11 @@ afterEach(async () => {
   )
 })
 
-async function testCheckpoints(): Promise<RoutineAuthoringCheckpoints> {
-  const root = await temporaryDirectory('codeinoven-routine-checkpoints-')
+async function testCheckpoints(): Promise<AssistantAuthoringCheckpoints> {
+  const root = await temporaryDirectory('codeinoven-assistant-checkpoints-')
   const storage = new StorageEngine(root)
   await storage.initialize()
-  return new RoutineAuthoringCheckpoints(storage)
+  return new AssistantAuthoringCheckpoints(storage)
 }
 
 /**
@@ -66,53 +66,53 @@ function questionAnswerMessage(id: string, body: string, createdAt: number): Age
   }
 }
 
-describe('RoutineAuthoringCheckpoints', () => {
-  it('round-trips one checkpoint per routine and replaces it in place', async () => {
+describe('AssistantAuthoringCheckpoints', () => {
+  it('round-trips one checkpoint per assistant and replaces it in place', async () => {
     const checkpoints = await testCheckpoints()
-    expect(await checkpoints.read('routine-1')).toBeNull()
+    expect(await checkpoints.read('assistant-1')).toBeNull()
 
-    await checkpoints.save('routine-1', '# Interview\n\n- Runs daily at 08:05')
-    expect(await checkpoints.read('routine-1')).toContain('Runs daily at 08:05')
+    await checkpoints.save('assistant-1', '# Interview\n\n- Runs daily at 08:05')
+    expect(await checkpoints.read('assistant-1')).toContain('Runs daily at 08:05')
 
-    await checkpoints.save('routine-1', '# Interview\n\n- Runs daily at 09:00')
-    const updated = await checkpoints.read('routine-1')
+    await checkpoints.save('assistant-1', '# Interview\n\n- Runs daily at 09:00')
+    const updated = await checkpoints.read('assistant-1')
     expect(updated).toContain('09:00')
     expect(updated).not.toContain('08:05')
 
-    // One routine's checkpoint never leaks into another's.
-    await checkpoints.save('routine-2', '# Interview\n\n- Different routine')
-    expect(await checkpoints.read('routine-1')).toContain('09:00')
-    expect(await checkpoints.read('routine-2')).toContain('Different routine')
+    // One assistant's checkpoint never leaks into another's.
+    await checkpoints.save('assistant-2', '# Interview\n\n- Different assistant')
+    expect(await checkpoints.read('assistant-1')).toContain('09:00')
+    expect(await checkpoints.read('assistant-2')).toContain('Different assistant')
   })
 
   it('clears a checkpoint without touching the others', async () => {
     const checkpoints = await testCheckpoints()
-    await checkpoints.save('routine-1', '# Interview')
-    await checkpoints.save('routine-2', '# Interview')
+    await checkpoints.save('assistant-1', '# Interview')
+    await checkpoints.save('assistant-2', '# Interview')
 
-    await checkpoints.clear('routine-1')
+    await checkpoints.clear('assistant-1')
 
-    expect(await checkpoints.read('routine-1')).toBeNull()
-    expect(await checkpoints.read('routine-2')).toBe('# Interview')
+    expect(await checkpoints.read('assistant-1')).toBeNull()
+    expect(await checkpoints.read('assistant-2')).toBe('# Interview')
   })
 
   it('bounds the checkpoint and refuses an empty body or a traversal id', async () => {
     const checkpoints = await testCheckpoints()
-    await expect(checkpoints.save('routine-1', '   ')).rejects.toThrow(/1-24000 characters/u)
+    await expect(checkpoints.save('assistant-1', '   ')).rejects.toThrow(/1-24000 characters/u)
     await expect(
-      checkpoints.save('routine-1', 'x'.repeat(ROUTINE_AUTHORING_CHECKPOINT_LIMIT + 1))
+      checkpoints.save('assistant-1', 'x'.repeat(ASSISTANT_AUTHORING_CHECKPOINT_LIMIT + 1))
     ).rejects.toThrow(/1-24000 characters/u)
-    expect(() => checkpoints.path('../../escape')).toThrow(/Invalid routine id/u)
+    expect(() => checkpoints.path('../../escape')).toThrow(/Invalid assistant id/u)
   })
 
   it('keeps the last write when two saves race', async () => {
     const checkpoints = await testCheckpoints()
     await Promise.all([
-      checkpoints.save('routine-1', '# First'),
-      checkpoints.save('routine-1', '# Second'),
-      checkpoints.save('routine-1', '# Third')
+      checkpoints.save('assistant-1', '# First'),
+      checkpoints.save('assistant-1', '# Second'),
+      checkpoints.save('assistant-1', '# Third')
     ])
-    expect(await checkpoints.read('routine-1')).toBe('# Third')
+    expect(await checkpoints.read('assistant-1')).toBe('# Third')
   })
 })
 
@@ -137,9 +137,9 @@ describe('formatInterviewDecisions', () => {
   })
 })
 
-describe('routineAuthoringProgressContext', () => {
+describe('assistantAuthoringProgressContext', () => {
   it('carries the checkpoint and the resolved decisions as final', () => {
-    const context = routineAuthoringProgressContext({
+    const context = assistantAuthoringProgressContext({
       checkpoint: '- Cadence: 08:05 daily',
       decisions: '1. Where does it go?\n   - In CodeInOven'
     })
@@ -150,22 +150,22 @@ describe('routineAuthoringProgressContext', () => {
   })
 
   it('says nothing when the interview has neither state yet', () => {
-    expect(routineAuthoringProgressContext({ checkpoint: null, decisions: '' })).toBe('')
+    expect(assistantAuthoringProgressContext({ checkpoint: null, decisions: '' })).toBe('')
   })
 })
 
-describe('routineAuthoringContext', () => {
+describe('assistantAuthoringContext', () => {
   it('asks for the two priority brackets as two separate questions', () => {
-    const contract = routineAuthoringContext('Slack latest info')
+    const contract = assistantAuthoringContext('Slack latest info')
     expect(contract).toContain('two separate single-choice questions')
-    expect(contract).toContain(ROUTINE_AUTHORING_UTILITY_ID)
+    expect(contract).toContain(ASSISTANT_AUTHORING_UTILITY_ID)
     // The observed failure: one question carrying both brackets, answered as
     // eight selections that no turn could resolve back into brackets.
     expect(contract).toContain('a combined list produces an answer nobody can resolve')
   })
 
   it('finishes the connection setup before the recap and asks for credentials in the same turn', () => {
-    const contract = routineAuthoringContext('Slack latest info')
+    const contract = assistantAuthoringContext('Slack latest info')
     // The observed failure: the model installed Slack, hit a 401, and presented
     // the plan for confirmation instead of walking the user through the setup.
     expect(contract).toContain('patient and gentle')

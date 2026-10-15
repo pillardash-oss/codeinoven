@@ -6,8 +6,8 @@
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { routineHowToComplete, type Project, type Thread } from '$shared/types'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
 
   interface Props {
@@ -57,14 +57,12 @@
     onRequestAddProject
   }: Props = $props()
 
-  /** Assistant mode reuses the chat thread renderer, but a routine's task
-   *  authors its how-to conversationally, so the view needs the routine. */
-  let assistantRoutineId = $derived(
-    mode === 'assistant' ? (selectedThread?.routineId ?? null) : null
-  )
-  let assistantRoutine = $derived(
-    assistantRoutineId
-      ? (assistantRoutines.routines.find((routine) => routine.id === assistantRoutineId) ?? null)
+  /** Assistant mode reuses the chat thread renderer, but an assistant's task
+   *  authors its knowledge conversationally, so the view needs the assistant. */
+  let assistantId = $derived(mode === 'assistant' ? (selectedThread?.assistantId ?? null) : null)
+  let assistant = $derived(
+    assistantId
+      ? (assistants.assistants.find((assistant) => assistant.id === assistantId) ?? null)
       : null
   )
 
@@ -93,11 +91,9 @@
             {active}
             chatMode={mode === 'chats' || mode === 'assistant'}
             assistantMode={mode === 'assistant'}
-            {assistantRoutineId}
-            assistantRoutineName={assistantRoutine?.name ?? null}
-            assistantHowToComplete={assistantRoutine
-              ? routineHowToComplete(assistantRoutine)
-              : false}
+            {assistantId}
+            assistantName={assistant?.name ?? null}
+            assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
             {assistantForeignRunThreadId}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
@@ -145,11 +141,11 @@
       onShowTour={() => workspaceState.requestViewTour('chats')}
     />
   {:else if mode === 'assistant'}
-    <!-- Assistant empty state   routines and tasks start here, exactly the way a
+    <!-- Assistant empty state   assistants and tasks start here, exactly the way a
          project does in the Projects view. -->
     <WelcomeStart
       variant="assistant"
-      onNewRoutine={() => workspaceState.requestAssistantRoutine()}
+      onNewAssistant={() => workspaceState.requestAssistant()}
       onNewTask={() => workspaceState.requestAssistantTask()}
       onOpenSettings={() => onNavigate('settings')}
       onShowTour={() => workspaceState.requestViewTour('assistant')}

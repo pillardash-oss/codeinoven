@@ -85,7 +85,7 @@
     setupRequestSeed?: string
     /**
      * Runs the assisted path for the caller instead of the app's own project
-     * thread. A routine's connection setup belongs to that routine, so the
+     * thread. An assistant's connection setup belongs to that assistant, so the
      * panel that owns it opens the thread itself.
      */
     onOpenSetupThread?: (request: string) => void
@@ -742,8 +742,8 @@
   /**
    * Hand the assisted path to a thread instead of running it here.
    *
-   * The caller that owns the context opens it: a routine's connection setup
-   * belongs to that routine's own new thread, while every other entry lands in
+   * The caller that owns the context opens it: an assistant's connection setup
+   * belongs to that assistant's own new thread, while every other entry lands in
    * the project the user was last on, or in a chat when they have no project,
    * since a capability installs into the app's own library and needs no
    * repository. Every route ends in a real conversation with the request
@@ -827,9 +827,7 @@
           </p>
         {/if}
         {#if isAppOwned}
-          <p
-            class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
-          >
+          <p class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary">
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
               : 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'}

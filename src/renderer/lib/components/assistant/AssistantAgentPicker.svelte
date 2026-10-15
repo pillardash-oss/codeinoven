@@ -7,13 +7,13 @@
   import type {
     AgentModelSelection,
     ProviderCatalog,
-    RoutineAgents,
+    AssistantAgents,
     ThinkingLevel
   } from '$shared/types'
 
   interface Props {
-    /** Persisted model set; the parent keys this component per routine. */
-    agents: RoutineAgents | undefined
+    /** Persisted model set; the parent keys this component per assistant. */
+    agents: AssistantAgents | undefined
     providers: ProviderCatalog[]
     /** Project whose harness catalog the pickers read. */
     projectId?: string | null
@@ -23,7 +23,7 @@
     maxFallbacks?: number
     disabled?: boolean
     /** Fires on every change with the full, already-updated model set. */
-    onChange: (agents: RoutineAgents) => void
+    onChange: (agents: AssistantAgents) => void
   }
 
   let {
@@ -39,7 +39,7 @@
   const DEFAULT_HARNESS = 'opencode'
 
   /**
-   * The routine's model set is an assistant decision, so both pickers read the
+   * The assistant's model set is an assistant decision, so both pickers read the
    * assistant's model memory: its own favorites and recently used models, kept
    * apart from the Chats and project lists.
    */
@@ -59,7 +59,7 @@
 
   /**
    * The picker's own last edit, or `null` on first render when the persisted set
-   * decides. The parent keys the component on the routine id, so a slow
+   * decides. The parent keys the component on the assistant id, so a slow
    * persistence round-trip can never clobber a pick.
    */
   let edited = $state<PickerDraft | null>(null)
@@ -134,7 +134,7 @@
 
   function removeFallback(index: number): void {
     const rows = draft.rows.filter((_, position) => position !== index)
-    // Dropping an empty row changes nothing the routine runs on, so it stays local.
+    // Dropping an empty row changes nothing the assistant runs on, so it stays local.
     if (draft.rows[index] === null) edited = { ...draft, rows }
     else commit({ ...draft, rows })
   }
@@ -165,7 +165,7 @@
           variant="field"
           fullWidth
           {disabled}
-          label={draft.primary ? undefined : 'Choose the model that runs this routine'}
+          label={draft.primary ? undefined : 'Choose the model that runs this assistant'}
           onSelect={(providerId, modelId, harnessId, accountId) =>
             setPrimary(
               selectionOf(providerId, modelId, harnessId, accountId, draft.primary?.thinkingLevel)
@@ -208,7 +208,7 @@
     <span class="text-[0.6875rem] font-medium text-muted">Fallback models</span>
     {#if filledFallbacks.length < minFallbacks}
       <p class="text-[0.625rem] leading-relaxed text-dimmed">
-        Add {minFallbacks} fallbacks so a model that fails or hits its limit never stops this routine.
+        Add {minFallbacks} fallbacks so a model that fails or hits its limit never stops this assistant.
       </p>
     {/if}
     {#each draft.rows as row, index (index)}

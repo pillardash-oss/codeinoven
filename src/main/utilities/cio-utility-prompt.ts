@@ -210,16 +210,16 @@ The user invoked @cio-utility earlier in this thread; the contract stays active 
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`
 
 /**
- * The compact management grant for a turn on a saved routine's task   a run or
+ * The compact management grant for a turn on a saved assistant's task   a run or
  * a follow-up on the same thread. Unlike the reuse contract, installing is
  * explicitly in scope: the assistant that discovers a missing connection is
  * expected to supply it itself, going online to find the official source when
  * the library has nothing, rather than send the user to the panel. The full
- * step-by-step contract in `routine-run.ts` carries the detail.
+ * step-by-step contract in `assistant-run.ts` carries the detail.
  */
 export const CIO_UTILITY_RUN_PROMPT = `CodeInOven utility contract (run)
 
-This turn runs a saved routine, and the tools it needs may still be missing. You may supply them on this turn:
+This turn runs a saved assistant, and the tools it needs may still be missing. You may supply them on this turn:
 - Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.
 - When the library has nothing, go online to find the official source: use your own web tools, or activate a web/search capability from the library with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME}. Look up the official MCP endpoint, package, or install instructions and cite the source.
 - Install a compatible one with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after you explain it and the user agrees. Definitions must stay secret-free.
@@ -227,16 +227,16 @@ This turn runs a saved routine, and the tools it needs may still be missing. You
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API.`
 
 /**
- * The compact management grant for a user turn on a saved routine's Getting
- * started thread. It is not a run   the routine's own job never executes here;
- * the user is tweaking the how-to, the schedule, or the connections. Installing
+ * The compact management grant for a user turn on a saved assistant's Getting
+ * started thread. It is not a run   the assistant's own job never executes here;
+ * the user is tweaking the knowledge, the schedule, or the connections. Installing
  * is still in scope, because a tweak that names a new service has to be set up in
  * this thread, with the same powers a run has, rather than by sending the user to
- * the panel. The editing contract in `routine-authoring.ts` carries the detail.
+ * the panel. The editing contract in `assistant-authoring.ts` carries the detail.
  */
-export const CIO_UTILITY_ROUTINE_EDIT_PROMPT = `CodeInOven utility contract (routine update)
+export const CIO_UTILITY_ASSISTANT_EDIT_PROMPT = `CodeInOven utility contract (assistant update)
 
-This turn updates a saved routine's how-to, schedule, or connections. It does not run the routine, and the tools the change needs may still be missing. You may supply them on this turn:
+This turn updates a saved assistant's knowledge, schedule, or connections. It does not run the assistant, and the tools the change needs may still be missing. You may supply them on this turn:
 - Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.
 - When the library has nothing, go online to find the official source: use your own web tools, or activate a web/search capability from the library with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME}. Look up the official MCP endpoint, package, or install instructions and cite the source.
 - Install a compatible one with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after you explain it and the user agrees. Definitions must stay secret-free.

@@ -133,7 +133,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   engineering          INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
-  routine_id           TEXT,
+  assistant_id           TEXT,
   assistant_icon_type  TEXT,
   assistant_icon       TEXT,
   schedule_override    TEXT,
@@ -1009,13 +1009,13 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
 
 /**
- * Assistant routines: the top-level grouping for assistant tasks. A routine
- * owns the agent-authored how-to, a default schedule, and its connection picks;
- * tasks are threads in the assistant space that reference `routines.id`.
+ * Assistants: the top-level grouping for assistant tasks. An assistant
+ * owns the agent-authored knowledge, a default schedule, and its connection picks;
+ * tasks are threads in the assistant space that reference `assistants.id`.
  */
-export const ROUTINES_SQL = `
--- ─── Assistant routines ─────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS routines (
+export const ASSISTANTS_SQL = `
+-- ─── Assistants ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS assistants (
   id                  TEXT PRIMARY KEY NOT NULL,
   name                TEXT NOT NULL,
   description         TEXT,
@@ -1026,8 +1026,8 @@ CREATE TABLE IF NOT EXISTS routines (
   custom_svg          TEXT,
   schedule            TEXT,
   schedule_updated_at INTEGER,
-  how_to              TEXT NOT NULL DEFAULT '',
-  how_to_updated_at   INTEGER,
+  knowledge              TEXT NOT NULL DEFAULT '',
+  knowledge_updated_at   INTEGER,
   connections         TEXT NOT NULL DEFAULT '[]',
   delivery            TEXT,
   priority            TEXT,
@@ -1041,7 +1041,7 @@ CREATE TABLE IF NOT EXISTS routines (
   updated_at          INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
+CREATE INDEX IF NOT EXISTS idx_assistants_listing ON assistants(pinned DESC, sort_order, updated_at DESC);`
 
 /**
  * Which folder of authored work a thread is working on, and which kind it holds.
@@ -1232,5 +1232,5 @@ export const DATABASE_SCHEMA_SQL = [
   THREAD_EXPERTS_SQL,
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,
-  ROUTINES_SQL
+  ASSISTANTS_SQL
 ].join('\n')

@@ -16,7 +16,7 @@ import {
   type Project,
   type Thread
 } from '$shared/types'
-import { assistantRoutines } from './assistant-routines.svelte'
+import { assistants } from './assistants.svelte'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 
 /** Top-level panel sections. */
@@ -27,9 +27,9 @@ export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'iss
 
 /**
  * The assistant-subject narrowing behind the Assistants tab's filter button:
- * everything, only runs owned by a routine, or only standalone task runs.
+ * everything, only runs owned by an assistant, or only standalone task runs.
  */
-export type NotificationAssistantSubject = 'all' | 'routine' | 'task'
+export type NotificationAssistantSubject = 'all' | 'assistant' | 'task'
 
 export interface InAppNotification {
   id: string
@@ -44,9 +44,9 @@ export interface InAppNotification {
   temporaryChatId?: string
   projectName: string
   projectColor?: string
-  /** Owning routine of an assistant run, when the task belongs to one. Absent
-   *  for a standalone task run; drives the routines/tasks filter. */
-  routineId?: string
+  /** Owning assistant of an assistant run, when the task belongs to one. Absent
+   *  for a standalone task run; drives the assistants/tasks filter. */
+  assistantId?: string
   /** Full diagnostic text (message plus raw detail/stack) for `error`
    *  notifications; drives the panel's copy action. */
   errorDetail?: string
@@ -152,7 +152,7 @@ class NotificationPanelState {
   private _dismissed = new SvelteSet<string>()
   topTab: NotificationTopTab = $state('projects')
   subFilter: NotificationSubFilter = $state('all')
-  /** The Assistants tab's routines/tasks narrowing. Ignored by every other tab. */
+  /** The Assistants tab's assistants/tasks narrowing. Ignored by every other tab. */
   assistantSubject: NotificationAssistantSubject = $state('all')
 
   /**
@@ -166,7 +166,7 @@ class NotificationPanelState {
     return n.source === 'chat' || n.projectId === INBOX_PROJECT_ID
   }
 
-  /** Assistant notices come from the hidden assistant space (routine runs).
+  /** Assistant notices come from the hidden assistant space (assistant runs).
    *  The source tag is authoritative; the project id covers any payload that
    *  predates the dedicated source. */
   isAssistant(n: InAppNotification): boolean {
@@ -194,12 +194,12 @@ class NotificationPanelState {
 
   /**
    * Whether an assistant entry (a notice, a missed fire, or an unattended run)
-   * answers to the routines/tasks filter. A routine-owned entry has a routine;
+   * answers to the assistants/tasks filter. An assistant-owned entry has an assistant;
    * a standalone task run does not.
    */
-  matchesAssistantSubject(hasRoutine: boolean): boolean {
+  matchesAssistantSubject(hasAssistant: boolean): boolean {
     if (this.assistantSubject === 'all') return true
-    return this.assistantSubject === 'routine' ? hasRoutine : !hasRoutine
+    return this.assistantSubject === 'assistant' ? hasAssistant : !hasAssistant
   }
 
   get projectNotifications(): InAppNotification[] {
@@ -210,7 +210,7 @@ class NotificationPanelState {
     return this._notifications.filter((n) => this.isChat(n))
   }
 
-  /** Assistant-space notices (routine runs). The panel renders them beside the
+  /** Assistant-space notices (assistant runs). The panel renders them beside the
    *  scheduled missed runs, which live in the assistant store rather than here. */
   get assistantNotifications(): InAppNotification[] {
     return this._notifications.filter((n) => this.isAssistant(n))
@@ -221,7 +221,7 @@ class NotificationPanelState {
     return this.assistantNotifications.filter(
       (n) =>
         notificationMatchesSubFilter(n.kind, this.subFilter) &&
-        this.matchesAssistantSubject(Boolean(n.routineId))
+        this.matchesAssistantSubject(Boolean(n.assistantId))
     )
   }
 
@@ -239,10 +239,10 @@ class NotificationPanelState {
   }
 
   private assistantMissedRunsFor(sub: NotificationSubFilter): MissedRun[] {
-    return assistantRoutines.missedRuns.filter(
+    return assistants.missedRuns.filter(
       (run) =>
         notificationMatchesSubFilter('attention', sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
+        this.matchesAssistantSubject(Boolean(run.assistantId))
     )
   }
 
@@ -254,11 +254,11 @@ class NotificationPanelState {
    */
   private assistantBackgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
     const noticedRunThreads = new Set(this.assistantNotifications.map((n) => n.threadId))
-    return assistantRoutines.recentBackgroundRuns.filter(
+    return assistants.recentBackgroundRuns.filter(
       (run) =>
         !noticedRunThreads.has(run.runThreadId) &&
         notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
+        this.matchesAssistantSubject(Boolean(run.assistantId))
     )
   }
 
@@ -274,9 +274,7 @@ class NotificationPanelState {
    */
   assistantRunPairedWithNotice(n: InAppNotification): BackgroundRun | null {
     if (!this.isAssistant(n)) return null
-    return (
-      assistantRoutines.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
-    )
+    return assistants.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
   }
 
   /** Items for the currently active top tab + sub filter. Project and chat
@@ -319,7 +317,7 @@ class NotificationPanelState {
     const notices = this.assistantNotifications.filter(
       (n) =>
         notificationMatchesSubFilter(n.kind, sub) &&
-        this.matchesAssistantSubject(Boolean(n.routineId))
+        this.matchesAssistantSubject(Boolean(n.assistantId))
     ).length
     return (
       notices +
@@ -338,7 +336,7 @@ class NotificationPanelState {
   get assistantColor(): string | null {
     return (
       this.assistantNotifications.findLast((n) => n.projectColor)?.projectColor ??
-      assistantRoutines.spaceColor
+      assistants.spaceColor
     )
   }
 
@@ -369,7 +367,8 @@ class NotificationPanelState {
       const color = this.accentColor(entry)
       if (!colors.includes(color)) colors.push(color)
     }
-    const familyLabel = family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'routine'
+    const familyLabel =
+      family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'assistant'
     return {
       count,
       label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
@@ -384,7 +383,7 @@ class NotificationPanelState {
   get hasAssistant(): boolean {
     return (
       this.assistantNotifications.some((n) => n.kind === 'completed') ||
-      assistantRoutines.missedRuns.length > 0
+      assistants.missedRuns.length > 0
     )
   }
 
@@ -596,19 +595,19 @@ class NotificationPanelState {
 
   /**
    * The name an assistant failure or parked card reports when its live payload
-   * never arrived: the task it ran, else its routine, else its own non-authoring
-   * title. A routine's fixed "Getting started" title is an authoring host, not a
+   * never arrived: the task it ran, else its assistant, else its own non-authoring
+   * title. An assistant's fixed "Getting started" title is an authoring host, not a
    * job, so it is never returned as a name.
    */
   private assistantThreadSubject(thread: Thread, threads: readonly Thread[]): string {
-    const routineName = thread.routineId
-      ? assistantRoutines.routines.find((routine) => routine.id === thread.routineId)?.name.trim()
+    const assistantName = thread.assistantId
+      ? assistants.assistants.find((assistant) => assistant.id === thread.assistantId)?.name.trim()
       : ''
     const task = thread.assistantTaskId
       ? threads.find((candidate) => candidate.id === thread.assistantTaskId)
       : undefined
     if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
-    if (routineName) return routineName
+    if (assistantName) return assistantName
     return isAssistantSetupThread(thread) ? '' : thread.title.trim()
   }
 
@@ -647,7 +646,7 @@ class NotificationPanelState {
           ...(errorDetail ? { errorDetail } : {}),
           projectId: thread.projectId,
           threadId: thread.id,
-          ...(thread.routineId ? { routineId: thread.routineId } : {}),
+          ...(thread.assistantId ? { assistantId: thread.assistantId } : {}),
           source: isChat ? 'chat' : isAssistant ? 'assistant' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color
@@ -672,7 +671,7 @@ class NotificationPanelState {
               : `${thread.title} is waiting for your input in ${project?.name ?? ''}.`,
           projectId: thread.projectId,
           threadId: thread.id,
-          ...(thread.routineId ? { routineId: thread.routineId } : {}),
+          ...(thread.assistantId ? { assistantId: thread.assistantId } : {}),
           source: isChat ? 'chat' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color

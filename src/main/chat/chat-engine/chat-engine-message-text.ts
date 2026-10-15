@@ -181,7 +181,7 @@ export function formatConversationTranscript(
  *
  * The newest entries win the character budget, so a long interview keeps what
  * was agreed last and drops the oldest records first. `maxCharacters` lets one
- * caller (Brainstorm generation) keep a large window and another (the routine
+ * caller (Brainstorm generation) keep a large window and another (the assistant
  * Getting started interview, which re-injects this every turn) keep a smaller
  * one.
  */

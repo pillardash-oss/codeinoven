@@ -4,8 +4,8 @@ const invoke = vi.hoisted(() => vi.fn())
 const subscribe = vi.hoisted(() => vi.fn())
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
-vi.mock('$lib/stores/assistant-routines.svelte', () => ({
-  assistantRoutines: { missedRuns: [], spaceColor: null, routines: [] }
+vi.mock('$lib/stores/assistants.svelte', () => ({
+  assistants: { missedRuns: [], spaceColor: null, assistants: [] }
 }))
 
 import { APP_SLUG } from '$shared/brand'
@@ -214,15 +214,15 @@ describe('restoring the durable inbox', () => {
 })
 
 describe('naming an assistant failure', () => {
-  it('names the routine a failed run of its Getting started host belongs to', async () => {
-    const { assistantRoutines } = await import('$lib/stores/assistant-routines.svelte')
-    assistantRoutines.routines = [{ id: 'routine-1', name: 'Slack digest' }] as never
+  it('names the assistant a failed run of its Getting started host belongs to', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    assistants.assistants = [{ id: 'assistant-1', name: 'Slack digest' }] as never
     const setupTask = thread({
       id: 'task-setup',
       projectId: ASSISTANT_SPACE_ID,
       title: 'Getting started',
       assistantGettingStarted: true,
-      routineId: 'routine-1',
+      assistantId: 'assistant-1',
       status: 'completed'
     })
     const run = thread({
@@ -230,7 +230,7 @@ describe('naming an assistant failure', () => {
       projectId: ASSISTANT_SPACE_ID,
       title: 'Run · 1 Jan',
       assistantTaskId: 'task-setup',
-      routineId: 'routine-1',
+      assistantId: 'assistant-1',
       status: 'failed',
       updatedAt: 200
     })

@@ -16,7 +16,7 @@
   } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { RoutineDefaultIcon } from '$lib/routine-icons'
+  import { AssistantDefaultIcon } from '$lib/assistant-icons'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
@@ -77,16 +77,16 @@
     projectId: string
     projectName: string
     /** Label shown as the tree's root name. Empty when the root names itself
-     *  with the icon alone, which is the case for a routine, whose name is
+     *  with the icon alone, which is the case for an assistant, whose name is
      *  often a whole sentence. */
     projectLabel?: string
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine, so the root icon falls back to
-     *  the routine default mark instead of a generic folder. */
-    routineRoot?: boolean
+    /** True when the tree's root is an assistant, so the root icon falls back to
+     *  the assistant default mark instead of a generic folder. */
+    assistantRoot?: boolean
     /** Accent colour of the tree's root identity, or null for the default
-     *  accent. An assistant task's tree mounts on its routine's own workspace,
-     *  so the parent passes that routine's colour here. */
+     *  accent. An assistant task's tree mounts on its assistant's own workspace,
+     *  so the parent passes that assistant's colour here. */
     projectAccentColor?: string | null
   }
 
@@ -95,7 +95,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null
   }: Props = $props()
 
@@ -860,13 +860,13 @@
           <button
             type="button"
             class="shrink-0"
-            title={routineRoot ? projectName : 'Show project root'}
+            title={assistantRoot ? projectName : 'Show project root'}
             onclick={() => revealBreadcrumb(-1)}
           >
             {#if projectIconUrl}
               <img src={projectIconUrl} alt={projectName} class="h-4 w-4 shrink-0" />
-            {:else if routineRoot}
-              <RoutineDefaultIcon
+            {:else if assistantRoot}
+              <AssistantDefaultIcon
                 size={14}
                 class="shrink-0"
                 style="color: {projectAccentColor ?? 'var(--color-primary)'}"
@@ -1144,7 +1144,7 @@
           {projectName}
           {projectLabel}
           {projectIconUrl}
-          {routineRoot}
+          {assistantRoot}
           {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
@@ -1439,7 +1439,7 @@
           {projectName}
           {projectLabel}
           {projectIconUrl}
-          {routineRoot}
+          {assistantRoot}
           {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>

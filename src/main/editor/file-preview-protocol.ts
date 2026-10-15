@@ -194,7 +194,7 @@ function decodeSegments(pathname: string): string[] {
  * - `appfile://thread/<projectId>/<threadId>/<relativePath>`   resolved against
  *   the conversation's own app-owned workspace directory (a chat's
  *   `chats-cwd/<threadId>`, an assistant task's
- *   `assistant-cwd/<routineId ?? threadId>`)
+ *   `assistant-cwd/<assistantId ?? threadId>`)
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
  * - `appfile://standalone/file?path=<absolute>&name=<label>`   a single file

@@ -358,7 +358,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
 
   // The search entries are one block at the top of the palette, in family order:
   // project threads first (only with a local project to search), then the
-  // standalone chats, the assistant tasks/routines, and the browser's open tabs.
+  // standalone chats, the assistant tasks/assistants, and the browser's open tabs.
   // Each opens its own screen with its own sub-container filter.
   const familySearchActions: ActionDefinition[] = [
     {
@@ -375,12 +375,12 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
     {
       id: 'app:assistant-search',
       title: 'Search assistant tasks',
-      description: 'Find an assistant task or routine by name, title, or message content',
-      category: 'routine',
+      description: 'Find an assistant task or assistant by name, title, or message content',
+      category: 'assistant',
       source: applicationSource,
       // The Assistant view's rail mark, kept from the one shared source.
       icon: CONTENT_FAMILY_ICONS.assistant,
-      keywords: ['quick open', 'find', 'routine', 'assistant', 'task', 'schedule']
+      keywords: ['quick open', 'find', 'assistant', 'assistant', 'task', 'schedule']
     },
     {
       id: 'app:browser-tab-search',

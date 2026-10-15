@@ -15,13 +15,13 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
-import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
-import { settingsWithRoutineTarget } from '../../lib/routine-execution'
+import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
+import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
 import { setWorkRoots } from '../design/work-roots-state'
-import { assistantRunTitle, routineRunPrompt } from '../../lib/routine-run'
+import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -187,13 +187,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ForeignRunService },
     { ThreadTransferService },
     { ThreadTransferLock },
-    { RoutineManager },
-    { RoutineSchedulerService },
+    { AssistantManager },
+    { AssistantSchedulerService },
     {
       broadcastMissedRunsChanged,
       broadcastAutoAnswersChanged,
       broadcastBackgroundRunsChanged,
-      broadcastSkippedRoutineRunsChanged
+      broadcastSkippedRunsChanged
     },
     { SkillUpdateService },
     { SecretVault },
@@ -220,8 +220,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../chat/foreign-run-service'),
     import('../chat/thread-transfer-service'),
     import('../system/thread-transfer-lock'),
-    import('../../lib/engines/routine-manager'),
-    import('../scheduler/routine-scheduler-service'),
+    import('../../lib/engines/assistant-manager'),
+    import('../scheduler/assistant-scheduler-service'),
     import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
@@ -243,7 +243,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     scopeRootProvider(scopeRootResolver),
     // Chat file trees mount on the thread's own `chats-cwd/<threadId>`
     // directory and assistant file trees on the task's
-    // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
+    // `assistant-cwd/<assistantId ?? threadId>` workspace; both are created on
     // demand so an empty conversation still has a browsable root.
     createThreadWorkspaceRoots(storage, database)
   )
@@ -364,8 +364,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.retryScheduler = new RetrySchedulerService(storage)
   state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
-  state.routineManager = new RoutineManager(database)
-  const routineManager = state.routineManager
+  state.assistantManager = new AssistantManager(database)
+  const assistantManager = state.assistantManager
   // Durable evidence of unattended runs, loaded before the scheduler can
   // dispatch so a run that fails at 3am is never invisible on the next launch.
   const { BackgroundRunLedger } = await import('../scheduler/background-run-ledger')
@@ -392,7 +392,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       outcome: report.outcome,
       projectId: report.projectId,
       threadId: report.threadId,
-      // File the gate under the task and routine it actually concerns, so the
+      // File the gate under the task and assistant it actually concerns, so the
       // decision keeps surfacing after this run thread is evicted.
       ...resolveAutoAnswerScope(database, report.projectId, report.threadId),
       entries: report.entries,
@@ -401,8 +401,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     broadcastAutoAnswersChanged(store.list())
     state.backgroundLifecycle?.refreshAttention()
   })
-  state.routineScheduler = new RoutineSchedulerService(storage, {
-    routines: routineManager,
+  state.assistantScheduler = new AssistantSchedulerService(storage, {
+    assistants: assistantManager,
     backgroundLedger: state.backgroundRunLedger,
     // A run that failed while nobody was watching becomes unread, so its
     // persisted message reaches the badge and the panel on the next open and the
@@ -418,43 +418,43 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     onTaskChanged: (task) => broadcastThreadUpdate(task),
     // Every run executes on a fresh thread: a scheduled fire and a manual
     // "Run now" both create one, so a run never lands in the task's own
-    // conversation. Only a routine's Getting started thread hosts authoring.
-    createRunThread: (task, routine) => {
+    // conversation. Only an assistant's Getting started thread hosts authoring.
+    createRunThread: (task, assistant) => {
       const chatEngine = state.chatEngine
       if (!chatEngine) throw new Error('The chat engine is not available')
       // A scheduled run needs a bound model; a task that was never configured
       // is skipped rather than fired with guessed settings.
       if (!task.settings) throw new Error('This task has no model configured yet.')
-      // The routine's primary model wins over whatever the thread was last set
-      // to, so the models the user picked for the routine are the models its
-      // runs actually use. A routine without a model set keeps the thread's own.
-      const primary = routinePrimaryModel(routine?.agents)
-      // The routine's execution target is the default for every run it
+      // The assistant's primary model wins over whatever the thread was last set
+      // to, so the models the user picked for the assistant are the models its
+      // runs actually use. An assistant without a model set keeps the thread's own.
+      const primary = assistantPrimaryModel(assistant?.agents)
+      // The assistant's execution target is the default for every run it
       // dispatches; a task that already picked an Oven of its own keeps it.
-      const targeted = settingsWithRoutineTarget(task.settings, routine?.execution)
-      const runSettings = primary ? settingsWithRoutineModel(targeted, primary) : targeted
+      const targeted = settingsWithAssistantTarget(task.settings, assistant?.execution)
+      const runSettings = primary ? settingsWithAssistantModel(targeted, primary) : targeted
       return chatEngine.createAssistantRunThread({
         task,
         settings: runSettings,
         title: assistantRunTitle(Date.now())
       })
     },
-    dispatch: (run, task, routine) => {
+    dispatch: (run, task, assistant) => {
       const chatEngine = state.chatEngine
       if (!chatEngine) {
-        Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
+        Logger.dev('Scheduled assistant run skipped   no chat engine', { threadId: task.id })
         return
       }
-      const prompt = routineRunPrompt(task, routine?.name)
+      const prompt = assistantRunPrompt(task, assistant?.name)
       const runSettings = run.settings ?? task.settings
       if (!runSettings) {
-        Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })
+        Logger.error('Assistant run has no bound settings', { taskId: task.id, runId: run.id })
         return
       }
-      // The routine's how-to is NOT passed as prompt context: the engine composes
-      // it into the run's system prompt from the routine itself
-      // (`routineHowToInstruction`), which the run thread carries through its
-      // inherited `routineId`, so it is restated every turn instead of being
+      // The assistant's knowledge is NOT passed as prompt context: the engine composes
+      // it into the run's system prompt from the assistant itself
+      // (`assistantKnowledgeInstruction`), which the run thread carries through its
+      // inherited `assistantId`, so it is restated every turn instead of being
       // appended to this message and kept in the harness transcript.
       return chatEngine.sendPrompt(
         run.projectId,
@@ -474,17 +474,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       )
     }
   })
-  state.routineScheduler.attachChangeListener(() => {
-    broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
-    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
-    broadcastSkippedRoutineRunsChanged(state.routineScheduler?.listSkippedRoutineRuns() ?? [])
+  state.assistantScheduler.attachChangeListener(() => {
+    broadcastMissedRunsChanged(state.assistantScheduler?.listMissedRuns() ?? [])
+    broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
+    broadcastSkippedRunsChanged(state.assistantScheduler?.listSkippedRuns() ?? [])
     state.backgroundLifecycle?.refreshAttention()
   })
   // Background wake: the machine is held awake inside the lead window before a
   // due scheduled run, capped so a mis-scheduled task cannot pin it. The next
   // due moment is read lazily from the scheduler, so a change is never cached.
   state.powerWakeService.attachScheduledRunSource(
-    () => state.routineScheduler?.nextDueAt(Date.now()) ?? null
+    () => state.assistantScheduler?.nextDueAt(Date.now()) ?? null
   )
   try {
     const backgroundConfig = await storage.getConfig()
@@ -499,18 +499,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch (error) {
     Logger.error('Background wake policy could not be applied', error)
   }
-  // Scheduled assistant runs fall over to the routine's next model when the
+  // Scheduled assistant runs fall over to the assistant's next model when the
   // current one fails, instead of waiting out the failed provider's reset.
   state.chatEngine.attachAssistantAgentsResolver((task) =>
-    state.routineManager?.resolveTaskAgents(task)
+    state.assistantManager?.resolveTaskAgents(task)
   )
-  // A settled turn on an assistant task is reported to the routine scheduler,
+  // A settled turn on an assistant task is reported to the assistant scheduler,
   // which knows whether it dispatched a run on that task and stamps the last
   // successful run once the run's turn actually completes.
   state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
-    state.routineScheduler?.settleRun(threadId, status)
+    state.assistantScheduler?.settleRun(threadId, status)
     // A settled run's outcome now belongs in the "While you were away" list.
-    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
+    broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
   })
   state.speechService = new SpeechService(
     {
@@ -790,8 +790,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     backgroundLifecycle: state.backgroundLifecycle ?? undefined,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
-    routineManager: state.routineManager ?? undefined,
-    routineScheduler: state.routineScheduler ?? undefined,
+    assistantManager: state.assistantManager ?? undefined,
+    assistantScheduler: state.assistantScheduler ?? undefined,
     cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
@@ -1023,16 +1023,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
 
     try {
-      await state.routineScheduler?.start()
+      await state.assistantScheduler?.start()
       // A slot the app was closed (or asleep) through is dispatched on return
       // when the user allows it, bounded per pass and idempotent across relaunch.
       if (state.backgroundLifecycle?.autoRunMissedRuns) {
-        void state.routineScheduler
+        void state.assistantScheduler
           ?.runPendingMisses()
           .catch((error) => Logger.error('Auto-run of missed assistant runs failed:', error))
       }
     } catch (error) {
-      Logger.error('Routine scheduler startup failed (non-fatal):', error)
+      Logger.error('Assistant scheduler startup failed (non-fatal):', error)
     }
 
     try {
@@ -1049,9 +1049,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         const { PowerMonitorService } = await import('../system/power-monitor-service')
         state.powerMonitorService = new PowerMonitorService({
           onResume: () => {
-            state.routineScheduler?.evaluate()
+            state.assistantScheduler?.evaluate()
             if (state.backgroundLifecycle?.autoRunMissedRuns) {
-              void state.routineScheduler
+              void state.assistantScheduler
                 ?.runPendingMisses()
                 .catch((error) => Logger.error('Resume catch-up failed:', error))
             }

@@ -9,7 +9,7 @@
     Pause,
     Pencil,
     Play,
-    RotateCcw,
+    RotateCcw
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
@@ -21,7 +21,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import type { AssistantPanelTab } from '$lib/stores/context-sidebar-types'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -31,43 +31,43 @@
   import {
     describeRelativeTime,
     describeSchedule,
-    routineAgentsComplete,
-    routineHowToComplete,
-    routineIsScheduled,
+    assistantAgentsComplete,
+    assistantKnowledgeComplete,
+    assistantIsScheduled,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
-    type Routine,
-    type RoutineAgents,
-    type RoutineConnection,
-    type RoutineDeliveryChannel,
-    type RoutineImpact,
-    type RoutineTimeliness,
+    type Assistant,
+    type AssistantAgents,
+    type AssistantConnection,
+    type AssistantDeliveryChannel,
+    type AssistantImpact,
+    type AssistantTimeliness,
     type Thread,
     type UtilityCatalog
   } from '$shared/types'
   import {
     isExternalDeliveryChannel,
-    routineDeliveryChannelLabel,
-    routineDeliveryLabel,
-    routinePriorityLabel,
-    ROUTINE_DELIVERY_OPTIONS,
-    ROUTINE_IMPACT_OPTIONS,
-    ROUTINE_TIMELINESS_OPTIONS
-  } from '$shared/routine-reporting'
+    assistantDeliveryChannelLabel,
+    assistantDeliveryLabel,
+    assistantPriorityLabel,
+    ASSISTANT_DELIVERY_OPTIONS,
+    ASSISTANT_IMPACT_OPTIONS,
+    ASSISTANT_TIMELINESS_OPTIONS
+  } from '$shared/assistant-reporting'
   import {
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    parseHowToSections,
+    parseKnowledgeSections,
     previewRuns,
     resolveConnections,
-    serializeHowToSections,
+    serializeKnowledgeSections,
     missedRunReasonText,
     TASK_RUN_PREVIEW,
     type ConnectionSetupRequest,
     type ConnectionView,
-    type HowToSection
+    type KnowledgeSection
   } from './assistant-view'
   import {
     buildConnectionLibrary,
@@ -77,8 +77,8 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
-  import RoutineAgentPicker from './RoutineAgentPicker.svelte'
-  import RoutineExecutionPicker from './RoutineExecutionPicker.svelte'
+  import AssistantAgentPicker from './AssistantAgentPicker.svelte'
+  import AssistantExecutionPicker from './AssistantExecutionPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
   import UtilityEditorModal, {
     type UtilityEditorTarget
@@ -87,18 +87,18 @@
   interface Props {
     projectId: string
     threadId: string
-    /** Routine snapshot from the tab; the task's own routineId wins when set. */
-    routineId: string | null
+    /** Assistant snapshot from the tab; the task's own assistantId wins when set. */
+    assistantId: string | null
     /** The section on screen. It is bound to the sidebar tab (not local state)
      *  so switching to another sidebar panel and back reopens the same section
      *  instead of resetting the panel to "All". */
     panelTab: AssistantPanelTab
     navigate: (view: MainView) => void
-    /** Open one of the routine's tasks, so the workspace owns the selection. */
+    /** Open one of the assistant's tasks, so the workspace owns the selection. */
     onOpenTask: (task: Thread) => void
     /**
      * Hand one connection's setup to the workspace, which opens it as a new
-     * thread of the routine: the panel owns the request, the workspace owns
+     * thread of the assistant: the panel owns the request, the workspace owns
      * thread creation and the selection.
      */
     onSetupConnection: (input: ConnectionSetupRequest) => void
@@ -107,7 +107,7 @@
   let {
     projectId,
     threadId,
-    routineId,
+    assistantId,
     panelTab = $bindable(),
     navigate,
     onOpenTask,
@@ -116,7 +116,7 @@
 
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'routine', label: 'Routine' },
+    { id: 'assistant', label: 'Assistant' },
     { id: 'connections', label: 'Connections' },
     { id: 'agents', label: 'Agents' },
     { id: 'issues', label: 'Issues' }
@@ -131,14 +131,14 @@
         ) ?? null)
   )
 
-  const routine = $derived.by((): Routine | null => {
-    // The panel's own routine id is authoritative: one panel per routine means
+  const assistant = $derived.by((): Assistant | null => {
+    // The panel's own assistant id is authoritative: one panel per assistant means
     // selecting another task must never re-target this panel (its anchor task
-    // can even belong to a different routine, e.g. a routine with no tasks yet).
-    // The task's routine is only a fallback for a panel opened without one.
-    const id = routineId ?? task?.routineId
+    // can even belong to a different assistant, e.g. an assistant with no tasks yet).
+    // The task's assistant is only a fallback for a panel opened without one.
+    const id = assistantId ?? task?.assistantId
     if (!id) return null
-    return assistantRoutines.routines.find((candidate) => candidate.id === id) ?? null
+    return assistants.assistants.find((candidate) => candidate.id === id) ?? null
   })
 
   let catalog = $state<UtilityCatalog | null>(null)
@@ -176,22 +176,22 @@
   let fullscreen = $state(false)
 
   const visibleTabs = $derived(
-    routine ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
+    assistant ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
   )
   const activeTab = $derived(
     visibleTabs.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
   )
 
-  // ─── Routine content ──────────────────────────────────────────────────────
+  // ─── Assistant content ──────────────────────────────────────────────────────
 
-  const sections = $derived(routine ? parseHowToSections(routine.howTo) : [])
-  const howToComplete = $derived(routine ? routineHowToComplete(routine) : false)
-  const agentsComplete = $derived(routine ? routineAgentsComplete(routine) : false)
-  /** Whether this routine runs on a clock at all; drives the schedule copy. */
-  const scheduled = $derived(routine ? routineIsScheduled(routine) : true)
+  const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+  const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
+  const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
+  /** Whether this assistant runs on a clock at all; drives the schedule copy. */
+  const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
   /** The schedule line everywhere in the panel: a cadence, or on-demand. */
   const scheduleLabel = $derived(
-    scheduled ? describeSchedule(routine?.schedule ?? null) : 'Runs on demand'
+    scheduled ? describeSchedule(assistant?.schedule ?? null) : 'Runs on demand'
   )
 
   const collapsed = new SvelteSet<string>()
@@ -203,7 +203,7 @@
     else collapsed.add(id)
   }
 
-  function startEdit(section: HowToSection): void {
+  function startEdit(section: KnowledgeSection): void {
     editingId = section.id
     editDraft = section.body
     collapsed.delete(section.id)
@@ -215,48 +215,51 @@
   }
 
   async function saveSection(sectionId: string): Promise<void> {
-    if (!routine) return
+    if (!assistant) return
     const next = sections.map((section) =>
       section.id === sectionId ? { ...section, body: editDraft.trim() } : section
     )
     editingId = null
-    await persistRoutine({ howTo: serializeHowToSections(next) }, 'Could not save the how-to')
+    await persistAssistant(
+      { knowledge: serializeKnowledgeSections(next) },
+      'Could not save the knowledge'
+    )
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────
 
-  async function persistRoutine(
-    patch: Parameters<typeof assistantRoutines.updateRoutine>[1],
+  async function persistAssistant(
+    patch: Parameters<typeof assistants.updateAssistant>[1],
     failureMessage: string
   ): Promise<void> {
-    if (!routine) return
+    if (!assistant) return
     try {
-      await assistantRoutines.updateRoutine(routine.id, patch)
+      await assistants.updateAssistant(assistant.id, patch)
     } catch (error) {
       reportError(error, failureMessage)
     }
   }
 
   async function togglePaused(): Promise<void> {
-    if (!routine) return
-    await persistRoutine(
-      { paused: !routine.paused },
-      routine.paused ? 'Could not resume the routine' : 'Could not pause the routine'
+    if (!assistant) return
+    await persistAssistant(
+      { paused: !assistant.paused },
+      assistant.paused ? 'Could not resume the assistant' : 'Could not pause the assistant'
     )
   }
 
-  function setAgents(agents: RoutineAgents): void {
-    void persistRoutine({ agents }, 'Could not save the routine models')
+  function setAgents(agents: AssistantAgents): void {
+    void persistAssistant({ agents }, 'Could not save the assistant models')
   }
 
   // ─── Reporting: where the output goes, and how urgent it is ────────────────
 
   /** The delivery channels, with a hint saying whether the choice needs a connection. */
-  const deliveryChoices = ROUTINE_DELIVERY_OPTIONS.map((option) => ({
+  const deliveryChoices = ASSISTANT_DELIVERY_OPTIONS.map((option) => ({
     id: option.id,
     label: option.label,
     hint: option.external
-      ? 'Needs a connection this routine must have'
+      ? 'Needs a connection this assistant must have'
       : 'A normal thread notification inside CodeInOven'
   }))
 
@@ -265,11 +268,11 @@
    * switching channel does not silently discard what the user already told the
    * agent; the in-app channel drops the destination because it has none.
    */
-  function setDeliveryChannel(channel: RoutineDeliveryChannel): void {
-    if (!routine) return
-    const current = routine.delivery
+  function setDeliveryChannel(channel: AssistantDeliveryChannel): void {
+    if (!assistant) return
+    const current = assistant.delivery
     const target = current?.target?.trim()
-    void persistRoutine(
+    void persistAssistant(
       {
         delivery: {
           channel,
@@ -283,12 +286,12 @@
 
   /** Commit the typed destination. The input is uncontrolled, so this is the only write. */
   function commitDeliveryTarget(raw: string): void {
-    if (!routine) return
-    const delivery = routine.delivery
+    if (!assistant) return
+    const delivery = assistant.delivery
     if (!delivery || delivery.channel === 'in-app') return
     const target = raw.trim()
     if (target === (delivery.target ?? '')) return
-    void persistRoutine(
+    void persistAssistant(
       {
         delivery: {
           channel: delivery.channel,
@@ -301,36 +304,36 @@
   }
 
   function clearDelivery(): void {
-    void persistRoutine({ delivery: null }, 'Could not clear the delivery channel')
+    void persistAssistant({ delivery: null }, 'Could not clear the delivery channel')
   }
 
   /**
-   * Set one priority bracket, keeping the other. When the routine has no
+   * Set one priority bracket, keeping the other. When the assistant has no
    * priority yet the other bracket starts from the middle of its scale, and the
    * panel immediately shows the pair that was actually saved.
    */
-  function setPriorityTimeliness(timeliness: RoutineTimeliness): void {
-    if (!routine) return
-    void persistRoutine(
-      { priority: { timeliness, impact: routine.priority?.impact ?? 'team' } },
+  function setPriorityTimeliness(timeliness: AssistantTimeliness): void {
+    if (!assistant) return
+    void persistAssistant(
+      { priority: { timeliness, impact: assistant.priority?.impact ?? 'team' } },
       'Could not save the priority'
     )
   }
 
-  function setPriorityImpact(impact: RoutineImpact): void {
-    if (!routine) return
-    void persistRoutine(
-      { priority: { timeliness: routine.priority?.timeliness ?? 'today', impact } },
+  function setPriorityImpact(impact: AssistantImpact): void {
+    if (!assistant) return
+    void persistAssistant(
+      { priority: { timeliness: assistant.priority?.timeliness ?? 'today', impact } },
       'Could not save the priority'
     )
   }
 
   function clearPriority(): void {
-    void persistRoutine({ priority: null }, 'Could not clear the priority')
+    void persistAssistant({ priority: null }, 'Could not clear the priority')
   }
 
   const connectionViews = $derived(
-    resolveConnections(routine?.connections ?? [], catalog, capabilities)
+    resolveConnections(assistant?.connections ?? [], catalog, capabilities)
   )
   // A connection that only matched by label still shows as connected, so the
   // picker marks the entry it resolved to rather than the raw stored id.
@@ -347,55 +350,55 @@
    * works, since the app surfaces the run thread itself.
    */
   const deliveryReady = $derived.by(() => {
-    const delivery = routine?.delivery
+    const delivery = assistant?.delivery
     if (!delivery || !isExternalDeliveryChannel(delivery.channel)) return true
-    const channel = routineDeliveryChannelLabel(delivery.channel)
+    const channel = assistantDeliveryChannelLabel(delivery.channel)
     return connectionViews.some(
       (view) => view.status === 'ready' && connectionNamesOverlap(view.connection.label, channel)
     )
   })
 
-  /** The reporting half of the routine as one line, for the All tab's brief. */
+  /** The reporting half of the assistant as one line, for the All tab's brief. */
   const reportingBrief = $derived.by(() => {
-    if (!routine) return 'Nothing agreed yet.'
+    if (!assistant) return 'Nothing agreed yet.'
     const parts: string[] = []
-    if (routine.delivery) parts.push(routineDeliveryLabel(routine.delivery))
-    if (routine.priority) parts.push(routinePriorityLabel(routine.priority))
+    if (assistant.delivery) parts.push(assistantDeliveryLabel(assistant.delivery))
+    if (assistant.priority) parts.push(assistantPriorityLabel(assistant.priority))
     if (parts.length === 0) return 'Nothing agreed yet. Ask the agent, or set it here.'
     return parts.join(' \u00b7 ')
   })
 
   function addConnection(entry: ConnectionLibraryEntry): void {
-    if (!routine) return
-    const connections: RoutineConnection[] = [
-      ...routine.connections,
+    if (!assistant) return
+    const connections: AssistantConnection[] = [
+      ...assistant.connections,
       { utilityId: entry.id, label: entry.name, kind: entry.kind }
     ]
-    void persistRoutine({ connections }, 'Could not add the connection')
+    void persistAssistant({ connections }, 'Could not add the connection')
   }
 
   /**
    * Removing a connection is destructive, so the row's X only stages it and the
    * shared confirmation dialog commits it. The trigger is a small icon, so a
-   * stray click must never drop a connection the routine depends on.
+   * stray click must never drop a connection the assistant depends on.
    */
-  let connectionRemoveTarget = $state<RoutineConnection | null>(null)
+  let connectionRemoveTarget = $state<AssistantConnection | null>(null)
   let connectionRemoveBusy = $state(false)
 
-  function removeConnection(connection: RoutineConnection): void {
-    if (!routine) return
+  function removeConnection(connection: AssistantConnection): void {
+    if (!assistant) return
     connectionRemoveTarget = connection
   }
 
   async function confirmRemoveConnection(): Promise<void> {
     const connection = connectionRemoveTarget
-    if (!routine || !connection) return
+    if (!assistant || !connection) return
     connectionRemoveBusy = true
     try {
-      const connections = routine.connections.filter(
+      const connections = assistant.connections.filter(
         (candidate) => candidate.utilityId !== connection.utilityId
       )
-      await persistRoutine({ connections }, 'Could not remove the connection')
+      await persistAssistant({ connections }, 'Could not remove the connection')
       connectionRemoveTarget = null
     } finally {
       connectionRemoveBusy = false
@@ -450,16 +453,16 @@
   /**
    * Run this connection's setup in a thread of its own.
    *
-   * The thread belongs to the routine rather than to the project the user
-   * happens to be in: a connection is the routine's, its setup runs on the
-   * routine's model, and the conversation lands beside the routine's other
+   * The thread belongs to the assistant rather than to the project the user
+   * happens to be in: a connection is the assistant's, its setup runs on the
+   * assistant's model, and the conversation lands beside the assistant's other
    * tasks where the panel can point the user back at it.
    */
   function setupConnectionInThread(request: string): void {
-    const routineIdValue = routine?.id
-    if (!routineIdValue) return
+    const assistantIdValue = assistant?.id
+    if (!assistantIdValue) return
     onSetupConnection({
-      routineId: routineIdValue,
+      assistantId: assistantIdValue,
       label: connectionSetupLabel,
       request
     })
@@ -468,30 +471,28 @@
   // ─── Issues ───────────────────────────────────────────────────────────────
 
   /**
-   * Every thread this panel reports on. A run inherits its task's `routineId`,
-   * so the routine's runs are in here too: the execution status of a run
+   * Every thread this panel reports on. A run inherits its task's `assistantId`,
+   * so the assistant's runs are in here too: the execution status of a run
    * (working, failed, interrupted) lives on the run thread, not the task.
    */
-  const routineTasks = $derived.by((): Thread[] => {
-    if (!routine) return task ? [task] : []
-    return scopeState.allScopeThreads.filter((thread) => thread.routineId === routine.id)
+  const assistantTasks = $derived.by((): Thread[] => {
+    if (!assistant) return task ? [task] : []
+    return scopeState.allScopeThreads.filter((thread) => thread.assistantId === assistant.id)
   })
 
   const missedRuns = $derived(
-    routine
-      ? assistantRoutines.missedForRoutine(routine.id)
-      : assistantRoutines.missedForTask(threadId)
+    assistant ? assistants.missedForAssistant(assistant.id) : assistants.missedForTask(threadId)
   )
 
   /**
-   * Ledger-entried unattended runs for this panel's scope: a routine's runs, or
-   * a routine-less task's own runs, newest first. The ledger keeps working after
+   * Ledger-entried unattended runs for this panel's scope: an assistant's runs, or
+   * an assistant-less task's own runs, newest first. The ledger keeps working after
    * the run thread is gone, which is why it is evidence beside thread issues.
    */
   const backgroundRuns = $derived(
-    routine
-      ? assistantRoutines.backgroundForRoutine(routine.id)
-      : assistantRoutines.backgroundForTask(threadId)
+    assistant
+      ? assistants.backgroundForAssistant(assistant.id)
+      : assistants.backgroundForTask(threadId)
   )
 
   let showAllBackgroundRuns = $state(false)
@@ -534,7 +535,7 @@
         pushIssue(thread, 'Interrupted', 'The last run was interrupted')
       }
     }
-    for (const entry of routineTasks) collectFrom(entry)
+    for (const entry of assistantTasks) collectFrom(entry)
     for (const run of backgroundRuns) {
       const thread = runThreadFor(run)
       if (thread) collectFrom(thread)
@@ -559,8 +560,8 @@
 
   // ─── Run history ──────────────────────────────────────────────────────────
 
-  /** The run panel is routine-scoped; a routine-less task reports on itself. */
-  const runScopeTasks = $derived(routine ? routineTasks : task ? [task] : [])
+  /** The run panel is assistant-scoped; an assistant-less task reports on itself. */
+  const runScopeTasks = $derived(assistant ? assistantTasks : task ? [task] : [])
 
   const lastDispatchedAt = $derived(
     runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastDispatchedAt ?? 0), 0)
@@ -577,91 +578,91 @@
 
   let running = $state(false)
 
-  // ─── The routine's how-to thread ──────────────────────────────────────────
+  // ─── The assistant's knowledge thread ──────────────────────────────────────────
 
   /**
-   * The routine's how-to ("Getting started") thread, hidden or not. A hidden
+   * The assistant's knowledge ("Getting started") thread, hidden or not. A hidden
    * row never reaches the hydrated thread list the sidebar renders from, so the
-   * panel asks the main process for its own routine's thread instead of reading
+   * panel asks the main process for its own assistant's thread instead of reading
    * the workspace's rows.
    */
-  let howToThread = $state<Thread | null>(null)
-  let howToThreadBusy = $state(false)
+  let knowledgeThread = $state<Thread | null>(null)
+  let knowledgeThreadBusy = $state(false)
 
   $effect(() => {
-    const routineIdValue = routine?.id ?? null
-    if (!routineIdValue) {
-      howToThread = null
+    const assistantIdValue = assistant?.id ?? null
+    if (!assistantIdValue) {
+      knowledgeThread = null
       return
     }
     // The same target drives the interview checkpoint: the panel is looking at
-    // this routine's how-to, so the state its authoring conversation agreed is
+    // this assistant's knowledge, so the state its authoring conversation agreed is
     // worth having loaded (and the store keeps it fresh from then on).
-    void assistantRoutines.refreshCheckpoint(routineIdValue)
+    void assistants.refreshCheckpoint(assistantIdValue)
     let cancelled = false
-    void assistantRoutines
-      .howToThread(routineIdValue)
+    void assistants
+      .knowledgeThread(assistantIdValue)
       .then((thread) => {
-        if (!cancelled) howToThread = thread
+        if (!cancelled) knowledgeThread = thread
       })
       .catch(() => {
-        if (!cancelled) howToThread = null
+        if (!cancelled) knowledgeThread = null
       })
     return () => {
       cancelled = true
     }
   })
 
-  const howToThreadHidden = $derived(howToThread?.archived === true)
+  const knowledgeThreadHidden = $derived(knowledgeThread?.archived === true)
 
   /**
-   * What this routine's Getting started conversation has agreed so far, as the
+   * What this assistant's Getting started conversation has agreed so far, as the
    * agent recorded it. The store keeps it current: it loads one when the panel
-   * targets a routine and refreshes it on `routine:checkpointChanged`, so this
+   * targets an assistant and refreshes it on `assistant:checkpointChanged`, so this
    * is a plain read.
    */
   const gettingStartedCheckpoint = $derived(
-    routine ? (assistantRoutines.checkpoints.get(routine.id) ?? null) : null
+    assistant ? (assistants.checkpoints.get(assistant.id) ?? null) : null
   )
 
   /**
-   * Hide or reveal the how-to thread. It stays pinned either way, so this is
+   * Hide or reveal the knowledge thread. It stays pinned either way, so this is
    * the thread's only state change, and revealing also opens the authoring
-   * thread so the user lands where the how-to is written.
+   * thread so the user lands where the knowledge is written.
    */
-  async function toggleHowToThread(): Promise<void> {
-    if (!routine || !howToThread || howToThreadBusy) return
-    const revealing = howToThreadHidden
-    howToThreadBusy = true
+  async function toggleKnowledgeThread(): Promise<void> {
+    if (!assistant || !knowledgeThread || knowledgeThreadBusy) return
+    const revealing = knowledgeThreadHidden
+    knowledgeThreadBusy = true
     try {
-      const updated = await assistantRoutines.setHowToHidden(routine.id, !revealing)
-      howToThread = updated
+      const updated = await assistants.setKnowledgeHidden(assistant.id, !revealing)
+      knowledgeThread = updated
       if (revealing) onOpenTask(updated)
     } catch (error) {
       reportError(
         error,
-        revealing ? 'Could not show the how-to thread' : 'Could not hide the how-to thread'
+        revealing ? 'Could not show the knowledge thread' : 'Could not hide the knowledge thread'
       )
     } finally {
-      howToThreadBusy = false
+      knowledgeThreadBusy = false
     }
   }
 
   /**
-   * Run the routine immediately, ignoring its schedule and pause state, so the
+   * Run the assistant immediately, ignoring its schedule and pause state, so the
    * user can test what they built without waiting for the next fire. Every task
    * runs on a fresh thread, so the first run is opened to show it happening.
    */
-  async function runRoutineNow(): Promise<void> {
-    if (!routine || running) return
+  async function runNow(): Promise<void> {
+    if (!assistant || running) return
     running = true
     try {
-      const runs = await assistantRoutines.runRoutineNow(routine.id)
+      const runs = await assistants.runNow(assistant.id)
       toast.success(runs.length === 1 ? 'Run started' : `${runs.length} runs started`)
       const first = runs[0]
       if (first) onOpenTask(first)
     } catch (error) {
-      reportError(error, 'Could not run the routine')
+      reportError(error, 'Could not run the assistant')
     } finally {
       running = false
     }
@@ -669,15 +670,15 @@
 
   async function dismissRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissMissedRun(id)
+      await assistants.dismissMissedRun(id)
     } catch (error) {
       reportError(error, 'Could not dismiss the missed run')
     }
   }
 
-  async function runNow(run: MissedRun): Promise<void> {
+  async function runMissedNow(run: MissedRun): Promise<void> {
     try {
-      const created = await assistantRoutines.runMissedRunNow(run.id)
+      const created = await assistants.runMissedRunNow(run.id)
       // A run happens on its own thread, so open the run itself.
       if (created) onOpenTask(created)
     } catch (error) {
@@ -780,14 +781,14 @@
   </div>
 {/snippet}
 
-{#snippet routineEmptyState()}
+{#snippet assistantEmptyState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
-      <AssistantIcon mark="how-to" size={24} class="text-dimmed" />
+      <AssistantIcon mark="knowledge" size={24} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">No how-to yet</p>
+    <p class="text-[0.8125rem] font-medium text-foreground">No knowledge yet</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Describe what this routine should do to the agent in its task. Tell it the goal, the steps,
+      Describe what this assistant should do to the agent in its task. Tell it the goal, the steps,
       and when it should run. The plan you agree on shows up here.
     </p>
   </div>
@@ -796,7 +797,7 @@
       <div class="border border-border bg-elevated p-2.5">
         <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Agreed so far</p>
         <p class="mb-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-          What you and the agent have agreed for this routine so far.
+          What you and the agent have agreed for this assistant so far.
         </p>
         <div class="text-[0.6875rem] text-muted">
           <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
@@ -806,14 +807,15 @@
   {/if}
 {/snippet}
 
-{#snippet noRoutineState()}
+{#snippet noAssistantState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
       <AssistantIcon size={40} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">Not part of a routine</p>
+    <p class="text-[0.8125rem] font-medium text-foreground">Not part of an assistant</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Group this task into a routine to give it instructions, connections, models, and a schedule.
+      Group this task into an assistant to give it instructions, connections, models, and a
+      schedule.
     </p>
   </div>
 {/snippet}
@@ -856,21 +858,21 @@
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
       <div class="flex flex-col gap-2 p-3">
-        {#if routine}
+        {#if assistant}
           <button
             type="button"
             class="flex items-center gap-2 border border-border px-2.5 py-2 text-left text-[0.75rem] transition-colors hover:bg-elevated"
-            title={routine.paused ? 'Resume this routine' : 'Pause this routine'}
-            aria-label={routine.paused ? 'Resume this routine' : 'Pause this routine'}
+            title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+            aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
             onclick={() => void togglePaused()}
           >
-            {#if routine.paused}
+            {#if assistant.paused}
               <Play size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Resume routine</span>
+              <span class="min-w-0 flex-1 text-foreground">Resume assistant</span>
               <span class="text-[0.625rem]" style="color: var(--color-warning)">Paused</span>
             {:else}
               <Pause size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Pause routine</span>
+              <span class="min-w-0 flex-1 text-foreground">Pause assistant</span>
               <span class="text-[0.625rem] text-dimmed">Running</span>
             {/if}
           </button>
@@ -880,18 +882,18 @@
               <button
                 type="button"
                 class="flex shrink-0 items-center gap-1.5 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                title="Run this routine now, even while paused"
-                aria-label="Run this routine now"
-                disabled={running || !howToComplete}
-                onclick={() => void runRoutineNow()}
+                title="Run this assistant now, even while paused"
+                aria-label="Run this assistant now"
+                disabled={running || !knowledgeComplete}
+                onclick={() => void runNow()}
               >
                 <RotateCcw size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
                 Run now
               </button>
               <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
-                {howToComplete
+                {knowledgeComplete
                   ? 'Test it without waiting for the schedule.'
-                  : 'Save a how-to first.'}
+                  : 'Save a knowledge first.'}
               </span>
             </div>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.625rem] text-dimmed">
@@ -903,12 +905,12 @@
           </div>
 
           {@render summaryRow({
-            title: 'Routine',
-            detail: howToComplete
+            title: 'Assistant',
+            detail: knowledgeComplete
               ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-              : 'No how-to yet. Describe the routine to the agent in its task.',
-            target: 'routine',
-            warn: !howToComplete
+              : 'No knowledge yet. Describe the assistant to the agent in its task.',
+            target: 'assistant',
+            warn: !knowledgeComplete
           })}
 
           {@render summaryRow({
@@ -926,7 +928,7 @@
           {@render summaryRow({
             title: 'Agents',
             detail: agentsComplete
-              ? `${1 + (routine.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
+              ? `${1 + (assistant.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
               : 'No model set. Add a primary and fallbacks on the Agents tab.',
             target: 'agents',
             warn: !agentsComplete
@@ -935,7 +937,7 @@
           {@render summaryRow({
             title: 'Reporting',
             detail: reportingBrief,
-            target: 'routine',
+            target: 'assistant',
             warn: !deliveryReady
           })}
 
@@ -949,22 +951,22 @@
             warn: issueCount > 0
           })}
         {:else}
-          {@render noRoutineState()}
+          {@render noAssistantState()}
         {/if}
       </div>
-    {:else if activeTab === 'routine'}
-      {#if !routine}
-        {@render noRoutineState()}
-      {:else if !howToComplete}
-        {@render routineEmptyState()}
+    {:else if activeTab === 'assistant'}
+      {#if !assistant}
+        {@render noAssistantState()}
+      {:else if !knowledgeComplete}
+        {@render assistantEmptyState()}
       {:else}
         <div class="flex flex-col gap-1.5 p-3">
-          {#if routine.description?.trim()}
+          {#if assistant.description?.trim()}
             <p
               class="mb-1 bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
-              title="Your own note about this routine, never sent to the agent"
+              title="Your own note about this assistant, never sent to the agent"
             >
-              {routine.description}
+              {assistant.description}
             </p>
           {/if}
           <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
@@ -987,7 +989,7 @@
               {/if}
             </div>
             <p class="text-[0.625rem] leading-relaxed text-dimmed">
-              Where this routine's output goes, and how urgent it is. Agree it with the agent, or
+              Where this assistant's output goes, and how urgent it is. Agree it with the agent, or
               set it here.
             </p>
 
@@ -995,14 +997,14 @@
               <div class="flex items-center gap-1.5">
                 <EnumSelect
                   options={deliveryChoices}
-                  value={routine.delivery?.channel ?? null}
+                  value={assistant.delivery?.channel ?? null}
                   onChange={setDeliveryChannel}
                   placeholder="Delivery channel"
                   ariaLabel="Delivery channel"
-                  title="Where this routine's output is delivered"
+                  title="Where this assistant's output is delivered"
                   class="flex-1"
                 />
-                {#if routine.delivery}
+                {#if assistant.delivery}
                   <button
                     type="button"
                     class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1015,14 +1017,14 @@
                 {/if}
               </div>
 
-              {#if routine.delivery && routine.delivery.channel !== 'in-app'}
+              {#if assistant.delivery && assistant.delivery.channel !== 'in-app'}
                 <input
                   type="text"
                   class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
                   placeholder="Destination: a chat, a channel, an address"
                   aria-label="Delivery destination"
                   title="The concrete destination, for example #eng-alerts"
-                  value={routine.delivery.target ?? ''}
+                  value={assistant.delivery.target ?? ''}
                   onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
                   onkeydown={(event) => {
                     if (event.key === 'Enter') event.currentTarget.blur()
@@ -1030,34 +1032,34 @@
                 />
               {/if}
 
-              {#if routine.delivery && !deliveryReady}
+              {#if assistant.delivery && !deliveryReady}
                 <p class="text-[0.625rem] leading-relaxed" style="color: var(--color-warning)">
-                  {routineDeliveryChannelLabel(routine.delivery.channel)} is not connected yet. Add it
-                  on the Connections tab; until then runs deliver in CodeInOven.
+                  {assistantDeliveryChannelLabel(assistant.delivery.channel)} is not connected yet. Add
+                  it on the Connections tab; until then runs deliver in CodeInOven.
                 </p>
               {/if}
             </div>
 
             <div class="flex items-center gap-1.5">
               <EnumSelect
-                options={ROUTINE_TIMELINESS_OPTIONS}
-                value={routine.priority?.timeliness ?? null}
+                options={ASSISTANT_TIMELINESS_OPTIONS}
+                value={assistant.priority?.timeliness ?? null}
                 onChange={setPriorityTimeliness}
                 placeholder="Timeliness"
                 ariaLabel="Time-based priority"
-                title="How soon this routine's output matters"
+                title="How soon this assistant's output matters"
                 class="flex-1"
               />
               <EnumSelect
-                options={ROUTINE_IMPACT_OPTIONS}
-                value={routine.priority?.impact ?? null}
+                options={ASSISTANT_IMPACT_OPTIONS}
+                value={assistant.priority?.impact ?? null}
                 onChange={setPriorityImpact}
                 placeholder="Impact"
                 ariaLabel="Scope-based priority"
-                title="How far this routine's output reaches"
+                title="How far this assistant's output reaches"
                 class="flex-1"
               />
-              {#if routine.priority}
+              {#if assistant.priority}
                 <button
                   type="button"
                   class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1149,14 +1151,14 @@
         </div>
       {/if}
     {:else if activeTab === 'connections'}
-      {#if !routine}
-        {@render noRoutineState()}
+      {#if !assistant}
+        {@render noAssistantState()}
       {:else}
         <div class="flex flex-col gap-2 p-3">
           {#if connectionViews.length === 0}
             <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-              No connections yet. Add the tools this routine needs, or let the agent name them as it
-              writes the how-to.
+              No connections yet. Add the tools this assistant needs, or let the agent name them as
+              it writes the knowledge.
             </p>
           {:else}
             {#each connectionViews as view (view.connection.utilityId)}
@@ -1178,15 +1180,15 @@
         </div>
       {/if}
     {:else if activeTab === 'agents'}
-      {#if !routine}
-        {@render noRoutineState()}
+      {#if !assistant}
+        {@render noAssistantState()}
       {:else}
         <div class="flex flex-col gap-4 p-3">
-          {#key routine.id}
-            <RoutineExecutionPicker routineId={routine.id} execution={routine.execution} />
+          {#key assistant.id}
+            <AssistantExecutionPicker assistantId={assistant.id} execution={assistant.execution} />
             <div class="border-t border-border pt-4">
-              <RoutineAgentPicker
-                agents={routine.agents}
+              <AssistantAgentPicker
+                agents={assistant.agents}
                 {providers}
                 projectId={projectIdForCatalog}
                 onChange={setAgents}
@@ -1225,7 +1227,7 @@
                     <button
                       type="button"
                       class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      onclick={() => void runNow(run)}
+                      onclick={() => void runMissedNow(run)}
                     >
                       <RotateCcw size={12} strokeWidth={1.8} />
                       Run now
@@ -1240,7 +1242,9 @@
         <section aria-label="Run issues">
           <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run issues</h2>
           {#if runIssues.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">No waiting runs, rate limits, failures, or interruptions.</p>
+            <p class="text-[0.6875rem] text-dimmed">
+              No waiting runs, rate limits, failures, or interruptions.
+            </p>
           {:else}
             <div class="flex flex-col gap-1.5">
               {#each runIssues as issue (issue.id)}
@@ -1323,33 +1327,33 @@
   </div>
 {/snippet}
 
-{#snippet howToThreadAction()}
-  {#if routine && howToThread}
-    <!-- The how-to thread is pinned for life and has exactly two states. Hide
+{#snippet knowledgeThreadAction()}
+  {#if assistant && knowledgeThread}
+    <!-- The knowledge thread is pinned for life and has exactly two states. Hide
          puts it away for the session, Show brings it back and opens it, so the
-         panel is always the way back to the routine's authoring thread. -->
+         panel is always the way back to the assistant's authoring thread. -->
     <button
       type="button"
       class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title={howToThreadHidden
-        ? 'Show the routine’s how-to thread again'
-        : 'Hide the routine’s how-to thread from the sidebar'}
-      disabled={howToThreadBusy}
-      onclick={() => void toggleHowToThread()}
+      title={knowledgeThreadHidden
+        ? 'Show the assistant’s knowledge thread again'
+        : 'Hide the assistant’s knowledge thread from the sidebar'}
+      disabled={knowledgeThreadBusy}
+      onclick={() => void toggleKnowledgeThread()}
     >
-      <AssistantIcon mark="how-to" size={14} class="shrink-0" />
+      <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
       <span class="truncate">
-        {howToThreadHidden ? 'Show how-to thread' : 'Hide how-to thread'}
+        {knowledgeThreadHidden ? 'Show knowledge thread' : 'Hide knowledge thread'}
       </span>
     </button>
   {/if}
 {/snippet}
 
 {#if !fullscreen}
-  <div class="flex h-full min-h-0 flex-col" aria-label="Assistant routine panel">
+  <div class="flex h-full min-h-0 flex-col" aria-label="Assistant panel">
     {@render panelHeader()}
     {@render panelContent()}
-    {@render howToThreadAction()}
+    {@render knowledgeThreadAction()}
   </div>
 {/if}
 
@@ -1371,7 +1375,7 @@
     <div class="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
       {@render panelContent()}
     </div>
-    {@render howToThreadAction()}
+    {@render knowledgeThreadAction()}
   </FullscreenPanelDialog>
 {/if}
 
@@ -1380,7 +1384,7 @@
     The same Add capability modal the Utilities page uses, opened from a
     connection that still needs setup. Its assisted path is seeded with the
     prompt the authoring agent recorded and opens a setup thread of this
-    routine; the library is reloaded afterwards, so a capability installed
+    assistant; the library is reloaded afterwards, so a capability installed
     through the editor flips the row to ready in place.
   -->
   <UtilityEditorModal
@@ -1403,7 +1407,7 @@
   onConfirm={confirmRemoveConnection}
 >
   <p>
-    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this routine?
-    The agent will no longer use it when this routine runs.
+    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this assistant?
+    The agent will no longer use it when this assistant runs.
   </p>
 </ConfirmDialog>

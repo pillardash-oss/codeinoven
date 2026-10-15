@@ -24,13 +24,13 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import {
     assistantSubjectName,
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    groupActivityByRoutine,
+    groupActivityByAssistant,
     missedRunReasonText,
     UNGROUPED_MISSED_RUNS
   } from '$lib/components/assistant/assistant-view'
@@ -56,30 +56,30 @@
   }
 
   /**
-   * One row the Assistants tab can show under a routine: a notice, a missed
+   * One row the Assistants tab can show under an assistant: a notice, a missed
    * fire, or an unattended run, each tagged with the moment it reports and the
-   * routine it belongs to, so all three fold together per routine.
+   * assistant it belongs to, so all three fold together per assistant.
    */
   type AssistantActivity =
     | {
         kind: 'notice'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         notification: InAppNotification
       }
     | {
         kind: 'missed'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         run: MissedRun
       }
     | {
         kind: 'background'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         run: BackgroundRun
       }
 
@@ -171,7 +171,7 @@
     showingAppErrors
       ? appErrorState.count > 0
       : showingAssistants
-        ? assistantRoutines.missedRuns.length > 0 || assistantRoutines.backgroundRuns.length > 0
+        ? assistants.missedRuns.length > 0 || assistants.backgroundRuns.length > 0
         : notificationPanelState.visible.length > 0
   )
 
@@ -184,24 +184,24 @@
       : notificationPanelState.assistantNotifications.length > 0
   )
 
-  // Missed runs are surfaced per routine: one group per owning routine, plus a
-  // single group for routine-less tasks. Both the groups and the panel's tab
+  // Missed runs are surfaced per assistant: one group per owning assistant, plus a
+  // single group for assistant-less tasks. Both the groups and the panel's tab
   // chrome exist only once at least one run has actually been missed.
-  const routineNameById = $derived(
-    new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
+  const assistantNameById = $derived(
+    new Map(assistants.assistants.map((assistant) => [assistant.id, assistant.name]))
   )
 
   /**
    * The missed fires and unattended runs the panel shows both come straight
    * from the store (`assistantVisibleMissedRuns` / `assistantVisibleBackgroundRuns`),
-   * which applies the same sub-filter, routines/tasks filter, and run/notice
+   * which applies the same sub-filter, assistants/tasks filter, and run/notice
    * de-duplication to them as it does to the notices it owns. Keeping the rule in
    * one place is what makes the tab badge match the rows on screen.
    */
 
   /**
    * One entry per row an assistant section can show: a notice, a missed fire, or
-   * an unattended run, each carrying the moment it reports and the routine it
+   * an unattended run, each carrying the moment it reports and the assistant it
    * belongs to.
    */
   const assistantActivity = $derived.by<AssistantActivity[]>(() => {
@@ -211,7 +211,7 @@
         kind: 'notice',
         id: `notice:${n.id}`,
         at: n.timestamp,
-        routineId: n.routineId,
+        assistantId: n.assistantId,
         notification: n
       })
     }
@@ -220,7 +220,7 @@
         kind: 'missed',
         id: `missed:${run.id}`,
         at: run.dueAt,
-        routineId: run.routineId,
+        assistantId: run.assistantId,
         run
       })
     }
@@ -229,7 +229,7 @@
         kind: 'background',
         id: `background:${run.runThreadId}`,
         at: run.settledAt ?? run.startedAt,
-        routineId: run.routineId,
+        assistantId: run.assistantId,
         run
       })
     }
@@ -237,16 +237,16 @@
   })
 
   /**
-   * The Assistants tab folds per routine: one section per routine (plus one for
-   * activity owned by no routine), newest update first inside each section and
-   * across them, so a routine that just updated rises to the top of the list.
+   * The Assistants tab folds per assistant: one section per assistant (plus one for
+   * activity owned by no assistant), newest update first inside each section and
+   * across them, so an assistant that just updated rises to the top of the list.
    */
   const assistantSections = $derived(
-    groupActivityByRoutine(assistantActivity, routineNameById, { key: UNGROUPED_MISSED_RUNS })
+    groupActivityByAssistant(assistantActivity, assistantNameById, { key: UNGROUPED_MISSED_RUNS })
   )
 
-  // Sections the user folded shut, keyed by routine (or the routine-less
-  // bucket). Open is the default, so a fresh routine stays visible until folded.
+  // Sections the user folded shut, keyed by assistant (or the assistant-less
+  // bucket). Open is the default, so a fresh assistant stays visible until folded.
   const collapsedAssistantSections = new SvelteSet<string>()
 
   function toggleAssistantSection(key: string): void {
@@ -254,28 +254,28 @@
     else collapsedAssistantSections.add(key)
   }
 
-  // The assistants tab's routines/tasks narrowing, behind the filter button at
+  // The assistants tab's assistants/tasks narrowing, behind the filter button at
   // the end of the sub-filter row.
   const assistantSubjectOptions: Array<{
     id: NotificationAssistantSubject
     label: string
     hint: string
   }> = [
-    { id: 'all', label: 'Routines and tasks', hint: 'Everything the assistant ran' },
-    { id: 'routine', label: 'Routines only', hint: 'Runs owned by a scheduled routine' },
-    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no routine' }
+    { id: 'all', label: 'Assistants and tasks', hint: 'Everything the assistant ran' },
+    { id: 'assistant', label: 'Assistants only', hint: 'Runs owned by a scheduled assistant' },
+    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no assistant' }
   ]
 
   const assistantSubjectLabel = $derived(
     assistantSubjectOptions.find((option) => option.id === notificationPanelState.assistantSubject)
-      ?.label ?? 'Routines and tasks'
+      ?.label ?? 'Assistants and tasks'
   )
 
   /** Whether any assistant activity exists before either filter narrows it. */
   const assistantHasActivity = $derived(
     notificationPanelState.assistantNotifications.length > 0 ||
-      assistantRoutines.missedRuns.length > 0 ||
-      assistantRoutines.backgroundRuns.length > 0
+      assistants.missedRuns.length > 0 ||
+      assistants.backgroundRuns.length > 0
   )
 
   /** Whether the active filters hide everything there is to show. */
@@ -288,34 +288,38 @@
 
   /**
    * The task a run row reports for, resolved from the loaded thread list. A
-   * routine's Getting started host is not a job, and a deleted task has no row
-   * at all, so both resolve through the routine name instead (see
+   * assistant's Getting started host is not a job, and a deleted task has no row
+   * at all, so both resolve through the assistant name instead (see
    * `assistantSubjectName`).
    */
   function runTask(threadId: string): Thread | undefined {
     return scopeState.allScopeThreads.find((thread) => thread.id === threadId)
   }
 
-  function routineNameFor(routineId: string | undefined): string | null {
-    return routineId ? (routineNameById.get(routineId) ?? null) : null
+  function assistantNameFor(assistantId: string | undefined): string | null {
+    return assistantId ? (assistantNameById.get(assistantId) ?? null) : null
   }
 
   function missedRunTitle(run: MissedRun): string {
     return assistantSubjectName(
       runTask(run.threadId),
-      routineNameFor(run.routineId),
+      assistantNameFor(run.assistantId),
       'Assistant task'
     )
   }
 
   /**
-   * A run's own row names the task it ran, never the routine's "Getting started"
+   * A run's own row names the task it ran, never the assistant's "Getting started"
    * authoring host, resolved from the thread list. A task whose thread was
-   * deleted still has ledger evidence, so it falls back to the routine name and
+   * deleted still has ledger evidence, so it falls back to the assistant name and
    * then the neutral label rather than disappearing.
    */
   function backgroundRunTitle(run: BackgroundRun): string {
-    return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
+    return assistantSubjectName(
+      runTask(run.taskId),
+      assistantNameFor(run.assistantId),
+      'Assistant run'
+    )
   }
 
   /**
@@ -382,7 +386,7 @@
 
   async function dismissMissedRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissMissedRun(id)
+      await assistants.dismissMissedRun(id)
     } catch {
       // Surfaced as a missed run returning on the next refresh; nothing to do here.
     }
@@ -391,7 +395,7 @@
   /** Acknowledge one unattended run so it leaves the "While you were away" list. */
   async function dismissBackgroundRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissBackgroundRun(id)
+      await assistants.dismissBackgroundRun(id)
     } catch {
       // Main pushes the fresh ledger list; a failure simply leaves the row.
     }
@@ -409,7 +413,7 @@
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
-      const run = await assistantRoutines.runMissedRunNow(id)
+      const run = await assistants.runMissedRunNow(id)
       // Every run executes on its own fresh thread, so open that thread.
       if (run) await openMissedRun(run.id)
     } finally {
@@ -472,7 +476,7 @@
    * The line under an entry's title.
    *
    * An assistant completion states its outcome: the reader is on the Assistants
-   * tab, the title is already the routine or task name, and the payload's body
+   * tab, the title is already the assistant or task name, and the payload's body
    * repeated that name ("Shower News finished."). Entries the durable inbox
    * restored from an older session still carry that repetition, so the outcome
    * is derived here rather than trusted from the stored body.
@@ -811,7 +815,7 @@
             value={notificationPanelState.assistantSubject}
             options={assistantSubjectOptions}
             onValueChange={(next) => notificationPanelState.setAssistantSubject(next)}
-            label="Filter assistant notifications by routines or tasks"
+            label="Filter assistant notifications by assistants or tasks"
             current={assistantSubjectLabel}
             narrowed={notificationPanelState.assistantSubject !== 'all'}
           />

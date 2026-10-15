@@ -12,15 +12,15 @@ vi.mock('electron', () => ({
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import type { Database } from '../../src/main/database/database'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
-import { RoutineRepo } from '../../src/main/database/repositories/routine-repo'
+import { AssistantRepo } from '../../src/main/database/repositories/assistant-repo'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
-import { RoutineAuthoringCheckpoints } from '../../src/main/chat/routine-authoring-checkpoints'
+import { AssistantAuthoringCheckpoints } from '../../src/main/chat/assistant-authoring-checkpoints'
 import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
-import type { AgentMessage, CreateThreadInput, Routine, Thread } from '../../src/lib/types'
+import type { AgentMessage, CreateThreadInput, Assistant, Thread } from '../../src/lib/types'
 
 /**
- * A routine's Getting started conversation is an interview, and the interview
+ * An assistant's Getting started conversation is an interview, and the interview
  * has to survive the model or harness the user is working on changing mid-way.
  * These lock in what every authoring turn starts from: the contract, the
  * checkpoint the agent keeps current, and every answer the user already
@@ -34,7 +34,7 @@ const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
 let temporaryConfigRoot = ''
 
 beforeEach(() => {
-  temporaryConfigRoot = mkdtempSync(join(tmpdir(), 'codeinoven-routine-authoring-'))
+  temporaryConfigRoot = mkdtempSync(join(tmpdir(), 'codeinoven-assistant-authoring-'))
   process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
 })
 
@@ -56,13 +56,13 @@ interface EngineInternals {
       sessionId?: string
     ): Promise<void>
   }
-  routineAuthoringInstruction(
+  assistantAuthoringInstruction(
     projectId: string,
     threadId: string,
     thread: Thread | null | undefined
   ): Promise<string | undefined>
-  routineRunHiddenContext(thread: Thread | null | undefined): string | undefined
-  routineHowToInstruction(thread: Thread | null | undefined): string | undefined
+  assistantRunHiddenContext(thread: Thread | null | undefined): string | undefined
+  assistantKnowledgeInstruction(thread: Thread | null | undefined): string | undefined
   createAssistantRunThread(input: { task: Thread; title: string }): Promise<Thread>
 }
 
@@ -70,14 +70,14 @@ function internals(engine: ChatEngine): EngineInternals {
   return engine as unknown as EngineInternals
 }
 
-function routine(howTo: string): Routine {
+function assistant(knowledge: string): Assistant {
   const now = Date.now()
   return {
-    id: 'routine-authoring',
+    id: 'assistant-authoring',
     name: 'Slack latest info',
     color: '#336699',
     schedule: null,
-    howTo,
+    knowledge,
     connections: [],
     paused: false,
     createdAt: now,
@@ -85,10 +85,10 @@ function routine(howTo: string): Routine {
   }
 }
 
-async function setup(howTo: string): Promise<{
+async function setup(knowledge: string): Promise<{
   engine: ChatEngine
   thread: Thread
-  checkpoints: RoutineAuthoringCheckpoints
+  checkpoints: AssistantAuthoringCheckpoints
 }> {
   const database = await createTestDb()
   temporaryDatabases.push(database)
@@ -104,7 +104,7 @@ async function setup(howTo: string): Promise<{
     createdAt: Date.now(),
     updatedAt: Date.now()
   })
-  new RoutineRepo(database).upsert(routine(howTo))
+  new AssistantRepo(database).upsert(assistant(knowledge))
 
   const storage = new StorageEngine(temporaryConfigRoot)
   const engine = new ChatEngine(storage, database)
@@ -112,10 +112,10 @@ async function setup(howTo: string): Promise<{
     projectId: ASSISTANT_SPACE_ID,
     providerId: 'pi',
     title: 'Getting started',
-    routineId: routine(howTo).id,
+    assistantId: assistant(knowledge).id,
     assistantGettingStarted: true
   })
-  return { engine, thread, checkpoints: new RoutineAuthoringCheckpoints(storage) }
+  return { engine, thread, checkpoints: new AssistantAuthoringCheckpoints(storage) }
 }
 
 /** One stored question card, shaped as the engine persists an answer. */
@@ -141,35 +141,35 @@ function answeredQuestion(body: string): AgentMessage {
   }
 }
 
-describe('routine run threads', () => {
-  it('inherit their task routine so the how-to and run contract reach the run', async () => {
-    const howTo = '# Saved how-to\n\nSearch the web and report.'
-    const { engine, thread } = await setup(howTo)
+describe('assistant run threads', () => {
+  it('inherit their task assistant so the knowledge and run contract reach the run', async () => {
+    const knowledge = '# Saved knowledge\n\nSearch the web and report.'
+    const { engine, thread } = await setup(knowledge)
 
     const run = await internals(engine).createAssistantRunThread({
       task: thread,
       title: 'Run · 09:07'
     })
 
-    // The run keeps the task's routine, which is what carries the how-to and
+    // The run keeps the task's assistant, which is what carries the knowledge and
     // the run contract into its system prompt.
-    expect(run.routineId).toBe(routine(howTo).id)
+    expect(run.assistantId).toBe(assistant(knowledge).id)
     expect(run.assistantTaskId).toBe(thread.id)
-    expect(internals(engine).routineHowToInstruction(run)).toBe(howTo)
-    const contract = internals(engine).routineRunHiddenContext(run)
+    expect(internals(engine).assistantKnowledgeInstruction(run)).toBe(knowledge)
+    const contract = internals(engine).assistantRunHiddenContext(run)
     expect(contract).toContain('Slack latest info')
-    expect(contract).toContain('Its how-to is your instruction set')
+    expect(contract).toContain('Its knowledge is your instruction set')
     // A run is never an authoring turn: the interview contract must not apply.
     expect(
-      await internals(engine).routineAuthoringInstruction(ASSISTANT_SPACE_ID, run.id, run)
+      await internals(engine).assistantAuthoringInstruction(ASSISTANT_SPACE_ID, run.id, run)
     ).toBeUndefined()
   })
 })
 
-describe('routineAuthoringInstruction', () => {
+describe('assistantAuthoringInstruction', () => {
   it('carries the contract, the checkpoint, and every resolved answer', async () => {
     const { engine, thread, checkpoints } = await setup('')
-    await checkpoints.save(routine('').id, '- Cadence: 08:05 daily\n- Digest goes in CodeInOven')
+    await checkpoints.save(assistant('').id, '- Cadence: 08:05 daily\n- Digest goes in CodeInOven')
     await internals(engine).threadManager.upsertMessages(
       ASSISTANT_SPACE_ID,
       thread.id,
@@ -177,7 +177,7 @@ describe('routineAuthoringInstruction', () => {
       SESSION_ID
     )
 
-    const instruction = await internals(engine).routineAuthoringInstruction(
+    const instruction = await internals(engine).assistantAuthoringInstruction(
       ASSISTANT_SPACE_ID,
       thread.id,
       thread
@@ -196,7 +196,7 @@ describe('routineAuthoringInstruction', () => {
   it('still carries the contract when the interview has saved nothing yet', async () => {
     const { engine, thread } = await setup('')
 
-    const instruction = await internals(engine).routineAuthoringInstruction(
+    const instruction = await internals(engine).assistantAuthoringInstruction(
       ASSISTANT_SPACE_ID,
       thread.id,
       thread
@@ -207,17 +207,17 @@ describe('routineAuthoringInstruction', () => {
     expect(instruction).not.toContain('## Resolved decisions (app-owned, verbatim)')
   })
 
-  it('carries the editing contract once the routine is saved, and never the run contract', async () => {
-    const howTo = '# Saved how-to\n\nSearch the web and report.'
-    const { engine, thread, checkpoints } = await setup(howTo)
-    await checkpoints.save(routine('').id, '- Stale interview state')
+  it('carries the editing contract once the assistant is saved, and never the run contract', async () => {
+    const knowledge = '# Saved knowledge\n\nSearch the web and report.'
+    const { engine, thread, checkpoints } = await setup(knowledge)
+    await checkpoints.save(assistant('').id, '- Stale interview state')
 
-    // A routine's Getting started thread is where the user comes back to change
-    // the how-to. Handing it the run contract made the agent answer a tweak
-    // ("more Nigerian news, less politics") by running the routine's job.
-    expect(internals(engine).routineRunHiddenContext(thread)).toBeUndefined()
+    // An assistant's Getting started thread is where the user comes back to change
+    // the knowledge. Handing it the run contract made the agent answer a tweak
+    // ("more Nigerian news, less politics") by running the assistant's job.
+    expect(internals(engine).assistantRunHiddenContext(thread)).toBeUndefined()
 
-    const instruction = await internals(engine).routineAuthoringInstruction(
+    const instruction = await internals(engine).assistantAuthoringInstruction(
       ASSISTANT_SPACE_ID,
       thread.id,
       thread
@@ -225,11 +225,11 @@ describe('routineAuthoringInstruction', () => {
 
     expect(instruction).toBeDefined()
     expect(instruction).toContain('Slack latest info')
-    expect(instruction).toContain('tweak or update its how-to and its connections')
-    expect(instruction).toContain('This thread never runs the routine')
+    expect(instruction).toContain('tweak or update its knowledge and its connections')
+    expect(instruction).toContain('This thread never runs the assistant')
     // The saved state is what the agent revises, so it rides the contract.
     expect(instruction).toContain('## Saved state (app-owned)')
-    expect(instruction).toContain(howTo)
+    expect(instruction).toContain(knowledge)
     expect(instruction).toContain('Current schedule: Not scheduled')
     // The interview's own state belongs to the authoring conversation only.
     expect(instruction).not.toContain('two separate single-choice questions')

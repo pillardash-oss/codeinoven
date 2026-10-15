@@ -659,7 +659,9 @@
         <div class="space-y-4">
           <!-- Appearance -->
           <div id="settings-block-general-appearance" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Appearance
             </h3>
             <div class="flex items-center justify-between">
@@ -779,7 +781,9 @@
 
           <!-- Notifications -->
           <div id="settings-block-general-notifications" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Notifications
             </h3>
             <div class="flex items-center justify-between gap-4">
@@ -892,7 +896,11 @@
           <!-- Browser -->
           <!-- Power -->
           <div id="settings-block-general-power" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Power</h3>
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Power
+            </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
@@ -912,7 +920,11 @@
 
           <!-- Recovery -->
           <div id="settings-block-general-recovery" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Recovery</h3>
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Recovery
+            </h3>
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -951,7 +963,11 @@
 
           <!-- Git -->
           <div id="settings-block-general-git" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Git</h3>
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Git
+            </h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -1047,7 +1063,11 @@
 
           <!-- Threads -->
           <div id="settings-block-general-threads" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Threads</h3>
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Threads
+            </h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -1136,7 +1156,7 @@
                 <div>
                   <p class="text-sm font-medium">Run in the background</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Keep Assistant routines on schedule after the window closes
+                    Keep Assistants on schedule after the window closes
                   </p>
                 </div>
                 <Switch
@@ -1227,13 +1247,15 @@
 
           <!-- CIO Cleanup -->
           <div id="settings-block-general-cio-cleanup" class="border bg-surface p-4">
-            <h3 class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            <h3
+              class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               CIO Cleanup
             </h3>
             <p class="mb-3 text-xs leading-relaxed text-dimmed">
               Stale content of every workspace's <code>.cio</code> scratch folder (projects, scopes, chats,
-              assistant routines, and browser tabs) is removed once a day. Folders you exclude below are
-              never touched.
+              assistants, and browser tabs) is removed once a day. Folders you exclude below are never
+              touched.
             </p>
             <div class="space-y-3">
               <div class="flex items-center justify-between gap-4">
@@ -1517,7 +1539,11 @@
         </div>
 
         <div id="settings-block-about-updates" class="mt-4 border bg-surface p-4">
-          <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Updates</h3>
+          <h3
+            class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+          >
+            Updates
+          </h3>
 
           <!-- Update status -->
           {#if updaterState.status.state === 'checking'}
@@ -1688,7 +1714,11 @@
         <!-- Storage + Diagnostics sit side by side and stack on narrow screens -->
         <div class="mt-4 grid gap-4 md:grid-cols-2">
           <div id="settings-block-about-storage" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Storage</h3>
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Storage
+            </h3>
             <p class="text-sm font-medium">Data directory</p>
             <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
               Projects, threads, and history are stored here.
@@ -1713,7 +1743,9 @@
           </div>
 
           <div id="settings-block-about-diagnostics" class="border bg-surface p-4">
-            <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Diagnostics
             </h3>
             <p class="text-sm font-medium">Export failure report</p>
@@ -1783,9 +1815,7 @@
     <div class="space-y-3 text-sm text-muted">
       <p>
         Nightly builds are bleeding-edge prereleases generated from the
-        <code class="bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
-          >nightly</code
-        >
+        <code class="bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground">nightly</code>
         branch. They ship continuously so you can try the latest changes early.
       </p>
       <ul class="list-disc space-y-1 pl-5">

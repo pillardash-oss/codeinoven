@@ -1,16 +1,16 @@
-import type { RoutinePriority, Thread, ThreadStatus } from './types'
+import type { AssistantPriority, Thread, ThreadStatus } from './types'
 import { isAssistantSetupThread, isAssistantThread } from './types'
-import { routinePriorityLabel } from './routine-reporting'
+import { assistantPriorityLabel } from './assistant-reporting'
 import { formatDateTime } from './date-time-format'
 
 /**
  * The durable copy of an assistant run's report.
  *
- * A routine's report is delivered into its run thread, and a thread is capped
+ * An assistant's report is delivered into its run thread, and a thread is capped
  * and evicted, so a report that only ever existed in the transcript is lost.
  * Every assistant task turn that ends with a report therefore also lands one
- * Markdown file under `reports/` in the routine's own workspace
- * (`assistant-cwd/<routineId>/reports/`), which the Workspace files panel
+ * Markdown file under `reports/` in the assistant's own workspace
+ * (`assistant-cwd/<assistantId>/reports/`), which the Workspace files panel
  * mounts. The in-app notification is unchanged: the run still reports in its
  * thread, and the file is the copy that outlives it.
  *
@@ -24,7 +24,7 @@ export const ASSISTANT_REPORTS_DIRECTORY = 'reports'
 /**
  * Whether a settled turn is one whose report is copied to disk.
  *
- * The routine's Getting started thread authors the how-to; it is an interview,
+ * The assistant's Getting started thread authors the knowledge; it is an interview,
  * not a run, so nothing about it is a report. Every other assistant-space turn
  * (a scheduled run, a manual run, or the user's own follow-up on a task) leaves
  * a report behind.
@@ -57,7 +57,7 @@ export function assistantReportStatusLabel(status: ThreadStatus): string {
  * `YYYY-MM-DD-HHmmss-<thread>.md` in the machine's local time.
  *
  * The short thread suffix keeps two runs that settle in the same second   two
- * tasks of one routine, say   from overwriting each other's report.
+ * tasks of one assistant, say   from overwriting each other's report.
  */
 export function assistantReportFileName(at: number, threadId: string): string {
   const date = new Date(at)
@@ -68,18 +68,18 @@ export function assistantReportFileName(at: number, threadId: string): string {
 }
 
 export interface AssistantReportDocumentInput {
-  /** The task the run belongs to; the report's heading when there is no routine. */
+  /** The task the run belongs to; the report's heading when there is no assistant. */
   taskTitle: string
-  /** The routine's name, when the task is grouped. */
-  routineName?: string
+  /** The assistant's name, when the task is grouped. */
+  assistantName?: string
   /** The turn's final answer, verbatim. */
   report: string
   /** How the turn settled. */
   status: ThreadStatus
   /** When the report was written. */
   at: number
-  /** The routine's agreed urgency default, when it has one. */
-  priority?: RoutinePriority
+  /** The assistant's agreed urgency default, when it has one. */
+  priority?: AssistantPriority
 }
 
 /**
@@ -90,17 +90,17 @@ export interface AssistantReportDocumentInput {
  */
 export function buildAssistantReportDocument(input: AssistantReportDocumentInput): string {
   const taskTitle = input.taskTitle.trim()
-  const routineName = input.routineName?.trim()
-  const heading = routineName || taskTitle || 'Assistant report'
+  const assistantName = input.assistantName?.trim()
+  const heading = assistantName || taskTitle || 'Assistant report'
 
   const meta = [
     `- Run: ${formatDateTime(input.at)}`,
     `- Status: ${assistantReportStatusLabel(input.status)}`
   ]
-  if (routineName && routineName !== taskTitle && taskTitle) {
+  if (assistantName && assistantName !== taskTitle && taskTitle) {
     meta.push(`- Task: ${taskTitle}`)
   }
-  if (input.priority) meta.push(`- Agreed urgency: ${routinePriorityLabel(input.priority)}`)
+  if (input.priority) meta.push(`- Agreed urgency: ${assistantPriorityLabel(input.priority)}`)
 
   return [`# Report: ${heading}`, '', ...meta, '', '---', '', input.report.trim(), ''].join('\n')
 }

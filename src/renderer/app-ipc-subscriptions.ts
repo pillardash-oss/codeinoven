@@ -50,7 +50,7 @@ export interface AppIpcSubscriptionDeps {
   /** Park the window (destroy it, keep the backend alive) instead of quitting. */
   parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
-  /** Raise the one-time start-at-login offer (raised after a routine's first how-to). */
+  /** Raise the one-time start-at-login offer (raised after an assistant's first knowledge). */
   showStartAtLoginOffer: () => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
@@ -211,7 +211,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     deps.setInstanceRole(role)
   })
   // The one-time start-at-login offer. Main raises it once in an install's life,
-  // right after a routine gets its first how-to, and only while
+  // right after an assistant gets its first knowledge, and only while
   // `launchAtLoginPrompted` is unanswered, so this only ever asks once.
   const unsubscribeStartAtLoginOffer = subscribeGuarded('app:startAtLoginPrompt', () => {
     deps.showStartAtLoginOffer()

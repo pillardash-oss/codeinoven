@@ -1,25 +1,27 @@
-import type { AgentModelSelection, RoutineAgents, ThreadSettings } from './types'
+import type { AgentModelSelection, AssistantAgents, ThreadSettings } from './types'
 
 /**
- * Routine model sets, as pure functions.
+ * Assistant model sets, as pure functions.
  *
- * A routine carries one primary model and any number of fallbacks. The order in
- * `routineModelCandidates` is the order the runner tries them: a run starts on
+ * An assistant carries one primary model and any number of fallbacks. The order in
+ * `assistantModelCandidates` is the order the runner tries them: a run starts on
  * the primary and, when that model fails, moves to the next fallback instead of
  * waiting out the failed provider's reset window. Both the scheduler and the
  * chat engine's retry path read the order from here, so the two can never
  * disagree about which model comes next.
  */
 
-/** The model a run starts on: the routine's primary, when it has one. */
-export function routinePrimaryModel(
-  agents: RoutineAgents | undefined
+/** The model a run starts on: the assistant's primary, when it has one. */
+export function assistantPrimaryModel(
+  agents: AssistantAgents | undefined
 ): AgentModelSelection | undefined {
-  return routineModelCandidates(agents)[0]
+  return assistantModelCandidates(agents)[0]
 }
 
-/** Every model a routine can run on, primary first, in the order to try them. */
-export function routineModelCandidates(agents: RoutineAgents | undefined): AgentModelSelection[] {
+/** Every model an assistant can run on, primary first, in the order to try them. */
+export function assistantModelCandidates(
+  agents: AssistantAgents | undefined
+): AgentModelSelection[] {
   if (!agents) return []
   return [agents.primary, ...agents.fallbacks].filter(
     (entry): entry is AgentModelSelection =>
@@ -37,21 +39,21 @@ export function sameModelSelection(
 
 /**
  * The model to try after `current` fails, or null when there is nothing left to
- * try. A current model that is not part of the routine's set means the user
+ * try. A current model that is not part of the assistant's set means the user
  * picked it themselves, and their choice is never overridden.
  */
-export function nextRoutineModel(
+export function nextAssistantModel(
   current: Pick<AgentModelSelection, 'harnessId' | 'providerId' | 'modelId'>,
-  agents: RoutineAgents | undefined
+  agents: AssistantAgents | undefined
 ): AgentModelSelection | null {
-  const candidates = routineModelCandidates(agents)
+  const candidates = assistantModelCandidates(agents)
   const index = candidates.findIndex((candidate) => sameModelSelection(candidate, current))
   if (index < 0) return null
   return candidates[index + 1] ?? null
 }
 
-/** The same thread settings, running on one of the routine's models. */
-export function settingsWithRoutineModel(
+/** The same thread settings, running on one of the assistant's models. */
+export function settingsWithAssistantModel(
   settings: ThreadSettings,
   selection: AgentModelSelection
 ): ThreadSettings {
@@ -68,15 +70,15 @@ export function settingsWithRoutineModel(
 }
 
 /**
- * The model set a routine starts with. When the user did not pick a primary,
+ * The model set an assistant starts with. When the user did not pick a primary,
  * the model they were already working on   the composer's current selection  
- * becomes the primary, so a routine defaults to the model they started with
+ * becomes the primary, so an assistant defaults to the model they started with
  * rather than blocking on an explicit pick.
  */
-export function withDefaultRoutinePrimary(
-  agents: RoutineAgents,
+export function withDefaultAssistantPrimary(
+  agents: AssistantAgents,
   fallback: AgentModelSelection | undefined
-): RoutineAgents {
+): AssistantAgents {
   if (agents.primary?.modelId) return agents
   if (!fallback || !fallback.modelId) return agents
   return { ...agents, primary: fallback }

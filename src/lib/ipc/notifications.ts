@@ -115,10 +115,10 @@ export interface AgentNotificationPayload extends ThreadClickedPayload {
   projectName: string
   /** Accent colour of the owning project, when known. */
   projectColor?: string
-  /** Owning routine of an assistant run, when the task belongs to one. Absent
-   *  for a standalone task run, which is how the panel's routines/tasks filter
+  /** Owning assistant of an assistant run, when the task belongs to one. Absent
+   *  for a standalone task run, which is how the panel's assistants/tasks filter
    *  tells the two apart without re-reading the thread. */
-  routineId?: string
+  assistantId?: string
   /** Full diagnostic text of the failure (message plus raw detail/stack) for
    *  `error` notifications, so the panel can show what actually went wrong and
    *  offer a faithful copy action. Absent for non-error notifications and when
