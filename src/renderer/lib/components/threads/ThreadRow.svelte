@@ -1201,7 +1201,9 @@
            pointer is on the row or while the thread is pinned, so pinning is
            never hidden behind the context menu alone. -->
       <span
-        class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center"
+        class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center {spineRailVisible
+          ? ''
+          : 'justify-center'}"
       >
         <!-- A role="button" span, not a real <button>: the whole row is one, and a
              button cannot be nested inside another. `tabindex={-1}` keeps it out of
@@ -1210,8 +1212,8 @@
         <span
           role="button"
           tabindex={-1}
-          class="flex h-[0.875rem] w-[0.875rem] flex-none cursor-pointer items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
-            ? 'opacity-100'
+          class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
+            ? 'pointer-events-auto cursor-pointer opacity-100'
             : 'pointer-events-none opacity-0'}"
           aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
           aria-hidden={!pinVisible}

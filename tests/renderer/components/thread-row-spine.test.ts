@@ -104,6 +104,7 @@ function thread(over: Partial<Thread> = {}): Thread {
 function render(t: Thread, over: Record<string, unknown> = {}) {
   const target = document.createElement('div')
   document.body.appendChild(target)
+  const pinCalls: Thread[] = []
   const app = mount(ThreadRow, {
     target,
     props: {
@@ -111,11 +112,12 @@ function render(t: Thread, over: Record<string, unknown> = {}) {
       detailed: true,
       projectIconUrl: null,
       projectIconGlyph: null,
+      onTogglePin: (thread: Thread) => pinCalls.push(thread),
       ...over
     }
   })
   flushSync()
-  return { target, app }
+  return { target, app, pinCalls }
 }
 
 describe('ThreadRow, the detailed spine row', () => {
@@ -157,6 +159,69 @@ describe('ThreadRow, the detailed spine row', () => {
     // the user can pin from the row without hunting the context menu.
     const pin = target.querySelector('[role="button"][aria-label="Pin thread"]')
     expect(pin).not.toBeNull()
+
+    unmount(app)
+  })
+
+  it('pins the thread when the pin is clicked, and unpins it when pinned', async () => {
+    // The click must reach the handler: the mark column is pointer-events-none so
+    // it cannot swallow clicks meant for the row, and the pin has to opt back in.
+    const first = render(thread({ pinned: false }))
+    await tick()
+
+    const pin = first.target.querySelector('[role="button"][aria-label="Pin thread"]')
+    expect(pin).not.toBeNull()
+    ;(pin as HTMLElement).click()
+    expect(first.pinCalls.length).toBe(1)
+    expect(first.pinCalls[0].id).toBe('t1')
+    unmount(first.app)
+
+    // A pinned row offers the opposite action, and clicking it unpins.
+    const second = render(thread({ pinned: true }))
+    await tick()
+
+    const unpin = second.target.querySelector('[role="button"][aria-label="Unpin thread"]')
+    expect(unpin).not.toBeNull()
+    ;(unpin as HTMLElement).click()
+    expect(second.pinCalls.length).toBe(1)
+    unmount(second.app)
+  })
+
+  it('makes the pin clickable, not just visible', async () => {
+    const { target, app } = render(thread({ pinned: true }))
+    await tick()
+
+    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]') as HTMLElement
+    // Visible alone is not enough: the column it sits in is pointer-events-none.
+    expect(pin.className).toContain('pointer-events-auto')
+    expect(pin.className).not.toContain('pointer-events-none')
+
+    unmount(app)
+  })
+
+  it('centres the mark column when no rail is drawn', async () => {
+    const { target, app } = render(thread({ status: 'completed' }))
+    await tick()
+
+    const column = target
+      .querySelector('[aria-label="Completed"]')
+      ?.parentElement as HTMLElement
+    // Without a rail there is no flexible child to push the mark to the top, so
+    // the column centres its contents against the text beside it.
+    expect(column.className).toContain('justify-center')
+
+    unmount(app)
+  })
+
+  it('anchors the mark column to the top when a rail is drawn', async () => {
+    const { target, app } = render(thread({ status: 'awaiting_approval' }))
+    await tick()
+
+    const column = target
+      .querySelector('[aria-label="Needs attention"]')
+      ?.parentElement as HTMLElement
+    // The rail is the flexible child that runs to the row's bottom edge.
+    expect(column.className).not.toContain('justify-center')
 
     unmount(app)
   })
