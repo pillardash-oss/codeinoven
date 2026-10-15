@@ -1406,17 +1406,34 @@ export class CodexDriver extends PersistentCliDriver {
       const error = recordValue(params['error'])
       const message = stringValue(error?.['message']) ?? 'Codex turn failed'
       if (params['willRetry'] === true) {
+        const retryIssue = codexRetryIssue(error, message)
+        // Codex's reconnecting loop cannot satisfy an expired credential: it
+        // re-fails the same 401 until it gives up, which used to leave the
+        // thread parked on a connection-wait card whose only actions were
+        // Retry and Stop, with no way to sign in again. Report the terminal
+        // sign-in verdict now, and keep it so the turn's teardown carries it.
+        if (retryIssue.kind === 'authentication') {
+          active.waitingForRetry = false
+          active.failure = retryIssue.message
+          active.failureIssue = retryIssue
+          this.emit({
+            type: 'session.status',
+            sessionId: active.session.id,
+            status: { state: 'error', issue: retryIssue }
+          })
+          return
+        }
         active.failure = undefined
         active.waitingForRetry = true
         this.emit({
           type: 'session.status',
           sessionId: active.session.id,
-          status: { state: 'waiting', issue: codexRetryIssue(error, message) }
+          status: { state: 'waiting', issue: retryIssue }
         })
       } else {
         active.waitingForRetry = false
         active.failure = message
-        active.failureIssue = codexUsageLimitIssue(error, message)
+        active.failureIssue = codexUsageLimitIssue(error, message) ?? active.failureIssue
       }
       return
     }

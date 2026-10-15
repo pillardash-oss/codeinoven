@@ -23530,18 +23530,29 @@ export class ChatEngine {
           this.enterRetryWait(event.sessionId, issue, event.error)
           return
         }
-        // A usage-reset wait must survive its own teardown noise. Harnesses
-        // that emit a structured limit outcome (will-retry card above) can
-        // still exit non-zero afterwards, and that trailing generic "process
-        // exited" failure classifies as unknown. It arrived AFTER the wait was
-        // entered, so honoring it here would flip the visible will-retry card
-        // into a red error badge milliseconds later.
+        // A scheduled usage-reset wait must survive its own teardown noise.
+        // Harnesses that emit a structured limit outcome (will-retry card
+        // above) can still exit non-zero afterwards, and that trailing generic
+        // "process exited" failure classifies as unknown. It arrived AFTER the
+        // wait was entered, so honoring it here would flip the visible
+        // will-retry card into a red error badge milliseconds later.
+        //
+        // A transient connection wait has no schedule behind it, so the same
+        // trailing failure must NOT be swallowed when it classifies to a real
+        // provider verdict (sign-in required, billing). Otherwise an expired
+        // credential left the thread parked on a connection card that offered
+        // no way to reauthenticate, while the actionable 401 was discarded.
         if (this.isAutomaticRetryWaitActive(event.sessionId) && !event.issue) {
-          Logger.dev(
-            'Ignored provider teardown failure trailing an active usage-reset wait:',
-            event.error
-          )
-          return
+          const activeWait = this.sessionStatuses.get(event.sessionId)
+          const activeIssue = activeWait?.state === 'waiting' ? activeWait.issue : undefined
+          const teardownKind = classifyProviderIssue(event.error ?? '')
+          if (isUsageResetWaitIssue(activeIssue) || teardownKind === 'unknown') {
+            Logger.dev(
+              'Ignored provider teardown failure trailing an active usage-reset wait:',
+              event.error
+            )
+            return
+          }
         }
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
         updateRetryWakeWindow(event.sessionId, null)
