@@ -5889,10 +5889,16 @@ export class ChatEngine {
     // path can skip a second provider history load. A freshly created session
     // that inherited, restored, or was pre-filled with native history counts
     // too   the recap must not replay on top of a natively bound transcript.
+    // A driver that can answer the question directly wins over the message
+    // count: `loadMessages` also serves the driver's durable mirror for a
+    // session the harness will boot cold, and reading that as native history
+    // suppresses the replay the rebuilt session needs to continue.
+    const nativeHeld = await this.probeNativeHistory(driver, projectPath, sessionId)
     this.sessionNativeHistory.set(
       sessionId,
-      (driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0) ||
-        nativeHistoryBound
+      nativeHistoryBound ||
+        (nativeHeld ??
+          (driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0))
     )
 
     // A reused native session is replayed in full under whichever model the
@@ -13002,6 +13008,28 @@ export class ChatEngine {
     })
   }
 
+  /**
+   * Ask the driver whether the harness itself holds a session's conversation.
+   *
+   * Returns undefined for a driver that cannot answer, so callers keep their
+   * own evidence-based fallback. A driver error is unknown, never "no
+   * history": treating a failed probe as an absent conversation would replay
+   * the mirror on top of a session that already holds it.
+   */
+  private async probeNativeHistory(
+    driver: HarnessDriver,
+    projectPath: string,
+    sessionId: string
+  ): Promise<boolean | undefined> {
+    if (!driver.holdsNativeHistory) return undefined
+    try {
+      return await driver.holdsNativeHistory(projectPath, sessionId)
+    } catch (error) {
+      Logger.dev('Native history probe failed:', error)
+      return undefined
+    }
+  }
+
   /** Recap of the mirrored transcript when no reusable harness session exists. */
   private async buildHistoryRecap(
     projectId: string,
@@ -13032,8 +13060,15 @@ export class ChatEngine {
         try {
           const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
           if (driver.capabilities?.nativeResume !== false) {
-            const held = await driver.loadMessages(projectPath, thread.sessionId)
-            if (held.length > 0) return ''
+            const held = await this.probeNativeHistory(driver, projectPath, thread.sessionId)
+            if (held === true) return ''
+            if (held === false) this.sessionNativeHistory.set(thread.sessionId, false)
+            // No probe on this driver: keep the message-count evidence, which
+            // is all a driver without native transcripts can offer.
+            if (held === undefined) {
+              const messages = await driver.loadMessages(projectPath, thread.sessionId)
+              if (messages.length > 0) return ''
+            }
           }
         } catch {
           // Session unreachable   replay the durable mirror below.

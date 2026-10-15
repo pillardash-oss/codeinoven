@@ -569,6 +569,18 @@ export interface HarnessDriver {
   ): Promise<AgentMessage[]>
 
   /**
+   * Whether the harness itself holds this session's conversation, probed
+   * cheaply and without parsing a transcript. The engine's replay decision
+   * cannot use `loadMessages` for this, because a driver may serve its own
+   * durable mirror for a session the harness will boot cold, and reading that
+   * as harness-held history suppresses the replay the rebuilt session needs.
+   * A driver that omits this keeps the previous behavior (`loadMessages`
+   * returning messages counts as native history). Best-effort; callers treat a
+   * throw as unknown rather than as "no history".
+   */
+  holdsNativeHistory?(projectPath: string, sessionId: string): Promise<boolean>
+
+  /**
    * Carry a replaced session's native conversation binding over to its
    * replacement, so a harness that persists its own transcript (native resume)
    * keeps resuming the real history instead of silently degrading every later

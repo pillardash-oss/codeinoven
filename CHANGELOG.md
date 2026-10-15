@@ -206,6 +206,19 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A resumed thread continues the harness conversation it already had.** A pi
+  account that keeps its own container runs pi with `PI_CODING_AGENT_DIR` pointing
+  at that container, but the app resolved pi's session directory from its own
+  process environment, which never carries the variable. The driver looked for the
+  thread's transcript under `~/.pi/agent`, found nothing, and silently booted a
+  brand new pi session on every resume, so a thread picked up after an idle gap
+  answered from a replayed transcript instead of from its own conversation, with
+  tool results reduced to summaries and no session to continue. The account's agent
+  directory now travels with every transcript lookup (resume, transfer, seeding,
+  sub-agent reads and compaction reconciliation), and the replay decision asks the
+  driver whether the harness really holds the session rather than inferring it from
+  a message count a driver's own durable mirror can satisfy.
+
 - **Only one transfer of a thread can be in flight.** Two windows could ask an
   owning instance to hand a run over at the same moment, and both requests passed
   the owner's "is this still my turn" check before either stopped anything: both

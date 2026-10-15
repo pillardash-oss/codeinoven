@@ -1625,8 +1625,8 @@ export class PiDriver extends PersistentCliDriver {
       const session = await this.requireSession(projectPath, sessionId)
       const nativeId = session.nativeSessionId
       if (!nativeId) return
-      if (!existsSync(nativePiSessionDir(projectPath))) return
-      const file = await findNativePiSessionFile(projectPath, nativeId)
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return
+      const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
       if (!file) return
       await client.switchSession(file)
       this.resumedNativeSessions.add(sessionId)
@@ -1678,6 +1678,15 @@ export class PiDriver extends PersistentCliDriver {
     return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
   }
 
+  async holdsNativeHistory(projectPath: string, sessionId: string): Promise<boolean> {
+    if (this.rpcClients.has(sessionId)) return true
+    const record = await this.readSessionRecord(projectPath, sessionId)
+    const nativeId = record?.nativeSessionId
+    if (!nativeId) return false
+    const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
+    return file !== null
+  }
+
   private async loadMessagesInternal(
     projectPath: string,
     sessionId: string,
@@ -1699,7 +1708,12 @@ export class PiDriver extends PersistentCliDriver {
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
+      const native = await loadNativeSubagentMessages(
+        projectPath,
+        sessionId,
+        waitForFlush,
+        this.agentDirectory
+      )
       if (native) return native
       // Throwing stays correct whenever a record genuinely exists   including
       // a hash-mismatched one (moved project), where the engine must retire
@@ -1760,8 +1774,8 @@ export class PiDriver extends PersistentCliDriver {
       if (!previous || previous.id === sessionId) return false
       const nativeId = previous.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory))) return false
       replacement.nativeSessionId = nativeId
       Logger.info('Restored native Pi transcript binding after harness switch', {
         sessionId,
@@ -1794,7 +1808,7 @@ export class PiDriver extends PersistentCliDriver {
       if (session.nativeSessionId) return true
       const entries = prefillTranscriptEntries(projectPath, messages)
       if (entries.length === 0) return false
-      const dir = nativePiSessionDir(projectPath)
+      const dir = nativePiSessionDir(projectPath, this.agentDirectory)
       await mkdir(dir, { recursive: true })
       const nativeId = randomUUID()
       const file = join(dir, `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`)
@@ -1830,8 +1844,8 @@ export class PiDriver extends PersistentCliDriver {
       const previous = await this.readSessionRecord(projectPath, fromSessionId)
       const nativeId = previous?.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
+      if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory))) return false
       const replacement = await this.requireSession(projectPath, toSessionId)
       if (replacement.nativeSessionId) return true
       replacement.nativeSessionId = nativeId
@@ -1859,8 +1873,8 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<AgentMessage[] | null> {
     const nativeId = sessionRecord.nativeSessionId
     if (!nativeId) return null
-    if (!existsSync(nativePiSessionDir(projectPath))) return null
-    const file = await findNativePiSessionFile(projectPath, nativeId)
+    if (!existsSync(nativePiSessionDir(projectPath, this.agentDirectory))) return null
+    const file = await findNativePiSessionFile(projectPath, nativeId, this.agentDirectory)
     if (!file) return null
     try {
       const messages = await parseNativePiSession(file, sessionId)
@@ -1921,7 +1935,11 @@ export class PiDriver extends PersistentCliDriver {
           session.nativeSessionId
         ) {
           try {
-            const file = await findNativePiSessionFile(projectPath, session.nativeSessionId)
+            const file = await findNativePiSessionFile(
+              projectPath,
+              session.nativeSessionId,
+              this.agentDirectory
+            )
             if (file) {
               const input = createReadStream(file)
               const lines = createInterface({ input, crlfDelay: Infinity })
@@ -2933,8 +2951,11 @@ export class PiDriver extends PersistentCliDriver {
     // process exit, watchdog finalization, and between-turn compactions, but
     // pi itself always wrote them durably to the session JSONL.
     try {
-      await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
-        this.mergeMessages(session, messages)
+      await reconcileNativeCompactions(
+        session,
+        this.sessionProjects.get(session.id),
+        (messages) => this.mergeMessages(session, messages),
+        this.agentDirectory
       )
     } catch (error) {
       Logger.dev('Pi compaction reconciliation failed:', error)
@@ -2959,8 +2980,11 @@ export class PiDriver extends PersistentCliDriver {
    */
   async reconcileSession(projectPath: string, sessionId: string): Promise<void> {
     const session = await this.requireSession(projectPath, sessionId)
-    await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
-      this.mergeMessages(session, messages)
+    await reconcileNativeCompactions(
+      session,
+      this.sessionProjects.get(session.id),
+      (messages) => this.mergeMessages(session, messages),
+      this.agentDirectory
     )
     await this.persistSession(session)
   }
