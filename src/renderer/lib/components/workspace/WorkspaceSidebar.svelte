@@ -792,6 +792,7 @@
             label="Pinned Threads"
             threads={pinnedTimelineThreads}
             detailed
+            trailingBreak={!threadGroupingState.enabled}
             activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}

@@ -48,6 +48,15 @@
     accent?: string
     /** Render only the reusable header when rows belong to a shared keyed list. */
     headerOnly?: boolean
+    /** Whether the block carries the break below itself.
+     *
+     *  The pinned block is the break's owner in every host that has no header
+     *  after it, which is all of them but the threads view. There it is off
+     *  while status groups are shown: each group header opens with its own
+     *  `pt-5`, and the block's trailing space would stack on top of it and leave
+     *  the pinned rows further from the first group than two groups are from each
+     *  other. */
+    trailingBreak?: boolean
   }
 
   let {
@@ -69,7 +78,8 @@
     onToggleFold,
     icon,
     accent,
-    headerOnly = false
+    headerOnly = false,
+    trailingBreak = true
   }: Props = $props()
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
@@ -82,8 +92,15 @@
    *  up barely larger than the gap it sits in.
    *
    *  A pinned section keeps the plain header it has always had: it is a section
-   *  of rows, not a parent of them, and it is titled by nothing but its label. */
-  const wrapperClass = $derived(headerOnly ? 'pt-5' : 'mb-3 pb-3')
+   *  of rows, not a parent of them, and it is titled by nothing but its label.
+   *
+   *  A pinned block that does not own the break below itself carries none: its
+   *  rows already hold the same bottom margin a grouped row does, and that margin
+   *  is trapped by whatever padding the wrapper adds (`padding` always blocks a
+   *  child margin from collapsing out), so a trailing `pb-3` plus its own `mb-3`
+   *  sat 24px proud of the 12 + 20 + 6px break a group header opens. Handing the
+   *  break to the block that follows makes the two measure the same. */
+  const wrapperClass = $derived(headerOnly ? 'pt-5' : trailingBreak ? 'mb-3 pb-3' : '')
   const buttonClass = $derived(
     headerOnly
       ? 'flex w-full items-center gap-2 py-1.5 pr-2 pl-0 text-left transition-colors hover:bg-overlay'
