@@ -8,7 +8,6 @@
     subagentTaskLabel
   } from '$lib/subagent-presentation'
   import CardButton from '../shared/CardButton.svelte'
-  import CardFoot from '../shared/CardFoot.svelte'
   import CardFrame from '../shared/CardFrame.svelte'
   import CardHead from '../shared/CardHead.svelte'
   import type { CardChipData } from '../shared/CardTimer.svelte'
@@ -68,26 +67,23 @@
       <SubagentModeBadge background={activity.background} />
       {#if modelLabel}
         <span
-          class="hidden max-w-32 shrink-0 truncate text-[0.625rem] text-dimmed sm:block"
+          class="hidden max-w-32 min-w-0 truncate text-[0.625rem] text-dimmed sm:block"
           title={activity.modelId ?? modelLabel}
         >
           {modelLabel}
         </span>
       {/if}
     {/snippet}
-  </CardHead>
-
-  <CardFoot>
-    {#snippet right()}
+    {#snippet controls()}
       {#if onOpen}
         <CardButton
           label="Open session"
           title="Open the sub-agent session"
           icon={ExternalLink}
-          variant="primary"
+          size="xs"
           onclick={() => onOpen?.(part)}
         />
       {/if}
     {/snippet}
-  </CardFoot>
+  </CardHead>
 </CardFrame>
