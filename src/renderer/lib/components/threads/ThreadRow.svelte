@@ -49,7 +49,7 @@
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
-  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AuthoredWorkKind } from '$shared/ipc-contract'
@@ -943,7 +943,11 @@
       {#if scopeBucket.pinned}
         <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
       {/if}
-      <span class="min-w-0 truncate">{scopeBucket.name}</span>
+      <!-- The scope is shortened at its own punctuation before the chip ever
+           truncates, so a long name keeps its distinguishing head instead of
+           spending the chip's width on a prefix several scopes share. The full
+           name stays in the title. -->
+      <span class="min-w-0 truncate">{abbreviatedScopeName(scopeBucket.name)}</span>
     </span>
   {/if}
 {/snippet}
@@ -1436,17 +1440,23 @@
             </span>
           {/if}
           {#if projectName && !hideProjectName}
-            <!-- No `flex-1` here: the name sizes to its content so the scope sits
-                 immediately after it, flush left, instead of being pushed to the
-                 far edge. It still truncates when the line runs out of room. -->
-            <span class="min-w-0 truncate text-[0.6875rem] text-muted" title={projectName}
+            <!-- The name is the line's flexible track: it takes whatever room the
+                 scope leaves, so the scope lands against the row's right edge and
+                 the name gives up width first, truncating, when the two compete. -->
+            <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={projectName}
               >{projectName}</span
             >
           {/if}
           {#if scopeVisible}
             <!-- The scope gives way: the project name truncates first and the
-                 scope chip narrows rather than pushing a neighbour off the line. -->
-            {@render scopeChip('min-w-0 shrink max-w-[8rem]')}
+                 scope chip narrows rather than pushing a neighbour off the line.
+                 With the name hidden (a project's own list) there is nothing for
+                 the scope to sit opposite, so it stays flush left. -->
+            {@render scopeChip(
+              projectName && !hideProjectName
+                ? 'shrink-0 max-w-[6.5rem]'
+                : 'min-w-0 shrink max-w-[6.5rem]'
+            )}
           {/if}
         </span>
       {/if}

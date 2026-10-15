@@ -71,22 +71,42 @@
   }: Props = $props()
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
+
+  /** The header of a keyed group list (the threads view's status groups) sits in
+   *  the same two columns a row does: the fold control takes the mark column, so
+   *  the group's glyph and label land on the axis the row titles start at. The
+   *  break above a group is padding rather than a margin, because a margin here
+   *  collapses with the row's own bottom margin and the group boundary would end
+   *  up barely larger than the gap it sits in.
+   *
+   *  A pinned section keeps the plain header it has always had: it is a section
+   *  of rows, not a parent of them, and it is titled by nothing but its label. */
+  const wrapperClass = $derived(headerOnly ? 'pt-5' : 'mb-3 pb-3')
+  const buttonClass = $derived(
+    headerOnly
+      ? 'flex w-full items-center gap-2 py-1.5 pr-2 pl-0 text-left transition-colors hover:bg-overlay'
+      : 'flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-overlay'
+  )
 </script>
 
 {#if threads.length > 0}
-  <div class={headerOnly ? 'mt-3 pt-1' : 'mb-3 pb-3'}>
+  <div class={wrapperClass}>
     <button
       type="button"
-      class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-overlay"
+      class={buttonClass}
       aria-expanded={!folded}
       aria-label="{folded ? 'Expand' : 'Fold'} {label}"
       title="{folded ? 'Expand' : 'Fold'} {label}"
       onclick={() => (onToggleFold ? onToggleFold() : pinnedFold.toggle(sectionKey))}
     >
-      <ChevronDown
-        size={12}
-        class="shrink-0 text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
-      />
+      <!-- The fold control is one column wide only for a keyed group, so the
+           glyph that follows it starts where a row's content starts. -->
+      <span class="flex shrink-0 justify-center {headerOnly ? 'w-[1.125rem]' : ''}">
+        <ChevronDown
+          size={12}
+          class="text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
+        />
+      </span>
       {#if icon}
         {@const Icon = icon}
         <Icon

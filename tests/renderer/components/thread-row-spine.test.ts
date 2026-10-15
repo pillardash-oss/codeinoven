@@ -10,7 +10,10 @@ import { THREAD_GROUP_MARK, THREAD_STATE_MARKS } from '$lib/components/threads/t
 // The context line only exists when there is something to put on it. A scope is
 // the case that must not float: it belongs flush against the row's left edge.
 const scope = vi.hoisted(() => ({ bucket: null as null | Record<string, unknown> }))
-vi.mock('$lib/threads/thread-scope', () => ({
+vi.mock('$lib/threads/thread-scope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/threads/thread-scope')>()),
+  // Only the bucket lookup is driven here; the name rule stays the real one, so
+  // these tests exercise the shortening the row actually applies.
   threadScopeBucket: () => scope.bucket
 }))
 
@@ -203,9 +206,7 @@ describe('ThreadRow, the detailed spine row', () => {
     const { target, app } = render(thread({ status: 'completed' }))
     await tick()
 
-    const column = target
-      .querySelector('[aria-label="Completed"]')
-      ?.parentElement as HTMLElement
+    const column = target.querySelector('[aria-label="Completed"]')?.parentElement as HTMLElement
     // Without a rail there is no flexible child to push the mark to the top, so
     // the column centres its contents against the text beside it.
     expect(column.className).toContain('justify-center')
@@ -217,8 +218,7 @@ describe('ThreadRow, the detailed spine row', () => {
     const { target, app } = render(thread({ status: 'awaiting_approval' }))
     await tick()
 
-    const column = target
-      .querySelector('[aria-label="Needs attention"]')
+    const column = target.querySelector('[aria-label="Needs attention"]')
       ?.parentElement as HTMLElement
     // The rail is the flexible child that runs to the row's bottom edge.
     expect(column.className).not.toContain('justify-center')
