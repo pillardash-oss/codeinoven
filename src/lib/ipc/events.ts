@@ -82,6 +82,16 @@ export const IPC_EVENT_CONTRACT = {
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
   /** Live thread snapshot push so sidebar indicators react without polling. */
   'thread:updated': [] as unknown as [thread: Thread],
+  /**
+   * Another CodeInOven instance wrote this thread's mirrored conversation.
+   *
+   * The mirror lives in the database both instances share, so the rows are
+   * already there and a window only has to re-read the tail it is showing. Kept
+   * separate from `thread:updated` on purpose: a message write is not a row
+   * change, and routing it through the row push would re-run the whole reconcile
+   * (working state, notices, draft label) for every batch.
+   */
+  'thread:messagesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Lightweight draft-state push (flag + committed draft content). Kept
    *  separate from `thread:updated` so commits land while the user is typing
    *  without triggering the full-transcript reconcile. */

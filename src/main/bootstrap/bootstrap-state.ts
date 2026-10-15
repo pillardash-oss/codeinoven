@@ -12,6 +12,7 @@ import type { DesignService } from '../design/design-service'
 import type { BrowserService } from '../browser/browser-service'
 import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
+import type { CrossInstanceThreadService } from '../chat/cross-instance-thread-service'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
 import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
@@ -122,6 +123,8 @@ export interface BootstrapState {
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
   foreignRuns: ForeignRunService | null
+  /** Shared thread rows and transcripts a sibling instance changed. */
+  crossInstanceThreads: CrossInstanceThreadService | null
   /** Cross-instance thread transfer: releases and adopts running threads. */
   threadTransfer: ThreadTransferService | null
   modelPricingService: ModelPricingService | null
@@ -205,6 +208,7 @@ export function createBootstrapState(): BootstrapState {
     cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
+    crossInstanceThreads: null,
     threadTransfer: null,
     modelPricingService: null,
     speechService: null,

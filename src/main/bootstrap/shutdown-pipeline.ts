@@ -224,6 +224,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
 
   state.foreignRuns?.dispose()
   state.foreignRuns = null
+  state.crossInstanceThreads?.dispose()
+  state.crossInstanceThreads = null
 
   state.threadTransfer?.dispose()
   state.threadTransfer = null

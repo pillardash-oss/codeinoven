@@ -1401,7 +1401,7 @@ export class ThreadManager {
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
-    return this.transcripts.saveMessages(threadId, messages)
+    return this.transcripts.saveMessages(projectId, threadId, messages)
   }
 
   /**
@@ -1538,7 +1538,7 @@ export class ThreadManager {
     messages: AgentMessage[]
   ): Promise<void> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
-    return this.transcripts.saveSubagentMessages(threadId, sessionId, messages)
+    return this.transcripts.saveSubagentMessages(projectId, threadId, sessionId, messages)
   }
 
   /** Load a mirrored child-agent transcript without contacting the provider. */

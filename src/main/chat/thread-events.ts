@@ -86,6 +86,24 @@ export function broadcastThreadUpdate(thread: Thread): void {
   // read change is a moment its state can have changed.
   _backgroundAttention?.requestAttentionRefresh()
   void _notificationService?.notify(thread)
+  // The row is shared with every other instance, and none of them receives this
+  // fan-out, so the change is also announced for a sibling to re-read.
+  instanceRegistry.publishThreadChanged(thread.projectId, thread.id, 'row')
+}
+
+/**
+ * Tell every renderer window that this thread's mirrored conversation changed.
+ *
+ * The mirror over the same database is what a sibling instance writes into, so
+ * its rows are already there: a window only has to re-read the tail it shows.
+ * Deliberately not a `thread:updated` push, which would also re-run the whole
+ * row reconcile (working state, notices, draft label) for a change that never
+ * touched the row.
+ */
+export function broadcastThreadMessagesChanged(projectId: string, threadId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:messagesChanged', projectId, threadId)
+  }
 }
 
 /**
@@ -108,6 +126,18 @@ export function broadcastCrossInstanceThreadUpdate(thread: Thread): void {
 }
 
 /**
+ * Announce to every other instance that this process wrote this thread's mirror.
+ *
+ * Wired into the transcript store once at boot, so every durable message write
+ * says so whichever flow made it. The announcement carries no messages at all:
+ * a sibling re-reads the shared rows, which is why a coalesced batch is enough
+ * and why a lost one costs only freshness.
+ */
+export function publishThreadMessagesChanged(projectId: string, threadId: string): void {
+  instanceRegistry.publishThreadChanged(projectId, threadId, 'messages')
+}
+
+/**
  * Push just a thread's draft state (drafting flag + committed draft content)
  * to every renderer window. Deliberately lighter than `broadcastThreadUpdate`:
  * draft commits happen while the user is actively typing, and the full thread
@@ -125,6 +155,9 @@ export function broadcastThreadDraftUpdated(
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
   }
+  // Draft state lives on the shared row, so a sibling instance reads it from
+  // there; this announces that the row moved.
+  instanceRegistry.publishThreadChanged(projectId, threadId, 'row')
 }
 
 /**
@@ -171,6 +204,23 @@ export function broadcastThreadAuthoredWorkUpdated(
 
 /** Push permanent task deletion so every renderer view drops it. */
 export function broadcastThreadDeleted(thread: Pick<Thread, 'projectId' | 'id'>): void {
+  broadcastCrossInstanceThreadDeleted(thread)
+  // Nothing in this instance can re-read a row that is gone, so the deletion
+  // itself is what siblings are told: without it a window keeps a row for a
+  // thread that no longer exists.
+  instanceRegistry.publishThreadChanged(thread.projectId, thread.id, 'deleted')
+}
+
+/**
+ * Drop a thread from this instance's renderers after another instance deleted it.
+ *
+ * This is the local half of `broadcastThreadDeleted`, deliberately without its
+ * cross-instance announcement: re-announcing a sibling's deletion would send the
+ * two instances to each other forever.
+ */
+export function broadcastCrossInstanceThreadDeleted(
+  thread: Pick<Thread, 'projectId' | 'id'>
+): void {
   for (const listener of corpusListeners) listener.deleted(thread)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:deleted', thread.projectId, thread.id)

@@ -31,11 +31,13 @@ import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadAuthoredWorkUpdated,
   broadcastThreadUpdate,
+  publishThreadMessagesChanged,
   subscribeThreadCorpus,
   setBackgroundAttention,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
+import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -53,6 +55,17 @@ import { registerSearchSettingsIpc } from '../ipc/search-settings-ipc'
 import { getLlamaServerBinary } from '../speech/backends/llama-backend'
 import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
 import type { BootstrapState } from './bootstrap-state'
+
+/**
+ * Every durable transcript write announces its thread to sibling instances.
+ *
+ * Wired at module evaluation, not inside the post-paint boot: recovery resumes
+ * turns before the service graph is up, and a message written then has to be
+ * announced like any other. Two instances share the mirror, and neither receives
+ * the other's writes, so this announcement is the only way a sibling window
+ * learns to re-read a thread it is showing.
+ */
+setTranscriptChangeListener(publishThreadMessagesChanged)
 
 /** Boot-scoped collaborators a per-window browser attach needs. */
 interface BrowserAttachContext {
@@ -185,6 +198,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { PrototypePreviewService },
     { DirectoryPreviewService },
     { ForeignRunService },
+    { CrossInstanceThreadService },
     { ThreadTransferService },
     { ThreadTransferLock },
     { AssistantManager },
@@ -218,6 +232,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../prototypes/prototype-preview-service'),
     import('../preview/directory-preview-service'),
     import('../chat/foreign-run-service'),
+    import('../chat/cross-instance-thread-service'),
     import('../chat/thread-transfer-service'),
     import('../system/thread-transfer-lock'),
     import('../../lib/engines/assistant-manager'),
@@ -813,6 +828,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
+  // Shared rows and transcripts a sibling writes into: the writer announces the
+  // threads it touched, and this instance re-reads and pushes them.
+  state.crossInstanceThreads = new CrossInstanceThreadService(database)
+  state.crossInstanceThreads.start()
   state.threadTransfer = new ThreadTransferService(state.chatEngine, {
     // One mutex, shared through the config root database, so two instances cannot
     // both claim the same thread's transfer.
