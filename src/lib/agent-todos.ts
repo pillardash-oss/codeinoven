@@ -40,14 +40,34 @@ export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): num
   return items.findIndex((item) => item.status === 'pending')
 }
 
-export function agentTodoProgressLabel(
-  itemCount: number,
-  completedCount: number,
-  activeIndex: number
-): string {
-  if (activeIndex >= 0) return `Working on ${activeIndex + 1} of ${itemCount}`
-  if (completedCount === 0) return `${itemCount} tasks`
-  return `${completedCount}/${itemCount} done`
+export interface AgentTodoCounter {
+  /** The number the task card's header shows. */
+  value: number
+  /** What that number means, for the header's tooltip and screen reader copy. */
+  meaning: string
+}
+
+/**
+ * The reading in the task card's header.
+ *
+ * While a run is live it is the position of the task being worked on   "1/6" on
+ * the first task   because that is the number that moves as the run advances; a
+ * completed count would sit at "0/6" for as long as the first task takes, which
+ * reads as no progress at all. Once the run stops the list is a record of where
+ * it left off, so the reading becomes the completed count.
+ */
+export function agentTodoCounter(items: AgentTodoItem[], activeIndex: number): AgentTodoCounter {
+  if (activeIndex >= 0) {
+    return {
+      value: activeIndex + 1,
+      meaning: `Working on task ${activeIndex + 1} of ${items.length}`
+    }
+  }
+  const completedCount = items.filter((item) => item.status === 'completed').length
+  return {
+    value: completedCount,
+    meaning: `${completedCount} of ${items.length} tasks complete`
+  }
 }
 
 /**

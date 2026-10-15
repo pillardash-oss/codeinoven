@@ -3,7 +3,7 @@
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
   import { rowArrive } from '../shared/card-motion'
-  import { activeAgentTodoIndex, type AgentTodoItem } from '$lib/agent-todos'
+  import { activeAgentTodoIndex, agentTodoCounter, type AgentTodoItem } from '$lib/agent-todos'
 
   interface Props {
     items: AgentTodoItem[]
@@ -27,8 +27,14 @@
   let userPinnedOpen = $state(false)
   let lastSignature = $state('')
 
-  let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
-  let activeIndex = $derived(activeAgentTodoIndex(items, busy))
+  /**
+   * A run that is live, wherever it streams from: this window's own turn, or the
+   * one another instance is streaming. Either way the list on screen is live
+   * progress and the task the run is on has to be named.
+   */
+  let live = $derived(busy || foreign)
+  let activeIndex = $derived(activeAgentTodoIndex(items, live))
+  let counter = $derived(agentTodoCounter(items, activeIndex))
   /**
    * What the list is, in one reading. A run another window is streaming is live
    * work, not a stopped one: the item that is marked active is marked by that
@@ -90,9 +96,13 @@
   foldLabel="task list"
 >
   {#snippet meta()}
-    <span class="border border-border px-1.5 py-0.5 text-[0.6875rem] tabular-nums text-foreground">
-      {completedCount}/{items.length}
+    <span
+      class="border border-border px-1.5 py-0.5 text-[0.6875rem] tabular-nums text-foreground"
+      title={counter.meaning}
+    >
+      {counter.value}/{items.length}
     </span>
+    <span class="sr-only">{counter.meaning}</span>
     {#if stoppedUnfinished}
       <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-warning">
         <TriangleAlert size={12} class="shrink-0" />

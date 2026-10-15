@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentMessage, AgentPart } from '../../../src/lib/types'
 import {
   activeAgentTodoIndex,
-  agentTodoProgressLabel,
+  agentTodoCounter,
   latestAgentTodo,
   todoSnapshotMatchesTurn
 } from '../../../src/renderer/lib/agent-todos'
@@ -47,11 +47,24 @@ describe('latestAgentTodo', () => {
     expect(activeAgentTodoIndex(items, true)).toBe(1)
   })
 
-  it('stops presenting any task as active once the turn ends', () => {
+  it('reads the header as the position of the live task, not a completed count', () => {
+    // A list published at the start of a long run and never updated leaves the
+    // card showing the first task for the whole run: a completed count would sit
+    // at "0/6" the entire time, which reads as no progress at all. The live
+    // reading is the position of the task being worked on.
+    const items = [
+      { id: 'diagnose', label: 'Diagnose the failure', status: 'completed' as const },
+      { id: 'plan', label: 'Write the plan', status: 'in_progress' as const },
+      { id: 'implement', label: 'Apply the fix', status: 'pending' as const }
+    ]
+
+    expect(agentTodoCounter(items, 1)).toEqual({ value: 2, meaning: 'Working on task 2 of 3' })
+  })
+
+  it('reads the header as a completed count once the run is over', () => {
     // Real case: a completed thread whose harness published one list and
-    // abandoned it on its second step. The card read "Working on 2 of 6" with a
-    // spinner on that step forever, because an explicit in_progress item stayed
-    // active after the run stopped.
+    // abandoned it on its second step. An explicit in_progress item must not
+    // stay active after the run stopped, so the reading is the completed count.
     const items = [
       { id: 'diagnose', label: 'Diagnose the failure', status: 'completed' as const },
       { id: 'plan', label: 'Write the plan', status: 'in_progress' as const },
@@ -63,13 +76,10 @@ describe('latestAgentTodo', () => {
 
     const activeIndex = activeAgentTodoIndex(items, false)
     expect(activeIndex).toBe(-1)
-    expect(agentTodoProgressLabel(items.length, 1, activeIndex)).toBe('1/6 done')
-  })
-
-  it('omits redundant completion copy while a task is active', () => {
-    expect(agentTodoProgressLabel(6, 0, 0)).toBe('Working on 1 of 6')
-    expect(agentTodoProgressLabel(6, 0, -1)).toBe('6 tasks')
-    expect(agentTodoProgressLabel(6, 6, -1)).toBe('6/6 done')
+    expect(agentTodoCounter(items, activeIndex)).toEqual({
+      value: 1,
+      meaning: '1 of 6 tasks complete'
+    })
   })
 
   it('tracks Codex plan status changes in the latest snapshot', () => {

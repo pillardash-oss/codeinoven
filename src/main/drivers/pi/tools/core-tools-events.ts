@@ -23,6 +23,106 @@ export function piCoreToolsEventsSource(): string {
     for (const record of subAgents.values()) stopSubAgent(record)
   })
 
+  // How many work steps   edits, writes, commands, scripts   may pass without a
+  // task-list update before the app reminds the agent mid-run. Reads and
+  // searches are not progress the user can see, so only work that changes
+  // something counts.
+  const CIO_TODO_CHECKIN_STEPS = 10
+  const CIO_TODO_WORK_TOOLS = new Set(['edit', 'write', 'bash', 'codemode'])
+
+  pi.on('tool_execution_end', (event) => {
+    if (!event || event.isError) return
+    // A codemode script's inner calls are already covered by the script itself.
+    if (event.parentToolCallId) return
+    if (CIO_TODO_WORK_TOOLS.has(event.toolName)) todoWorkSteps += 1
+  })
+
+  /** Labels of the tasks the list the agent last published still shows unfinished. */
+  function unfinishedCioTodos() {
+    const unfinished = []
+    for (const item of latestTodoItems) {
+      if (item.status !== 'completed') unfinished.push(item.content)
+    }
+    return unfinished
+  }
+
+  function hasRunningCioSubAgents() {
+    for (const record of subAgents.values()) {
+      if (record.status === 'running') return true
+    }
+    return false
+  }
+
+  /** The reconcile instruction, shared by the boundary guard and the settle fallback. */
+  function cioTodoReconcilePrompt(unfinished) {
+    return (
+      'Your turn is ending, but the task list you published still shows unfinished work: ' +
+      unfinished.join('; ') +
+      '. The app shows that list as live task progress, so it now reads as abandoned work. Publish the final list before you finish: call ' +
+      '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). Only end your turn once the list matches what you actually did.'
+    )
+  }
+
+  /**
+   * The mid-run task-list check-in, or an empty string when there is nothing to
+   * say. A list published at the start of a long run and never updated leaves
+   * the app's task card frozen on the first task while the agent works through
+   * all of it, which reads as a stalled run. Once a batch of work steps has
+   * passed without an update, the next model request carries this reminder, and
+   * the counter resets so the next one waits for another batch instead of
+   * nagging on every step. The reminder is request-local: the context handler
+   * hands it to one provider request and Pi restores the conversation after, so
+   * it is never persisted, summarized, or rendered as a message of its own.
+   */
+  function buildCioTodoCheckin() {
+    const steps = todoWorkSteps
+    if (steps < CIO_TODO_CHECKIN_STEPS) return ''
+    todoWorkSteps = 0
+    const unfinished = unfinishedCioTodos()
+    if (unfinished.length === 0) return ''
+    return (
+      'Automatic task-list check-in from CodeInOven, not a message from the user and not a request to stop working: ' +
+      steps +
+      ' steps of work have passed since your last ' +
+      '${CIO_TODO_WRITE_TOOL_NAME} call, and the list the user is watching still shows these tasks unfinished: ' +
+      unfinished.join('; ') +
+      '. Call ${CIO_TODO_WRITE_TOOL_NAME} now with the true status of every task, then carry on with the work exactly as you were.'
+    )
+  }
+
+  // Task-list guard (boundary): agent_before_settle is the last actionable
+  // boundary, so a run about to end with an unfinished list is stopped for one
+  // more request that publishes the list matching what the agent actually did;
+  // the app then finalizes a turn whose card is truthful instead of one frozen
+  // mid-run. One nudge per stale list: the budget is spent here, released when
+  // the list becomes truthful again, and reset by the next user prompt. An
+  // aborted turn, a stopped session, and a run still waiting on sub-agents are
+  // never continued from here.
+  pi.on('agent_before_settle', (event) => {
+    if (!event || event.outcome !== 'completed') return undefined
+    if (applyStopRequest()) return undefined
+    if (hasRunningCioSubAgents()) return undefined
+    if (event.context && event.context.canContinue === false) return undefined
+    const unfinished = unfinishedCioTodos()
+    if (unfinished.length === 0) {
+      todoReconcileSpent = false
+      return undefined
+    }
+    if (todoReconcileSpent) return undefined
+    todoReconcileSpent = true
+    return {
+      entries: [
+        {
+          type: 'custom_message',
+          customType: 'cio-todo-reconcile',
+          content: cioTodoReconcilePrompt(unfinished),
+          display: false
+        }
+      ],
+      continue: true
+    }
+  })
+
   // Turn-end guard: the primary must never finish its work while sub-agents
   // are still running. When a run settles with live workers, wake the agent
   // with a fresh turn instructing it to collect every result (completed or
@@ -43,10 +143,7 @@ export function piCoreToolsEventsSource(): string {
     // Capture the published list's unfinished tasks before clearing it: the
     // list only describes the run that just settled, and a later turn that
     // never publishes one must not be judged against it.
-    const unfinishedTodos = []
-    for (const item of latestTodoItems) {
-      if (item.status !== 'completed') unfinishedTodos.push(item)
-    }
+    const unfinishedTodos = unfinishedCioTodos()
     latestTodoItems = []
     if (running.length > 0) {
       if (!pi || typeof pi.sendMessage !== 'function') return
@@ -65,31 +162,25 @@ export function piCoreToolsEventsSource(): string {
       } catch {}
       return
     }
-    // Task-list guard: a run that settles while the list it published still
-    // shows unfinished work leaves the app's task card frozen mid-run, reading
-    // as abandoned work. Wake the agent once per user prompt to reconcile the
-    // list with what it actually did. One nudge is spent per prompt (the
-    // counter resets on the next genuine prompt), so this can never loop; an
+    // Task-list guard (fallback): a runtime whose settle boundary could not
+    // continue, or one that reports no boundary at all, must still not leave the
+    // app's card frozen on an unfinished list. Wake the agent with one fresh turn
+    // to publish the final list. The budget is shared with the boundary guard
+    // above, so a run that guard already nudged is never nudged twice, and an
     // aborted run is never defended with a fresh turn.
     if (event && event.aborted) return
-    if (unfinishedTodos.length === 0) return
-    if (todoReconcileSpent) {
+    if (unfinishedTodos.length === 0) {
       todoReconcileSpent = false
       return
     }
+    if (todoReconcileSpent) return
     if (!pi || typeof pi.sendMessage !== 'function') return
-    const labels = unfinishedTodos.map(function (item) {
-      return item.content
-    })
     todoReconcileSpent = true
     try {
       void pi.sendMessage(
         {
           customType: 'cio-todo-reconcile',
-          content:
-            'Your turn ended, but the task list you published still shows unfinished work: ' +
-            labels.join('; ') +
-            '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, call ${CIO_TODO_WRITE_TOOL_NAME} once more with the final list: mark every task you completed as completed, and drop tasks you no longer intend to do (publish an empty list to clear them). Only end your turn once the list matches what you actually did.',
+          content: cioTodoReconcilePrompt(unfinishedTodos),
           display: false
         },
         { triggerTurn: true }
@@ -138,9 +229,16 @@ export function piCoreToolsEventsSource(): string {
   // never persisted or summarized, and the next recap cannot nest inside one.
   pi.on('context', (event) => {
     const recap = loadCioHistoryRecap()
-    if (!recap) return undefined
+    const messages = recap
+      ? [{ role: 'user', content: recap, timestamp: Date.now() }, ...event.messages]
+      : event.messages
+    // The mid-run task-list check-in rides the same request-local channel: the
+    // agent sees it on this provider request only, and it is the last thing on
+    // the wire so a stale list is answered before the agent plans its next step.
+    const checkin = buildCioTodoCheckin()
+    if (!checkin) return recap ? { messages } : undefined
     return {
-      messages: [{ role: 'user', content: recap, timestamp: Date.now() }, ...event.messages]
+      messages: [...messages, { role: 'user', content: checkin, timestamp: Date.now() }]
     }
   })
 

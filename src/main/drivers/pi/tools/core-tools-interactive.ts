@@ -102,26 +102,30 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
     }
   })
 
-  // Latest list the agent published through cio_todo_write. The turn-end guard
-  // in the events fragment reads it to catch the common failure where the
-  // agent finishes its work but never marks the tasks complete, which leaves
-  // the app's task card frozen on stale progress. It is cleared on every
-  // settle and on every new user prompt, so a turn that never publishes a list
-  // is never nudged about an older turn's list.
+  // Latest list the agent published through cio_todo_write, plus the work the
+  // app has watched since it was published. Two guards in the events fragment
+  // read them: the mid-run check-in, which keeps the card moving while a long
+  // run is still going, and the turn-end reconcile, which catches the common
+  // failure where the agent finishes its work but never marks the tasks
+  // complete. The list is cleared on every settle and on every new user prompt,
+  // so a turn that never publishes one is never judged against an older turn's.
   let latestTodoItems = []
-  // One reconciliation nudge is spent per user prompt; the flag is reset on
-  // before_agent_start, which fires only for a genuine user prompt   never for
-  // the guard's own synthetic reconciliation turn   so the guard can never loop.
+  // Work steps (edits, writes, commands, scripts) taken since that publish; the
+  // check-in spends it and resets it.
+  let todoWorkSteps = 0
+  // Set while a reconciliation nudge is outstanding, so one stale list is never
+  // nudged twice; it clears when the published list is truthful again.
   let todoReconcileSpent = false
 
   pi.registerTool({
     name: '${CIO_TODO_WRITE_TOOL_NAME}',
     label: 'Write the todo list',
     description:
-      'Create or update the visible todo list so the user can track progress. Replace the whole list on every call: give every task with its current status (pending, in_progress, or completed), or an empty list to clear the tasks. Mark tasks in_progress just before starting and completed immediately after finishing.',
+      'Create or update the visible todo list so the user can track progress. Replace the whole list on every call: give every task with its current status (pending, in_progress, or completed), or an empty list to clear the tasks. Update it as you go: mark a task in_progress just before you start it and completed in the same step you finish it, one call per transition instead of one batch at the end. The task card is the only place the user sees progress, so a list that stops moving while you keep working reads as a stalled run.',
     promptSnippet: 'Publish or update the shared todo list (task tracking)',
     promptGuidelines: [
       'Use ${CIO_TODO_WRITE_TOOL_NAME} as soon as a task spans multiple steps: publish the full plan, keep exactly one task in_progress, and update statuses as work advances.',
+      'Update the list as you go, not at the end: a task is marked completed in the same step its work is finished, so the card moves while you work instead of jumping when you stop.',
       'Before you end a turn, publish the final list: mark every task you completed as completed, and publish an empty list (or a shorter one) to drop tasks you no longer intend to do, so the visible list matches what you actually finished.'
     ],
     parameters: Type.Object({
@@ -148,6 +152,7 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
         status: todo.status
       }))
       latestTodoItems = todos
+      todoWorkSteps = 0
       const active = todos.find((todo) => todo.status === 'in_progress')
       return textResult({
         todos,
