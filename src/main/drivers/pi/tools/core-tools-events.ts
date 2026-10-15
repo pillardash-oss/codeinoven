@@ -53,12 +53,22 @@ export function piCoreToolsEventsSource(): string {
     return false
   }
 
-  /** The reconcile instruction, shared by the boundary guard and the settle fallback. */
+  /**
+   * The reconcile instruction, shared by the boundary guard and the settle
+   * fallback.
+   *
+   * It never claims the card is showing this particular list. A steer moves the
+   * turn boundary, so the card drops the list it was showing and the guard's
+   * remembered list is one the user can no longer see; saying "the app shows
+   * that list" would be false exactly when the guard is asking for the list the
+   * steer replaced. Naming the list that was last published holds in both cases
+   * and still gets the run to end on a truthful card.
+   */
   function cioTodoReconcilePrompt(unfinished) {
     return (
-      'Your turn is ending, but the task list you published still shows unfinished work: ' +
+      'Your turn is ending, but the task list you last published still shows unfinished work: ' +
       unfinished.join('; ') +
-      '. The app shows that list as live task progress, so it now reads as abandoned work. Publish the final list before you finish: call ' +
+      '. The task card is how the user follows the run, and a run that ends on that list reads as abandoned work. Publish the final list before you finish: call ' +
       '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). Only end your turn once the list matches what you actually did.'
     )
   }
@@ -70,9 +80,12 @@ export function piCoreToolsEventsSource(): string {
    * all of it, which reads as a stalled run. Once a batch of work steps has
    * passed without an update, the next model request carries this reminder, and
    * the counter resets so the next one waits for another batch instead of
-   * nagging on every step. The reminder is request-local: the context handler
-   * hands it to one provider request and Pi restores the conversation after, so
-   * it is never persisted, summarized, or rendered as a message of its own.
+   * nagging on every step. It says "the list you published", not "the list on
+   * screen": a steer clears the card, and this reminder is also what brings it
+   * back mid-run by getting the agent to publish the list again. The reminder is
+   * request-local: the context handler hands it to one provider request and Pi
+   * restores the conversation after, so it is never persisted, summarized, or
+   * rendered as a message of its own.
    */
   function buildCioTodoCheckin() {
     const steps = todoWorkSteps
@@ -84,7 +97,7 @@ export function piCoreToolsEventsSource(): string {
       'Automatic task-list check-in from CodeInOven, not a message from the user and not a request to stop working: ' +
       steps +
       ' steps of work have passed since your last ' +
-      '${CIO_TODO_WRITE_TOOL_NAME} call, and the list the user is watching still shows these tasks unfinished: ' +
+      '${CIO_TODO_WRITE_TOOL_NAME} call, and the list you published then still shows these tasks unfinished: ' +
       unfinished.join('; ') +
       '. Call ${CIO_TODO_WRITE_TOOL_NAME} now with the true status of every task, then carry on with the work exactly as you were.'
     )
