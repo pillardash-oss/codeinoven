@@ -282,6 +282,24 @@ interface CdpTarget {
   webSocketDebuggerUrl?: string
 }
 
+/**
+ * The app's own window among the page targets.
+ *
+ * The app serves its auxiliary documents from the same origin: `browser-overlay.html`
+ * is its transparent floating-chrome window and `splash.html` its launch screen, and
+ * a bare `pages[0]` is very often one of those. Closing the overlay disposes the
+ * chrome window and leaves the app exactly as running as before, which looks like a
+ * parked app. The app document is the one whose path carries no document name,
+ * because the renderer is served at the origin root.
+ */
+function selectAppWindow(pages: CdpTarget[]): CdpTarget | undefined {
+  const isAuxiliary = (target: CdpTarget): boolean => {
+    const path = (target.url ?? '').split(/[?#]/)[0]
+    return path.includes('.html') || path.includes('devtools')
+  }
+  return pages.find((target) => !isAuxiliary(target)) ?? pages[0]
+}
+
 /** Close the primary window over CDP, so the app decides park or quit itself. */
 async function closePrimaryWindow(debugPort: number): Promise<{ ok: boolean; detail: string }> {
   let targets: CdpTarget[]
@@ -292,7 +310,7 @@ async function closePrimaryWindow(debugPort: number): Promise<{ ok: boolean; det
     return { ok: false, detail: `CDP was not reachable: ${error instanceof Error ? error.message : String(error)}` }
   }
   const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl)
-  const appWindow = pages.find((target) => !(target.url ?? '').includes('devtools')) ?? pages[0]
+  const appWindow = selectAppWindow(pages)
   if (!appWindow?.webSocketDebuggerUrl) return { ok: false, detail: 'no page target is attached' }
   const socket = new WebSocket(appWindow.webSocketDebuggerUrl)
   try {
@@ -313,7 +331,7 @@ async function closePrimaryWindow(debugPort: number): Promise<{ ok: boolean; det
   } finally {
     socket.close()
   }
-  return { ok: true, detail: 'window.close() was delivered to the primary window' }
+  return { ok: true, detail: `window.close() was delivered to ${appWindow.url ?? 'the primary window'}` }
 }
 
 /** Run the shell scenario with the probes coordinates in its environment. */
@@ -348,30 +366,57 @@ function baselineLogSize(path: string): number {
   return existsSync(path) ? statSync(path).size : 0
 }
 
-/** Kill anything left holding this run's root, and prove nothing did. */
+/** Every process whose command line names this run's root, as `pid command`. */
+function processesForRoot(root: string): string[] {
+  const result = Bun.spawnSync(['pgrep', '-fl', root])
+  return result.stdout
+    .toString()
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+}
+
+/**
+ * Put the whole tree down, and then prove it is down.
+ *
+ * The probe is a grandchild of this runner: `bun run dev` spawns the dev server,
+ * which spawns Electron, which spawns a helper per renderer, GPU and network
+ * service. Signalling only the child therefore leaves a whole app behind, and in
+ * background mode that app is parked there on purpose, holding its root until
+ * someone notices. So the child is started in its own process group and that
+ * group is signalled first, the root path is used as the escalation for anything
+ * that escaped it, and the check is repeated instead of taken once, because help
+ * processes outlive their main process by a moment.
+ */
 async function ensureNoSurvivors(root: string, child: ChildProcess): Promise<string[]> {
-  const survivors: string[] = []
-  const list = (): string[] => {
-    const result = Bun.spawnSync(['pgrep', '-f', root])
-    return result.stdout.toString().split('\n').filter((line) => line.trim() !== '')
+  const signalGroup = (signal: NodeJS.Signals): boolean => {
+    if (child.pid === undefined) return false
+    try {
+      // The negative pid is the process group, which is every process the run
+      // started, not just the one this runner spawned.
+      process.kill(-child.pid, signal)
+      return true
+    } catch {
+      // No group to signal: it is already gone.
+      return false
+    }
   }
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL')
-    await sleep(500)
-  }
-  let remaining = list()
-  if (remaining.length > 0) {
-    Bun.spawnSync(['pkill', '-TERM', '-f', root])
+  if (signalGroup('SIGTERM')) await sleep(2000)
+  if (processesForRoot(root).length > 0) {
+    signalGroup('SIGKILL')
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     await sleep(1000)
-    remaining = list()
   }
-  if (remaining.length > 0) {
+  for (const signal of ['-TERM', '-KILL']) {
+    if (processesForRoot(root).length === 0) break
+    Bun.spawnSync(['pkill', signal, '-f', root])
+    await sleep(1500)
+  }
+  for (let attempt = 0; attempt < 3 && processesForRoot(root).length > 0; attempt += 1) {
     Bun.spawnSync(['pkill', '-KILL', '-f', root])
-    await sleep(500)
-    remaining = list()
+    await sleep(1500)
   }
-  for (const pid of remaining) survivors.push(pid.trim())
-  return survivors
+  return processesForRoot(root)
 }
 
 const options = parseOptions(Bun.argv.slice(2))
@@ -418,7 +463,14 @@ const devArgs = ['run', 'dev']
 if (options.debugPort !== null) devArgs.push(`--remote-debugging-port=${options.debugPort}`)
 devArgs.push(...options.passthrough)
 
-const child = spawn('bun', devArgs, { cwd: projectRoot, env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
+const child = spawn('bun', devArgs, {
+  cwd: projectRoot,
+  env: environment,
+  // Its own process group, so teardown can signal the whole run rather than the
+  // one `bun` process that happens to be this runner's direct child.
+  detached: true,
+  stdio: ['ignore', 'pipe', 'pipe']
+})
 child.stdout?.on('data', (chunk: Buffer) => logStream.write(chunk))
 child.stderr?.on('data', (chunk: Buffer) => logStream.write(chunk))
 
@@ -468,7 +520,8 @@ async function finish(): Promise<void> {
     for (const line of errors.slice(0, 12)) write(`  ${line}`)
   }
   if (survivors.length > 0) {
-    write(`\nSURVIVORS still holding this root: ${survivors.join(', ')}`)
+    write(`\nSURVIVORS still holding this root after SIGTERM and SIGKILL:`)
+    for (const line of survivors.slice(0, 5)) write(`  ${line.slice(0, 140)}`)
     process.exit(1)
   }
   write(`\nNo process of this run survived.`)

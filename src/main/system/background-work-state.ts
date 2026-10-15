@@ -11,6 +11,7 @@ import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { BootstrapState } from '../bootstrap/bootstrap-state'
+import { instanceHandoffBus } from './instance-handoff-bus'
 import { Logger } from './logger'
 
 /**
@@ -49,9 +50,14 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
  *   - `update-pending`: a downloaded update is waiting to install, and the
  *     install is a real quit that must not be left unapplied;
  *   - `thread-running`: a run is in flight and an exit would interrupt it;
+ *   - `handoff-pending`: another instance is being asked to release a run and has
+ *     not answered, so an exit loses that transfer;
  *   - `retry-pending`: a provider retry falls due inside the wake window, so the
  *     run it belongs to is waiting on this process;
  *   - `run-due`: a slot is due now, or was missed, and must be fired or recorded;
+ *   - `heartbeat-armed`: a heartbeat is enabled with times to fire. Like a
+ *     routine it only pings while the app is running, so the clock is the reason
+ *     the process exists;
  *   - `schedule-armed`: a task is on the clock and will come due later. Nothing
  *     needs the process this second, but the clock is the whole reason a menu bar
  *     process exists: dropping it would turn a scheduled run into a late one that
@@ -62,8 +68,10 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
 export type ResidencyReason =
   | 'update-pending'
   | 'thread-running'
+  | 'handoff-pending'
   | 'retry-pending'
   | 'run-due'
+  | 'heartbeat-armed'
   | 'schedule-armed'
   | 'unreadable'
 
@@ -86,6 +94,7 @@ export function residencyReason(
   try {
     if (state.quitForUpdate) return 'update-pending'
     if (database.isOpen() && new ThreadRepo(database).hasActive()) return 'thread-running'
+    if (instanceHandoffBus.hasPendingHandoff()) return 'handoff-pending'
     const now = Date.now()
     if (state.retryScheduler?.hasPendingRetryBefore(now + SCHEDULED_RETRY_WAKE_WINDOW_MS)) {
       return 'retry-pending'
@@ -99,6 +108,7 @@ export function residencyReason(
       // The long-horizon case: nothing is due now, but the clock is still armed.
       if (scheduler.hasTaskOnTheClock()) return 'schedule-armed'
     }
+    if (state.heartbeatScheduler?.hasHeartbeatOnTheClock()) return 'heartbeat-armed'
   } catch (error) {
     Logger.error('Background residency check failed', error)
     return 'unreadable'

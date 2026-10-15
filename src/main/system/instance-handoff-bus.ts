@@ -323,6 +323,19 @@ export class InstanceHandoffBus {
   }
 
   /**
+   * Whether a hand-off this process sent is still waiting for its verdict.
+   *
+   * The wait is bounded by `HANDOFF_TIMEOUT_MS`, and it only starts while the user
+   * is moving a run between instances, but an exit taken inside it loses the
+   * transfer and leaves the peer waiting out its timeout. The residency check
+   * reads this so a process holding an unanswered hand-off stays alive until the
+   * answer lands.
+   */
+  hasPendingHandoff(): boolean {
+    return this.pending.size > 0
+  }
+
+  /**
    * Whether the backstop poll has work to do: an ack this process is waiting
    * for, a peer that can write a request at any moment, or files still on disk
    * to consume or retire. With none of the three, a pass would only learn that

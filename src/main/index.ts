@@ -503,6 +503,13 @@ function createWindow(): BrowserWindow {
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
     const park = !state.quitForUpdate && (state.backgroundLifecycle?.shouldPark() ?? false)
+    // Worth a line: a close that does not park is a quit, and the reason is the
+    // whole decision. Without it, "why did it quit" and "why is it still in the
+    // menu bar" are both unanswerable from outside the process.
+    Logger.dev('Close requested', {
+      park,
+      reason: state.backgroundLifecycle?.residencyReason() ?? null
+    })
     requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 

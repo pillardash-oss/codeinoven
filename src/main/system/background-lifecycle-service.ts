@@ -263,6 +263,11 @@ export class BackgroundLifecycleService {
     return this.deps.residencyReason() !== null
   }
 
+  /** Why the process still has to exist, for a log line or a diagnosis. */
+  residencyReason(): ResidencyReason | null {
+    return this.deps.residencyReason()
+  }
+
   /** Apply a config change without a restart. */
   async applyConfig(config: AppConfig): Promise<void> {
     this.config = config
@@ -400,6 +405,9 @@ export class BackgroundLifecycleService {
       return
     }
     this.deps.state.parkingForBackground = true
+    // Worth a line: "why is this app still sitting in the menu bar?" is otherwise
+    // unanswerable from the outside, and the reason is the whole decision.
+    Logger.info('Parking in the background', { reason: this.deps.residencyReason() })
     // Let the renderer persist what only it holds (durable browser tab lists,
     // editor drafts) before its process is torn down.
     if (!window.webContents.isDestroyed()) {
