@@ -20,8 +20,11 @@
     title?: string
     icon?: Component
     variant?: CardButtonVariant
-    /** `sm` for the chat actions that share a card foot with bigger controls. */
-    size?: 'md' | 'sm'
+    /**
+     * `sm` for the chat actions that share a card foot with bigger controls,
+     * `xs` for a dressed button that has to fit a card head.
+     */
+    size?: 'md' | 'sm' | 'xs'
     disabled?: boolean
     /** Renders a spinner-sized gap before the label while work is in flight. */
     loading?: boolean
@@ -53,14 +56,20 @@
   }
 
   const variantClass = $derived(VARIANT_CLASS[variant])
+
+  const sizeClass = $derived(
+    size === 'xs'
+      ? 'h-6 px-1.5 text-[0.6875rem]'
+      : size === 'sm'
+        ? 'h-7 px-2 text-[0.6875rem]'
+        : 'h-8 px-2.5 text-xs'
+  )
+  const iconSize = $derived(size === 'xs' ? 11 : size === 'sm' ? 12 : 13)
 </script>
 
 <button
   type="button"
-  class="inline-flex shrink-0 items-center gap-1.5 border font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40 {size ===
-  'sm'
-    ? 'h-7 px-2 text-[0.6875rem]'
-    : 'h-8 px-2.5 text-xs'} {variantClass} {className}"
+  class="inline-flex shrink-0 items-center gap-1.5 border font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40 {sizeClass} {variantClass} {className}"
   {disabled}
   {onclick}
   title={title ?? label}
@@ -68,7 +77,7 @@
 >
   {#if icon}
     {@const Icon = icon}
-    <Icon size={size === 'sm' ? 12 : 13} class="shrink-0" />
+    <Icon size={iconSize} class="shrink-0" />
   {/if}
   {#if loading}
     <span class="h-3 w-3 shrink-0 animate-spin border border-current border-t-transparent"></span>

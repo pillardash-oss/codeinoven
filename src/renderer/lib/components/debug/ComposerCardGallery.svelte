@@ -51,6 +51,9 @@
     galleryQuestionWalkthrough,
     galleryScope,
     gallerySecret,
+    galleryProvidersConnected,
+    galleryProvidersEmpty,
+    gallerySecretPaused,
     gallerySlashActions,
     galleryStartAfterThreads,
     gallerySubagentPart,
@@ -128,7 +131,13 @@
       id: 'secret',
       group: 'replace',
       label: 'Secret request',
-      note: 'Two secrets, value mode. Step between them, and fold the card back open.'
+      note: 'Two secrets, a live countdown. Step between them, and fold the card back open.'
+    },
+    {
+      id: 'secret-paused',
+      group: 'replace',
+      label: 'Secret request, paused',
+      note: 'A value is being typed, so the countdown is held.'
     },
     {
       id: 'audit-running',
@@ -211,6 +220,12 @@
       note: 'Nothing signed in for this harness.'
     },
     {
+      id: 'ai-account-connected',
+      group: 'replace',
+      label: 'Choose the model for this thread',
+      note: 'A harness is connected, so the card asks for the model. Its only control is the head close.'
+    },
+    {
       id: 'foreign-run',
       group: 'replace',
       label: 'Running on another instance',
@@ -220,7 +235,7 @@
       id: 'vision-failure',
       group: 'replace',
       label: 'Image Descriptor failed',
-      note: 'Retry, replace or continue.'
+      note: 'Retry, replace, report or continue.'
     },
     {
       id: 'routine-recap',
@@ -512,9 +527,9 @@
               onExplain={noop}
               onQuickChat={noop}
             />
-          {:else if selected.id === 'secret'}
+          {:else if selected.id === 'secret' || selected.id === 'secret-paused'}
             <AgentSecretCard
-              request={gallerySecret}
+              request={selected.id === 'secret' ? gallerySecret : gallerySecretPaused}
               scope={galleryScope}
               onSubmit={noopAsync}
               onDismiss={noopAsync}
@@ -658,10 +673,12 @@
               onJumpIn={noop}
               onModelChange={noop}
             />
-          {:else if selected.id === 'ai-account'}
+          {:else if selected.id === 'ai-account' || selected.id === 'ai-account-connected'}
             <AiAccountSetupCard
               harnessName="Pi"
-              {providers}
+              providers={selected.id === 'ai-account'
+                ? galleryProvidersEmpty
+                : galleryProvidersConnected}
               settings={DEFAULT_SETTINGS}
               projectId="gallery-project"
               onModelChange={noop}

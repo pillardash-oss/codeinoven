@@ -443,6 +443,10 @@
         <ShieldCheck size={13} class="shrink-0 text-primary" />
         <span class="agent-card-footer-note-text min-w-0 truncate">Secrets are safe</span>
       </p>
+    {/snippet}
+    {#snippet right()}
+      <!-- Answering with an instruction is still an answer, so it sits on the
+           truthy side attached to Submit, never beside Reject-shaped company. -->
       <CardButton
         label={showingAlternative ? 'Use a value instead' : 'Provide alternative'}
         title={showingAlternative
@@ -452,8 +456,6 @@
         disabled={working}
         onclick={toggleAlternativeMode}
       />
-    {/snippet}
-    {#snippet right()}
       <CardButton
         label={working ? 'Storing…' : 'Submit'}
         title="Store the secret and answer the agent"

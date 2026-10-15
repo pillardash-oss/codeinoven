@@ -14,12 +14,14 @@ import type {
   ImageDescriptorErrorRequest,
   PermissionRequest,
   PendingAgentQuestionRequest,
+  ProviderCatalog,
   TurnCheckpointSummary
 } from '$shared/types'
 import type { ActionDefinition, ActionSource } from '$lib/actions'
 import type { AgentTodoItem } from '$shared/agent-todos'
 import { APP_NAME } from '$shared/brand'
 import type { ExpertSummary } from '$shared/experts'
+import { DEFAULT_HARNESS } from '$shared/harness-default'
 import type { ThreadExpertState } from '$shared/ipc-contract'
 import type { SpeechScope } from '$shared/speech/types'
 import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
@@ -97,7 +99,6 @@ export const galleryQuestionSingle: PendingAgentQuestionRequest = {
 export const galleryQuestionMultiple: PendingAgentQuestionRequest = {
   ...galleryQuestionSingle,
   requestId: 'gallery-question-multiple',
-  expiresAt: undefined,
   questions: [
     question({
       header: 'Question from the agent',
@@ -191,11 +192,12 @@ export const galleryQuestionAnswered: PendingAgentQuestionRequest = {
   interactedQuestionIndexes: [0, 1, 2]
 }
 
-/** A secret request with two entries. */
+/** A secret request with two entries. Secrets always run their countdown: the
+ *  app deadlines a secret card like any other question, so the card here carries
+ *  a live one. */
 export const gallerySecret: PendingAgentQuestionRequest = {
   ...galleryQuestionSingle,
   requestId: 'gallery-secret',
-  expiresAt: undefined,
   questions: [
     question({
       header: 'Secret the agent needs',
@@ -212,6 +214,16 @@ export const gallerySecret: PendingAgentQuestionRequest = {
       secretEnvironmentVariable: 'STAGING_PASSWORD'
     })
   ]
+}
+
+/** The same secret request while the user is filling a value in: the countdown
+ *  is held (the card the user is typing into is never cut off), which is the
+ *  paused reading, never a card without a deadline. */
+export const gallerySecretPaused: PendingAgentQuestionRequest = {
+  ...gallerySecret,
+  requestId: 'gallery-secret-paused',
+  expiresAt: undefined,
+  interactedQuestionIndexes: [0]
 }
 
 /** A finished audit with one open annotation: the report carried on the card. */
@@ -328,7 +340,9 @@ export const galleryAssignment: AssignmentPlan = {
   updatedAt: NOW
 }
 
-/** A failed vision-descriptor call with a partial description. */
+/** A failed vision-descriptor call with a partial description. The requesting
+ *  model is the text-only model whose turn is blocked, so the card keeps the
+ *  "False positive" action it reports that model with. */
 export const galleryImageDescriptorError: ImageDescriptorErrorRequest = {
   id: 'gallery-image-descriptor',
   sessionId: 'gallery-session',
@@ -342,11 +356,53 @@ export const galleryImageDescriptorError: ImageDescriptorErrorRequest = {
     providerId: 'opencode-go',
     modelId: 'deepseek-v4.1-flash'
   },
+  requestingModel: {
+    harnessId: DEFAULT_HARNESS,
+    providerId: 'gallery-provider',
+    modelId: 'gallery-text-model'
+  },
   partialOutput: 'A window with a left rail and a conversation.',
   imageCount: 1,
   imageId: 'image-1',
   createdAt: NOW
 }
+
+/**
+ * The two AI-account states.
+ *
+ * Nothing published means nothing connected: Pi and OpenCode publish only the
+ * providers the user holds credentials for. The connected state carries a small
+ * catalog of its own so the state does not depend on whichever accounts the
+ * machine running the gallery happens to hold.
+ */
+export const galleryProvidersEmpty: ProviderCatalog[] = []
+
+export const galleryProvidersConnected: ProviderCatalog[] = [
+  {
+    id: 'gallery-provider',
+    name: 'Gallery provider',
+    harnessId: DEFAULT_HARNESS,
+    supportsAttachments: true,
+    models: [
+      {
+        id: 'gallery-text-model',
+        providerId: 'gallery-provider',
+        name: 'Gallery text model',
+        reasoning: true,
+        attachment: false,
+        toolcall: true
+      },
+      {
+        id: 'gallery-vision-model',
+        providerId: 'gallery-provider',
+        name: 'Gallery vision model',
+        reasoning: false,
+        attachment: true,
+        toolcall: true
+      }
+    ]
+  }
+]
 
 /** The expert gate for a design session with two staffed experts. */
 export const galleryExpertState: ThreadExpertState = {

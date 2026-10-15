@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Plug, Sparkles, X } from '@lucide/svelte'
+  import { Plug, Sparkles } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'
   import { APP_NAME } from '$shared/brand'
   import type { ProviderCatalog, ThinkingLevel, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'
+  import CardCloseButton from '../shared/CardCloseButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
   import CardFrame from '../shared/CardFrame.svelte'
   import CardHead from '../shared/CardHead.svelte'
@@ -97,6 +98,13 @@
       {#snippet meta()}
         <CardTag text={harnessName} />
       {/snippet}
+
+      <!-- Dismissal is a close, not an answer: it ends the card without choosing
+           anything, so it lives in the head. The foot then carries only an action
+           the card is actually asking for, and the connected state has none. -->
+      {#snippet controls()}
+        <CardCloseButton title="Dismiss AI account setup" onclick={onDismiss} />
+      {/snippet}
     </CardHead>
 
     {#if !folded}
@@ -146,27 +154,16 @@
       </div>
     {/if}
 
-    {#if !folded}
+    {#if !folded && !connected}
       <CardFoot>
-        {#snippet left()}
-          <CardButton
-            label="Dismiss"
-            title="Dismiss AI account setup"
-            icon={X}
-            variant="ghost"
-            onclick={onDismiss}
-          />
-        {/snippet}
         {#snippet right()}
-          {#if !connected}
-            <CardButton
-              label="Connect Your AI Account"
-              title="Connect your AI account"
-              icon={Plug}
-              variant="primary"
-              onclick={onConnect}
-            />
-          {/if}
+          <CardButton
+            label="Connect Your AI Account"
+            title="Connect your AI account"
+            icon={Plug}
+            variant="primary"
+            onclick={onConnect}
+          />
         {/snippet}
       </CardFoot>
     {/if}

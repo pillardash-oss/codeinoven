@@ -10,7 +10,6 @@
     Trash2
   } from '@lucide/svelte'
   import CardButton from '../shared/CardButton.svelte'
-  import CardFoot from '../shared/CardFoot.svelte'
   import CardStack from '../shared/CardStack.svelte'
   import CardTag from '../shared/CardTag.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
@@ -99,8 +98,9 @@
 
 <!-- A message waiting behind the running turn. It stacks on the composer's top
 edge, so it drops its own bottom rule and the composer's dashed top rule carries
-the join. Falsy actions left (Remove), the truthy action last right (Send now,
-which is the steer key). -->
+the join. Its one action, Send now (the steer key), is a head control: a card
+that only needs one action has no foot, and deleting the message already lives in
+the head's menu. -->
 <CardStack
   label="Queued message"
   icon={Clock}
@@ -188,6 +188,14 @@ which is the steer key). -->
         </div>
       {/if}
     </div>
+    <CardButton
+      label="Send now"
+      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end`}
+      icon={Send}
+      size="xs"
+      disabled={!hasQueuedPayload}
+      onclick={onSteer}
+    />
   {/snippet}
 
   {#snippet body()}
@@ -275,29 +283,5 @@ which is the steer key). -->
         </div>
       {/if}
     </div>
-  {/snippet}
-
-  {#snippet foot()}
-    <CardFoot>
-      {#snippet left()}
-        <CardButton
-          label="Remove"
-          title="Remove the queued message"
-          icon={Trash2}
-          variant="ghost-danger"
-          onclick={onDelete}
-        />
-      {/snippet}
-      {#snippet right()}
-        <CardButton
-          label="Send now"
-          title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end`}
-          icon={Send}
-          variant="primary"
-          disabled={!hasQueuedPayload}
-          onclick={onSteer}
-        />
-      {/snippet}
-    </CardFoot>
   {/snippet}
 </CardStack>
