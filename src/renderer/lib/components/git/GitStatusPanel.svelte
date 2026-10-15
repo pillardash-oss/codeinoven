@@ -3968,7 +3968,9 @@
         stretch. While conflicts are open they stand aside entirely (see
         `conflictsOpen`) so the row can hold the controls that end them.
       -->
-      <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
+      <div
+        class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-2"
+      >
         {@render viewContext()}
         {#if showsRemoteActions}
           {#if showsPull}
