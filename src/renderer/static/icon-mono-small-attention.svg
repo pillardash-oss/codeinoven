@@ -1,27 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  CodeInOven small-size mono mark: the tray glyph, attention state.
-  Same slab as `icon-mono-small.svg`, with the bracket pair swapped for an
-  exclamation mark. Keeping the silhouette identical is what makes the state
-  change readable at 16px: only one shape inside the mark ever differs, so the
-  icon never has to be re-parsed to notice that something needs the user. The
-  bar, gap and dot are sized so the three reads survive a 16px draw instead of
-  thinning into a speck, which is why the mark is not simply scaled down.
-  Keep the slab geometry in step with `icon-mono-small.svg`.
-  Regenerate the rasters with `bun scripts/build-app-icons.ts`.
--->
-<svg width="100%" height="100%" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" style="color:#000000;fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
-  <defs>
-    <mask id="small-mark-cut">
-      <rect width="1024" height="1024" fill="black"/>
-      <rect x="132" y="172" width="760" height="720" rx="112" fill="white"/>
-      <!-- Exclamation: 4.7px bar, 1.2px gap, 1.8px dot at 16px after tray
-           framing. -->
-      <g stroke="black" stroke-width="108" stroke-linecap="round" fill="none">
-        <path d="M512 378 L512 526"/>
-      </g>
-      <circle cx="512" cy="692" r="48" fill="black"/>
-    </mask>
-  </defs>
-  <rect width="1024" height="1024" fill="currentColor" mask="url(#small-mark-cut)"/>
+<!-- Single-ink attention state: keep the logo intact and add a separate cue. -->
+<svg width="100%" height="100%" viewBox="0 0 248 248" xmlns="http://www.w3.org/2000/svg" style="color:#000000">
+  <path d="M110 69a64 64 0 1 0 0 110" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="butt" stroke-linejoin="miter"/>
+  <path d="M144.5 78.5h78v91h-78z" fill="none" stroke="currentColor" stroke-width="15" stroke-linejoin="miter"/>
+  <path d="M144.5 124h78" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="butt"/>
+  <circle cx="239" cy="58" r="7" fill="currentColor"/>
 </svg>

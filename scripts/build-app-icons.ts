@@ -12,11 +12,10 @@
  *  - `../build/appx/*.png`            → MSIX Store tile and taskbar logos
  *  - `../build/icon.ico`              → Windows executable, taskbar, Explorer
  *
- * Two masters feed this. `icon.svg` is the full app tile with its gloss, rim,
- * reflections and detailed oven; `icon-small.svg` is its optical-size partner
- * for the sizes where none of that survives. App-icon entries below
- * `SMALL_ART_MAX_PX` take the small tile, everything from there up takes the
- * master. Tray entries all take the small-size mono marks (`icon-mono-small.svg`
+ * Two full-color masters feed this. `icon.svg` and `icon-small.svg` carry the
+ * approved C/O Relay mark and auric endpoint on a flat obsidian tile. App-icon
+ * entries below `SMALL_ART_MAX_PX` take the small master, everything from there
+ * up takes the primary master. Tray entries take the mono marks (`icon-mono-small.svg`
  * and its attention sibling), because a tray glyph is drawn at roughly 16pt
  * however many device pixels back it.
  *
@@ -44,16 +43,14 @@ const buildDir = join(root, 'build')
  */
 const appxDir = join(buildDir, 'appx')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
-/** Small-size app tile: same tile and palette, no depth layers, one bold mark. */
+/** Small-size app tile: same flat tile, C/O geometry and gold endpoint. */
 const smallTile = readFileSync(join(staticDir, 'icon-small.svg'), 'utf8')
 /**
- * Device-pixel size below which app-icon entries take the small tile. At 16px
- * the master's gloss, rim, reflections and detailed oven collapse into a smear;
- * from 48px up every one of those layers reads, so the master keeps them.
+ * Device-pixel size below which app-icon entries take the small optical master.
  */
 const SMALL_ART_MAX_PX = 48
 
-/** The app-icon master for a device-pixel size: small tile first, full art up. */
+/** The app-icon master for a device-pixel size: small tile first, primary up. */
 function appArt(size: number): string {
   return size < SMALL_ART_MAX_PX ? smallTile : master
 }
@@ -67,13 +64,9 @@ function renderPng(svg: string, size: number): Buffer {
 /**
  * Render an app-icon master centred on a wider transparent canvas.
  *
- * MSIX tile art is landscape (a 310x150 wide tile), while the master is a square
- * squircle that already draws its own tile body. Rendering the square straight
- * into a landscape canvas would stretch it, so the master's inner content is
- * re-wrapped in an outer document and scaled to sit centred at `mark` pixels.
- * The squircle's own fill rules have to be repeated on the wrapping group: they
- * are set as attributes on the master's root element, and attributes do not
- * inherit through a child `<g>`.
+ * MSIX tile art is landscape (a 310x150 wide tile), while the master is square.
+ * Rendering it straight into a landscape canvas would stretch it, so the
+ * master's content is re-wrapped and scaled to sit centred at `mark` pixels.
  */
 function renderTile(svg: string, width: number, height: number, mark: number): Buffer {
   const scale = mark / 1024
@@ -102,9 +95,7 @@ if (!Bun.argv.includes('--windows-tray-only')) {
     ['icon.png', renderPng(master, 1024)],
     ['favicon.png', renderPng(appArt(180), 180)],
     // Opaque rasters: Windows shows taskbar/window icons over arbitrary
-    // surfaces, and the historic flat black look came from a fully opaque
-    // square — keep those rasters opaque but let the squircle corners show the
-    // dark backdrop instead of pure black.
+    // surfaces, so retain a solid obsidian background at every size.
     ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
   ]
 
@@ -128,8 +119,8 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   writeFileSync(join(buildDir, 'icon.ico'), winIco)
   Logger.dev(`[build-app-icons] Wrote build/icon.ico (${winIcoSizes.join('/')}px).`)
 
-  // macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
-  // shape with transparent margins; macOS composites its own drop shadow.
+  // macOS iconset → icns. The square artwork is supplied edge-to-edge; macOS
+  // applies its platform mask and drop shadow.
   const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
   mkdirSync(macosDir, { recursive: true })
   for (const size of iconSizes) {
@@ -194,13 +185,9 @@ if (!Bun.argv.includes('--windows-tray-only')) {
 // macOS treats a `...Template.png` filename as a template image and derives its
 // own tint from the alpha channel, so the mark is rendered in solid black and a
 // matching `@2x` file is picked up automatically for Retina menu bars. The
-// artwork is the small-size mono mark, and its idle and attention states share
-// one slab so only the shape inside the mark ever changes. Unlike the app icon
-// these are not rendered from the full oven: the menu bar and the Windows
-// notification area both draw a tray glyph at roughly 16pt, and the full mark's
-// walls land on fractions of a pixel there and close the gaps between its
-// window, handle and code glyph. Tray weight therefore comes from the mark's own
-// geometry, and the same art feeds both platforms.
+// artwork is the small-size monochrome C/O Relay. It keeps the divider inside
+// the O and omits only the gold endpoint for platform template rendering. The
+// attention version adds a separate cue without changing the base mark.
 const monoSmall = readFileSync(join(staticDir, 'icon-mono-small.svg'), 'utf8')
 const monoSmallAttention = readFileSync(join(staticDir, 'icon-mono-small-attention.svg'), 'utf8')
 if (!Bun.argv.includes('--windows-tray-only')) {

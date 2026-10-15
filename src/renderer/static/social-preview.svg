@@ -1,0 +1,15 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="social-title social-description">
+  <title id="social-title">CodeInOven</title>
+  <desc id="social-description">A workstation for coordinated engineering agents.</desc>
+  <rect width="1200" height="630" fill="#0b0b0d"/>
+  <text x="104" y="198" fill="#d4af37" font-family="JetBrainsMono Nerd Font Mono" font-size="24" font-weight="600" letter-spacing="3">COORDINATED ENGINEERING</text>
+  <text x="100" y="302" fill="#f5f4f0" font-family="JetBrainsMono Nerd Font Mono" font-size="68" font-weight="700" letter-spacing="-3">CodeInOven</text>
+  <text x="104" y="370" fill="#c7c7c3" font-family="JetBrainsMono Nerd Font Mono" font-size="25">A workstation for coordinated</text>
+  <text x="104" y="410" fill="#c7c7c3" font-family="JetBrainsMono Nerd Font Mono" font-size="25">engineering agents.</text>
+  <g transform="translate(752 180) scale(1.42)" fill="none" stroke="#f5f4f0" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M110 39a64 64 0 1 0 0 110" stroke-width="13"/>
+    <path d="M144.5 48.5h78v91h-78z" stroke-width="13"/>
+    <path d="M144.5 94h78" stroke-width="13"/>
+    <circle cx="222.5" cy="94" r="10" fill="#d4af37" stroke="none"/>
+  </g>
+</svg>

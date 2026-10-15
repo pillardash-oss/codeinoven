@@ -1,50 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  CodeInOven small-size app tile.
-  Optical-size partner of the master (`icon.svg`). The shell draws a 16px app
-  icon from 16 device pixels, and the master's depth (gloss, rim, reflections,
-  the detailed oven with its window, knobs and steam) collapses into a smear at
-  that size. This variant keeps the tile's own silhouette and palette so the two
-  never look like different apps, drops every layer that cannot survive the
-  downscale, and carries the identity in one bold mark: the code bracket pair the
-  oven's window holds in the master.
-  Render this for app-icon entries below 48px, the master at and above it. Both
-  are rasterised by `scripts/build-app-icons.ts`; never import either from
-  JavaScript (this directory is the renderer's `publicDir`).
--->
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd">
-  <defs>
-    <!-- Tile body: near-black charcoal, subtly lighter at the top. -->
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2b2b31"/>
-      <stop offset="0.55" stop-color="#17171c"/>
-      <stop offset="1" stop-color="#0c0c10"/>
-    </linearGradient>
-    <!-- Ember glow, kept because it is brand colour at no cost: one soft fill. -->
-    <radialGradient id="ember" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ff7a1a" stop-opacity="0.38"/>
-      <stop offset="0.5" stop-color="#ff6a00" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#ff6a00" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="tile-clip">
-      <rect x="112" y="112" width="800" height="800" rx="184" ry="184"/>
-    </clipPath>
-  </defs>
-
-  <!-- Squircle tile, same geometry as the master so the silhouette matches. -->
-  <rect x="112" y="112" width="800" height="800" rx="184" ry="184" fill="url(#tile)"/>
-  <g clip-path="url(#tile-clip)">
-    <ellipse cx="512" cy="300" rx="330" ry="230" fill="url(#ember)"/>
-  </g>
-
-  <!--
-    The code mark, matched to the mono tray glyph so app icon and tray read as
-    one family. The geometry is set for a 16px draw: 1.6px strokes, a 1.3px gap
-    between the pair, and 2px of tile either side. Narrowing that gap fuses the
-    two brackets into a single diamond, which is what the first pass did.
-  -->
-  <g stroke="#ffffff" stroke-width="104" stroke-linejoin="miter" stroke-linecap="butt" fill="none">
-    <path d="M420 386 L286 512 L420 638"/>
-    <path d="M604 386 L738 512 L604 638"/>
+<!-- Small-size rendering of the exact approved landscape C/O Relay mark. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="1024" fill="#0b0b0d"/>
+  <g transform="translate(0 124) scale(4.129032)" fill="none" stroke="#f5f4f0" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M110 39a64 64 0 1 0 0 110" stroke-width="13"/>
+    <path d="M144.5 48.5h78v91h-78z" stroke-width="13"/>
+    <path d="M144.5 94h78" stroke-width="13"/>
+    <circle cx="222.5" cy="94" r="10" fill="#d4af37" stroke="none"/>
   </g>
 </svg>
