@@ -135,8 +135,8 @@ async function attachBrowserService(
   chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
     service.executeUtility(operation, input, browserContext)
   )
-  service.setTabMarkRecogniser((projectId, threadId, url) =>
-    designService.observeShownFolder(projectId, threadId, url)
+  service.setTabMarkRecogniser((projectId, threadId, url, recordThread) =>
+    designService.observeShownFolder(projectId, threadId, url, recordThread)
   )
 }
 

@@ -297,7 +297,7 @@
     const current = designState?.current ?? null
     if (current === null) return null
     if (forcedKind !== undefined && current.kind !== forcedKind) return null
-    return current
+    return items.some((item) => item.directory === current.directory) ? current : null
   })
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
@@ -307,7 +307,15 @@
         ? viewedDirectory
         : ''
     const directory =
-      picked !== '' ? picked : (current?.directory ?? items[0]?.directory ?? workRoot)
+      picked !== ''
+        ? picked
+        : (current?.directory ??
+          items.find((item) => item.creatorThreadId === threadId)?.directory ??
+          items.find(
+            (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
+          )?.directory ??
+          items[0]?.directory ??
+          workRoot)
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
@@ -580,6 +588,7 @@
   function selectDesign(directory: string): void {
     if (directory === '' || directory === selected.directory) return
     viewedDirectory = directory
+    projectWorkState.focusDirectory(projectId, requestedKind, directory)
     gallery = []
     void loadGallery()
     void loadCanvas()
@@ -992,7 +1001,11 @@
       await loadCanvas()
     })
     void loadWorkRoots()
-    return () => videoPackagesStore.dispose()
+    return () => {
+      if (selectedItem)
+        projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
+      videoPackagesStore.dispose()
+    }
   })
 
   // Play the composition in the board rather than in the browser.
@@ -1625,9 +1638,10 @@
                   onSelect={() =>
                     void openInBrowser(
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
-                    )}>
-                    <Store size={13} class="shrink-0 text-muted" />
-                    Browse Open Design prompts</DropdownMenu.Item
+                    )}
+                >
+                  <Store size={13} class="shrink-0 text-muted" />
+                  Browse Open Design prompts</DropdownMenu.Item
                 >
               {/if}
               {#if !video && canvasRead && canvasState === null}
@@ -1936,8 +1950,7 @@
       </p>
     {:else}
       <p class="text-[0.75rem] text-muted">
-        The agent measures this site, then writes the brand into DESIGN.md for {selectedName ===
-          ''
+        The agent measures this site, then writes the brand into DESIGN.md for {selectedName === ''
           ? `this ${noun}`
           : selectedName}.
       </p>

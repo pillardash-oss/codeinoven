@@ -1295,32 +1295,41 @@
     // on, so the entry is there whether or not a session is open and opens the
     // board for the kind it names.
     const authoredWork: ContextDockItem[] = []
-    if (!coordinator && selectedThread) {
+    if (selectedThread) {
       const work = projectWorkState.stateFor(selectedThread.projectId)
       for (const kind of ['design', 'video'] as const) {
-        if ((work?.[kind].length ?? 0) === 0) continue
+        const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
+        const sessionKind = session?.active ? session.kind : undefined
+        if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
         authoredWork.push({
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
-          active: dockKindActive('coordinator'),
+          active:
+            dockKindActive('coordinator') &&
+            coordinator?.panel.component === 'design' &&
+            (coordinator.panel.props.kind ??
+              designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
+                ?.kind) === kind,
           onSelect: () => openAuthoredWork(kind)
         })
       }
     }
-    const coordination: ContextDockItem[] = coordinator
-      ? [
-          {
-            id: 'coordinator',
-            label: coordinator.label,
-            icon: coordinator.icon,
-            active: dockKindActive('coordinator'),
-            badge: coordinatorRailBadge,
-            badgeTitle: coordinatorRailBadgeTitle,
-            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
-          }
-        ]
-      : authoredWork
+    const coordination: ContextDockItem[] =
+      coordinator && coordinator.panel.component !== 'design'
+        ? [
+            {
+              id: 'coordinator',
+              label: coordinator.label,
+              icon: coordinator.icon,
+              active: dockKindActive('coordinator'),
+              badge: coordinatorRailBadge,
+              badgeTitle: coordinatorRailBadgeTitle,
+              onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+            },
+            ...authoredWork
+          ]
+        : authoredWork
 
     // The thread-note indicator sits below its own hairline. It's always
     // present   not just once a note exists   so it also doubles as the "add a

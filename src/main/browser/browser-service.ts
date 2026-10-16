@@ -2021,7 +2021,10 @@ export class BrowserService {
       this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
       return
     }
-    void recogniser(tab.projectId, tab.threadId, url)
+    // Project board views and user-opened screen tabs browse work without
+    // changing the thread's durable authored-work association.
+    const recordThread = !tabId.startsWith('browser:screen:') && !tabId.startsWith('browser:board:')
+    void recogniser(tab.projectId, tab.threadId, url, recordThread)
       .then((recognised) => {
         if (contents.isDestroyed() || contents.getURL() !== url) return
         this.applyTabMark(tabId, tab, url, recognised)

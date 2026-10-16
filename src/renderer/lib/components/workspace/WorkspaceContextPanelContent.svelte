@@ -328,7 +328,9 @@
               {/await}
             {:else if coordinator.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                <DesignCoordinatorPanel {...coordinator.panel.props} />
+                {#key `${coordinator.projectId}:${coordinator.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
+                  <DesignCoordinatorPanel {...coordinator.panel.props} />
+                {/key}
               {/await}
             {:else}
               {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
