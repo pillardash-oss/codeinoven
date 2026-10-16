@@ -252,7 +252,7 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> CodeInOven </span>
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> cio </span>
     </button>
 
     <!-- Global navigation: back / forward -->
