@@ -2,7 +2,6 @@ import { ipcMain, app, BrowserWindow } from 'electron'
 import { join, relative, extname } from 'node:path'
 import { mkdir, rm, readFile, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { atomicWrite } from '../../lib/utils'
 import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import {
   validateVideoStudio,
@@ -21,7 +20,9 @@ import {
   videoFile,
   videoFolder,
   videoOutput,
-  videoScratch
+  videoScratch,
+  videoTargetFolder,
+  videoExportFile
 } from './video-paths'
 import { VideoJobs } from './video-jobs'
 import { VideoPackagesService } from './video-packages'
@@ -31,7 +32,9 @@ import { videoWaveformDataUrl } from './video-waveform'
 import { videoProcess } from './video-process'
 import { readCompositionManifest } from './video-manifest'
 import type { VideoProjectManifest } from '../../lib/video/project'
-import { videoRuntimeSource } from './video-runtime'
+import { installVideoRuntime } from './video-runtime-install'
+import { copyVideoStarter } from './video-starters'
+import { videoStartersRoot } from './video-starters-root'
 import { videoWorkerJob } from './video-worker-job'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { Database } from '../database/database'
@@ -51,6 +54,7 @@ export const VIDEO_STUDIO_OPERATIONS = [
   'jobs',
   'studio',
   'runtime',
+  'scaffold',
   'captions',
   'track',
   'remove-background'
@@ -90,6 +94,20 @@ export class VideoStudioService {
       root: project.path,
       folder: await videoFolder(project.path, directory ?? currentWorkRoot('video', projectId))
     }
+  }
+  /**
+   * The export one composition already has, as a project-relative path.
+   *
+   * The board asks this for the folder in front rather than remembering an answer,
+   * because the answer has to outlive a job record: an export made in another
+   * thread of the same project, or before the app restarted, still belongs to the
+   * composition that produced it. A composition that has never been exported
+   * answers null, and the board falls back to what it has.
+   */
+  async latestExport(projectId: string, directory: unknown): Promise<string | null> {
+    const { root, folder } = await this.folder(projectId, directory)
+    const file = await videoExportFile(root, relative(root, folder))
+    return file === null ? null : relative(root, file)
   }
   async read(
     projectId: string,
@@ -181,46 +199,28 @@ export class VideoStudioService {
       if (input.document === undefined) return this.read(context.projectId, input.directory)
       return this.save(context.projectId, input.directory, input.document, input.revision)
     }
-    if (operation === 'runtime') {
-      const folder = await videoFolder(root, input.directory)
-      const path = join(folder, 'cio-video.js')
-      const source = videoRuntimeSource()
-      // Never replace a file authored by someone else, and never leave a partial
-      // one behind: a matching runtime is reused, anything else is refused, and
-      // the write itself goes through the same atomic rename studio.json uses, so
-      // an interrupted install cannot leave a truncated cio-video.js that would
-      // then be refused forever as "different content".
-      const existing = await videoFile(folder, 'cio-video.js').catch(
-        (error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error
-          return null
-        }
-      )
-      if (existing === null) await atomicWrite(path, source)
-      else if ((await stat(existing)).size > 64000 || (await readFile(existing, 'utf8')) !== source)
-        throw new Error(
-          'cio-video.js already exists with different content. Keep it or rename it before installing the runtime.'
-        )
+    if (operation === 'scaffold') {
+      const target = await videoTargetFolder(root, input.directory)
+      const copied = await copyVideoStarter({
+        startersRoot: videoStartersRoot(),
+        target,
+        name: videoText(input.starter, 'starter')
+      })
+      const runtime = await installVideoRuntime(root, target)
+      // What a caller needs to start work: the film, the runtime it needs, and the
+      // guide that says which parts of it are placeholders.
       return {
-        file: relative(root, path).replaceAll('\\', '/'),
-        reference: './cio-video.js',
-        api: [
-          'CIOVideo.ready',
-          'CIOVideo.parameters',
-          'CIOVideo.bind(draw)',
-          'CIOVideo.useCanvas(canvas)',
-          'CIOVideo.drawCaptions(ctx, seconds, width, height)',
-          'CIOVideo.progress(seconds,start,duration)',
-          'CIOVideo.interpolate(from,to,progress)',
-          'CIOVideo.ease(progress)',
-          'CIOVideo.strokePath(ctx,d,length,reveal,options)',
-          'CIOVideo.pivot(ctx,x,y,angle,scale)',
-          'CIOVideo.trackingAt(points,seconds)',
-          'CIOVideo.seekMedia(media,seconds)',
-          'CIOVideo.mediaReady(media)'
-        ]
+        ...copied,
+        runtime: runtime.file,
+        reference: runtime.reference,
+        guide: copied.files.includes('README.md') ? 'README.md' : null,
+        note: `${copied.starter.seconds ?? '?'} seconds at ${copied.starter.frame ?? '?'}, runtime installed. Read README.md beside the composition for the beat map, then preview it.`
       }
     }
+    // The install itself lives in one module, because a scaffold and an explicit
+    // runtime install must produce the same file.
+    if (operation === 'runtime')
+      return installVideoRuntime(root, await videoFolder(root, input.directory))
     if (operation === 'captions') {
       const folder = await videoFolder(root, input.directory)
       const state = await this.read(context.projectId, input.directory)
@@ -402,6 +402,9 @@ export class VideoStudioService {
     )
     ipcMain.handle('video:export', (_event, projectId, threadId, directory) =>
       this.execute('export', { directory }, { projectId: id(projectId), threadId: id(threadId) })
+    )
+    ipcMain.handle('video:latestExport', (_event, projectId, directory) =>
+      this.latestExport(id(projectId), directory)
     )
     ipcMain.handle('video:waveform', (_event, projectId, directory, source, offset, duration) =>
       this.waveform(id(projectId), directory, source, offset, duration)

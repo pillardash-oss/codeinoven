@@ -12,6 +12,10 @@ afterPack: scripts/native-splash/after-pack.js
 extraResources:
   - from: resources/speech/model-catalog.json
     to: speech/model-catalog.json
+  # Films the video capability scaffolds into a project, with the type, the bed
+  # and the README that carries each one's beat map.
+  - from: resources/video-starters
+    to: video-starters
   # Invisible Electron utilityProcess bridge that runs bundled harness modules
   # in-process (macOS never shows a separate Dock app for them).
   - from: resources/harnesses/utility-bridge.cjs

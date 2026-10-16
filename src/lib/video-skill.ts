@@ -87,6 +87,14 @@ Write one composition per folder under \`${videoRoot}/<name>/\`:
 
 ${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
 
+## Start from a shipped film
+
+\`scaffold\` copies a film this app ships into a project folder and installs the runtime beside it, so the first frame of the work is already a composition that plays and already exports:
+
+- \`product-launch\`, fifteen seconds at 1920x1080, a finished launch film in four beats: the mark, the claim, the proof, the close. It brings its own type, a bed and a README holding the beat map and the exact list of what to replace.
+
+Read the README beside the copy before cutting into it. Reach for it whenever the brief is a launch or product film. Keep the structure where it earns its place and break it where it does not, and never leave its placeholder copy in a delivered film: the brand, the claim and the tagline are controls in the video panel, and the proof numbers are claims that have to become true.
+
 ## The manifest
 
 \`composition.json\` declares the frame, because the app has to know it before the page runs:

@@ -93,9 +93,25 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'runtime',
-      'Install the CIO-authored standalone cio-video.js helpers beside a composition. Include it as a script and await CIOVideo.bind(draw). Exposes parameters, captions, easing, path reveals, pivots, tracking interpolation and exact media seeking. Does not overwrite a different existing file.',
+      'Install the CIO-authored standalone cio-video.js helpers beside a composition. Include it as a script and await CIOVideo.bind(draw). Exposes parameters, captions, the curve set in CIOVideo.easings, path reveals, pivots, tracking interpolation and exact media seeking. Does not overwrite a different existing file.',
       { directory },
       ['directory']
+    ),
+    tool(
+      'scaffold',
+      'Start a composition from a film the app ships, copied into a project folder with the runtime installed beside it. The shipped film is a finished piece rather than a blank form, and its README carries the beat map and the list of what to replace. Refuses a folder that already holds a composition.',
+      {
+        starter: {
+          type: 'string',
+          description:
+            'Name of a shipped film. This build ships product-launch, a fifteen second launch film in four beats.'
+        },
+        directory: {
+          type: 'string',
+          description: 'Project-relative folder to create, such as .cio/videos/launch.'
+        }
+      },
+      ['starter', 'directory']
     ),
     tool(
       'studio',

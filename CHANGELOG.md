@@ -7,6 +7,33 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- **A film ships with the app to start from.** The video capability gains a
+  `scaffold` operation that copies a finished film into a project folder and
+  installs the composition runtime beside it, so the first frame of the work is a
+  composition that already plays and already exports. This build ships
+  `product-launch`: fifteen seconds at 1920x1080 in four beats, with its own type
+  under the SIL Open Font License, a synthesized bed, and a README carrying the
+  beat map and the exact list of what to replace. The copy refuses a folder that
+  already holds a composition instead of merging into it.
+
+- **Motion craft reaches the video capability's own guidance.** A film now starts
+  from one representative frame and a premise rather than from particles, carries
+  one motif through every beat, and picks its curve on purpose: `CIOVideo.easings`
+  exposes ten named curves where the runtime offered a single cubic out, which is
+  the one every composition used to hand-roll for itself. `composition.json` also
+  takes an optional `audioPolicy` of `required` or `silent`, and the video guidance
+  treats sound as a decision: a film meant to be heard produces real local audio,
+  aligns accents to measured audio rather than a guessed pulse, and never reports
+  silence as a finished film.
+
+- **An export is checked before it is called delivered.** The export job now
+  verifies what it produced: the file exists where the export says, carries a video
+  stream at the manifest's frame size, runs the manifest's length, decodes to the
+  end, and holds the sound the composition declares. A render that fails is kept as
+  `render.failed.mp4` and the job reports the real reason instead of a file list, so
+  a broken export cannot be mistaken for a finished one while the composition source
+  stays untouched. A completed job carries what was measured.
+
 - **An assistant run running in another instance is transferable in place.** An
   assistant task and its runs are different threads, so opening the task showed
   nothing when one of its runs streamed in a sibling CodeInOven window, because

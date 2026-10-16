@@ -1,0 +1,9 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "duration": 15,
+  "background": "#0b0b0d",
+  "audio": ["sound/bed.m4a"],
+  "audioPolicy": "required"
+}
