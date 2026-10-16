@@ -27,6 +27,7 @@
     type ThreadRowSecondary
   } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { longPress } from '$lib/long-press.svelte'
@@ -82,6 +83,8 @@
     hideProjectName?: boolean
     /** Presentation-only row for searchable thread pickers. */
     picker?: boolean
+    /** Surface label for compact switcher rows. */
+    pickerBadge?: string
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
     /** Mark shown in the project-icon slot when the thread's container has no
@@ -109,6 +112,7 @@
     detailed = false,
     hideProjectName = false,
     picker = false,
+    pickerBadge,
     projectIconUrl = null,
     projectIconGlyph = null,
     showChangeScope = true,
@@ -1011,9 +1015,9 @@
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'bg-selected'
-      : ''}"
+    class="flex w-full flex-col justify-center gap-1 px-2.5 py-1.5 {compact
+      ? 'h-9'
+      : 'min-h-11'} text-left transition-colors {selected ? 'bg-selected' : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
@@ -1055,7 +1059,7 @@
         {displayTitle}
       </span>
       {@render peekIndicator()}
-      {#if !showBottomRow}
+      {#if compact || !showBottomRow}
         {#if activeIndicators.length > 0}
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
@@ -1082,12 +1086,15 @@
           />
         </span>
       {/if}
+      {#if pickerBadge}
+        <StatusPill>{pickerBadge}</StatusPill>
+      {/if}
       {#if selected}
         <Check size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
 
-    {#if showBottomRow}
+    {#if showBottomRow && !compact}
       <!-- Scope is the track that gives way: the harness track keeps its icons
            (`max-content` minimum) and the marks track keeps its own content, so
            a crowded row narrows the scope instead of overlapping it. -->

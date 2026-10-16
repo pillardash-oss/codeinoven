@@ -311,6 +311,12 @@
     // so only the native document's own defaults are settled here: Escape and
     // Cmd+Enter belong to the source, a control activates on Enter and Space,
     // and Tab walks the panel and wraps at its own edges.
+    // The switcher source owns Tab cycling. Native traversal would scroll a
+    // different row into view before the projected highlight arrives.
+    if (event.key === 'Tab' && dock.id === 'thread-switcher') {
+      event.preventDefault()
+      return
+    }
     if (event.key === 'Tab' && modalRoot) {
       const controls = focusOrder(modalRoot)
       const next = event.shiftKey ? controls.at(-1) : controls[0]

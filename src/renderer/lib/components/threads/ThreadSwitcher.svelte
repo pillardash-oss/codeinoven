@@ -3,6 +3,7 @@
   import { on } from 'svelte/events'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -118,9 +119,22 @@
     if (nativeReady && !nativeFailed) {
       // The native window owns focus. Focusing its hidden source row would
       // activate the parent again and dismiss the native modal on hover.
-      row.scrollIntoView({ block: 'nearest' })
-    } else row.focus()
+      scrollRowIntoList(row)
+    } else {
+      row.focus({ preventScroll: true })
+      scrollRowIntoList(row)
+    }
     return true
+  }
+
+  /** Scroll only the list, never the panel or the source document behind the overlay. */
+  function scrollRowIntoList(row: HTMLElement): void {
+    const list = row.parentElement
+    if (!list) return
+    const bounds = list.getBoundingClientRect()
+    const item = row.getBoundingClientRect()
+    if (item.top < bounds.top) list.scrollTop += item.top - bounds.top
+    else if (item.bottom > bounds.bottom) list.scrollTop += item.bottom - bounds.bottom
   }
 
   function focusHighlightedEntry(key: string | null, attempts = 8): void {
@@ -272,7 +286,7 @@
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (keymapState.matches('thread-switcher', event)) {
+    if (keymapState.matches('thread-switcher', event) || (open && event.key === 'Tab')) {
       // No "nothing to show" guard before the cycle: an empty list is exactly the
       // state the cycle's own stored-list read is there to fill, so returning
       // here would leave Ctrl+Tab doing nothing in that session.
@@ -357,7 +371,7 @@
   </header>
 
   <div
-    class="max-h-[min(28rem,65vh)] overflow-y-auto p-1.5"
+    class="max-h-[calc(80vh-7rem)] min-h-0 overflow-y-auto overscroll-contain p-1.5"
     role="listbox"
     aria-label="Recent threads and browser tabs"
   >
@@ -391,6 +405,12 @@
           <ThreadRow
             thread={entry.thread}
             picker
+            compact
+            pickerBadge={contentThreadFamily(entry.thread) === 'chats'
+              ? 'Chat'
+              : contentThreadFamily(entry.thread) === 'assistant'
+                ? 'Assistant'
+                : 'Project'}
             selected={entryKey === highlightedKey}
             projectIconUrl={resolvedProjectIcon}
             projectIconGlyph={contentFamilyIcon(entry.thread)}

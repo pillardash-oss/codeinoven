@@ -45,7 +45,7 @@
 </script>
 
 <div
-  class="flex min-h-11 w-full flex-col justify-center px-2.5 py-1.5 text-left transition-colors {selected
+  class="flex h-9 w-full flex-col justify-center px-2.5 py-1.5 text-left transition-colors {selected
     ? 'bg-selected'
     : ''}"
 >
