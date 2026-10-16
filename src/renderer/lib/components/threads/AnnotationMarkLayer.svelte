@@ -454,7 +454,6 @@
     initialComment={editingMark.comment ?? ''}
     targetId={`mark-comment-${threadId}-${editingMark.id}`}
     scope={{ kind: 'project', projectId }}
-    allowEmptyRemove
     onDraftChange={(comment) => draftComment(editingMark.id, comment)}
     onDone={(comment) => saveComment(editingMark.id, comment)}
     onRemove={() => removeMark(editingMark.id)}

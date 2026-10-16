@@ -45,8 +45,6 @@
     placeholder?: string
     removeTitle?: string
     doneTitle?: string
-    /** Keep Remove available with an empty comment. See the form. */
-    allowEmptyRemove?: boolean
   }
 
   let {
@@ -64,8 +62,7 @@
     attach,
     placeholder,
     removeTitle,
-    doneTitle,
-    allowEmptyRemove
+    doneTitle
   }: Props = $props()
 </script>
 
@@ -105,6 +102,5 @@
     {placeholder}
     {removeTitle}
     {doneTitle}
-    {allowEmptyRemove}
   />
 </div>

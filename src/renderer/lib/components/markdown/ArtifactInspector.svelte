@@ -596,7 +596,6 @@
     initialComment={editingPick.comment ?? ''}
     targetId={`svg-element-comment-${threadId}-${editingPick.id}`}
     scope={{ kind: 'project', projectId }}
-    allowEmptyRemove
     onDraftChange={(comment) => draftComment(editingPick.id, comment)}
     onDone={(comment) => saveComment(editingPick.id, comment)}
     onRemove={() => removePick(editingPick.id)}
