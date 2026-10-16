@@ -33,9 +33,9 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
-    AppWindow,
     Bell,
     Bot,
     Boxes,
@@ -65,6 +65,8 @@
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+
+  const defaultPopupIconUrl = publicAssetUrl('icon-mono.svg')
 
   interface Props {
     tabs: ContextSidebarTab[]
@@ -490,7 +492,12 @@
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
       {:else}
-        <AppWindow size={12} class="shrink-0" />
+        <img
+          src={defaultPopupIconUrl}
+          alt=""
+          class="h-3 w-3 shrink-0 object-contain"
+          aria-hidden="true"
+        />
       {/if}
     {:else if tab.kind === 'boxes'}
       <Boxes size={12} class="shrink-0" />
@@ -591,6 +598,11 @@
               ? 'italic'
               : ''}">{tab.title}</span
           >
+          {#if tab.kind === 'popup-window' && tab.boxName}
+            <span class="shrink-0 border-l border-border pl-1.5 text-[0.625rem] text-dimmed">
+              {tab.boxName}
+            </span>
+          {/if}
         {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}

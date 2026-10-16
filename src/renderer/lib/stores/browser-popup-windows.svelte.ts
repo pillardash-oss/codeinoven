@@ -96,7 +96,8 @@ class BrowserPopupWindowsState {
       id: popup.id,
       kind: 'popup-window',
       title: extension?.name ?? (popup.title || popup.url || 'Popup window'),
-      favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined
+      favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined,
+      extensionId: popup.extensionId ?? undefined
     }
   }
 

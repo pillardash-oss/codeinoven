@@ -22,6 +22,7 @@
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserHistory, BROWSER_HISTORY_GLOBAL_SCOPE } from '$lib/stores/browser-history.svelte'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 
@@ -174,7 +175,24 @@
    * A popup keeps the tab and box session that opened it, while its rail tab stays
    * available as the user moves between pages and boxes.
    */
-  const popupTabs = $derived(browserPopupWindows.tabs())
+  const popupTabs = $derived.by(() => {
+    const tabs = browserPopupWindows.tabs()
+    const extensionTabCounts = new Map<string, number>()
+    for (const tab of tabs) {
+      if (tab.extensionId) {
+        extensionTabCounts.set(tab.extensionId, (extensionTabCounts.get(tab.extensionId) ?? 0) + 1)
+      }
+    }
+    return tabs.map((tab) => {
+      if (!tab.extensionId || (extensionTabCounts.get(tab.extensionId) ?? 0) < 2) return tab
+      const popup = browserPopupWindows.find(tab.id)
+      const ownerTab = popup ? globalBrowser.tabById(popup.tabId) : null
+      return {
+        ...tab,
+        boxName: globalBrowser.boxById(ownerTab?.boxId ?? DEFAULT_BOX_ID)?.name ?? 'Default'
+      }
+    })
+  })
   /** The browser-wide popup the rail is showing, or null while none are open. */
   const activePopup = $derived(
     globalBrowser.popupsSidebarShown ? browserPopupWindows.active() : null
