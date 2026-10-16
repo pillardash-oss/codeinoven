@@ -17,6 +17,7 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
   import {
     Bell,
@@ -48,6 +49,7 @@
   }
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
+  const appMarkUrl = publicAssetUrl('icon-mark.svg')
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -263,16 +265,12 @@
       </button>
     </div>
 
-    <!-- Selected view's name: the rail is icon-only, so the header names the
-         view it has selected, between the nav buttons and the view's actions. -->
-    {#if navigation.activeHeaderViewLabel}
-      <span
-        class="whitespace-nowrap px-1 text-[0.6875rem] font-medium text-muted"
-        aria-live="polite"
-      >
-        {navigation.activeHeaderViewLabel}
+    <div class="flex shrink-0 items-center gap-1.5 pl-1.5" aria-label="CodeInOven">
+      <img src={appMarkUrl} alt="" class="h-5 w-5 text-foreground" draggable="false" />
+      <span class="whitespace-nowrap text-[0.75rem] font-semibold tracking-tight text-foreground">
+        CodeInOven
       </span>
-    {/if}
+    </div>
 
     {#if onSettings}
       <!-- Settings owns this slot while it is on screen: the per-view actions
