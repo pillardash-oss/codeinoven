@@ -142,6 +142,7 @@ export const invokeDesignContract = {
    * have to report what the move did with the work already on disk.
    */
   'design:workRootState': {} as Contract<[projectId?: string], WorkRootState>,
+  'design:removeMissing': {} as Contract<[projectId: string, directory: string], void>,
   'design:updateDetails': {} as Contract<
     [projectId: string, details: UpdateWorkDetails],
     UpdateWorkDetailsResult

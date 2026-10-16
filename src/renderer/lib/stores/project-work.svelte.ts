@@ -41,6 +41,11 @@ class ProjectWorkStore {
     this.#focused.set(`${projectId}:${kind}`, directory)
   }
 
+  /** Opening a panel discards its cached listing before checking recorded folders. */
+  invalidate(projectId: string): void {
+    this.#states.delete(projectId)
+  }
+
   /** Read a project's work once, unless a read is already in flight. */
   ensure(projectId: string): Promise<void> {
     return this.#states.has(projectId) ? Promise.resolve() : this.refresh(projectId)

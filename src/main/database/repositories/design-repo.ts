@@ -1,3 +1,6 @@
+import { DEFAULT_WORK_ROOTS } from '../../../lib/design/work-roots'
+import { projectWorkRootPaths } from '../../design/work-roots-state'
+import { dirname } from 'node:path'
 import type { Database } from '../database'
 import type { AuthoredWorkKind, ThreadDesignCurrent } from '../../../lib/ipc/design'
 
@@ -86,6 +89,24 @@ export class DesignRepo {
       input.kind,
       Date.now()
     )
+    // A generic HTML preview is not a new design. Register only a folder directly
+    // under an authored-work root, including the project's explicit custom roots.
+    if (
+      [
+        DEFAULT_WORK_ROOTS[input.kind],
+        ...projectWorkRootPaths(input.projectId, input.kind)
+      ].includes(dirname(input.directory))
+    ) {
+      this.db.run(
+        `INSERT INTO authored_work_folders (project_id, directory, kind, created_at, updated_at, missing)
+        VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(project_id, directory) DO UPDATE SET kind = excluded.kind, missing = 0`,
+        input.projectId,
+        input.directory,
+        input.kind,
+        Date.now(),
+        Date.now()
+      )
+    }
     // The first thread to preview a folder is the one that created it, because the
     // agent writes a folder before showing it. The insert is ignored once the
     // folder has an origin, so a second thread previewing someone else's design,
@@ -184,6 +205,10 @@ export class DesignRepo {
         `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
       ]
     })
+    statements.push({
+      sql: 'UPDATE authored_work_folders SET directory = ? WHERE project_id = ? AND directory = ?',
+      params: [input.to, input.projectId, input.from]
+    })
     const saved = await this.db.transactionViaWorker(statements)
     if (!saved.ok) throw new Error(saved.error ?? 'Could not update work tracking')
     const updated = matching.length
@@ -191,6 +216,7 @@ export class DesignRepo {
   }
 
   deleteProject(projectId: string): void {
+    this.db.run('DELETE FROM authored_work_folders WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM design_origins WHERE project_id = ?', projectId)
   }

@@ -1198,6 +1198,16 @@ CREATE TABLE IF NOT EXISTS design_history_heads (
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS authored_work_folders (
+    project_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    missing INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(project_id, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_authored_work_folders_kind ON authored_work_folders(project_id, kind);`,
   `CREATE TABLE IF NOT EXISTS design_reviews (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL,

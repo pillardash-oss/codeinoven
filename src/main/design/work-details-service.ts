@@ -68,14 +68,15 @@ async function moveDetails(
   ) {
     throw new Error('The save folder cannot be inside an existing design or video')
   }
-  const selected = items.find((item) => item.directory === details.directory)
+  const available = items.filter((item) => !item.missing)
+  const selected = available.find((item) => item.directory === details.directory)
   if (!selected && (details.directory !== '' || details.thisOnly || !root))
     throw new Error('This work no longer exists. Refresh the board and try again.')
   const moving =
     details.newOnly === true
       ? []
       : root !== undefined && !details.thisOnly
-        ? items
+        ? available
         : selected
           ? [selected]
           : []

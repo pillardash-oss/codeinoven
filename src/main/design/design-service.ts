@@ -1,8 +1,9 @@
+import { WorkFolderRegistry } from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
 import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
@@ -330,6 +331,16 @@ export class DesignService {
       defaults: { ...DEFAULT_WORK_ROOTS },
       reports: currentWorkRootReports()
     }))
+    ipcMain.handle('design:removeMissing', async (_event, rawProjectId, rawDirectory) => {
+      const projectId = requireId(rawProjectId, 'project id')
+      const directory = requirePath(rawDirectory)
+      const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+      await new WorkFolderRegistry(this.options.database).removeMissing(
+        projectId,
+        project.path,
+        directory
+      )
+    })
     ipcMain.handle(
       'design:updateDetails',
       async (_event, rawProjectId, details: UpdateWorkDetails) => {
@@ -1010,42 +1021,13 @@ export class DesignService {
     })
   }
 
-  /**
-   * Every folder of one project under `root`, newest first.
-   *
-   * The folder listing is the registry: `.cio/designs/<name>/` and
-   * `.cio/videos/<name>/` are the documented layouts, so a folder another thread
-   * wrote is found here without anything having registered it.
-   */
+  /** Refresh exact registered folders and discover only the canonical default directories. */
   private async listProjectFolders(
     projectId: string,
     path: string,
     kind: AuthoredWorkKind
   ): Promise<DesignEntry[]> {
-    const roots = new Set(projectWorkRootPaths(projectId, kind))
-    const recorded = await this.options.database.queryViaWorker(
-      'SELECT directory FROM thread_designs WHERE project_id = ? AND kind = ?',
-      [projectId, kind],
-      0
-    )
-    if (!recorded.ok) throw new Error('Could not read work folders')
-    for (const row of recorded.rows as unknown as Array<{ directory: string }>)
-      roots.add(dirname(row.directory))
-    const folders = new Map<string, DesignEntry>()
-    for (const root of roots) {
-      for (const item of await this.listWorkFolders(path, root)) {
-        // A previous root can contain the new root; that container is not another design.
-        if (
-          [...roots].some(
-            (known) => known === item.directory || known.startsWith(`${item.directory}/`)
-          )
-        )
-          continue
-        folders.set(item.directory, item)
-      }
-      await new Promise<void>((resume) => setImmediate(resume))
-    }
-    return [...folders.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+    return new WorkFolderRegistry(this.options.database).list(projectId, path, kind)
   }
 
   async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {

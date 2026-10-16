@@ -23,6 +23,7 @@
     RefreshCw,
     Store,
     Target,
+    Trash2,
     Volume2,
     VolumeX
   } from '@lucide/svelte'
@@ -298,11 +299,14 @@
             (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
           )?.directory ??
           items[0]?.directory ??
-          workRoot)
+          '')
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
+  let removeRequested = $state<DesignEntry | null>(null)
+  let removeBusy = $state(false)
+  let selectedMissing = $derived(selectedItem?.missing === true)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
   /**
    * The view this board plays its composition in, named by main when it opened it.
@@ -442,6 +446,26 @@
     }
   }
 
+  async function removeMissingWork(): Promise<void> {
+    const target = removeRequested
+    if (!target || removeBusy) return
+    removeBusy = true
+    try {
+      await invoke('design:removeMissing', projectId, target.directory)
+      removeRequested = null
+      viewedDirectory = ''
+      projectWorkState.focusDirectory(projectId, kind, '')
+      await projectWorkState.refresh(projectId)
+      await loadState()
+      await loadGallery()
+      await loadCanvas()
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The entry could not be removed.'
+    } finally {
+      removeBusy = false
+    }
+  }
+
   /** Read the folders in use, and what the last change moved. */
   async function loadWorkRoots(): Promise<WorkRootState | null> {
     try {
@@ -486,7 +510,7 @@
    * under the playhead. The mute then drives the view the user is watching.
    */
   async function loadGallery(force = false): Promise<void> {
-    if (selected.directory === '') {
+    if (selected.directory === '' || selectedMissing) {
       gallery = []
       return
     }
@@ -593,7 +617,7 @@
    * board plays.
    */
   async function ensureComposition(directory: string, force = false): Promise<void> {
-    if (!video || directory === '') return
+    if (!video || directory === '' || selectedMissing) return
     if (!force && compositionAsked === directory) return
     compositionAsked = directory
     composing = directory
@@ -642,7 +666,7 @@
   /** Read the design's canvas state, and remember that main answered. */
   async function loadCanvas(): Promise<void> {
     const directory = selected.directory
-    if (directory === '') {
+    if (directory === '' || selectedMissing) {
       canvasState = null
       canvasDirectory = ''
       canvasRead = true
@@ -805,7 +829,9 @@
    * header is the whole board's reload and the controls do not need their own. The
    * remount discards unsaved control edits, so those are confirmed first.
    */
-  function refreshBoard(): void {
+  async function refreshBoard(): Promise<void> {
+    await projectWorkState.refresh(projectId)
+    await loadState()
     if (video) {
       if (studioDirty) {
         reloadRequested = true
@@ -946,11 +972,12 @@
   })
 
   onMount(() => {
-    void projectWorkState.ensure(projectId)
+    projectWorkState.invalidate(projectId)
     // The board is one of the surfaces that watches the optional video pack, so
     // installing it from Settings turns on live editing here without a reload.
     void videoPackagesStore.load()
-    void loadState().then(async () => {
+    void projectWorkState.refresh(projectId).then(async () => {
+      await loadState()
       await loadGallery()
       await loadCanvas()
     })
@@ -1341,6 +1368,9 @@
                     >
                       <WorkIcon size={12} class="shrink-0 text-dimmed" />
                       <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                      {#if item.missing}<span class="shrink-0 text-[0.625rem] text-warning"
+                          >Not found</span
+                        >{/if}
                       {#if item.creatorThreadId === threadId}
                         <span
                           class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
@@ -1427,7 +1457,7 @@
         >
           <Target size={12} />
         </button>
-        {#if historyActions && selected.directory !== ''}
+        {#if historyActions && selected.directory !== '' && !selectedMissing}
           <DesignHistoryActions
             canUndo={historyActions.canUndo}
             canRedo={historyActions.canRedo}
@@ -1442,7 +1472,7 @@
           class="flex h-6 w-6 items-center justify-center transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
             ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:text-foreground'}"
-          disabled={selected.directory === ''}
+          disabled={selected.directory === '' || selectedMissing}
           aria-pressed={historyOpen}
           title={`${nounTitle} history`}
           aria-label={`${nounTitle} history`}
@@ -1621,7 +1651,7 @@
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={selected.directory === ''}
+                disabled={selected.directory === '' || selectedMissing}
                 onSelect={() => (historyOpen = !historyOpen)}
               >
                 <History size={13} class="shrink-0 text-muted" />
@@ -1630,7 +1660,7 @@
               <DropdownMenu.Sub>
                 <DropdownMenu.SubTrigger
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                  disabled={selected.directory === ''}
+                  disabled={selected.directory === '' || selectedMissing}
                 >
                   <Pencil size={13} class="shrink-0 text-muted" />
                   Update {noun} details
@@ -1661,7 +1691,7 @@
         <button
           type="button"
           class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={opening || selected.directory === ''}
+          disabled={opening || selected.directory === '' || selectedMissing}
           title={`Show this ${noun} in the in-app browser`}
           aria-label={`Show this ${noun} in the in-app browser`}
           onclick={() => void openPreview(selected.entry)}
@@ -1717,7 +1747,22 @@
       </p>
     {/if}
 
-    {#if video && selected.directory !== ''}
+    {#if selectedMissing}
+      <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
+        <ImageOff size={20} class="text-warning" />
+        <p class="text-sm font-medium">{nounTitle} not found</p>
+        <p class="break-all font-mono text-xs text-muted">{selected.directory}</p>
+        <p class="text-xs text-muted">
+          Restore the folder and refresh, or remove this entry from the panel.
+        </p>
+        <button
+          type="button"
+          class="ml-auto flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
+          onclick={() => (removeRequested = selectedItem)}
+          ><Trash2 size={13} />Remove from panel</button
+        >
+      </div>
+    {:else if video && selected.directory !== ''}
       <!--
         The composition above, the tools below.
 
@@ -1815,19 +1860,21 @@
         {/if}
       </div>
     {/if}
-    {#key `${projectId}:${threadId}:${selected.directory}`}
-      <DesignHistoryPanel
-        {projectId}
-        {threadId}
-        directory={selected.directory}
-        {noun}
-        unit={video ? 'file' : 'screen'}
-        open={historyOpen}
-        onRestored={restoreBoard}
-        onClose={() => (historyOpen = false)}
-        onActions={handleHistoryActions}
-      />
-    {/key}
+    {#if selected.directory !== '' && !selectedMissing}
+      {#key `${projectId}:${threadId}:${selected.directory}`}
+        <DesignHistoryPanel
+          {projectId}
+          {threadId}
+          directory={selected.directory}
+          {noun}
+          unit={video ? 'file' : 'screen'}
+          open={historyOpen}
+          onRestored={restoreBoard}
+          onClose={() => (historyOpen = false)}
+          onActions={handleHistoryActions}
+        />
+      {/key}
+    {/if}
   </div>
 </div>
 
@@ -1926,3 +1973,20 @@
     onUpdated={detailsUpdated}
   />
 {/if}
+
+<ConfirmDialog
+  open={removeRequested !== null}
+  title={`Remove missing ${noun}?`}
+  confirmLabel="Remove from panel"
+  cancelLabel="Cancel"
+  busy={removeBusy}
+  onCancel={() => {
+    if (!removeBusy) removeRequested = null
+  }}
+  onConfirm={removeMissingWork}
+>
+  <p>
+    Remove {removeRequested?.name ?? ''} from this project's {noun} panel? This removes its saved folder
+    record. No files are deleted.
+  </p>
+</ConfirmDialog>

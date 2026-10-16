@@ -29,6 +29,8 @@ export interface DesignEntry {
   name: string
   /** Whether the folder holds an `index.html` entry file. */
   hasEntry: boolean
+  /** A registered folder that no longer exists remains visible until removed. */
+  missing?: boolean
   /**
    * When the folder was made (ms), for the board's "created" stamp.
    *
