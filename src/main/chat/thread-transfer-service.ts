@@ -90,7 +90,8 @@ export class ThreadTransferService {
     this.isRunOwnerAlive =
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
     this.liveInstancePids = options.liveInstancePids ?? (() => instanceRegistry.liveInstancePids())
-    this.hasPeerInstance = options.hasPeerInstance ?? (() => instanceRegistry.hasOtherLiveInstance())
+    this.hasPeerInstance =
+      options.hasPeerInstance ?? (() => instanceRegistry.hasOtherLiveInstance())
     this.bus = options.bus ?? instanceHandoffBus
     this.locks = options.locks ?? null
     this.detachPromptPreflight =
@@ -161,12 +162,11 @@ export class ThreadTransferService {
       // longer be split across two instances.
       const target = await this.chatEngine.resolveTransferTarget(projectId, threadId)
       const ownerPid = target.ownerPid
-      if (ownerPid === null || ownerPid === this.bus.localPid) return { ok: true }
+      if (ownerPid === null || ownerPid === this.bus.localPid) {
+        return { ok: true, noLongerForeign: true }
+      }
       if (!this.isRunOwnerAlive(ownerPid)) {
-        return {
-          ok: false,
-          reason: 'The instance running this thread is no longer running.'
-        }
+        return { ok: true, noLongerForeign: true }
       }
       // One transfer per thread. The receiving side takes `adopt` for the whole
       // hand-off and hands its token to the owner, so a second window asking at
@@ -186,6 +186,14 @@ export class ThreadTransferService {
           lock ?? undefined
         )
         if (ack.status !== 'accepted') {
+          const current = await this.chatEngine.resolveTransferTarget(projectId, threadId)
+          if (
+            current.ownerPid === null ||
+            current.ownerPid === this.bus.localPid ||
+            !this.isRunOwnerAlive(current.ownerPid)
+          ) {
+            return { ok: true, noLongerForeign: true }
+          }
           return {
             ok: false,
             reason: ack.reason ?? 'The instance running this thread did not hand it over.'

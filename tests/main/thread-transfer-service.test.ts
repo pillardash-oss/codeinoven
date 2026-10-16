@@ -204,7 +204,8 @@ describe('ThreadTransferService', () => {
     const { adopter, adopterEngine, directory, ownerEngine } = await harness({ ownsTurn: null })
 
     await expect(adopter.transferToThisInstance(PROJECT_ID, THREAD_ID)).resolves.toEqual({
-      ok: true
+      ok: true,
+      noLongerForeign: true
     })
     expect(adopterEngine.adopt).not.toHaveBeenCalled()
     expect(ownerEngine.release).not.toHaveBeenCalled()
@@ -217,19 +218,20 @@ describe('ThreadTransferService', () => {
     })
 
     await expect(adopter.transferToThisInstance(PROJECT_ID, THREAD_ID)).resolves.toEqual({
-      ok: true
+      ok: true,
+      noLongerForeign: true
     })
     expect(adopterEngine.adopt).not.toHaveBeenCalled()
     expect(ownerEngine.release).not.toHaveBeenCalled()
     expect(handoffFiles(directory)).toEqual([])
   })
 
-  it('refuses a run whose recorded owner is gone, without asking anyone', async () => {
+  it('reports stale ownership when the recorded owner is gone, without asking anyone', async () => {
     const { adopter, adopterEngine, directory, ownerEngine } = await harness({ ownerAlive: false })
 
     await expect(adopter.transferToThisInstance(PROJECT_ID, THREAD_ID)).resolves.toEqual({
-      ok: false,
-      reason: 'The instance running this thread is no longer running.'
+      ok: true,
+      noLongerForeign: true
     })
     expect(adopterEngine.adopt).not.toHaveBeenCalled()
     expect(ownerEngine.release).not.toHaveBeenCalled()

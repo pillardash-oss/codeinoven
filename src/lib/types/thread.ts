@@ -451,7 +451,8 @@ export interface ForeignRunNotice {
  * window asking to take over a run it cannot see, and a silent failure would
  * leave the transfer card stuck with no explanation.
  */
-export type ThreadTransferResult = { ok: true } | { ok: false; reason: string }
+export type ThreadTransferResult =
+  { ok: true; noLongerForeign?: true } | { ok: false; reason: string }
 
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'tool'
 
