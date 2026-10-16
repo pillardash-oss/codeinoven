@@ -10,6 +10,7 @@ import {
   type VideoExportEncoderDrain,
   type VideoExportEncoderSupport
 } from './video-export-encoder'
+import { checkVideoExport, keepFailedExport, type VideoExportCheck } from './video-export-check'
 import { videoFile, readVideoStudio, videoOutput } from './video-paths'
 import { loadCompositionManifest } from './video-manifest'
 import { startVideoProcess } from './video-process'
@@ -113,7 +114,7 @@ export async function exportVideo(
   folder: string,
   previews: DirectoryPreviewService,
   context: VideoJobContext
-): Promise<{ files: string[]; encoder: VideoExportEncoderPath }> {
+): Promise<{ files: string[]; encoder: VideoExportEncoderPath; check: VideoExportCheck }> {
   context.update(0, 'Validating composition')
   const manifest = await loadCompositionManifest(folder, relative(root, folder))
   if (manifest.width * manifest.height > 3840 * 2160)
@@ -121,7 +122,8 @@ export async function exportVideo(
   const studio = await readVideoStudio(folder)
   const directory = await videoOutput(root, 'exports')
   const partial = join(directory, 'render.partial.mp4'),
-    final = join(directory, 'render.mp4')
+    final = join(directory, 'render.mp4'),
+    failed = join(directory, 'render.failed.mp4')
   context.update(0, 'Preparing composition preview')
   const registration = await previews.open(folder)
   const entry = await resolveServedEntry(folder, 'index.html')
@@ -309,13 +311,41 @@ export async function exportVideo(
     await encoder.done
     context.signal.throwIfAborted()
     await rename(partial, final)
+    context.update(0.98, 'Checking the exported file')
+    let check: VideoExportCheck
+    try {
+      check = await checkVideoExport(
+        root,
+        final,
+        {
+          width: manifest.width,
+          height: manifest.height,
+          fps: manifest.fps,
+          duration: manifest.duration,
+          audio: tracks.length ? 'required' : 'silent',
+          audioFrom: tracks.length ? Math.min(...tracks.map((track) => track.start)) : 0
+        },
+        context.signal
+      )
+    } catch (error) {
+      // A file that failed its check must not sit where a deliverable belongs, but
+      // it is the only evidence of what went wrong, so it is renamed, not deleted.
+      const kept = await keepFailedExport(root, final, failed, context.signal)
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        kept
+          ? `${reason} That render was kept as ${kept} for inspection; the composition is unchanged.`
+          : reason,
+        { cause: error }
+      )
+    }
     const files = [relative(root, final).replaceAll('\\', '/')]
     if (studio.captions.length) {
       const subtitles = join(directory, 'captions.srt')
       await atomicWrite(subtitles, videoCaptionsSrt(studio.captions))
       files.push(relative(root, subtitles).replaceAll('\\', '/'))
     }
-    return { files, encoder: renderer.kind }
+    return { files, encoder: renderer.kind, check }
   } finally {
     context.signal.removeEventListener('abort', abortWindow)
     encoder?.child.kill('SIGKILL')
