@@ -220,7 +220,7 @@
           {/if}
           {#if item.countText && item.countText.length > 0}
             <span
-              class="absolute -top-1 -right-1 flex items-center text-[0.5625rem] font-semibold leading-none tabular-nums whitespace-nowrap"
+              class="absolute -top-1 right-1 flex items-center text-[0.5625rem] font-semibold leading-none tabular-nums whitespace-nowrap"
               aria-hidden="true"
             >
               {#each item.countText as token, tokenIndex (tokenIndex)}
