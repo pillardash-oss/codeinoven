@@ -1,4 +1,4 @@
-<svg width="100%" height="100%" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg" style="color:#a1a1aa">
+<svg width="100%" height="100%" viewBox="3 0 96 96" xmlns="http://www.w3.org/2000/svg" style="color:#a1a1aa">
   <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
   <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter"/>
   <rect x="58" y="45" width="29" height="6" fill="currentColor"/>

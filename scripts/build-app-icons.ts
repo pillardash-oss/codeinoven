@@ -1,6 +1,6 @@
 /**
- * Render every platform app-icon and tray asset from the two brand masters, so
- * all platforms ship one identical, current brand mark:
+ * Render every platform app-icon and tray asset from the brand masters, so all
+ * platforms ship the same approved, optically centered mark:
  *
  *  - `icon.png`                       → electron-builder source for win/linux
  *  - `favicon.ico`                    → multi-size Windows/browser favicon
@@ -12,10 +12,12 @@
  *  - `../build/appx/*.png`            → MSIX Store tile and taskbar logos
  *  - `../build/icon.ico`              → Windows executable, taskbar, Explorer
  *
- * Two full-color masters feed this. `icon.svg` and `icon-small.svg` carry the
- * approved C/O Relay mark and auric endpoint on a flat obsidian tile. App-icon
- * entries below `SMALL_ART_MAX_PX` take the small master, everything from there
- * up takes the primary master. Tray entries take the mono marks (`icon-mono-small.svg`
+ * Three full-color masters feed this. `icon.svg` and `icon-small.svg` carry the
+ * approved C/O Relay mark and auric endpoint on the square obsidian tile.
+ * `icon-macos.svg` keeps that exact centered mark on a restrained layered tile
+ * tuned for the macOS mask. App-icon entries below `SMALL_ART_MAX_PX` take the
+ * small master, everything from there up takes the primary master. Tray entries
+ * take the mono marks (`icon-mono-small.svg`
  * and its attention sibling), because a tray glyph is drawn at roughly 16pt
  * however many device pixels back it.
  *
@@ -43,7 +45,10 @@ const buildDir = join(root, 'build')
  */
 const appxDir = join(buildDir, 'appx')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
-/** Small-size app tile: same flat tile, C/O geometry and gold endpoint. */
+const macMaster = readFileSync(join(staticDir, 'icon-macos.svg'), 'utf8')
+const monoSmall = readFileSync(join(staticDir, 'icon-mono-small.svg'), 'utf8')
+const monoSmallAttention = readFileSync(join(staticDir, 'icon-mono-small-attention.svg'), 'utf8')
+/** Small-size app tile: square obsidian tile, C/O geometry and gold endpoint. */
 const smallTile = readFileSync(join(staticDir, 'icon-small.svg'), 'utf8')
 /**
  * Device-pixel size below which app-icon entries take the small optical master.
@@ -53,6 +58,11 @@ const SMALL_ART_MAX_PX = 48
 /** The app-icon master for a device-pixel size: small tile first, primary up. */
 function appArt(size: number): string {
   return size < SMALL_ART_MAX_PX ? smallTile : master
+}
+
+/** macOS gets its own background finish while keeping the shared mark master. */
+function macAppArt(): string {
+  return macMaster
 }
 
 /** Render an SVG string to a PNG buffer at the requested pixel size. */
@@ -119,12 +129,12 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   writeFileSync(join(buildDir, 'icon.ico'), winIco)
   Logger.dev(`[build-app-icons] Wrote build/icon.ico (${winIcoSizes.join('/')}px).`)
 
-  // macOS iconset → icns. The square artwork is supplied edge-to-edge; macOS
-  // applies its platform mask and drop shadow.
+  // macOS iconset → icns. The native mask and shadow stay system-owned; the
+  // source tile uses a subtle tonal field and a centered, padded mark.
   const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
   mkdirSync(macosDir, { recursive: true })
   for (const size of iconSizes) {
-    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(appArt(size), size))
+    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(macAppArt(), size))
   }
   // MSIX tile and taskbar logos. The four base names are the ones the generated
   // manifest references: `Properties/Logo` (StoreLogo), both `VisualElements`
@@ -172,7 +182,7 @@ if (!Bun.argv.includes('--windows-tray-only')) {
       ['icon_512x512@2x.png', 1024]
     ]
     for (const [name, size] of entries) {
-      writeFileSync(join(setDir, name), renderPng(appArt(size), size))
+      writeFileSync(join(setDir, name), renderPng(macAppArt(), size))
     }
     execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
     rmSync(iconset, { recursive: true, force: true })
@@ -188,14 +198,29 @@ if (!Bun.argv.includes('--windows-tray-only')) {
 // artwork is the small-size monochrome C/O Relay. It keeps the divider inside
 // the O and omits only the gold endpoint for platform template rendering. The
 // attention version adds a separate cue without changing the base mark.
-const monoSmall = readFileSync(join(staticDir, 'icon-mono-small.svg'), 'utf8')
-const monoSmallAttention = readFileSync(join(staticDir, 'icon-mono-small-attention.svg'), 'utf8')
+/** Render the menu mark within a square optical frame so the visible ink is
+ * centered in the native 16pt / 32px Retina slot rather than floating in its
+ * original roomy canvas. */
+function renderMacTray(svg: string, size: number): Buffer {
+  const viewBox = svg.match(/viewBox="([^"]*)"/)
+  if (!viewBox) throw new Error('macOS tray artwork has no viewBox')
+  const [, rawViewBox] = viewBox
+  const [x, y, width, height] = rawViewBox.split(/\s+/).map(Number)
+  const extent = Math.max(width, height)
+  const squareX = x + (width - extent) / 2
+  const squareY = y + (height - extent) / 2
+  const squareSvg = svg.replace(viewBox[0], `viewBox="${squareX} ${squareY} ${extent} ${extent}"`)
+  const png = new Resvg(squareSvg, { fitTo: { mode: 'width', value: size }, background: undefined })
+    .render()
+    .asPng()
+  return Buffer.from(png)
+}
 if (!Bun.argv.includes('--windows-tray-only')) {
   const trayOutputs: Array<[string, Buffer]> = [
-    ['trayTemplate.png', renderPng(monoSmall, 16)],
-    ['trayTemplate@2x.png', renderPng(monoSmall, 32)],
-    ['trayAttentionTemplate.png', renderPng(monoSmallAttention, 16)],
-    ['trayAttentionTemplate@2x.png', renderPng(monoSmallAttention, 32)]
+    ['trayTemplate.png', renderMacTray(monoSmall, 16)],
+    ['trayTemplate@2x.png', renderMacTray(monoSmall, 32)],
+    ['trayAttentionTemplate.png', renderMacTray(monoSmallAttention, 16)],
+    ['trayAttentionTemplate@2x.png', renderMacTray(monoSmallAttention, 32)]
   ]
   for (const [name, buffer] of trayOutputs) {
     writeFileSync(join(macosDir, name), buffer)

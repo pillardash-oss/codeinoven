@@ -6,7 +6,7 @@
   <text x="100" y="302" fill="#f5f4f0" font-family="JetBrainsMono Nerd Font Mono" font-size="68" font-weight="700" letter-spacing="-3">CodeInOven</text>
   <text x="104" y="370" fill="#c7c7c3" font-family="JetBrainsMono Nerd Font Mono" font-size="25">A workstation for coordinated</text>
   <text x="104" y="410" fill="#c7c7c3" font-family="JetBrainsMono Nerd Font Mono" font-size="25">engineering agents.</text>
-  <g transform="translate(820 160) scale(2.85)" fill="none" stroke="#f5f4f0" stroke-linecap="square" stroke-linejoin="miter">
+  <g transform="translate(820 160) translate(136.5 136.5) scale(3.15) translate(-51 -48)" fill="none" stroke="#f5f4f0" stroke-linecap="square" stroke-linejoin="miter">
     <path d="M49 17a31 31 0 1 0 0 62" stroke-width="8"/>
     <path d="M61 23h23v50H61z" stroke-width="7"/>
     <rect x="58" y="45" width="29" height="6" fill="#f5f4f0" stroke="none"/>
