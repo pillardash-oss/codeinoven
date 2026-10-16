@@ -975,9 +975,27 @@
    * in that session. The user reviews the work without hunting for the thread that
    * made it.
    */
+  function authoredWorkActive(kind: 'design' | 'video'): boolean {
+    if (
+      !selectedThread ||
+      !dockKindActive('coordinator') ||
+      coordinator?.panel.component !== 'design'
+    ) {
+      return false
+    }
+    const shownKind =
+      coordinator.panel.props.kind ??
+      designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)?.kind
+    return shownKind === kind
+  }
+
   function openAuthoredWork(kind: 'design' | 'video'): void {
     const thread = selectedThread
     if (!thread) return
+    if (authoredWorkActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
     designCoordinatorState.openBoard(thread.projectId, thread.id, kind)
   }
 
@@ -1305,12 +1323,7 @@
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
-          active:
-            dockKindActive('coordinator') &&
-            coordinator?.panel.component === 'design' &&
-            (coordinator.panel.props.kind ??
-              designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
-                ?.kind) === kind,
+          active: authoredWorkActive(kind),
           onSelect: () => openAuthoredWork(kind)
         })
       }
