@@ -148,18 +148,22 @@ export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
 ].join(' ')
 
 /**
- * Reply budget for every user-facing answer. Injected by the turn composers for
- * the engineering, planning and chat modes, and deliberately app-owned: the
+ * Reply budget for the day-to-day conversations: regular implementation and
+ * chats. Injected by the turn composers, and deliberately app-owned: the
  * editable Agent behavior prompt can neither drop it nor shorten it, and the
  * user can always ask for more.
  *
- * The Assistant mode is deliberately excluded. An assistant already owns its
- * reply contract, and it is stricter than this budget: the voice instruction
- * that rides the assistant persona layers asks for one short message, and the
- * run contract caps the delivered result at 80 words (`ASSISTANT_VOICE_INSTRUCTION`
- * and `ASSISTANT_BRIEF_REPLY_INSTRUCTION` in `src/lib/assistant-voice.ts`).
- * Two style owners in one prompt contradict each other, so the executable
- * contract wins and the reply stays a message rather than an executive brief.
+ * Two modes are deliberately excluded because they own their own output shape:
+ *
+ * - The engineering lifecycle (specification, PRD and Assignment planning turns)
+ *   must produce the full technical detail, so the brevity budget never applies
+ *   to those stages.
+ * - An assistant already owns its reply contract, and it is stricter than this
+ *   budget: the voice instruction that rides the assistant persona layers asks
+ *   for one short message, and the run contract caps the delivered result at 80
+ *   words (`ASSISTANT_VOICE_INSTRUCTION` and `ASSISTANT_BRIEF_REPLY_INSTRUCTION`
+ *   in `src/lib/assistant-voice.ts`). Two style owners in one prompt contradict
+ *   each other, so the executable contract wins.
  */
 export const RESPONSE_STYLE_INSTRUCTION = [
   'Write to the user the way a senior engineer briefs an executive: the outcome first, then only what the user has to know, decide, or do.',
@@ -682,10 +686,12 @@ export function formatOpenAnnotations(
 /**
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
- * planning or implementation instruction exactly once; the reply budget is injected
- * here for every mode except `assistant`, which owns its own reply contract, and
- * mermaid, artifact and question instructions are injected here for the
- * conversational modes (`chat` and `assistant`), where no app layer supplies them.
+ * planning or implementation instruction exactly once. The reply budget is
+ * injected only for the day-to-day conversations (`implement` and `chat`); the
+ * engineering lifecycle (`brainstorm`) and the `assistant` mode own their own
+ * output shape and keep the full technical detail. Mermaid, artifact and
+ * question instructions are injected here for the conversational modes (`chat`
+ * and `assistant`), where no app layer supplies them.
  *
  * The restored history recap is deliberately NOT a layer here: it rides the
  * user channel through `SendPromptOptions.historyRecap`, so the system role is
@@ -711,9 +717,11 @@ export function composeTurnSystemPrompt(input: {
   // both carry the mermaid rules and the question-tool instruction; a project
   // thread gets them from its own application layer instead.
   const conversational = input.behaviorMode === 'chat' || input.behaviorMode === 'assistant'
-  // An assistant already carries its own reply contract, which is tighter than
-  // the executive budget, so this mode is the one exception to the reply rule.
-  const assistantOwnsReplyStyle = input.behaviorMode === 'assistant'
+  // Only the day-to-day conversations carry the executive budget: a previous
+  // engineering lifecycle turn loses the technical detail the later stages need,
+  // and an assistant already carries a stricter reply contract of its own.
+  const dayToDayConversation =
+    input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
   return [
     input.chatPrompt,
     input.memoryInstruction,
@@ -722,7 +730,7 @@ export function composeTurnSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.assistantInstruction,
-    assistantOwnsReplyStyle ? undefined : RESPONSE_STYLE_INSTRUCTION,
+    dayToDayConversation ? RESPONSE_STYLE_INSTRUCTION : undefined,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
     conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined
@@ -769,7 +777,6 @@ export function composeBrainstormSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.assistantInstruction,
-    RESPONSE_STYLE_INSTRUCTION,
     ARTIFACT_OUTPUT_INSTRUCTION,
     'In studio output, keep artifact fences inside the appropriate Markdown string field and preserve the required structured output contract.'
   ]

@@ -175,12 +175,12 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(withoutAssistant).not.toContain('install_bundle')
   })
 
-  it('gives each mode exactly one reply-style owner', () => {
-    // The engineering modes carry the app-owned executive reply budget, and the
-    // assistant mode must not: an assistant's own voice and run contract already
-    // cap its reply at one short message, so a second style contract would
-    // contradict it. Both halves are asserted so the exclusion cannot silently
-    // become an omission everywhere.
+  it('scopes the reply budget to day-to-day implementation and chat turns', () => {
+    // Only regular implementation and chats carry the app-owned executive reply
+    // budget. The engineering lifecycle needs the full technical detail, and an
+    // assistant already owns a stricter reply contract of its own, so neither may
+    // receive it. Every half is asserted so the scope cannot silently widen or
+    // collapse to an omission everywhere.
     const implement = implementSystemBase()
     expect(implement.split(RESPONSE_STYLE_INSTRUCTION)).toHaveLength(2)
 
@@ -194,6 +194,19 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       behaviorMode: 'chat'
     })
     expect(chat.split(RESPONSE_STYLE_INSTRUCTION)).toHaveLength(2)
+
+    const lifecycle = composeBrainstormSystemPrompt({
+      activeBrainstormTurn: false,
+      assignmentMode: false,
+      engineeringSpecPrompt: 'Return the specification.',
+      revisionPrompt: '',
+      memoryInstruction: '',
+      imageDescriptorNote: '',
+      behaviorPrompt: '',
+      utilityInstructions: ''
+    })
+    expect(lifecycle).not.toContain(RESPONSE_STYLE_INSTRUCTION)
+    expect(lifecycle).toContain('keep artifact fences inside the appropriate Markdown string field')
 
     const assistant = composeTurnSystemPrompt({
       chatPrompt: 'You are the CodeInOven assistant.',
