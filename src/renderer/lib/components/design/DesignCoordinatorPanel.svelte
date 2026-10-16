@@ -440,15 +440,39 @@
    */
   let liveEditing = $derived(video && videoPackagesStore.state?.installed === true)
   /**
-   * The composition the board is playing, when its own view is on screen.
+   * The composition the board is playing, when its own view is on screen for the
+   * folder in front.
    *
    * The view arrives on `browser:state`, and it is addressed by the id main
    * returned rather than by the thread: a browser tab on the same folder must not
    * be mistaken for the board's own page. While it is here the board is a player
    * and an editor at once, and while it is not the stage falls back to the last
    * export or the captured frame.
+   *
+   * The folder is part of the test, not just the view's existence. Switching to
+   * another composition leaves the folder just left with a live view of its own,
+   * so a board that only asked "is a view open?" kept playing the composition the
+   * user had navigated away from. A null here is what asks main to open the one in
+   * front instead.
    */
-  let liveTab = $derived(boardTabId !== '' ? videoTimelineState.compositionByTab(boardTabId) : null)
+  let liveTab = $derived.by(() => {
+    if (boardTabId === '') return null
+    const live = videoTimelineState.compositionByTab(boardTabId)
+    if (live === null || live.directory !== selected.directory) return null
+    return live
+  })
+  /**
+   * The board's own menus, so the pane can step aside while one of them is
+   * showing.
+   *
+   * A menu opens downward over the composition, and a native view is composited
+   * above every DOM node, so a menu cannot be raised above the page: the page has
+   * to come off screen for as long as the menu is up. That is the same answer a
+   * modal gives, which is why every root here is watched rather than only the one
+   * the user happened to open first.
+   */
+  let menus = $state({ list: false, sort: false, options: false, card: false })
+  let menuOpen = $derived(menus.list || menus.sort || menus.options || menus.card)
   /**
    * Whether the composition is being watched full screen instead of in the pane.
    *
@@ -1363,7 +1387,7 @@
         back: the stage places the view as it mounts, after the full screen surface
         has let it go.
       -->
-      <CompositionStage tab={liveTab} {active} />
+      <CompositionStage tab={liveTab} {active} covered={menuOpen} />
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -1447,7 +1471,7 @@
     {@const copyLabel = video
       ? `Copy the path of this ${noun}`
       : `Copy ${noun} screen: ${screen.name}`}
-    <ContextMenu.Root>
+    <ContextMenu.Root bind:open={menus.card}>
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
         <button
           type="button"
@@ -1595,7 +1619,7 @@
           otherwise be a strip that scrolls sideways, hiding the very design the
           user came for; here the tab never moves and the list is one click away.
         -->
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={menus.list}>
           <DropdownMenu.Trigger
             class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
             title="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
@@ -1773,7 +1797,7 @@
             dropdown rather than a row of buttons because the header has one line
             to give, and the tooltip names the order in use.
           -->
-          <DropdownMenu.Root>
+          <DropdownMenu.Root bind:open={menus.sort}>
             <DropdownMenu.Trigger
               class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
               title={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
@@ -1826,7 +1850,7 @@
             <RefreshCw size={12} />
           {/if}
         </button>
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={menus.options}>
           <DropdownMenu.Trigger
             class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title={`${nounTitle} options`}
