@@ -1,7 +1,7 @@
 export interface PanZoomOptions {
   min?: number
   max?: number
-  /** Multiplier applied per wheel tick / toolbar click. */
+  /** Multiplier applied per wheel tick. */
   step?: number
   /**
    * Pointer travel, in pixels, before a press becomes a pan.
@@ -99,6 +99,12 @@ export class PanZoom {
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
       : { x: 0, y: 0 }
     this.zoomAt(center.x, center.y, this.clamp(this.zoom * factor))
+  }
+
+  /** Apply one consistent, modest toolbar step in either direction. */
+  zoomByButtonStep(direction: 'in' | 'out', viewport?: HTMLElement): void {
+    const factor = direction === 'in' ? this.step : 1 / this.step
+    this.zoomByButton(factor, viewport)
   }
 
   onPointerDown = (event: PointerEvent): void => {

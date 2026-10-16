@@ -17,6 +17,12 @@
     'flex items-center gap-0.5 border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
     className
   ]}
+  role="group"
+  aria-label="Zoom controls"
+  onpointerdown={(event) => event.stopPropagation()}
+  onpointerup={(event) => event.stopPropagation()}
+  onpointercancel={(event) => event.stopPropagation()}
+  ondblclick={(event) => event.stopPropagation()}
 >
   <button
     type="button"
@@ -24,7 +30,7 @@
     aria-label="Zoom out"
     title="Zoom out"
     disabled={panZoom.zoom <= panZoom.min}
-    onclick={() => panZoom.zoomByButton(1 / 1.4, viewport)}
+    onclick={() => panZoom.zoomByButtonStep('out', viewport)}
   >
     <ZoomOut size={14} />
   </button>
@@ -37,7 +43,7 @@
     aria-label="Zoom in"
     title="Zoom in"
     disabled={panZoom.zoom >= panZoom.max}
-    onclick={() => panZoom.zoomByButton(1.4, viewport)}
+    onclick={() => panZoom.zoomByButtonStep('in', viewport)}
   >
     <ZoomIn size={14} />
   </button>

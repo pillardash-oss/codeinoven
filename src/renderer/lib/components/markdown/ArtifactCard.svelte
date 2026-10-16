@@ -200,17 +200,24 @@
     <!-- The inline frame is the artifact's own shape whenever the artifact states
          one, and the plain viewport otherwise. The viewer fills its stage and lets
          the zoom carry the picture past the frame's edges. -->
-    <iframe
-      title="{label} preview"
-      sandbox=""
-      {srcdoc}
-      class={[
-        'block w-full border-0 bg-app',
-        fullscreen ? 'h-full min-h-0' : picture === undefined ? 'h-80' : 'mx-auto'
-      ]}
-      style={fullscreen ? panZoom.transform : picture}
-      {@attach fullscreen ? panZoom.bindTarget : () => {}}
-    ></iframe>
+    {#if fullscreen}
+      <div {@attach panZoom.bindTarget} class="absolute inset-0" style={panZoom.transform}>
+        <iframe
+          title="{label} preview"
+          sandbox=""
+          {srcdoc}
+          class="block h-full w-full border-0 bg-app"
+        ></iframe>
+      </div>
+    {:else}
+      <iframe
+        title="{label} preview"
+        sandbox=""
+        {srcdoc}
+        class={['block w-full border-0 bg-app', picture === undefined ? 'h-80' : 'mx-auto']}
+        style={picture}
+      ></iframe>
+    {/if}
   {/if}
 {/snippet}
 
