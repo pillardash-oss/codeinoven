@@ -9,9 +9,8 @@
     /** Accessible name and tooltip text describing the real count. */
     label: string
     /** Status tone driving the badge color: working (info), attention
-     *  (warning), spec (the review-ready purple), error (danger), or retry
-     *  (warning). */
-    tone?: 'working' | 'attention' | 'spec' | 'error' | 'retry'
+     *  (warning), error (danger), or retry (warning). */
+    tone?: 'working' | 'attention' | 'error' | 'retry'
     /** Optional explicit status accents, used for unread notification colours. */
     colors?: string[]
     /** Counts above this render as `<max>+` so the pill never grows past two glyphs. */
@@ -34,8 +33,6 @@
       case 'attention':
       case 'retry':
         return 'text-warning'
-      case 'spec':
-        return 'text-thread-spec'
       case 'error':
         return 'text-danger'
       default:

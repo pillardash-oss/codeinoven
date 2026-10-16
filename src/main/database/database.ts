@@ -905,6 +905,7 @@ export class Database {
       this.migrateThreadAuthoredWorkKind(connection)
       this.migrateThreadAuthoredWorkKinds(connection)
       this.migrateDesignRevisionMetadata(connection)
+      this.migrateSettledAuditThreadStatus(connection)
     })()
   }
 
@@ -1721,6 +1722,38 @@ export class Database {
           SELECT thread_id FROM engineering_lifecycle
            WHERE selection != 'none' OR started_at IS NOT NULL
         )`
+    )
+  }
+
+  /**
+   * Land threads a settled audit left parked on `spec`.
+   *
+   * An audit parks its thread on `spec` while the report waits on the user, and
+   * settling the report used to clear the audit state without moving the status:
+   * the thread kept reading "Spec ready" with nothing left to review, holding a
+   * review count on its project strip forever. `completed` is what a settled
+   * audit means, so the thread is done.
+   *
+   * Only a row whose `spec` can have come from an audit is touched: an
+   * independent-audit thread (locked out of the specification flows for its
+   * lifetime) and an Achievement coordinator that owns a durable auditor. A
+   * thread parked on a specification that is still waiting for approval keeps
+   * its status, and so does an audit `offered`, which is still an open question
+   * for the user. Idempotent: a database with nothing left to settle is
+   * untouched.
+   */
+  private migrateSettledAuditThreadStatus(connection: DatabaseType): void {
+    connection.exec(
+      `UPDATE threads
+          SET status = 'completed',
+              scope_sort_order = NULL,
+              sort_order = NULL
+        WHERE status = 'spec'
+          AND audit_state IS NULL
+          AND (
+            independent_audit = 1
+            OR (achievement_role = 'coordinator' AND auditor_thread_id IS NOT NULL)
+          )`
     )
   }
 

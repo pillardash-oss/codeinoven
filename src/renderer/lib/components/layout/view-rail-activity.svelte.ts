@@ -42,7 +42,7 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
  */
 export type ViewActivityCounts = Record<ContentThreadFamily, ThreadStateCounts>
 
-export type ViewBadgeTone = 'working' | 'attention' | 'spec' | 'error' | 'retry'
+export type ViewBadgeTone = 'working' | 'attention' | 'error' | 'retry'
 
 export interface ViewBadge {
   tone: ViewBadgeTone
@@ -124,11 +124,6 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
       } attention`
     )
   }
-  if (activity.spec > 0) {
-    parts.push(
-      `${activity.spec} ${plural(noun, activity.spec)} ${activity.spec === 1 ? 'has' : 'have'} a spec ready`
-    )
-  }
   if (activity.retry > 0) {
     parts.push(`${activity.retry} ${plural(noun, activity.retry)} waiting to retry`)
   }
@@ -144,8 +139,7 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
  *
  * Working threads wear the working tone; threads parked on `working-paused`
  * wear the retry tone; threads parked on the user (a permission, question or
- * secret) wear the attention tone, a thread holding a finished artifact nobody
- * has reviewed yet wears the spec tone, and a failed total wears the error tone. A
+ * secret) wear the attention tone, and a failed total wears the error tone. A
  * badge carries its count and never animates, because a running animation keeps
  * the compositor producing frames for as long as it runs, which a parked state
  * can hold open indefinitely. Orchestration children are folded into their
@@ -231,14 +225,15 @@ export class ViewRailActivity {
 
 /**
  * The single activity pill a rail view shows, chosen by priority: working
- * outranks attention, which outranks a spec waiting on review, which outranks a
- * parked retry. The returned label always carries the family's full breakdown.
- * Returns null when the family is quiet.
+ * outranks attention, which outranks a parked retry. The returned label always
+ * carries the family's full breakdown. Returns null when the family is quiet.
  *
- * A ready artifact outranks a retry wait because the two are not the same kind of
- * parked: a retry clears on the provider's clock and nothing the user does moves
- * it, while a spec or audit report only clears when they review it. The badge
- * spends its one count on the thing that is theirs to do.
+ * The review-ready bucket a project strip draws in purple is deliberately not
+ * badged here. The rail answers "what wants the user now" across every project
+ * at once, and a finished artifact waiting to be read is already announced by
+ * that thread's own unread dot (the card that delivered it), so a second badge
+ * would report the same landing twice. The strip, which speaks for one project,
+ * is where the review trace belongs.
  *
  * The project family spans four views (Projects, Threads, Scoped threads, Scope
  * Board), so its badge rides only one of them at a time: the option the caller
@@ -317,18 +312,6 @@ export function viewBadgesFor(
       activity: {
         tone: 'attention',
         count: activity.attention,
-        label: familyActivityLabel(family, activity),
-        icon
-      },
-      unread: unreadBadge,
-      playing
-    }
-  }
-  if (activity.spec > 0) {
-    return {
-      activity: {
-        tone: 'spec',
-        count: activity.spec,
         label: familyActivityLabel(family, activity),
         icon
       },
