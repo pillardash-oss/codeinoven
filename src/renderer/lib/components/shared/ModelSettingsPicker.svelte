@@ -9,13 +9,16 @@
     fastSupported: boolean
     ultrafastSupported: boolean
     fastMultiplier: number
+    /** The windows this model can run with, exactly as its harness states them. */
     contextWindows: number[]
+    /** The window stored for this thread; undefined means the harness default. */
     contextWindow?: number
+    /** The window the harness uses when nothing is stored, so it can be labelled. */
     defaultContextWindow?: number
     disabled?: boolean
     menuOpen: boolean
     onSelect: (mode: InferenceMode) => void
-    onSelectContext: (tokens?: number) => void
+    onSelectContext: (tokens: number) => void
   }
 
   let {
@@ -127,7 +130,7 @@
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
             title={`Use ${contextLabel(tokens)} context window`}
-            onSelect={() => onSelectContext(tokens === defaultContextWindow ? undefined : tokens)}
+            onSelect={() => onSelectContext(tokens)}
           >
             <span class="flex-1">{contextLabel(tokens)}</span>
             {#if tokens === displayedContextWindow}<Check

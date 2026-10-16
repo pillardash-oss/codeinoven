@@ -55,6 +55,12 @@ import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 import { fallbackCodexModels, mapCodexModel, THINKING_PRESETS } from './codex/codex-models'
 import {
+  type CodexWindowCatalog,
+  codexContextWindowOptions,
+  emptyCodexWindowCatalog,
+  parseCodexWindowCatalog
+} from './codex/codex-catalog'
+import {
   CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
   CODEX_COMPACTION_TIMEOUT_MS,
   CODEX_USAGE_TIMEOUT_MS,
@@ -123,6 +129,9 @@ const CODEX_APP_SERVER_RESTART_DELAY_MS = 5_000
  * that cannot stay up must surface for manual recovery instead of retry-looping.
  */
 const CODEX_APP_SERVER_RECOVERY_LIMIT = 3
+/** How long Codex's own context-window catalog is reused before it is read
+ *  again. Codex updates that catalog with its own releases, not per turn. */
+const CODEX_WINDOW_CATALOG_TTL_MS = 5 * 60 * 1000
 
 /** Multiplexed bridge for one resident Codex app-server and many native threads. */
 export class CodexDriver extends PersistentCliDriver {
@@ -162,6 +171,12 @@ export class CodexDriver extends PersistentCliDriver {
   private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
+  /** Codex's own context windows, cached per Codex home. The CLI's catalog
+   *  changes only when Codex itself updates it, so a short TTL keeps repeated
+   *  catalog refreshes from re-running the dump for every project. */
+  private codexWindowsByHome = new Map<string, { catalog: CodexWindowCatalog; readAt: number }>()
+  private codexWindowReads = new Map<string, Promise<CodexWindowCatalog>>()
+
   /** Consecutive automatic recoveries already attempted for a session after the
    *  shared app-server died under it, cleared the moment one of its turns
    *  completes. Bounds the auto-resume of a harness that cannot stay up, so a
@@ -190,15 +205,18 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    // Codex states its own context windows in its model catalog, so the picker
+    // offers exactly what Codex accepts and starts at what Codex uses.
+    const windows = await this.codexWindowCatalog(projectPath)
     let builtInModels: ProviderModel[]
     try {
       const discovered = await this.discoverModels(projectPath)
-      builtInModels = discovered.length > 0 ? discovered : fallbackCodexModels()
+      builtInModels = discovered.length > 0 ? discovered : fallbackCodexModels(windows)
     } catch (error) {
       Logger.info('Codex model discovery fell back to the bundled catalog', {
         error: error instanceof Error ? error.message : String(error)
       })
-      builtInModels = fallbackCodexModels()
+      builtInModels = fallbackCodexModels(windows)
     }
     const catalogs: ProviderCatalog[] = [
       {
@@ -407,15 +425,16 @@ export class CodexDriver extends PersistentCliDriver {
           : [])
       ]
       const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
+      const contextWindow = this.codexContextWindowOverride(options.settings)
       const contextConfig =
-        options.settings.contextWindow && options.settings.providerId === 'openai'
-          ? {
+        contextWindow === undefined
+          ? {}
+          : {
               config: {
-                model_context_window: options.settings.contextWindow,
-                model_auto_compact_token_limit: Math.floor(options.settings.contextWindow * 0.9)
+                model_context_window: contextWindow,
+                model_auto_compact_token_limit: Math.floor(contextWindow * 0.9)
               }
             }
-          : {}
       const startThread = (): Promise<Record<string, unknown>> =>
         this.appServerRequest(host, 'thread/start', {
           ...contextConfig,
@@ -1216,9 +1235,74 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
+  private codexHomeKey(): string {
+    return this.accountEnvironment['CODEX_HOME']?.trim() || 'default'
+  }
+
+  /**
+   * The context window this turn actually sends to Codex. Codex's own catalog
+   * decides which windows a model runs with, so a stored window the model no
+   * longer offers is dropped and the turn keeps Codex's default, exactly as the
+   * picker shows it. A catalog that has not been read leaves the stored pick
+   * untouched instead of silently discarding the user's choice.
+   */
+  private codexContextWindowOverride(settings: ThreadSettings): number | undefined {
+    const requested = settings.contextWindow
+    if (requested === undefined || settings.providerId !== 'openai') return undefined
+    const cached = this.codexWindowsByHome.get(this.codexHomeKey())
+    if (!cached) return requested
+    const offered = codexContextWindowOptions(cached.catalog.get(settings.modelId))
+    return offered.length === 0 || offered.includes(requested) ? requested : undefined
+  }
+
+  /**
+   * Codex's own context windows for every model it lists, read through
+   * `codex debug models`, the CLI's supported dump of the catalog it actually
+   * runs with. A failed read yields an empty catalog rather than a guessed
+   * figure: a model with no stated window shows no window options at all.
+   */
+  private async codexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+    const home = this.codexHomeKey()
+    const cached = this.codexWindowsByHome.get(home)
+    if (cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS) return cached.catalog
+    const pending = this.codexWindowReads.get(home)
+    if (pending) return pending
+    const read = this.readCodexWindowCatalog(projectPath)
+      .then((catalog) => {
+        this.codexWindowsByHome.set(home, { catalog, readAt: Date.now() })
+        return catalog
+      })
+      .catch((error: unknown) => {
+        // A transient failure must not cache an empty catalog: the next
+        // discovery reads Codex again instead of showing no windows for minutes.
+        Logger.info('Codex context window catalog unavailable', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return emptyCodexWindowCatalog()
+      })
+      .finally(() => {
+        this.codexWindowReads.delete(home)
+      })
+    this.codexWindowReads.set(home, read)
+    return read
+  }
+
+  private async readCodexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+    const result = await runHarnessCommand('codex', ['debug', 'models'], {
+      cwd: projectPath,
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      timeoutMs: 20_000,
+      // The catalog embeds each model's prompt templates, so it is far larger
+      // than any other harness command output.
+      maxOutputBytes: 8 * 1024 * 1024
+    })
+    return parseCodexWindowCatalog(JSON.parse(result.stdout))
+  }
+
   private async discoverModels(projectPath: string): Promise<ProviderModel[]> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
+      const windows = await this.codexWindowCatalog(projectPath)
       const host =
         this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
@@ -1236,7 +1320,7 @@ export class CodexDriver extends PersistentCliDriver {
           throw new Error('Codex model discovery returned an invalid response')
         }
         for (const value of data) {
-          const model = mapCodexModel(value)
+          const model = mapCodexModel(value, windows)
           if (model) discovered.push(model)
         }
         cursor = stringValue(result['nextCursor'])
@@ -2315,12 +2399,13 @@ export class CodexDriver extends PersistentCliDriver {
       '-c',
       `features.fast_mode=${serviceTier !== 'default'}`
     )
-    if (options.settings.contextWindow && options.settings.providerId === 'openai') {
+    const contextWindow = this.codexContextWindowOverride(options.settings)
+    if (contextWindow !== undefined) {
       args.push(
         '-c',
-        `model_context_window=${options.settings.contextWindow}`,
+        `model_context_window=${contextWindow}`,
         '-c',
-        `model_auto_compact_token_limit=${Math.floor(options.settings.contextWindow * 0.9)}`
+        `model_auto_compact_token_limit=${Math.floor(contextWindow * 0.9)}`
       )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()

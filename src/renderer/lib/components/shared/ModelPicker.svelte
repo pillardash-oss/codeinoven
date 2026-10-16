@@ -795,9 +795,7 @@
           fastMultiplier={fastMultiplierFor(modelId)}
           {contextWindows}
           contextWindow={runtimeSettings?.contextWindow}
-          defaultContextWindow={harnessId === 'codex' && providerId === 'openai'
-            ? contextWindows[0]
-            : (runtimeModel?.contextWindow ?? contextWindows[0])}
+          defaultContextWindow={runtimeModel?.contextWindow ?? contextWindows[0]}
           bind:menuOpen={runtimeMenuOpen}
           disabled={disabled || !onSelectRuntime}
           onSelect={chooseSpeed}

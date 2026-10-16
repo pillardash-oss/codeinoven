@@ -1,5 +1,10 @@
 import type { ProviderModel, ThinkingPreset } from '../../../lib/types'
-import { numberValue, record, stringValue } from './codex-values'
+import {
+  codexContextWindowOptions,
+  type CodexWindowCatalog,
+  emptyCodexWindowCatalog
+} from './codex-catalog'
+import { record, stringValue } from './codex-values'
 
 /** Codex provider catalog discovery, model mapping, and thinking presets. */
 
@@ -23,35 +28,6 @@ export const THINKING_PRESETS: ThinkingPreset[] = [
 
 /** Last-resort catalog for older Codex versions without the app-server model API. */
 const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
-
-/** Documented capacity fallback when model/list omits context metadata.
- * https://developers.openai.com/api/docs/models/gpt-6.1-sol
- * https://developers.openai.com/api/docs/models/compare
- * https://developers.openai.com/api/docs/models/gpt-6-sol
- * https://developers.openai.com/api/docs/models/gpt-5.4
- * https://developers.openai.com/api/docs/models/gpt-5.5
- * https://developers.openai.com/api/docs/models/gpt-5.6-sol
- * https://developers.openai.com/api/docs/models/gpt-5.6-terra
- * https://developers.openai.com/api/docs/models/gpt-5.6-luna
- * Keep exact identities: version numbers do not establish capabilities.
- */
-const CODEX_EXTENDED_CONTEXT_MODELS = new Set([
-  'gpt-6.1-sol',
-  'gpt-6-sol',
-  'gpt-5.4',
-  'gpt-5.4-pro',
-  'gpt-5.5',
-  'gpt-6-astra',
-  'gpt-6-luna',
-  'gpt-5.6',
-  ...CODEX_FALLBACK_MODELS
-])
-
-function codexContextWindows(id: string, reportedContextWindow?: number): number[] {
-  return (reportedContextWindow ?? 0) >= 1_000_000 || CODEX_EXTENDED_CONTEXT_MODELS.has(id)
-    ? [272_000, 1_000_000]
-    : [272_000]
-}
 
 export function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined
@@ -93,7 +69,10 @@ export function codexModelSupportsAttachments(model: Record<string, unknown>): b
   return typeof explicitVision === 'boolean' ? explicitVision : true
 }
 
-export function mapCodexModel(value: unknown): ProviderModel | null {
+export function mapCodexModel(
+  value: unknown,
+  windows: CodexWindowCatalog = emptyCodexWindowCatalog()
+): ProviderModel | null {
   const model = record(value)
   if (!model) return null
   const id = stringValue(model?.['id']) ?? stringValue(model?.['model'])
@@ -103,10 +82,11 @@ export function mapCodexModel(value: unknown): ProviderModel | null {
     ? model['additionalSpeedTiers']
     : []
   const thinkingPresets = codexThinkingPresets(model?.['supportedReasoningEfforts'])
-  const contextWindow =
-    numberValue(model?.['contextWindow']) ??
-    numberValue(model?.['context_window']) ??
-    numberValue(model?.['modelContextWindow'])
+  // The context window is Codex's own: app-server model/list carries none, so it
+  // comes from Codex's catalog and never from a guessed or pricing-derived
+  // figure. A model Codex does not describe gets no window to choose from.
+  const window = windows.get(id)
+  const options = codexContextWindowOptions(window)
   return {
     id,
     providerId: 'openai',
@@ -115,8 +95,8 @@ export function mapCodexModel(value: unknown): ProviderModel | null {
     thinkingPresets,
     attachment: codexModelSupportsAttachments(model),
     toolcall: true,
-    ...(contextWindow === undefined ? {} : { contextWindow }),
-    contextWindows: codexContextWindows(id, contextWindow),
+    ...(window === undefined ? {} : { contextWindow: window.defaultWindow }),
+    ...(options.length === 0 ? {} : { contextWindows: options }),
     ultrafastSupported:
       additionalSpeedTiers.includes('ultrafast') ||
       serviceTiers.some((tier) => stringValue(record(tier)?.['id']) === 'ultrafast'),
@@ -126,16 +106,23 @@ export function mapCodexModel(value: unknown): ProviderModel | null {
   }
 }
 
-export function fallbackCodexModels(): ProviderModel[] {
-  return CODEX_FALLBACK_MODELS.map((id) => ({
-    id,
-    providerId: 'openai',
-    name: id,
-    reasoning: true,
-    thinkingPresets: THINKING_PRESETS,
-    attachment: true,
-    toolcall: true,
-    fastSupported: false,
-    contextWindows: codexContextWindows(id)
-  }))
+export function fallbackCodexModels(
+  windows: CodexWindowCatalog = emptyCodexWindowCatalog()
+): ProviderModel[] {
+  return CODEX_FALLBACK_MODELS.map((id) => {
+    const window = windows.get(id)
+    const options = codexContextWindowOptions(window)
+    return {
+      id,
+      providerId: 'openai',
+      name: id,
+      reasoning: true,
+      thinkingPresets: THINKING_PRESETS,
+      attachment: true,
+      toolcall: true,
+      fastSupported: false,
+      ...(window === undefined ? {} : { contextWindow: window.defaultWindow }),
+      ...(options.length === 0 ? {} : { contextWindows: options })
+    }
+  })
 }

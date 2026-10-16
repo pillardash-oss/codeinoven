@@ -227,10 +227,15 @@ export class ModelPricingService {
    * Fill only catalog gaps from the same live metadata payload used for prices.
    * Exact IDs win. A bare model ID is used only when all matching labs publish
    * the same limit, so wrapper-specific caps are never guessed.
+   *
+   * A CLI harness that carries its own catalog is left alone: Codex reports its
+   * windows through `codex debug models`, and this feed's API-level figures
+   * (1,050,000 for a model Codex runs at 500,000) are not what it budgets.
    */
   async enrichMissingContext(catalogs: ProviderCatalog[]): Promise<ProviderCatalog[]> {
+    const fillable = catalogs.filter((catalog) => catalog.harnessId !== 'codex')
     if (
-      !catalogs.some((catalog) => catalog.models.some((model) => model.contextWindow === undefined))
+      !fillable.some((catalog) => catalog.models.some((model) => model.contextWindow === undefined))
     ) {
       return catalogs
     }
@@ -239,7 +244,7 @@ export class ModelPricingService {
     return catalogs.map((catalog) => ({
       ...catalog,
       models: catalog.models.map((model) => {
-        if (model.contextWindow !== undefined) return model
+        if (model.contextWindow !== undefined || catalog.harnessId === 'codex') return model
         const modelId = normalizeId(model.id)
         const providerModelId = `${normalizeId(model.providerId)}/${modelId}`
         const contextWindow =
