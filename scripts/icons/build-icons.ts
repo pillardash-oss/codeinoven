@@ -334,6 +334,19 @@ for (const name of await readdir(OUT)) {
 
 await Bun.write(join(OUT, 'glyph.ts'), GLYPH_TS)
 
+// Format what was just written, so the generated files are always the files the
+// project's own formatter would have produced and a build cannot leave the tree
+// in a state where `prettier --check` fails.
+const prettier = Bun.spawnSync(['npx', 'prettier', '--write', `${OUT}/*.svelte`, `${OUT}/*.ts`], {
+  cwd: process.cwd(),
+  stdout: 'ignore',
+  stderr: 'inherit'
+})
+if (prettier.exitCode !== 0) {
+  process.stderr.write('prettier could not format the generated glyphs.\n')
+  process.exit(1)
+}
+
 const registry = built
   .map((b) => ({ ...b, name: pascal(b.id), component: pascal(b.id) }))
   .sort((a, b) => a.name.localeCompare(b.name))
@@ -387,6 +400,39 @@ const lines = [
     (b) => `  ${b.id.padEnd(26)} ${b.source.padEnd(9)} ${b.scale.toFixed(4).padEnd(8)} ${b.ink}`
   )
 ]
+// Every import of a glyph in the app must resolve to a file this run wrote. The
+// project-wide check runs through tsgo, which cannot see a component that fails to
+// resolve, so an import left pointing at a glyph that was renamed or removed ships
+// silently and only fails in the dev server.
+const importers: Array<{ path: string; missing: string[] }> = []
+const written = new Set([
+  ...expected,
+  'glyph.ts',
+  'index.ts',
+  ...APP_MARKS.map((m) => `${m.component}.svelte`)
+])
+for (const path of new Bun.Glob('src/**/*.{svelte,ts}').scanSync({ cwd: process.cwd() })) {
+  const text = await Bun.file(path).text()
+  const missing = [
+    ...new Set(
+      [...text.matchAll(/icons\/cio\/([A-Za-z0-9]+)\.svelte/g)]
+        .map((match) => `${match[1]}.svelte`)
+        .filter((file) => !written.has(file))
+    )
+  ]
+  if (missing.length > 0) importers.push({ path, missing })
+}
+
 const drawn = built.filter((b) => b.source === 'drawn').length
 lines.push('', `${drawn} fitted here, ${built.length - drawn} carried or solid`)
 process.stdout.write(`${lines.join('\n')}\n`)
+
+if (importers.length > 0) {
+  process.stderr.write(
+    `\n${importers.length} files import a glyph the set does not draw:\n` +
+      importers.map((i) => `  ${i.path}: ${i.missing.join(', ')}`).join('\n') +
+      '\nDraw it in scripts/icons/cio-drawings.ts, or point the import at a glyph that exists.\n'
+  )
+  process.exit(1)
+}
+process.stdout.write(`every glyph import resolves (${built.length + APP_MARKS.length} marks)\n`)

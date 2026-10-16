@@ -368,6 +368,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'design',
+    title: 'Design',
+    glyph: {
+      kind: 'drawn',
+      note: 'Design: a ruler on the diagonal with three solid ticks, which is measuring and drafting rather than editing text.',
+      shapes: `<g transform="rotate(-45 12 12)"><rect x="3.4" y="9.2" width="17.2" height="5.4" rx="1.2" />${solid(6.2, 11, 1.7, 2.2, 0.5)}${solid(9.9, 11, 1.7, 2.2, 0.5)}${solid(13.6, 11, 1.7, 2.2, 0.5)}</g>`
+    }
+  },
+  {
     id: 'diff',
     title: 'Changes',
     glyph: {
@@ -546,6 +555,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       kind: 'drawn',
       note: 'Reorder: six solid dots in two columns. Nothing else reads as a handle at 12px.',
       shapes: `${dot(9.4, 7, 1.3)}${dot(14.6, 7, 1.3)}${dot(9.4, 12, 1.3)}${dot(14.6, 12, 1.3)}${dot(9.4, 17, 1.3)}${dot(14.6, 17, 1.3)}`
+    }
+  },
+  {
+    id: 'hammer',
+    title: 'Engineering',
+    glyph: {
+      kind: 'drawn',
+      note: 'Engineering: a hammer, head solid and handle swung out below it, which is the mark the app puts on build and engineering work rather than on a setting.',
+      shapes: `<g transform="rotate(-45 8.6 8.6)"><rect x="3.4" y="6.2" width="10.4" height="4.8" rx="1.6" />${solid(6.6, 6.2, 4.4, 4.8, 1.6)}</g><path d="M10.2 10.2 18.8 18.8" />`
     }
   },
   {

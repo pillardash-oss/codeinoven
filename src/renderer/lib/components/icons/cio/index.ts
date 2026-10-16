@@ -41,6 +41,7 @@ import CioCopy from './CioCopy.svelte'
 import CioCpu from './CioCpu.svelte'
 import CioCrossCircle from './CioCrossCircle.svelte'
 import CioDebugger from './CioDebugger.svelte'
+import CioDesign from './CioDesign.svelte'
 import CioDiff from './CioDiff.svelte'
 import CioDisk from './CioDisk.svelte'
 import CioDisplay from './CioDisplay.svelte'
@@ -61,6 +62,7 @@ import CioFolderPlus from './CioFolderPlus.svelte'
 import CioFork from './CioFork.svelte'
 import CioForward from './CioForward.svelte'
 import CioGrip from './CioGrip.svelte'
+import CioHammer from './CioHammer.svelte'
 import CioHistory from './CioHistory.svelte'
 import CioImageOff from './CioImageOff.svelte'
 import CioKey from './CioKey.svelte'
@@ -175,6 +177,7 @@ export const CIO_ICONS = {
   cpu: CioCpu,
   'cross-circle': CioCrossCircle,
   debugger: CioDebugger,
+  design: CioDesign,
   diff: CioDiff,
   disk: CioDisk,
   display: CioDisplay,
@@ -195,6 +198,7 @@ export const CIO_ICONS = {
   fork: CioFork,
   forward: CioForward,
   grip: CioGrip,
+  hammer: CioHammer,
   history: CioHistory,
   'image-off': CioImageOff,
   key: CioKey,
