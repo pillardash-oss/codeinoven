@@ -800,13 +800,12 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal,
-      // A composition is played by the board's own view, which is what lets a user
-      // watch and edit without opening the browser. An explicit reveal is the user
-      // asking for the browser instead, and the board's view never enters the tab
-      // strip: the thread's own tab is the only route a browser panel can show,
-      // maximize or take fullscreen. A design screen keeps its own tab, and a
-      // design's other routes keep the thread's.
-      tab: kind === 'design' ? 'screen' : reveal ? 'thread' : 'board'
+      // A composition is played by the board's own view, and only by it: the board
+      // is the control surface and the picture, the browser is the same view shown
+      // full screen, and a second tab would be a second player that the board's own
+      // controls could not reach. A design screen keeps its own tab, and a design's
+      // other routes keep the thread's.
+      tab: kind === 'design' ? 'screen' : 'board'
     })
     if (forcedKind === undefined) {
       this.designs.upsert({

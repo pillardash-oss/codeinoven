@@ -37,6 +37,7 @@
   import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import CompositionStage from '$lib/components/design/CompositionStage.svelte'
+  import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
   import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
@@ -44,7 +45,7 @@
   import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
@@ -449,20 +450,35 @@
    */
   let liveTab = $derived(boardTabId !== '' ? videoTimelineState.compositionByTab(boardTabId) : null)
   /**
-   * Whether the user is watching this composition in the sidebar browser instead.
+   * Whether the composition is being watched full screen instead of in the pane.
    *
-   * The app shows one native view at a time and a board outranks a plain sidebar,
-   * so the board has to let go of the view for a composition the user asked to see
-   * in the browser to be visible there at all. It is read from what the sidebar is
-   * actually showing rather than from a flag the last click set, so it settles both
-   * ways on its own: opening the composition in the browser yields the board, and
-   * closing that tab or looking at another one hands the board back its stage.
+   * The board is the control surface and the full screen surface is the picture:
+   * both show the composition's own view, so this is a mode of the board rather
+   * than a hand-off. The tab that plays the film never changes, which is what lets
+   * the board's mute and transport keep driving what the full screen shows.
    */
-  let watchedInBrowser = $derived.by(() => {
-    if (!video || !contextSidebarState.sidebarVisible) return false
-    const shown = contextSidebarState.sidebarActiveTab?.id ?? ''
-    if (shown === '' || shown === boardTabId) return false
-    return videoTimelineState.compositionByTab(shown) !== null
+  let compositionFullscreen = $state(false)
+  /**
+   * The composition's tab described as a browser tab, for the full screen surface.
+   *
+   * The board's view is a registered browser tab that deliberately stays out of
+   * every tab strip, so the full screen browser is handed the descriptor it needs
+   * instead of looking one up in a list this tab is not in. Null until the view
+   * exists, so the surface can never open on a tab nothing has served.
+   */
+  let fullscreenCompositionTab = $derived.by((): BrowserContextTab | null => {
+    const live = liveTab
+    if (!video || !compositionFullscreen || live === null) return null
+    return {
+      id: live.tabId,
+      kind: 'browser',
+      title: selectedName === '' ? `${nounTitle} preview` : selectedName,
+      projectId,
+      threadId,
+      url: live.url,
+      favicon: null,
+      boxId: live.boxId
+    }
   })
   /**
    * Whether the folder in front has an entry page, which is what makes it playable.
@@ -654,7 +670,7 @@
     }
     galleryBusy = true
     try {
-      if (video && liveTab !== null && !watchedInBrowser) {
+      if (video && liveTab !== null) {
         gallery = []
         tabId = boardTabId
       } else if (video) {
@@ -794,11 +810,33 @@
     }
   }
 
-  /** Preview one screen, or the design's own entry file. */
+  /**
+   * Open the work in the in-app browser.
+   *
+   * A design opens in its own browser tab, which is where a page a visitor
+   * lands on belongs. A composition opens full screen instead, on the board's own
+   * view: the board is the control surface and the full screen browser is the same
+   * tab shown bigger, so this is not a second tab and the transport the user was
+   * just using keeps driving the picture.
+   */
   async function openPreview(entry: string | null): Promise<void> {
     if (opening || openingCanvas) return
     opening = true
     try {
+      if (video) {
+        // A folder with no entry page has nothing to serve, so there is no page to
+        // show full screen. The board says so in the pane instead.
+        if (!playable || selected.directory === '') return
+        await ensureComposition(selected.directory)
+        // A view main already holds is not reloaded, so no state follows the open.
+        // Reading its own state is what guarantees the surface has a tab to show
+        // rather than opening on nothing.
+        if (boardTabId !== '' && videoTimelineState.compositionByTab(boardTabId) === null) {
+          await videoTimelineState.seed(boardTabId)
+        }
+        if (boardTabId !== '') compositionFullscreen = true
+        return
+      }
       await openWork(selected.directory, entry)
     } finally {
       opening = false
@@ -1272,7 +1310,7 @@
         </button>
       </div>
     {/if}
-    {#if liveTab && !watchedInBrowser}
+    {#if liveTab}
       <!--
         The live composition, played in the board.
 
@@ -1282,13 +1320,12 @@
         the composition's own aspect ratio inside this pane, so the frame is whole
         at every panel size.
 
-        It stands aside while the sidebar browser is showing this composition: the
-        app displays one native view at a time, and a board outranks a plain
-        sidebar, so holding the view here would leave the page the user asked for
-        blank. What stands in is the composition's own picture, or the export it
-        already has.
+        While the composition is watched full screen this stage stays mounted and
+        keeps its transport, and the store resolves the single native view to the
+        surface on top. The board remains the control surface either way, and the
+        page comes back to this frame when that surface closes.
       -->
-      <CompositionStage tab={liveTab} {active} />
+      <CompositionStage tab={liveTab} {active} shownElsewhere={compositionFullscreen} />
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -1366,7 +1403,7 @@
 
   {#snippet screenCard(screen: DesignScreenShot, full: boolean)}
     {@const cardLabel = video
-      ? `Open the ${noun} in the in-app browser`
+      ? `Watch the ${noun} full screen in the in-app browser`
       : `Open the ${noun} screen ${screen.name} in the in-app browser`}
     {@const onScreen = !video && screen.entry === selected.entry}
     {@const copyLabel = video
@@ -1412,7 +1449,11 @@
           <span
             class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
           >
-            <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
+            <span class="text-[0.625rem] font-medium text-white"
+              >{video
+                ? 'Watch full screen in the in-app browser'
+                : 'Open in the in-app browser'}</span
+            >
           </span>
         </button>
       </ContextMenu.Trigger>
@@ -1944,9 +1985,9 @@
         <button
           type="button"
           class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={opening || selected.directory === '' || selectedMissing}
-          title={`Show this ${noun} in the in-app browser`}
-          aria-label={`Show this ${noun} in the in-app browser`}
+          disabled={opening || !playable || selected.directory === '' || selectedMissing}
+          title={`Watch this ${noun} full screen in the in-app browser`}
+          aria-label={`Watch this ${noun} full screen in the in-app browser`}
           onclick={() => void openPreview(selected.entry)}
         >
           {#if opening}
@@ -2243,3 +2284,30 @@
     record. No files are deleted.
   </p>
 </ConfirmDialog>
+
+{#if fullscreenCompositionTab}
+  <!--
+    The composition's own view, full screen.
+
+    Not a second tab and not a second player: it is the board's tab in a full
+    window surface, so the page the user is already watching moves here and the
+    board's controls keep driving the same tab. It carries the composition's own
+    transport (`BrowserPanel` draws one for any tab showing a composition), so the
+    film keeps playing and stays scrubbable. The dialog hosts the browser's native
+    view, which is why the surface must not suppress it (see `hostsBrowserView`).
+  -->
+  <FullscreenPanelDialog
+    tabs={[{ id: fullscreenCompositionTab.id, title: fullscreenCompositionTab.title }]}
+    activeTabId={fullscreenCompositionTab.id}
+    minimizeLabel="Minimize the composition"
+    hostsBrowserView
+    onSelect={() => {}}
+    onMinimize={() => (compositionFullscreen = false)}
+  >
+    {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
+      {#key fullscreenCompositionTab.id}
+        <BrowserPanel tab={fullscreenCompositionTab} fullscreen />
+      {/key}
+    {/await}
+  </FullscreenPanelDialog>
+{/if}

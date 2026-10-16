@@ -31,9 +31,18 @@
   interface Props {
     tab: VideoCompositionTab
     active?: boolean
+    /**
+     * Whether another surface is showing this composition right now.
+     *
+     * The board is the control surface, so its transport has to count a
+     * composition the full screen picture is displaying as on screen too. Without
+     * it the transport stops the moment the user maximizes, and stopping is a
+     * pause: the film would freeze on the frame it was maximized at.
+     */
+    shownElsewhere?: boolean
   }
 
-  let { tab, active = true }: Props = $props()
+  let { tab, active = true, shownElsewhere = false }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
@@ -155,6 +164,20 @@
   })
 
   /**
+   * Put the page back on this frame when this surface owns the view again.
+   *
+   * Another surface can hold the single native view for a while: the full screen
+   * composition is this very tab shown bigger, and it hides the view as it
+   * unmounts. The store decides who owns the view, so the answer coming back here
+   * has to re-place the page rather than leave the pane empty until the next
+   * resize happens to fire.
+   */
+  $effect(() => {
+    if (!placed) return
+    void showAtCurrentBounds().catch(() => {})
+  })
+
+  /**
    * The pane's frame, and the observers that keep the native view on it.
    *
    * The measurement follows the rectangle rather than a single placement: the
@@ -197,7 +220,7 @@
   <BrowserCompositionTransport
     tabId={tab.tabId}
     composition={tab}
-    active={active && placed}
+    active={active && (placed || shownElsewhere)}
     pauseWhenHidden
   />
   <div
