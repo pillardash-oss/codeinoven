@@ -69,7 +69,7 @@ interface AuthDefinition {
   readStatus?(projectPath?: string, environment?: NodeJS.ProcessEnv): Promise<HarnessAuthStatus>
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
-  logoutArgs?(providerId?: string): string[]
+  logoutArgs?(providerId?: string, credential?: string): string[]
   /** Confirm that a CLI logout actually removed the account rather than returning a no-op. */
   verifyLogout?(environment: NodeJS.ProcessEnv): Promise<void>
   /**
@@ -84,6 +84,23 @@ interface AuthDefinition {
    * credential identifier the harness CLI actually accepts at logout time.
    */
   resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
+  /**
+   * Resolves the credential selector a multi-account CLI needs as the second
+   * positional logout argument.
+   *
+   * OpenCode V2's `auth logout <integration> [<credential>]` opens an account
+   * picker when the credential is omitted, which ends the command with "Pass a
+   * credential ID or label when running without an interactive terminal". The
+   * account the user picked is known, so it is resolved to its stored
+   * credential id here instead of letting the CLI guess. `credentialHint` is the
+   * account's own credential id when the registry kept one, else its display
+   * name.
+   */
+  resolveLogoutCredential?(
+    providerId: string,
+    credentialHint: string | undefined,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined>
   /**
    * Version line whose credential store holds the account state, for harnesses
    * that keep several credentials in their own store. Only V2 OpenCode does, and
@@ -270,6 +287,35 @@ async function resolveOpencodeLogoutTarget(
   const slugged = keys.find((key) => accountId(key) === lowered)
   if (slugged) return slugged
   const hint = providerHint?.trim()
+  return hint || undefined
+}
+
+/**
+ * Resolve the credential selector OpenCode V2's logout requires.
+ *
+ * V2 holds several credentials per integration and refuses to run
+ * non-interactively without one, so the integration id alone is not enough.
+ * The account's own store is read to turn the hint (the account's credential id
+ * when the registry kept one, else its store label) into a credential the CLI
+ * accepts. A single stored credential for the integration is unambiguous and is
+ * used when the hint matches nothing.
+ */
+async function resolveOpenCodeV2LogoutCredential(
+  providerId: string,
+  credentialHint: string | undefined,
+  environment: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  const stored = await readOpenCodeV2StoredCredentials(environment)
+  const forIntegration = stored.filter((credential) => credential.integrationId === providerId)
+  const hint = credentialHint?.trim()
+  if (hint) {
+    const byId = forIntegration.find((credential) => credential.id === hint)
+    if (byId) return byId.id
+    const lowered = hint.toLowerCase()
+    const byLabel = forIntegration.find((credential) => credential.label?.toLowerCase() === lowered)
+    if (byLabel) return byLabel.id
+  }
+  if (forIntegration.length === 1) return forIntegration[0]?.id
   return hint || undefined
 }
 
@@ -894,12 +940,14 @@ function openCodeV2Auth(command: string): AuthDefinition {
       ...(options.providerId ? [options.providerId] : []),
       '--standalone'
     ],
-    logoutArgs: (providerId) => [
+    logoutArgs: (providerId, credential) => [
       'auth',
       'logout',
       ...(providerId ? [providerId] : []),
+      ...(credential ? [credential] : []),
       '--standalone'
     ],
+    resolveLogoutCredential: resolveOpenCodeV2LogoutCredential,
     // V2 keeps several credentials per integration and switches the active one
     // by id or label (`opencode auth switch <integration> <credential>`).
     activateArgs: (providerId, credentialId) => [
@@ -1251,7 +1299,8 @@ export class ProviderAccountOrchestrator {
     harnessId: string,
     providerId?: string,
     environment: NodeJS.ProcessEnv = {},
-    providerHint?: string
+    providerHint?: string,
+    credentialHint?: string
   ): Promise<void> {
     const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
@@ -1274,9 +1323,17 @@ export class ProviderAccountOrchestrator {
     if (definition.resolveLogoutTarget && providerId !== undefined) {
       target = (await definition.resolveLogoutTarget(providerId, providerHint)) ?? providerId
     }
+    const credential =
+      definition.resolveLogoutCredential && providerId !== undefined
+        ? await definition.resolveLogoutCredential(
+            providerId,
+            credentialHint ?? providerHint,
+            environment
+          )
+        : undefined
     const result = await this.run(
       definition.command,
-      definition.logoutArgs(target),
+      definition.logoutArgs(target, credential),
       homedir(),
       environment
     )

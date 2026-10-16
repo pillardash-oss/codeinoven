@@ -267,7 +267,10 @@ export function registerProviderAccountIpc(
           ? undefined
           : validateEntityId(rawProviderId, 'Provider ID', 256),
         account ? accounts.environment(account) : undefined,
-        account?.providerName ?? account?.label
+        account?.providerName ?? account?.label,
+        // The credential id a registry row mirrors (OpenCode V2's store id) is
+        // the selector its CLI logout needs non-interactively.
+        account?.sourceId
       )
     }
   )
