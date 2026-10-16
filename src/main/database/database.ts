@@ -15,6 +15,7 @@ import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
   LEGACY_RUBRIC_VERSION,
+  MAX_PLAUSIBLE_SHOT_COST_USD,
   MODEL_RANKINGS_COLUMNS_SQL,
   MODEL_RANKING_CALC_VERSION,
   MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
@@ -863,6 +864,7 @@ export class Database {
       this.migrateAssistantVocabulary(connection)
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateModelRankingCostPlausibility(connection)
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateModelRankingSnapshotAnchorMessageId(connection)
       this.migrateModelRankingSnapshotUndoneAt(connection)
@@ -1540,6 +1542,42 @@ export class Database {
     )
     if (columns.size === 0 || columns.has('undone_at_ms')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN undone_at_ms INTEGER')
+  }
+
+  /**
+   * Discard ranking cost sums that an arithmetic artifact poisoned.
+   *
+   * The cost columns of `model_rankings` are running sums whose snapshots are
+   * hard-deleted the moment they are scored, so one absurd addend can never be
+   * subtracted back out   it only ever surfaces as an impossible per-sample
+   * average, and it takes the "spent across ranked conversations" figure with
+   * it forever. Anything above `MAX_PLAUSIBLE_SHOT_COST_USD` per ranked
+   * conversation is therefore dropped to 0, exactly how an unpriced session is
+   * already recorded: the priced siblings of those samples under-report by the
+   * few cents they actually cost, which is the honest direction for a sum
+   * nothing can recompute. Scores, sample counts, and durations are untouched,
+   * because those are the ranking's own numbers and they were never corrupt.
+   * The 2026-10-10 pi cumulative-cost fix stopped the one producer of such
+   * addends, and `ModelRankingRepo` now refuses to fold a new one in at all.
+   * Idempotent: a repaired row is already below the ceiling.
+   */
+  migrateModelRankingCostPlausibility(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const beyondCeiling = (samplesColumn: string, costColumn: string): string =>
+      `${samplesColumn} > 0 AND ${costColumn} > ${samplesColumn} * ${MAX_PLAUSIBLE_SHOT_COST_USD}`
+    target.exec(`
+      UPDATE model_rankings
+      SET one_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')} THEN 0
+            ELSE one_shot_cost_usd
+          END,
+          multi_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')} THEN 0
+            ELSE multi_shot_cost_usd
+          END
+      WHERE (${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')})
+         OR (${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')})
+    `)
   }
 
   /**

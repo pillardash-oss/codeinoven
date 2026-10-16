@@ -349,6 +349,20 @@ export const LEGACY_RUBRIC_VERSION = 'legacy-1to5-map-v1'
  */
 export const MODEL_RANKING_CALC_VERSION = 'sum-count-v1'
 
+/**
+ * Most a single ranked conversation may plausibly cost, in USD.
+ *
+ * The aggregate's cost columns are running sums that can never be decomposed:
+ * a snapshot is hard-deleted the moment its score lands, so one absurd addend
+ * poisons the "spent across ranked conversations" headline permanently. A live
+ * pi session once folded its own cumulative session spend back into
+ * per-response cost and doubled it on every usage refresh (fixed 2026-10-10),
+ * which landed a single $11.97 conversation at $3.4e46. Priced conversations in
+ * this app run from cents to tens of dollars, so one exchange above this
+ * ceiling is arithmetic corruption rather than spend.
+ */
+export const MAX_PLAUSIBLE_SHOT_COST_USD = 1_000
+
 export const MODEL_RANKING_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_model_rankings_updated
   ON model_rankings(updated_at DESC);`
