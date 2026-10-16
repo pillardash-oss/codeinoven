@@ -2455,6 +2455,9 @@ export class UtilityOrchestrationService {
         ['lint', this.designPreviewExecutor],
         ['critique', this.designPreviewExecutor],
         ['extract-reference', this.designPreviewExecutor],
+        ...['motion-read', 'motion-preview', 'motion-apply', 'motion-inspect'].map(
+          (name): [string, DesignCapabilityExecutor | null] => [name, this.designPreviewExecutor]
+        ),
         ['delegate', this.designAssignmentExecutor],
         ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
@@ -2491,6 +2494,7 @@ export class UtilityOrchestrationService {
           'runtime',
           'captions',
           'track',
+          'analyze-motion',
           'remove-background'
         ].map((name): [string, VideoCapabilityExecutor | null] => [
           name,

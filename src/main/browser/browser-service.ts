@@ -1,3 +1,5 @@
+import { designMotionPageScript } from '../design/design-motion-page'
+import type { AuthoredMotion } from '../../lib/design/motion-policy'
 import { dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
@@ -2898,6 +2900,44 @@ export class BrowserService {
    * on it is never called back and every capture of a composition the app had
    * shown timed out instead of answering.
    */
+  designMotionTab(projectId: string, threadId: string, expectedUrl: string): string | null {
+    const id = this.agentTabFor(projectId, threadId)
+    const tab = id ? this.tabs.get(id) : null
+    return id &&
+      tab &&
+      !tab.view.webContents.isDestroyed() &&
+      tab.view.webContents.getURL() === expectedUrl
+      ? id
+      : null
+  }
+
+  async inspectDesignMotion(
+    tabId: string,
+    expectedUrl: string,
+    input: { targetId?: string; motion?: AuthoredMotion; sampleMs?: number }
+  ): Promise<unknown> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed())
+      throw new Error('The design preview is unavailable')
+    const contents = tab.view.webContents
+    if (contents.getURL() !== expectedUrl)
+      throw new Error('The preview navigated. Reopen the screen before inspecting motion.')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const result: unknown = await Promise.race([
+        contents.executeJavaScript(designMotionPageScript(input)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Motion observation timed out')), 4000)
+        })
+      ])
+      if (contents.isDestroyed() || contents.getURL() !== expectedUrl)
+        throw new Error('The preview changed during motion observation')
+      return result
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async renderTabFrame(
     tabId: string,
     seconds: number

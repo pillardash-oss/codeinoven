@@ -190,6 +190,16 @@ A screen passes only at 8/10 or above, with no craft findings or critical issues
 
 For "make it look like this site", call \`extract-reference\` with the user's HTTP(S) URL. It measures a bounded visible sample in an isolated renderer and returns source URL, viewport, typography, area-weighted colours, component geometry and logo references. Treat it as observed evidence, not the reference's complete brand system. Compare it with the project's existing contract and CSS tokens. Generate a lightweight contract with \`write-contract\` only when the user requests generation, preserving the old contract; distinguish observed values from inferred design rules. Ask for a source URL when the user has not supplied one.
 
+## Motion tools
+
+Use motion for feedback, continuity or attention. Repeated interactions must stay immediate and interruptible. Reuse project timing and components; respect reduced motion. Do not import stock effects or assets. The workstation and an authored film have different timing needs.
+
+Select an element using the browser inspector and use its source id. If it has none, add a unique stable id in the source first. Call \`motion-read\` with directory, entry and targetId. Call \`motion-preview\` with that revision and motion: purpose feedback|continuity|attention, trigger enter|hover|press|focus, frequency frequent|occasional, duration immediate|feedback|control|reveal, easing ease-out|ease-in-out|linear, from and to objects with opacity, x/y in rem, scale and rotate in degrees. Defaults inside each state are opacity/scale 1, x/y/rotate 0. Individual translate/scale/rotate properties compose with an existing transform, but inspect any existing individual transforms before changing them.
+
+Preview changes are temporary. Exercise the interaction using browser tools, then call \`motion-inspect\` with directory, entry and optional sampleMs 0–2000. It samples bounded Web Animations API effects, not FPS or canvas loops. It reports the current reduced-motion setting, not proof of both settings. The linter also returns advisory motionWarnings separately from blocking craft findings. Check each warning in context.
+
+Call \`motion-apply\` with the same inputs to persist the reviewed change. It rejects stale revisions and ambiguous source ids, preserves unrelated markup, and captures checkpoints. Existing history restores the previous screen. Read again after any source edit. No extra effect library is needed.
+
 ## Live design controls
 
 When adjustable accent, density, theme or sample data helps the review, declare an opt-in manifest and load the app runtime in that screen, after its content:

@@ -171,6 +171,12 @@ For footage on the stage, await \`CIOVideo.mediaReady(video)\` once and \`CIOVid
 
 Analysis, cuts, tracking, background removal and export return a job immediately. Poll \`jobs\` for progress and terminal success, files or errors; never report delivery while it is running. One expensive job runs at a time. The user can cancel with confirmation in Video controls or the task manager. A completed export has already been checked for wholeness, frame size, length and sound, and its record carries what was measured, so capture its frames and look at them for what no check can see: content, layout and legibility.
 
+## Motion measurement and export evidence
+
+For a user-supplied recording call \`analyze-motion\` with source, start, duration up to 60 seconds and normalized x/y/width/height for a distinctive rectangular region. This reuses the isolated tracking worker and cancellable video jobs. The result includes measured sample times and displacement, tracking confidence and an estimated nearest easing with error. It does not recover original spring constants or recognize semantic objects. Inspect occlusion and low-confidence frames. Choose one movement interval; holds and scene changes distort the fit.
+
+Exports now include export-evidence.json and three small frames decoded from the actual MP4. Evidence binds the bounded local source assets by hash and records the output checks and caption data. Source changes during export reject the render. Hidden assets and remote resources are outside the evidence snapshot; keep rendering assets local and non-hidden. The file/byte/depth limits are reported as errors rather than producing incomplete evidence. Open the returned frame images and inspect captions, timing and audio. The evidence initially says unreviewed, not that a model or user approved it. Encoding success alone is not visual approval.
+
 ## Preview and frame review
 
 Invoke this capability with operation \`preview\`:

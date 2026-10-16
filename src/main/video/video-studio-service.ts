@@ -57,6 +57,7 @@ export const VIDEO_STUDIO_OPERATIONS = [
   'scaffold',
   'captions',
   'track',
+  'analyze-motion',
   'remove-background'
 ] as const
 export interface VideoStudioOptions {
@@ -272,7 +273,12 @@ export class VideoStudioService {
     const config = operation === 'transcribe' ? await this.options.config() : null
     return this.jobs.start(context.projectId, context.threadId, operation, async (job) => {
       if (folder) return exportVideo(root, folder, this.options.previews, job)
-      if (operation === 'track' || operation === 'remove-background' || operation === 'cut') {
+      if (
+        operation === 'track' ||
+        operation === 'analyze-motion' ||
+        operation === 'remove-background' ||
+        operation === 'cut'
+      ) {
         const info = await probeVideo(root, relative(root, source!), job.signal)
         const start = videoNumber(input.start ?? 0, 'start', 0, 3600)
         const requested = videoNumber(
@@ -318,7 +324,7 @@ export class VideoStudioService {
             throw error
           }
         }
-        if (operation === 'track') {
+        if (operation === 'track' || operation === 'analyze-motion') {
           const x = videoNumber(input.x, 'x', 0, 1),
             y = videoNumber(input.y, 'y', 0, 1)
           const width = videoNumber(input.width, 'width', 0.01, 1 - x)
@@ -326,7 +332,18 @@ export class VideoStudioService {
           return videoWorkerJob(
             'track',
             root,
-            { root, source, output, start, duration, x, y, width, height },
+            {
+              root,
+              source,
+              output,
+              start,
+              duration,
+              x,
+              y,
+              width,
+              height,
+              analyze: operation === 'analyze-motion'
+            },
             job
           )
         }

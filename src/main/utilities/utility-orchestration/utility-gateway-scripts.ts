@@ -1,3 +1,4 @@
+import { designMotionTools } from '../../design/design-motion-tools'
 import type {
   HarnessUtilityBinding,
   ResolvedUtility,
@@ -253,6 +254,7 @@ function authoredWorkCheckpointTool(): McpTool {
 export function designUtilityTools(roots: WorkRoots): McpTool[] {
   const designRoot = workRootForKind(roots, 'design')
   return [
+    ...designMotionTools(),
     {
       name: 'read-contract',
       description:

@@ -20,6 +20,7 @@ export interface DesignCraftFinding {
 export interface DesignCraftReport {
   hash: string
   findings: DesignCraftFinding[]
+  motionWarnings?: import('./motion-review').MotionWarning[]
 }
 export interface DesignModelRanking {
   harness: string

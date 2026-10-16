@@ -33,7 +33,7 @@ export function videoStudioTools(): McpTool[] {
   }
   const jobNote =
     ' Returns a running job immediately. Poll jobs for progress, files and errors. One expensive video job runs at a time. The user can cancel in Video controls.'
-  return [
+  const tools: McpTool[] = [
     tool(
       'probe',
       'Read source duration, frame size, frame rate and streams using the bundled decoder.',
@@ -160,4 +160,13 @@ export function videoStudioTools(): McpTool[] {
       ['source']
     )
   ]
+  const tracking = tools.find((tool) => tool.name === 'track')!
+  tools.push({
+    ...tracking,
+    name: 'analyze-motion',
+    description:
+      'Measure a selected region in a user-supplied recording and estimate its displacement, overshoot and nearest easing curve with fit error and tracking confidence. Coordinates and bounds match track. Uses the existing isolated tracking worker; no downloads. Choose one movement interval. Estimates do not recover original spring constants.' +
+      jobNote
+  })
+  return tools
 }

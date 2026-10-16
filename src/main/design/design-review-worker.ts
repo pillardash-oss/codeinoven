@@ -1,6 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { readFile, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { lintMotion } from '../../lib/design/motion-review'
 import { lintDesignCraft } from '../../lib/design/design-review'
 
 export async function reviewDesignFile(file: string) {
@@ -9,7 +10,8 @@ export async function reviewDesignFile(file: string) {
   const content = await readFile(file, 'utf8')
   return {
     hash: createHash('sha256').update(content).digest('hex'),
-    findings: lintDesignCraft(content)
+    findings: lintDesignCraft(content),
+    motionWarnings: lintMotion(content)
   }
 }
 if (parentPort)
