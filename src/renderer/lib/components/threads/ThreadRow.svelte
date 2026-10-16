@@ -1009,23 +1009,17 @@
       class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"
-      aria-label={thread.bookmarked
-        ? 'Remove bookmark'
-        : effectivePinned
-          ? 'Unpin thread'
-          : 'Pin thread'}
+      aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
       aria-hidden={!pinVisible}
-      title={thread.bookmarked ? 'Remove bookmark' : effectivePinned ? 'Unpin' : 'Pin'}
+      title={effectivePinned ? 'Unpin' : 'Pin'}
       onclick={(e: MouseEvent) => {
         e.stopPropagation()
-        if (thread.bookmarked) onBookmark(thread)
-        else onTogglePin(thread)
+        onTogglePin(thread)
       }}
       onkeydown={(e: KeyboardEvent) => {
         if (keymapState.matches('thread-pin', e)) {
           e.stopPropagation()
-          if (thread.bookmarked) onBookmark(thread)
-          else onTogglePin(thread)
+          onTogglePin(thread)
         }
       }}
     >
@@ -1258,23 +1252,17 @@
           class="flex h-[0.875rem] w-[0.875rem] mb-1 flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
             ? 'pointer-events-auto cursor-pointer opacity-100'
             : 'pointer-events-none opacity-0'}"
-          aria-label={thread.bookmarked
-            ? 'Remove bookmark'
-            : effectivePinned
-              ? 'Unpin thread'
-              : 'Pin thread'}
+          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
           aria-hidden={!pinVisible}
-          title={thread.bookmarked ? 'Remove bookmark' : effectivePinned ? 'Unpin' : 'Pin'}
+          title={effectivePinned ? 'Unpin' : 'Pin'}
           onclick={(e: MouseEvent) => {
             e.stopPropagation()
-            if (thread.bookmarked) onBookmark(thread)
-            else onTogglePin(thread)
+            onTogglePin(thread)
           }}
           onkeydown={(e: KeyboardEvent) => {
             if (keymapState.matches('thread-pin', e)) {
               e.stopPropagation()
-              if (thread.bookmarked) onBookmark(thread)
-              else onTogglePin(thread)
+              onTogglePin(thread)
             }
           }}
         >
