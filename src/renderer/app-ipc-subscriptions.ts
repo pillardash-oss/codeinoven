@@ -11,6 +11,7 @@ import {
 import { clearDraftLabelCookie } from '$lib/stores/draft-label'
 import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
@@ -98,7 +99,12 @@ function showAgentNotification(
   appFocused: boolean,
   deps: AppIpcSubscriptionDeps
 ): void {
+  // The user is only "on" a thread while the workspace shell is actually showing
+  // it. A full-page surface (the global browser, the Scope view, a Settings page)
+  // keeps the shell mounted but hidden, so a thread left behind there must still
+  // announce itself rather than being treated as already on screen.
   const onSelectedThread =
+    !isWorkspaceCovered() &&
     workspaceState.selectedThread?.id === payload.threadId &&
     workspaceState.selectedThread?.projectId === payload.projectId
   if (
